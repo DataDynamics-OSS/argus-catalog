@@ -1,0 +1,76 @@
+app:
+  name: argus-catalog-server
+  version: 0.1.0
+  debug: ${app.debug:false}
+
+server:
+  host: ${server.host:0.0.0.0}
+  port: ${server.port:4600}
+
+logging:
+  level: ${log.level:INFO}
+  dir: ${log.dir:/var/log/argus-catalog-server}
+  filename: ${log.filename:argus-catalog-server.log}
+  rolling:
+    type: daily
+    backup_count: 30
+
+data:
+  dir: ${data.dir:/var/lib/argus-catalog-server}
+
+cors:
+  origins: ${cors.origins:*}
+
+# Added for SSO AUTH - Keycloak OIDC settings
+auth:
+  type: ${auth.type:local}
+  keycloak:
+    server_url: ${auth.keycloak.server_url:http://localhost:8180}
+    realm: ${auth.keycloak.realm:argus}
+    client_id: ${auth.keycloak.client_id:argus-client}
+    client_secret: ${auth.keycloak.client_secret:argus-client-secret}
+    admin_role: ${auth.keycloak.admin_role:argus-admin}
+    superuser_role: ${auth.keycloak.superuser_role:argus-superuser}
+    user_role: ${auth.keycloak.user_role:argus-user}
+
+database:
+  type: ${db.type:postgresql}
+  host: ${db.host:localhost}
+  port: ${db.port:5432}
+  name: ${db.name:argus_catalog}
+  username: ${db.username:argus}
+  password: ${db.password:argus}
+  pool:
+    size: ${db.pool.size:5}
+    max_overflow: ${db.pool.max_overflow:10}
+    recycle: ${db.pool.recycle:3600}
+  echo: ${db.echo:false}
+
+external:
+  cache:
+    max_size: 1000
+    ttl_seconds: 300
+    enabled: true
+
+# Object Storage (MinIO / S3) — 최초 seed 기본값. 이후 DB 설정값으로 덮어쓴다.
+object_storage:
+  endpoint: ${os.endpoint:http://localhost:9000}
+  access_key: ${os.access_key:minioadmin}
+  secret_key: ${os.secret_key:minioadmin}
+  region: ${os.region:us-east-1}
+  use_ssl: ${os.use_ssl:false}
+  bucket: ${os.bucket:model-artifacts}
+  presigned_url_expiry: ${os.presigned_url_expiry:3600}
+
+# 변경 관리(change-mgmt) 결재/통지 워크플로우용 Temporal 설정
+# 개발 스택 기동: docker compose -f backend/deploy/temporal/docker-compose.yml up -d
+# AI 어시스턴트 에이전트 (agent/ serve 모드) — 설정 시 채팅을 프록시.
+# 비워 두면 서버 내장 단순 대화로 폴백한다.
+assistant:
+  agent.url: ${assistant.agent.url:}
+
+temporal:
+  enabled: ${temporal.enabled:true}
+  target: ${temporal.target:localhost:7233}
+  namespace: ${temporal.namespace:default}
+  task_queue: ${temporal.task_queue:change-mgmt}

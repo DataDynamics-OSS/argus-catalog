@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "argus-catalog-sdk"
+version = "0.1.0"
+description = "Python SDK and CLI for Argus Catalog Model Registry"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.27.0",
+    "rich>=13.0.0",
+]
+
+[project.optional-dependencies]
+huggingface = ["huggingface_hub>=0.28.0"]
+dev = ["ruff", "pytest"]
+
+[project.scripts]
+argus-model = "argus_catalog_sdk.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

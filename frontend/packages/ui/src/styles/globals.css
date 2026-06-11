@@ -1,0 +1,366 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@plugin "@tailwindcss/typography";
+
+@custom-variant dark (&:is(.dark *));
+@source "../../../apps/**/*.{ts,tsx}";
+@source "../../../components/**/*.{ts,tsx}";
+@source "../**/*.{ts,tsx}";
+
+:root {
+    --background: oklch(1 0 0);
+    --foreground: oklch(0.145 0 0);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.145 0 0);
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.145 0 0);
+    --primary: oklch(0.488 0.243 264.376);
+    --primary-foreground: oklch(0.97 0.014 254.604);
+    --secondary: oklch(0.967 0.001 286.375);
+    --secondary-foreground: oklch(0.21 0.006 285.885);
+    --muted: oklch(0.97 0 0);
+    --muted-foreground: oklch(0.556 0 0);
+    --accent: oklch(0.97 0 0);
+    --accent-foreground: oklch(0.205 0 0);
+    --destructive: oklch(0.577 0.245 27.325);
+    --border: oklch(0.922 0 0);
+    --input: oklch(0.922 0 0);
+    --ring: oklch(0.708 0 0);
+    --chart-1: oklch(0.809 0.105 251.813);
+    --chart-2: oklch(0.623 0.214 259.815);
+    --chart-3: oklch(0.546 0.245 262.881);
+    --chart-4: oklch(0.488 0.243 264.376);
+    --chart-5: oklch(0.424 0.199 265.638);
+    --radius: 0.625rem;
+    --sidebar: oklch(0.30 0.02 260);
+    --sidebar-foreground: oklch(0.93 0.01 260);
+    --sidebar-primary: oklch(0.623 0.214 259.815);
+    --sidebar-primary-foreground: oklch(0.97 0.014 254.604);
+    --sidebar-accent: oklch(0.36 0.03 260);
+    --sidebar-accent-foreground: oklch(0.95 0.01 260);
+    --sidebar-border: oklch(1 0 0 / 12%);
+    --sidebar-ring: oklch(0.556 0.02 260);
+}
+
+.dark {
+    --background: oklch(0.145 0 0);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.205 0 0);
+    --card-foreground: oklch(0.985 0 0);
+    --popover: oklch(0.205 0 0);
+    --popover-foreground: oklch(0.985 0 0);
+    --primary: oklch(0.424 0.199 265.638);
+    --primary-foreground: oklch(0.97 0.014 254.604);
+    --secondary: oklch(0.274 0.006 286.033);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.269 0 0);
+    --muted-foreground: oklch(0.708 0 0);
+    --accent: oklch(0.269 0 0);
+    --accent-foreground: oklch(0.985 0 0);
+    --destructive: oklch(0.704 0.191 22.216);
+    --border: oklch(1 0 0 / 10%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.556 0 0);
+    --chart-1: oklch(0.809 0.105 251.813);
+    --chart-2: oklch(0.623 0.214 259.815);
+    --chart-3: oklch(0.546 0.245 262.881);
+    --chart-4: oklch(0.488 0.243 264.376);
+    --chart-5: oklch(0.424 0.199 265.638);
+    --sidebar: oklch(0.25 0.03 260);
+    --sidebar-foreground: oklch(0.93 0.01 260);
+    --sidebar-primary: oklch(0.623 0.214 259.815);
+    --sidebar-primary-foreground: oklch(0.97 0.014 254.604);
+    --sidebar-accent: oklch(0.32 0.04 260);
+    --sidebar-accent-foreground: oklch(0.95 0.01 260);
+    --sidebar-border: oklch(1 0 0 / 12%);
+    --sidebar-ring: oklch(0.556 0.02 260);
+}
+
+@theme inline {
+    --color-background: var(--background);
+    --color-foreground: var(--foreground);
+    --color-card: var(--card);
+    --color-card-foreground: var(--card-foreground);
+    --color-popover: var(--popover);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-primary: var(--primary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-secondary: var(--secondary);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-muted: var(--muted);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-accent: var(--accent);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-destructive: var(--destructive);
+    --color-border: var(--border);
+    --color-input: var(--input);
+    --color-ring: var(--ring);
+    --color-chart-1: var(--chart-1);
+    --color-chart-2: var(--chart-2);
+    --color-chart-3: var(--chart-3);
+    --color-chart-4: var(--chart-4);
+    --color-chart-5: var(--chart-5);
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+    --radius-2xl: calc(var(--radius) * 1.8);
+    --radius-3xl: calc(var(--radius) * 2.2);
+    --radius-4xl: calc(var(--radius) * 2.6);
+    --color-sidebar: var(--sidebar);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-ring: var(--sidebar-ring);
+    /* 본문 — Pretendard 가 라틴·한글을 한 글꼴로 통합 처리. Pretendard 미로딩 시
+       Noto Sans KR → system-ui 순으로 폴백. */
+    --font-sans: "Pretendard Variable", var(--font-pretendard),
+                 var(--font-noto-sans-kr), "Noto Sans KR",
+                 system-ui, -apple-system, "Segoe UI", sans-serif;
+    /* 헤더·그리드 헤더 — 좁은 글자폭이 필요한 곳만 명시 적용. 한글 글리프는
+       Pretendard fallback 이 처리. */
+    --font-display: var(--font-roboto-condensed), "Roboto Condensed",
+                    "Pretendard Variable", var(--font-pretendard),
+                    system-ui, sans-serif;
+    /* 코드 — D2Coding 우선. code/pre/.font-mono 가 전역으로 받음. */
+    --font-mono: var(--font-d2coding), "D2Coding",
+                 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+                 "Liberation Mono", "Courier New", monospace;
+}
+
+@layer base {
+  /* 비-Retina 모니터에서 한글·라틴 모두 또렷하게.
+     · antialiased: macOS 에서 grayscale 렌더 (sub-pixel 보다 가독성 안정).
+     · text-rendering: optimizeLegibility — 커닝/리거처 활성.
+     · font-feature-settings: kern/liga/calt 명시 활성.
+     · font-synthesis: none — 가짜 bold/italic 차단. */
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: "kern", "liga", "calt";
+    font-synthesis: none;
+  }
+  * {
+    @apply border-border outline-ring/50;
+    }
+  body {
+    @apply bg-background text-foreground;
+    }
+}
+
+/* monospace 전역 — 모든 <code>·<pre> 와 `font-mono` 가 D2Coding 우선. */
+code,
+pre,
+.font-mono {
+  font-family: var(--font-mono);
+}
+
+
+/* BlockNote editor styles */
+.bn-container[data-changing-font-demo] .bn-editor * {
+  font-family: var(--font-display);
+}
+
+/* Markdown preview styles */
+.markdown-body {
+  color: var(--foreground);
+  font-size: 1rem;
+  line-height: 1.75;
+}
+.markdown-body h1 {
+  font-size: 2em;
+  font-weight: 700;
+  margin-top: 0;
+  margin-bottom: 0.75em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--border);
+  line-height: 1.25;
+}
+.markdown-body h2 {
+  font-size: 1.5em;
+  font-weight: 600;
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--border);
+  line-height: 1.3;
+}
+.markdown-body h3 {
+  font-size: 1.25em;
+  font-weight: 600;
+  margin-top: 1.25em;
+  margin-bottom: 0.5em;
+  line-height: 1.4;
+}
+.markdown-body h4 {
+  font-size: 1em;
+  font-weight: 600;
+  margin-top: 1em;
+  margin-bottom: 0.5em;
+}
+.markdown-body p {
+  margin-top: 0;
+  margin-bottom: 1em;
+}
+.markdown-body a {
+  color: var(--primary);
+  text-decoration: underline;
+}
+.markdown-body a:hover {
+  opacity: 0.8;
+}
+.markdown-body strong {
+  font-weight: 600;
+}
+.markdown-body ul,
+.markdown-body ol {
+  margin-top: 0;
+  margin-bottom: 1em;
+  padding-left: 2em;
+}
+.markdown-body ul {
+  list-style-type: disc;
+}
+.markdown-body ol {
+  list-style-type: decimal;
+}
+.markdown-body li {
+  margin-bottom: 0.25em;
+}
+.markdown-body li > ul,
+.markdown-body li > ol {
+  margin-top: 0.25em;
+  margin-bottom: 0;
+}
+.markdown-body blockquote {
+  margin: 0 0 1em;
+  padding: 0.5em 1em;
+  border-left: 4px solid var(--border);
+  color: var(--muted-foreground);
+  background: var(--muted);
+  border-radius: 0 0.375rem 0.375rem 0;
+}
+.markdown-body blockquote p:last-child {
+  margin-bottom: 0;
+}
+.markdown-body code {
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  background: var(--muted);
+  padding: 0.2em 0.4em;
+  border-radius: 0.25rem;
+}
+.markdown-body pre {
+  margin-top: 0;
+  margin-bottom: 1em;
+  padding: 1em;
+  overflow-x: auto;
+  background: oklch(0.22 0 0);
+  color: oklch(0.9 0 0);
+  border-radius: 0.5rem;
+  line-height: 1.5;
+}
+.markdown-body pre code {
+  background: transparent;
+  padding: 0;
+  font-size: 0.875em;
+  color: inherit;
+  border-radius: 0;
+}
+.markdown-body hr {
+  margin: 1.5em 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+.markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 1em;
+  font-size: 0.875em;
+}
+.markdown-body thead th {
+  font-weight: 600;
+  padding: 0.5em 0.75em;
+  border-bottom: 2px solid var(--border);
+  text-align: left;
+}
+.markdown-body tbody td {
+  padding: 0.5em 0.75em;
+  border-bottom: 1px solid var(--border);
+}
+.markdown-body tbody tr:last-child td {
+  border-bottom: none;
+}
+.markdown-body img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 0.5rem;
+}
+.markdown-body input[type="checkbox"] {
+  margin-right: 0.5em;
+}
+
+/* Tiptap editor prose styles */
+.tiptap.ProseMirror {
+  outline: none;
+}
+.tiptap.ProseMirror p {
+  margin: 0.25em 0;
+}
+.tiptap.ProseMirror h1 { font-size: 1.5em; font-weight: 700; margin: 0.5em 0 0.25em; }
+.tiptap.ProseMirror h2 { font-size: 1.25em; font-weight: 600; margin: 0.5em 0 0.25em; }
+.tiptap.ProseMirror h3 { font-size: 1.1em; font-weight: 600; margin: 0.4em 0 0.2em; }
+.tiptap.ProseMirror ul { list-style: disc; padding-left: 1.5em; margin: 0.25em 0; }
+.tiptap.ProseMirror ol { list-style: decimal; padding-left: 1.5em; margin: 0.25em 0; }
+.tiptap.ProseMirror li { margin: 0.1em 0; }
+.tiptap.ProseMirror blockquote {
+  border-left: 3px solid var(--border);
+  padding-left: 1em;
+  color: var(--muted-foreground);
+  margin: 0.5em 0;
+}
+.tiptap.ProseMirror code {
+  background: var(--muted);
+  padding: 0.15em 0.3em;
+  border-radius: 0.25em;
+  font-size: 0.9em;
+}
+.tiptap.ProseMirror pre {
+  background: var(--muted);
+  padding: 0.75em 1em;
+  border-radius: 0.5em;
+  overflow-x: auto;
+  margin: 0.5em 0;
+}
+.tiptap.ProseMirror pre code {
+  background: none;
+  padding: 0;
+}
+.tiptap.ProseMirror hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 0.75em 0;
+}
+.tiptap.ProseMirror p.is-editor-empty:first-child::before {
+  color: var(--muted-foreground);
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
+
+/* 진행 시간이 불확정한 작업(AI 생성 등)을 위한 인디터미닛 프로그레스 바.
+   좁은 막대가 트랙을 왕복하며 "처리 중"을 표현한다. */
+@keyframes ac-indeterminate {
+  0% { left: -40%; }
+  100% { left: 100%; }
+}
+.ac-progress-indeterminate {
+  position: relative;
+  animation: ac-indeterminate 1.1s ease-in-out infinite;
+}

@@ -1,0 +1,24 @@
+# MySQL/MariaDB 통합 테스트용 외부 인프라.
+# 호스트 13306 → 컨테이너 3306.
+#
+# sakila/01-schema.sql, sakila/02-data.sql 을 /docker-entrypoint-initdb.d 에
+# read-only 로 마운트해 컨테이너 첫 기동 시 자동으로 Sakila DB 를 적재한다.
+# (대용량 02-data.sql 때문에 healthcheck retries 와 start_period 를 늘림.)
+
+services:
+  mysql:
+    image: mysql:8
+    container_name: argus-test-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: argus_test
+      # initdb 의 schema.sql 이 ``CREATE SCHEMA sakila`` 를 수행하므로 별도 DB 는 생성하지 않음.
+    ports:
+      - "13306:3306"
+    volumes:
+      - ./sakila:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-pargus_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 30s

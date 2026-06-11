@@ -1,0 +1,100 @@
+/*
+ * 댓글 에디터·뷰어의 코드블록 syntax highlight + TipTap 표 리사이즈 스타일.
+ *
+ * - highlight.js 의 github 테마를 끌어와 토큰 색을 적용하고
+ *   lowlight 가 출력하는 <pre class="hljs"><code class="language-xxx"> 구조에
+ *   맞춰 padding / overflow / 폰트를 보강한다.
+ * - TipTap Table 의 column resize 플러그인이 작동하려면 ``table-layout: fixed``
+ *   와 ``th/td { position: relative }`` 가 필수이며 ``.column-resize-handle``
+ *   이라는 div 가 absolute 로 들어간다. 시각화와 cursor 도 같이 정의.
+ */
+
+@import "highlight.js/styles/github.css";
+
+/* github.css 는 ``pre code.hljs`` / ``code.hljs`` 셀렉터로 padding · overflow
+ * 를 부여하지만 우리 lowlight 출력은 ``<code class="language-xxx">`` 형태로
+ * code 에는 hljs 가 없다. 같은 효과를 ``pre.hljs`` 에도 부여해 컨테이너의
+ * padding / overflow / 폰트 / 행간을 맞춘다.
+ *
+ * ``background-color`` 는 ``.hljs { background: #f6f8fa }`` 만으로는 prose 의
+ * ``.prose pre { background-color: #1f2937 }`` 룰(class+element specificity)
+ * 에 밀려 미적용. ``pre.hljs`` 셀렉터로 동률을 맞춘 뒤 source order 로 이긴다. */
+pre.hljs {
+  display: block;
+  overflow-x: auto;
+  padding: 0.75em 1em;
+  border-radius: 0.375rem;
+  background-color: #f6f8fa;
+  color: #24292e;
+  font-family: D2Coding, ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.875rem;
+  line-height: 1.55;
+  white-space: pre;
+}
+
+/* 내부 <code> 는 부모 pre 의 스타일을 그대로 받고 자체 padding · background 는
+ * 제거한다 (인라인 code 와 충돌 방지). */
+pre.hljs code {
+  background: transparent;
+  padding: 0;
+  font-family: inherit;
+  font-size: inherit;
+}
+
+/* ---------------------------------------------------------------------------
+ * TipTap 표 — column resize 활성화 + 셀 보더·헤더 스타일.
+ *
+ * ``.ProseMirror`` 는 TipTap 이 editor root element 에 자동으로 부여하는
+ * 클래스. editor 안의 표만 잡아 외부 표(예: data grid) 와는 충돌하지 않는다.
+ * --------------------------------------------------------------------------- */
+
+.ProseMirror table {
+  /* column resize 플러그인은 ``table-layout: fixed`` 일 때만 컬럼 폭을 직접
+     제어할 수 있다. ``auto`` 면 셀 내용에 따라 자동 폭 조정되어 드래그 무시. */
+  table-layout: fixed;
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.6em 0;
+  overflow: hidden;
+}
+
+.ProseMirror table th,
+.ProseMirror table td {
+  /* resize handle 이 absolute 로 들어가므로 cell 이 relative containing block. */
+  position: relative;
+  min-width: 1em;
+  border: 1px solid #cbd5e1;
+  padding: 0.4em 0.6em;
+  vertical-align: top;
+}
+
+.ProseMirror table th {
+  background: #f1f5f9;
+  font-weight: 600;
+  text-align: left;
+}
+
+/* 선택된 셀 표시 — 표 안에서 cell selection 시 파란색 반투명 overlay. */
+.ProseMirror .selectedCell::after {
+  background: rgba(59, 130, 246, 0.18);
+  content: "";
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+  z-index: 2;
+}
+
+/* 컬럼 사이의 4px 폭 핸들 — 마우스 hover 시 ew-resize cursor 와 함께 드래그. */
+.ProseMirror table .column-resize-handle {
+  background-color: #93c5fd;
+  bottom: -2px;
+  pointer-events: none;
+  position: absolute;
+  right: -2px;
+  top: 0;
+  width: 4px;
+}
+
+.ProseMirror .resize-cursor {
+  cursor: ew-resize;
+}

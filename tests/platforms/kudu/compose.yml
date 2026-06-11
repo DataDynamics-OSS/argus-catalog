@@ -1,0 +1,53 @@
+# Kudu 통합 테스트 — apache/kudu master + tserver. 자체 metadata 관리(HMS X).
+#
+# apache/kudu entrypoint 는 플래그를 MASTER_ARGS / TSERVER_ARGS 환경변수로 받고,
+# DEFAULT_ARGS 의 --use_hybrid_clock=false(NTP 없이 동작) 가 unsafe 라 반드시
+# --unlock_unsafe_flags=true 를 함께 줘야 기동된다.
+#
+# 멀티컨테이너에서 advertised address 를 localhost 로 쓰면 master->tserver 통신이
+# 깨지므로(서로 다른 컨테이너의 localhost), host 네트워킹을 사용해 client/master/tserver
+# 가 모두 동일한 host 의 127.0.0.1:1705x 로 도달하게 한다. 포트는 conftest 기본값
+# (17051/17050) 과 맞춘다.
+
+services:
+  kudu-master:
+    image: apache/kudu:1.17.0
+    container_name: argus-test-kudu-master
+    network_mode: host
+    command: ["master"]
+    environment:
+      MASTER_ARGS: >-
+        --unlock_unsafe_flags=true
+        --rpc_bind_addresses=127.0.0.1:17051
+        --rpc_advertised_addresses=127.0.0.1:17051
+        --webserver_port=18051
+        --default_num_replicas=1
+    healthcheck:
+      # 이미지에 ss/nc/curl/bash 가 없어 /proc/net/tcp 로 RPC 포트(17051=0x429B) 확인.
+      test: ["CMD-SHELL", "grep -qi 429B /proc/net/tcp /proc/net/tcp6 || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 60
+      start_period: 30s
+
+  kudu-tserver:
+    image: apache/kudu:1.17.0
+    container_name: argus-test-kudu-tserver
+    network_mode: host
+    depends_on:
+      kudu-master:
+        condition: service_healthy
+    command: ["tserver"]
+    environment:
+      KUDU_MASTERS: "127.0.0.1:17051"
+      TSERVER_ARGS: >-
+        --unlock_unsafe_flags=true
+        --rpc_bind_addresses=127.0.0.1:17050
+        --rpc_advertised_addresses=127.0.0.1:17050
+        --webserver_port=18050
+    healthcheck:
+      test: ["CMD-SHELL", "grep -qi 429A /proc/net/tcp /proc/net/tcp6 || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 60
+      start_period: 30s

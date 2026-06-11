@@ -1,0 +1,25 @@
+node_modules/
+.venv/
+.next/
+__pycache__/
+*.egg-info/
+.turbo/
+
+# IDE
+.idea/
+.vscode/
+
+# 로컬 데이터 디렉터리 (샘플 parquet 등 — scripts/seed_sakila_samples.py 로 재생성)
+backend/data/
+
+# Sakila 다운로드 산출물 (deploy/download-sakila.sh 로 재생성)
+deploy/sakila/*.sql
+
+# 런타임 로그
+logs/
+*.log
+
+# Next.js 자동 생성 타입 선언
+next-env.d.ts
+
+# 오픈소스 publish 스크립트 (내부 전용 — 공개 저장소에 노출 금지)

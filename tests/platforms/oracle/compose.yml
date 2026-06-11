@@ -1,0 +1,23 @@
+# Oracle 통합 테스트용 외부 인프라. 호스트 11521 → 컨테이너 1521.
+#
+# gvenzl/oracle-free 는 ORACLE_PASSWORD(SYS/SYSTEM) + APP_USER/APP_USER_PASSWORD 로
+# 첫 기동 시 PDB(FREEPDB1) 에 앱 유저(=동명 스키마 ARGUS_TEST)를 자동 생성한다.
+# 이미지에 healthcheck.sh 가 내장돼 있어 DB 가 열리면 healthy 가 된다. 첫 부팅이 느려
+# start_period/retries 를 넉넉히 둔다.
+
+services:
+  oracle:
+    image: gvenzl/oracle-free:slim
+    container_name: argus-test-oracle
+    environment:
+      ORACLE_PASSWORD: argus_test
+      APP_USER: argus_test
+      APP_USER_PASSWORD: argus_test
+    ports:
+      - "11521:1521"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 10s
+      timeout: 10s
+      retries: 40
+      start_period: 60s

@@ -1,0 +1,5 @@
+.venv
+logs
+.claude
+*.egg-info
+*.log

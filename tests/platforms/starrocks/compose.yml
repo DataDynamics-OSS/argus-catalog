@@ -1,0 +1,18 @@
+# StarRocks 통합 테스트용 외부 인프라.
+#
+# StarRocks allin1 이미지는 FE + BE 가 한 컨테이너 안에서 동작. MySQL 프로토콜
+# 포트(9030) 와 HTTP 포트(8030) 만 호스트에 노출.
+
+services:
+  starrocks:
+    image: starrocks/allin1-ubuntu:3.2-latest
+    container_name: argus-test-starrocks
+    ports:
+      - "19030:9030"   # MySQL 프로토콜 (sync 어댑터)
+      - "18030:8030"   # FE HTTP
+    healthcheck:
+      test: ["CMD-SHELL", "mysql -h127.0.0.1 -P9030 -uroot -e 'SELECT 1' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 60s

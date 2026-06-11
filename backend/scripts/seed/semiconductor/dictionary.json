@@ -1,0 +1,7 @@
+{
+  "dict_name": "반도체 제조 표준사전",
+  "description": "반도체 Fab 제조 공정에 특화된 데이터 표준 사전. SEMI 표준, ISA-95, STDF 등 국제 표준과 국내 반도체 업계 관행을 반영하여 MES, FDC, SPC, Yield, 장비관리, 품질관리 영역의 표준 단어, 도메인, 용어를 정의한다.",
+  "version": "1.0.0",
+  "effective_date": "2026-01-01",
+  "created_by": "argus-system"
+}

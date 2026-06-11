@@ -1,0 +1,27 @@
+# PostgreSQL 통합 테스트용 외부 인프라.
+#
+# 구성:
+#   - postgresql : PG 16 인스턴스. 컨테이너 첫 기동 시 docker-entrypoint-initdb.d
+#                  로 northwind 샘플 DB (14 tables / public schema) 가 자동 적재됨.
+#
+# 호스트 포트 15432 → 컨테이너 5432 — 다른 PG 와 충돌 방지.
+
+services:
+  postgresql:
+    image: postgres:16
+    container_name: argus-test-postgresql
+    environment:
+      POSTGRES_USER: argus_test
+      POSTGRES_PASSWORD: argus_test
+      # initdb 가 자동 생성하는 DB. northwind SQL 은 이 DB 의 public schema 에 적재된다.
+      POSTGRES_DB: northwind
+    ports:
+      - "15432:5432"
+    volumes:
+      - ./northwind:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U argus_test -d northwind"]
+      interval: 3s
+      timeout: 5s
+      retries: 60
+      start_period: 30s

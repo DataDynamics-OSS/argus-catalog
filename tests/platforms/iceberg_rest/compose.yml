@@ -1,0 +1,65 @@
+# Iceberg REST Catalog 통합 테스트용 외부 인프라.
+#
+# 구성:
+#   - iceberg-rest  : Iceberg REST Catalog 스펙 구현체(``tabulario/iceberg-rest``)
+#                     in-memory JDBC catalog 백엔드 + MinIO warehouse
+#   - minio         : S3 호환 오브젝트 스토리지 (warehouse 데이터 저장소)
+#   - minio-bucket  : ``warehouse`` 버킷을 한 번 만들고 종료하는 init 컨테이너
+#
+# REST Catalog 스펙만 사용하므로 Lakekeeper / Polaris / Nessie 같은 다른 구현체로
+# 갈아끼워도 어댑터 코드/테스트가 그대로 동작한다. tabulario/iceberg-rest 는 부트스트랩이
+# 필요 없는 가장 가벼운 옵션이라 통합 테스트 1단계 베이스로 선택.
+
+services:
+  minio:
+    image: minio/minio:latest
+    container_name: argus-test-iceberg-minio
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      # 호스트 19000 → 컨테이너 9000 (pyiceberg 가 호스트에서 S3IO 호출)
+      - "19000:9000"
+      - "19001:9001"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9000/minio/health/live || exit 1"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  minio-bucket:
+    image: minio/mc:latest
+    container_name: argus-test-iceberg-minio-bucket
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        mc alias set local http://minio:9000 minioadmin minioadmin &&
+        mc mb --ignore-existing local/warehouse
+    restart: "no"
+
+  iceberg-rest:
+    image: tabulario/iceberg-rest:latest
+    container_name: argus-test-iceberg-rest
+    depends_on:
+      minio-bucket:
+        condition: service_completed_successfully
+    environment:
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_REGION: us-east-1
+      CATALOG_WAREHOUSE: s3://warehouse/
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      CATALOG_S3_ENDPOINT: http://minio:9000
+      CATALOG_S3_PATH__STYLE__ACCESS: "true"
+    ports:
+      - "18181:8181"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8181/v1/config 2>&1 | grep -q overrides || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 30

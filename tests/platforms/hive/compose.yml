@@ -1,0 +1,59 @@
+# Hive Metastore 통합 테스트.
+#
+# apache/hive:4.0.0 standalone metastore + 내장 Derby DB. derby in-memory 라
+# 컨테이너 재기동마다 깨끗한 상태로 시작. metadata-sync 어댑터는 thrift mode 로
+# 9083 포트에 직접 붙어 metadata 만 가져온다. seed 는 hmsclient 로 HMS Thrift API 직접 호출.
+#
+# seed 의 테이블 LOCATION 이 s3a://warehouse/... 이므로 HMS 가 그 디렉터리를 만들 수 있도록
+# minio(S3) + S3A(core-site + hadoop-aws 클래스패스)를 함께 띄운다.
+
+services:
+  minio:
+    image: minio/minio:latest
+    container_name: argus-test-hive-minio
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9000/minio/health/live || exit 1"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: argus-test-hive-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        mc alias set local http://minio:9000 minioadmin minioadmin &&
+        mc mb --ignore-existing local/warehouse
+    restart: "no"
+
+  hive-metastore:
+    image: apache/hive:4.0.0
+    container_name: argus-test-hive-metastore
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      SERVICE_NAME: metastore
+      # s3a:// warehouse 위치 생성을 위해 hadoop-aws(tools/lib)를 클래스패스에 포함.
+      HADOOP_OPTIONAL_TOOLS: hadoop-aws
+    volumes:
+      - ./etc/hadoop/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
+    ports:
+      - "19083:9083"
+    healthcheck:
+      # apache/hive 이미지엔 ss/netstat/nc 가 없고 HMS 는 IPv6 로 listen 하므로
+      # bash 의 /dev/tcp 로 9083 연결 가능 여부를 확인한다(bash 는 이미지에 존재).
+      test: ["CMD-SHELL", "timeout 2 bash -c 'exec 3<>/dev/tcp/127.0.0.1/9083' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 60s

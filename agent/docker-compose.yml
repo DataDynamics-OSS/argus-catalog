@@ -1,0 +1,94 @@
+# Argus Metadata Agent + ollama (qwen2.5:7b) 묶음 실행.
+#
+# 기동:
+#   docker compose up -d ollama          # 모델 자동 pull (최초 1회 수 분)
+#   docker compose run --rm agent describe --urn <URN>
+#   docker compose up -d worker          # 폴링 데몬
+#
+# 카탈로그 API 가 호스트에서 돌고 있으면 ARGUS_API_URL 에
+# host.docker.internal 을 사용한다 (.env 로 재정의 가능).
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: argus-agent-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    # 기동 후 기본 모델을 미리 받아 둔다 (이미 있으면 즉시 통과)
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  # 모델 pull 1회성 — ollama 가 뜨면 qwen2.5:7b 를 받는다
+  ollama-pull:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["ollama", "pull", "qwen2.5:7b"]
+    restart: "no"
+
+  agent:
+    build: .
+    image: argus-agent:latest
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      ARGUS_API_URL: ${ARGUS_API_URL:-http://host.docker.internal:4600}
+      AGENT_LLM_URL: ${AGENT_LLM_URL:-http://ollama:11434/v1}
+      AGENT_MODEL: ${AGENT_MODEL:-qwen2.5:7b}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+  # AI 어시스턴트 서버 — 백엔드가 채팅을 프록시 (assistant.agent.url)
+  assistant:
+    build: .
+    image: argus-agent:latest
+    command: ["serve", "--port", "8930"]
+    ports:
+      - "8930:8930"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      ARGUS_API_URL: ${ARGUS_API_URL:-http://host.docker.internal:4600}
+      AGENT_LLM_URL: ${AGENT_LLM_URL:-http://ollama:11434/v1}
+      AGENT_MODEL: ${AGENT_MODEL:-qwen2.5:7b}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # 폴링 데몬 — 설명 없는 데이터셋 자동 생성
+  worker:
+    build: .
+    image: argus-agent:latest
+    command: ["worker", "--datasource-id", "${AGENT_DATASOURCE_ID:-sakila-mysql}"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      ARGUS_API_URL: ${ARGUS_API_URL:-http://host.docker.internal:4600}
+      AGENT_LLM_URL: ${AGENT_LLM_URL:-http://ollama:11434/v1}
+      AGENT_MODEL: ${AGENT_MODEL:-qwen2.5:7b}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  ollama-models:

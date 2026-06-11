@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+<!--
+  HMS(apache/hive)가 s3a:// warehouse 위치에 디렉터리를 만들 때 사용할 S3A 설정.
+  hadoop-aws jar 은 이미지의 tools/lib 에 있으므로 compose 의
+  HADOOP_OPTIONAL_TOOLS=hadoop-aws 로 클래스패스에 포함시킨다.
+-->
+<configuration>
+  <property><name>fs.s3a.endpoint</name><value>http://minio:9000</value></property>
+  <property><name>fs.s3a.access.key</name><value>minioadmin</value></property>
+  <property><name>fs.s3a.secret.key</name><value>minioadmin</value></property>
+  <property><name>fs.s3a.path.style.access</name><value>true</value></property>
+  <property><name>fs.s3a.connection.ssl.enabled</name><value>false</value></property>
+  <property><name>fs.s3a.impl</name><value>org.apache.hadoop.fs.s3a.S3AFileSystem</value></property>
+  <property>
+    <name>fs.s3a.aws.credentials.provider</name>
+    <value>org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider</value>
+  </property>
+</configuration>

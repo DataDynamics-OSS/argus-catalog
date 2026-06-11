@@ -1,0 +1,40 @@
+# Argus Catalog 품질 배치 의존성
+#
+#   pip install -r quality/requirements.txt
+#
+# python-quality.py (pandas 버전) 기준. dataset-quality.py (PySpark 버전)는
+# pandas 대신 Spark 환경(spark-submit + 타입별 JDBC 드라이버 jar)이 필요하며
+# 파이썬 추가 의존성은 없다 (표준 라이브러리 + pyspark 런타임 제공).
+#
+# 드라이버는 지연 임포트라 전부 설치하지 않아도 동작하지만,
+# 모든 데이터 소스 타입을 지원하도록 기본 포함한다.
+
+pandas>=2.0
+
+# ---------------------------------------------------------------------------
+# 원본 DB 드라이버 (데이터 소스 타입 → 드라이버)
+# ---------------------------------------------------------------------------
+
+# mysql / mariadb / starrocks (MySQL 와이어 프로토콜)
+pymysql>=1.1
+
+# postgresql / greenplum
+psycopg2-binary>=2.9
+
+# redshift
+redshift_connector>=2.1
+
+# mssql / sqlserver
+pymssql>=2.3
+
+# oracle / tibero (Oracle 호환)
+oracledb>=2.0
+
+# trino
+trino>=0.330
+
+# hive / impala (HiveServer2 프로토콜)
+impyla>=0.19
+
+# snowflake
+snowflake-connector-python>=3.12

@@ -1,0 +1,11 @@
+# Argus Metadata Agent — OS native 환경 설치용.
+#
+#   python3 -m venv .venv
+#   .venv/bin/pip install -r requirements.txt
+#   .venv/bin/argus-agent --help
+#
+# 에이전트는 표준 라이브러리만 사용하므로(urllib 기반 HTTP) 외부 패키지
+# 의존성이 없다. 아래 -e . 는 이 패키지 자신을 설치해 argus-agent CLI 를
+# PATH 에 등록하기 위한 것 (pyproject.toml 의 [project.scripts]).
+
+-e .

@@ -1,0 +1,156 @@
+{
+  "groups": [
+    {
+      "id": "catalog",
+      "label": "데이터 카탈로그",
+      "items": [
+        {
+          "id": "dashboard",
+          "title": "대시보드",
+          "url": "/dashboard",
+          "icon": "LayoutDashboard"
+        },
+        {
+          "id": "datasets",
+          "title": "데이터셋",
+          "url": "/dashboard/datasets",
+          "icon": "Database"
+        },
+        {
+          "id": "datasources",
+          "title": "데이터 소스",
+          "url": "/dashboard/datasources",
+          "icon": "Server"
+        },
+        {
+          "id": "taxonomies",
+          "title": "분류 체계",
+          "url": "/dashboard/taxonomies",
+          "icon": "FolderTree"
+        },
+        {
+          "id": "changes",
+          "title": "변경 관리",
+          "url": "/dashboard/changes",
+          "icon": "ClipboardCheck"
+        },
+        {
+          "id": "my-approvals",
+          "title": "내 결재함",
+          "url": "/dashboard/my-approvals",
+          "icon": "Inbox"
+        }
+      ]
+    },
+    {
+      "id": "ai-catalog",
+      "label": "AI 카탈로그",
+      "items": [
+        {
+          "id": "ai-agents",
+          "title": "AI Agent",
+          "url": "/dashboard/ai-agents",
+          "icon": "Bot"
+        },
+        {
+          "id": "models",
+          "title": "MLflow 모델",
+          "url": "/dashboard/models",
+          "icon": "Box"
+        },
+        {
+          "id": "mlflow-files",
+          "title": "MLflow 모델 파일",
+          "url": "/dashboard/mlflow-files",
+          "icon": "FolderOpen",
+          "adminOnly": true
+        },
+        {
+          "id": "oci-hub",
+          "title": "OCI 모델 허브",
+          "url": "/dashboard/oci-hub",
+          "icon": "Globe"
+        },
+        {
+          "id": "oci-files",
+          "title": "OCI 모델 파일",
+          "url": "/dashboard/oci-files",
+          "icon": "FolderOpen",
+          "adminOnly": true
+        }
+      ]
+    },
+    {
+      "id": "api-catalog",
+      "label": "API 카탈로그",
+      "items": [
+        {
+          "id": "apis",
+          "title": "API",
+          "url": "/dashboard/apis",
+          "icon": "Webhook"
+        },
+        {
+          "id": "api-favorites",
+          "title": "즐겨찾기",
+          "url": "/dashboard/apis/favorites",
+          "icon": "Star"
+        }
+      ]
+    },
+    {
+      "id": "governance",
+      "label": "거버넌스",
+      "items": [
+        {
+          "id": "standards",
+          "title": "데이터 표준",
+          "url": "/dashboard/standards",
+          "icon": "Shield"
+        },
+        {
+          "id": "glossary",
+          "title": "용어집",
+          "url": "/dashboard/glossary",
+          "icon": "BookOpen"
+        },
+        {
+          "id": "tags",
+          "title": "태그",
+          "url": "/dashboard/tags",
+          "icon": "Tags"
+        },
+        {
+          "id": "alerts",
+          "title": "알림",
+          "url": "/dashboard/alerts",
+          "icon": "Bell"
+        }
+      ]
+    },
+    {
+      "id": "admin",
+      "label": "관리",
+      "items": [
+        {
+          "id": "users",
+          "title": "사용자 관리",
+          "url": "/dashboard/users",
+          "icon": "Users"
+        },
+        {
+          "id": "settings",
+          "title": "설정",
+          "url": "/dashboard/settings",
+          "icon": "Settings"
+        },
+        {
+          "id": "permissions",
+          "title": "권한 관리",
+          "url": "/dashboard/permissions",
+          "icon": "ShieldCheck"
+        }
+      ]
+    }
+  ]
+}
