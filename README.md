@@ -1,5 +1,10 @@
 # Argus Catalog
 
+[![CI](https://github.com/DataDynamics-OSS/argus-catalog/actions/workflows/ci.yml/badge.svg)](https://github.com/DataDynamics-OSS/argus-catalog/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+
 **Argus Catalog** 은 DataHub 스타일의 **데이터 카탈로그**와 Unity Catalog OSS 호환
 **ML 모델 레지스트리**를 하나로 묶은 오픈소스 메타데이터 플랫폼입니다. 데이터셋·스키마·
 리니지·데이터 품질·용어집·데이터 표준은 물론, ML 모델 레지스트리와 LLM 기반 메타데이터
