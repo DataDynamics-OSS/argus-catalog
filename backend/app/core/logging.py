@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """일 단위 롤링 파일 핸들러를 사용하는 로깅 설정."""
 
 import logging

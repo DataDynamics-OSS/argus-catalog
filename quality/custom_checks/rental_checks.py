@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Sakila rental 데이터셋용 커스텀 품질 체크 (CUSTOM_PYTHON 플러그인 예시).
 
 함수 규약:

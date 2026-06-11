@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """사용자 관리 서비스(비즈니스 로직 계층).
 
 라우터에서 호출하는 사용자/역할 CRUD 로직을 모은다. 모든 DB 상호작용은

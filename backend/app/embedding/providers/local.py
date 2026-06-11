@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """sentence-transformers 를 사용하는 로컬 임베딩 제공자.
 
 sentence-transformers 모델을 로컬에 로드하고, async 이벤트 루프를 막지 않도록

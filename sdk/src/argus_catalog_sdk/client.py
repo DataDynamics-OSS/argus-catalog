@@ -1,28 +1,29 @@
-"""Argus Catalog Model Client.
+# SPDX-License-Identifier: Apache-2.0
+"""Argus Catalog 모델 클라이언트.
 
-Provides Python API for managing ML models in Argus Catalog:
-  - List, create, delete models
-  - Upload/download model files via presigned URLs
-  - Import from HuggingFace Hub
-  - Import from local directory (airgap)
-  - Pull model files to local directory
+Argus Catalog 의 ML 모델을 관리하는 Python API 를 제공한다:
+  - 모델 목록 조회 / 생성 / 삭제
+  - presigned URL 을 통한 모델 파일 업로드/다운로드
+  - HuggingFace Hub 에서 임포트
+  - 로컬 디렉터리에서 임포트 (에어갭)
+  - 모델 파일을 로컬 디렉터리로 내려받기(pull)
 
-Usage::
+사용 예::
 
     from argus_catalog_sdk import ModelClient
 
     client = ModelClient("http://catalog-server:4600")
 
-    # List models
+    # 모델 목록
     models = client.list_models()
 
-    # Import from HuggingFace
+    # HuggingFace 에서 임포트
     result = client.import_huggingface("bert-base-uncased", "argus.ml.bert")
 
-    # Pull model to local
+    # 모델을 로컬로 내려받기
     client.pull("argus.ml.bert", version=1, dest="/tmp/model")
 
-    # Push local directory
+    # 로컬 디렉터리 업로드
     client.push("/path/to/model", "argus.ml.custom", description="My model")
 """
 
@@ -33,16 +34,16 @@ import httpx
 
 
 class ModelClient:
-    """Client for Argus Catalog Model Registry."""
+    """Argus Catalog 모델 레지스트리 클라이언트."""
 
     def __init__(self, base_url: str, timeout: float = 300.0,
                  token: str | None = None,
                  username: str | None = None, password: str | None = None):
-        """Initialize the client.
+        """클라이언트를 초기화한다.
 
         Args:
-            base_url: Catalog server URL (e.g. "http://localhost:4600")
-            timeout: Request timeout in seconds (default 300s for large uploads)
+            base_url: 카탈로그 서버 URL (예: "http://localhost:4600")
+            timeout: 요청 타임아웃(초). 대용량 업로드를 위해 기본 300초.
             token: 액세스 토큰(Bearer). 모델 등록/삭제 등 변이 작업에 필요.
             username/password: 토큰 대신 자격증명을 주면 생성 시 자동 로그인한다.
 
@@ -90,13 +91,13 @@ class ModelClient:
         return resp
 
     # -----------------------------------------------------------------
-    # Model CRUD
+    # 모델 CRUD
     # -----------------------------------------------------------------
 
     def list_models(
         self, search: str | None = None, page: int = 1, page_size: int = 20,
     ) -> dict:
-        """List registered models."""
+        """등록된 모델 목록을 조회한다."""
         params = {"page": page, "page_size": page_size}
         if search:
             params["search"] = search
@@ -104,14 +105,14 @@ class ModelClient:
         return resp.json()
 
     def get_model(self, name: str) -> dict:
-        """Get a registered model by name."""
+        """이름으로 등록된 모델을 조회한다."""
         resp = self._request("GET", self._url(f"/models/{name}"))
         return resp.json()
 
     def create_model(
         self, name: str, description: str | None = None, owner: str | None = None,
     ) -> dict:
-        """Create a registered model."""
+        """모델을 등록(생성)한다."""
         payload = {"name": name}
         if description:
             payload["description"] = description
@@ -121,23 +122,23 @@ class ModelClient:
         return resp.json()
 
     def delete_model(self, name: str) -> dict:
-        """Soft-delete a model."""
+        """모델을 소프트 삭제한다."""
         resp = self._request("DELETE", self._url(f"/models/{name}"))
         return resp.json()
 
     def hard_delete_models(self, names: list[str]) -> dict:
-        """Permanently delete models (DB + disk/S3)."""
+        """모델을 영구 삭제한다 (DB + 디스크/S3)."""
         resp = self._request("POST", self._url("/models/hard-delete"), json={"names": names})
         return resp.json()
 
     # -----------------------------------------------------------------
-    # Model Store: Upload
+    # 모델 스토어: 업로드
     # -----------------------------------------------------------------
 
     def upload_file(
         self, model_name: str, version: int, filepath: str | Path,
     ) -> dict:
-        """Upload a single file to a model version."""
+        """모델 버전에 단일 파일을 업로드한다."""
         p = Path(filepath)
         with open(p, "rb") as f:
             resp = self._request(
@@ -150,7 +151,7 @@ class ModelClient:
     def get_upload_url(
         self, model_name: str, version: int, filename: str,
     ) -> dict:
-        """Get a presigned upload URL for direct S3 upload."""
+        """S3 직접 업로드용 presigned 업로드 URL 을 발급받는다."""
         resp = self._request(
             "POST",
             self._store_url(f"/{model_name}/versions/{version}/upload-url"),
@@ -161,7 +162,7 @@ class ModelClient:
     def upload_via_presigned(
         self, model_name: str, version: int, filepath: str | Path,
     ) -> dict:
-        """Upload a file using presigned URL (for large files)."""
+        """presigned URL 로 파일을 업로드한다 (대용량 파일용)."""
         p = Path(filepath)
         url_info = self.get_upload_url(model_name, version, p.name)
         with open(p, "rb") as f:
@@ -171,13 +172,13 @@ class ModelClient:
         return {"key": url_info["key"], "status": "uploaded"}
 
     # -----------------------------------------------------------------
-    # Model Store: Download / Pull
+    # 모델 스토어: 다운로드 / Pull
     # -----------------------------------------------------------------
 
     def get_download_url(
         self, model_name: str, version: int, filename: str,
     ) -> dict:
-        """Get a presigned download URL."""
+        """presigned 다운로드 URL 을 발급받는다."""
         resp = self._request(
             "GET",
             self._store_url(f"/{model_name}/versions/{version}/download-url"),
@@ -186,7 +187,7 @@ class ModelClient:
         return resp.json()
 
     def get_download_urls(self, model_name: str, version: int) -> dict:
-        """Get presigned download URLs for all files."""
+        """모든 파일에 대한 presigned 다운로드 URL 을 발급받는다."""
         resp = self._request(
             "GET",
             self._store_url(f"/{model_name}/versions/{version}/download-urls"),
@@ -196,7 +197,7 @@ class ModelClient:
     def pull(
         self, model_name: str, version: int, dest: str | Path,
     ) -> list[str]:
-        """Download all model files to a local directory."""
+        """모델의 모든 파일을 로컬 디렉터리로 내려받는다."""
         dest_path = Path(dest)
         dest_path.mkdir(parents=True, exist_ok=True)
 
@@ -214,11 +215,11 @@ class ModelClient:
         return downloaded
 
     # -----------------------------------------------------------------
-    # Model Store: List / Manifest
+    # 모델 스토어: 목록 / Manifest
     # -----------------------------------------------------------------
 
     def list_files(self, model_name: str, version: int) -> list[dict]:
-        """List all files for a model version."""
+        """모델 버전의 모든 파일을 조회한다."""
         resp = self._request(
             "GET",
             self._store_url(f"/{model_name}/versions/{version}/files"),
@@ -226,7 +227,7 @@ class ModelClient:
         return resp.json()
 
     def get_manifest(self, model_name: str, version: int) -> dict:
-        """Get OCI manifest for a model version."""
+        """모델 버전의 OCI manifest 를 조회한다."""
         resp = self._request(
             "GET",
             self._store_url(f"/{model_name}/versions/{version}/manifest"),
@@ -234,13 +235,13 @@ class ModelClient:
         return resp.json()
 
     # -----------------------------------------------------------------
-    # Model Store: Finalize
+    # 모델 스토어: Finalize
     # -----------------------------------------------------------------
 
     def finalize(
         self, model_name: str, version: int, annotations: dict | None = None,
     ) -> dict:
-        """Finalize a model version (scan files, generate manifest)."""
+        """모델 버전을 확정(finalize)한다 (파일 스캔, manifest 생성)."""
         body = {}
         if annotations:
             body["annotations"] = annotations
@@ -252,7 +253,7 @@ class ModelClient:
         return resp.json()
 
     # -----------------------------------------------------------------
-    # Model Store: Import
+    # 모델 스토어: 임포트
     # -----------------------------------------------------------------
 
     def import_huggingface(
@@ -263,7 +264,7 @@ class ModelClient:
         description: str | None = None,
         owner: str | None = None,
     ) -> dict:
-        """Import a model from HuggingFace Hub."""
+        """HuggingFace Hub 에서 모델을 임포트한다."""
         payload = {
             "hf_model_id": hf_model_id,
             "model_name": model_name,
@@ -288,10 +289,10 @@ class ModelClient:
         owner: str | None = None,
         source: str = "local",
     ) -> dict:
-        """Import model from a local directory (server-side).
+        """로컬 디렉터리에서 모델을 임포트한다 (서버 측 처리).
 
-        The directory must be accessible to the catalog server.
-        For airgap: transfer files to server first, then call this.
+        해당 디렉터리는 카탈로그 서버에서 접근 가능해야 한다.
+        에어갭의 경우: 먼저 파일을 서버로 전송한 뒤 이 메서드를 호출한다.
         """
         payload = {
             "local_dir": str(local_dir),
@@ -319,20 +320,20 @@ class ModelClient:
         framework: str | None = None,
         source_type: str = "my",
     ) -> dict:
-        """Push a local model directory to the OCI Model Hub.
+        """로컬 모델 디렉터리를 OCI Model Hub 로 푸시한다.
 
-        1. Creates the OCI model if it doesn't exist
-        2. Uploads all files to S3 via model-store API
-        3. Finalizes the version (scan files, generate manifest, update DB)
+        1. OCI 모델이 없으면 생성한다
+        2. model-store API 로 모든 파일을 S3 에 업로드한다
+        3. 버전을 확정한다 (파일 스캔, manifest 생성, DB 갱신)
 
-        Unlike import_local (server-side), this uploads from the client side.
-        Works when the client cannot access the server's filesystem.
+        import_local(서버 측)과 달리 클라이언트 측에서 업로드한다.
+        클라이언트가 서버 파일시스템에 접근할 수 없는 경우에 동작한다.
         """
         local_path = Path(local_dir)
         if not local_path.is_dir():
             raise FileNotFoundError(f"Directory not found: {local_path}")
 
-        # Create OCI model if needed
+        # 필요 시 OCI 모델 생성
         try:
             payload = {"name": model_name, "source_type": source_type}
             if description:
@@ -348,27 +349,27 @@ class ModelClient:
             if "409" not in str(e):
                 raise
 
-        # Determine version number
+        # 버전 번호 결정
         versions = self._request("GET", self._url(f"/oci-models/{model_name}/versions")).json()
         new_version = max((v["version"] for v in versions), default=0) + 1
 
-        # Collect files
+        # 파일 수집
         files = []
         for fp in sorted(local_path.rglob("*")):
             if fp.is_file() and not str(fp.relative_to(local_path)).startswith("."):
                 files.append(fp)
 
-        # Upload each file to S3 via model-store
+        # 각 파일을 model-store 로 S3 업로드
         for fp in files:
             self.upload_file(model_name, new_version, fp)
 
-        # Read README if present
+        # README 가 있으면 읽기
         readme = None
         readme_path = local_path / "README.md"
         if readme_path.is_file():
             readme = readme_path.read_text(encoding="utf-8")
 
-        # Finalize via OCI Hub API (creates version record + updates model stats)
+        # OCI Hub API 로 확정 (버전 레코드 생성 + 모델 통계 갱신)
         body = {}
         if readme:
             body["readme"] = readme

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Trino 테이블에서 sample row 를 뽑아 CSV 로 직렬화하는 헬퍼.
 
 테스트 시 seed 가 INSERT 까지 수행하진 않지만, 외부 S3 location 에 어떤 파일이

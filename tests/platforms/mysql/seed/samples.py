@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Sakila 테이블에서 sample row 를 뽑아 CSV 로 직렬화하는 헬퍼.
 
 각 dataset 의 sample 은 catalog 의 ``POST /datasets/{id}/sample`` 로 업로드된다

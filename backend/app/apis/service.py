@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """API Catalog 서비스 — 스펙 파싱·등록, CRUD, 상태 이력, Try-it 프록시."""
 
 from __future__ import annotations

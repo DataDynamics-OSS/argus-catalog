@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """리니지 변경 알림 Pydantic 스키마(요청·응답 DTO).
 
 라우터(``app/alert/router.py``) 와 서비스(``app/alert/service.py``) 가 공유하는

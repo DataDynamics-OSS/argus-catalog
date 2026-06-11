@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """임베딩(pgvector) 용 SQLAlchemy ORM 모델.
 
 활성 임베딩 제공자가 생성한 벡터 임베딩을 저장한다.

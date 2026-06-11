@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """AI 메타데이터 생성 API 용 Pydantic 스키마."""
 
 

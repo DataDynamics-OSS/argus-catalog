@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """데이터베이스 연결 및 세션 관리.
 
 SQLAlchemy 비동기 엔진을 통해 PostgreSQL 과 MariaDB/MySQL 을 지원한다.

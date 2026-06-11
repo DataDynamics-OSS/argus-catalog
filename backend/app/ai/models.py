@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """AI 생성 ORM 모델.
 
 감사(audit), 되돌리기, 비용 추적을 위해 AI 가 생성한 모든 메타데이터 제안을 추적한다.

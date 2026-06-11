@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """권한 매트릭스 모델.
 
 행 의미: (kind, perm_key) 에 role 이 허용됨.

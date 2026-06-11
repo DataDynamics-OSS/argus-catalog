@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Argus Catalog Server."""
 
 # 제품 버전의 단일 소스(single source of truth).

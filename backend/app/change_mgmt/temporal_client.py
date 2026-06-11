@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Temporal 클라이언트 헬퍼.
 
 프로세스당 한 번만 연결을 맺어 재사용한다. FastAPI lifespan 에서

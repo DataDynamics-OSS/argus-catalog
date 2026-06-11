@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """두 OpenAPI 스펙(엔드포인트) 간 변경 비교 + Breaking change 감지.
 
 엔드포인트는 (METHOD, path) 로 매칭한다. Breaking 판정 규칙(MVP):

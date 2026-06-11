@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """조직(Organization) · 시스템(System) · 토폴로지 서비스.
 
 사이드바 데이터 소스 메뉴를 ``조직(트리) → 시스템 → 데이터 소스 → 데이터셋`` 계층으로

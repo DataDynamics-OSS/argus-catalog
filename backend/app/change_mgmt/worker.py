@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Temporal 워커 진입점.
 
 별도 프로세스로 기동한다:

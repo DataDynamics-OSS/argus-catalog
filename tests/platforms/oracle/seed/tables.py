@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Oracle 통합 테스트 시드 — APP 스키마(ARGUS_TEST)에 테이블 직접 생성.
 
 Oracle 은 따옴표 없는 식별자를 대문자로 저장하므로, 생성한 ``orders`` 는

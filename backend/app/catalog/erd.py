@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """ER 다이어그램 빌더 — 카탈로그에 저장된 메타데이터만으로 ERD 를 구성한다.
 
 관계(FK) 도출 — 3단 폴백:

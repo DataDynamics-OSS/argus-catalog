@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """품질 검증 주기 실행 스케줄러.
 
 데이터셋 property ``argus.quality_schedule``(hourly/daily/weekly)가 설정된

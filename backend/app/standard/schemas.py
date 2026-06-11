@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """데이터 표준 Pydantic 스키마."""
 
 from datetime import date, datetime

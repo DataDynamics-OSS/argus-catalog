@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Argus Catalog 데이터셋 품질 배치 — PySpark 프로파일링 + 규칙 검증.
 
 카탈로그 API 에서 데이터셋(URN)과 품질 규칙을 가져와, 원본 RDBMS 를 PySpark(JDBC)로

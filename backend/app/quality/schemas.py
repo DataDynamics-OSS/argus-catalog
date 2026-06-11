@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """데이터 품질 Pydantic 스키마.
 
 프로파일링·품질 규칙·검사 결과·점수에 대한 요청/응답 모델.

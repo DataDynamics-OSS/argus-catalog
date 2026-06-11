@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """OpenAI API 임베딩 제공자.
 
 OpenAI 임베딩 API 및 호환 엔드포인트(Azure OpenAI 등)를 지원한다.

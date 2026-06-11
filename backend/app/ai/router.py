@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """AI 메타데이터 생성 API 엔드포인트.
 
 LLM 기반의 데이터셋/컬럼 설명 자동 생성, 태그 제안, PII 탐지

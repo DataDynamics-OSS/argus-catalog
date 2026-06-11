@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """MySQL/MariaDB 통합 테스트 fixture — iceberg_rest / postgresql 와 동일 패턴."""
 
 from __future__ import annotations

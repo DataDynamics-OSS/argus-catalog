@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """OpenAPI 스펙 품질 린팅 — Spectral(oas 룰셋) 스타일의 경량 구현.
 
 스펙 dict 를 규칙별로 검사해 위치(location)·심각도(severity)·메시지를 가진

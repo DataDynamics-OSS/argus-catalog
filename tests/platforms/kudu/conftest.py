@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Kudu 통합 테스트 fixture.
 
 ``kudu-python`` 은 native 의존성이라 venv 에 설치 안 될 수도 있다. import 실패

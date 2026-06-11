@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """데이터셋 분류체계(Taxonomy) 서비스 — 다중 분류체계, 카테고리 트리, N:M 매핑."""
 
 from __future__ import annotations

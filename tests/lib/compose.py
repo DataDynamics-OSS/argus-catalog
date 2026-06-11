@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Thin wrapper around the ``docker compose`` CLI.
 
 testcontainers-python 을 직접 쓰는 대신 compose 파일을 그대로 사용한다.

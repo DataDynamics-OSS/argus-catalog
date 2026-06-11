@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Trino + Hive connector — 스키마/테이블 생성. warehouse 는 MinIO S3.
 
 CREATE TABLE 만으로 데이터 파일은 만들지 않지만 metadata 는 HMS 에 등록되어

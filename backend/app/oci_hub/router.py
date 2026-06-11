@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """OCI 모델 허브 라우터.
 
 ``/api/v1/oci-models`` 경로에서 HuggingFace 스타일의 모델 카탈로그

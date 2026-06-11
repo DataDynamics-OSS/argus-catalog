@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Unity Catalog OSS 호환 라우터 — MLflow 통합용.
 
 MLflow 의 ``UnityCatalogOssStore`` (``uc_oss_rest_store.py``) 가 호출하는

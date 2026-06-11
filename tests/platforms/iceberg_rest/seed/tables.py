@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Iceberg REST Catalog 에 테스트용 namespace/테이블/데이터를 만든다.
 
 호출하는 쪽이 ``RestCatalog`` 인스턴스를 넘기면 in-place 로 테이블을 생성하고

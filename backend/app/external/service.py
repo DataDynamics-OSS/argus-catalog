@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """외부 API 용 dataset 메타데이터/Avro 스키마 빌더 + 캐시 관리 서비스.
 
 외부 컨슈머가 dataset 정보를 빠르게 얻을 수 있도록 메타데이터/Avro JSON 을 조립하고

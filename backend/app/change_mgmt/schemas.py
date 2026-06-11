@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """변경 관리 Pydantic 스키마.
 
 라우터/서비스/Temporal 액티비티 간에 공유되는 DTO 와 열거형.

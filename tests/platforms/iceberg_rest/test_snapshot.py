@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Iceberg 테이블에 추가 데이터를 append 한 뒤 sync 를 재실행하면
 ``iceberg.current_snapshot_id`` 가 바뀌고 ``iceberg.last_updated_ms`` 가
 증가하는지 검증.

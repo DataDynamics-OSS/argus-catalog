@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """동일 데이터로 두 번 sync — created=0, total 행 수 동일."""
 
 from __future__ import annotations

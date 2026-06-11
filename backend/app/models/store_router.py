@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """모델 스토어 라우터 — S3 기반 모델 아티팩트 관리 API.
 
 ``/api/v1/model-store`` 경로에서 다음을 제공한다:

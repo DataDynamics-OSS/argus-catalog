@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Temporal 액티비티.
 
 워크플로우(workflow.py) 가 호출하는 비결정적(non-deterministic) 작업.

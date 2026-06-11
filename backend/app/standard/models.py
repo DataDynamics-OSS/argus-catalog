@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """데이터 표준 ORM 모델.
 
 표준 사전, 단어, 도메인, 용어, 코드 그룹/값, 용어-컬럼 매핑, 변경 이력.

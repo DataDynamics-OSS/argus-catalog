@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Scan model-artifacts directory and populate catalog_models table.
 
 Usage:

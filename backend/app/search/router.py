@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """시맨틱·하이브리드 검색 API 엔드포인트.
 
 시맨틱 검색(pgvector 코사인 유사도), 하이브리드 검색(키워드 + 시맨틱),

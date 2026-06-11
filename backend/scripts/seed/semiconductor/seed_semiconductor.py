@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """반도체 제조 표준사전 시드 데이터 로딩 스크립트.
 
 Catalog Server Standard API를 호출하여 반도체 Fab 표준 단어/도메인/코드/용어를 일괄 등록한다.

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Argus Catalog 데이터셋 품질 배치 — pandas 프로파일링 + 규칙 검증 (소규모 데이터용).
 
 dataset-quality.py(PySpark)와 동일한 흐름이지만 Spark 클러스터 없이

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Hive 동기화 어댑터 end-to-end 검증 (thrift mode)."""
 
 from __future__ import annotations

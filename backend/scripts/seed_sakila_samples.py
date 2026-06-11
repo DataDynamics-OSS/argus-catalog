@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Sakila 데이터셋 샘플 parquet 시드 생성기.
 
 각 sakila 데이터셋의 미리보기용 샘플 데이터를 제품 규약 경로에 기록한다:

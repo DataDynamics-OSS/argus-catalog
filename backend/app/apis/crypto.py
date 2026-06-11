@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """대칭 암호화 헬퍼(Fernet) — API 자격증명 시크릿 저장용.
 
 키는 환경변수 ``ARGUS_SECRET_KEY`` (없으면 개발용 기본 패스프레이즈)에서 SHA-256

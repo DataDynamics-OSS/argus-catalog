@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """시맨틱/하이브리드 검색 API 용 Pydantic 스키마."""
 
 from pydantic import BaseModel, Field

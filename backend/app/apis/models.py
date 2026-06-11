@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """API Catalog 의 SQLAlchemy ORM 모델.
 
 데이터셋/모델/AI 에이전트와 동급의 1급 엔티티로 API 를 등록·문서화·호출·

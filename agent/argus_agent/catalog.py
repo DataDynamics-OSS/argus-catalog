@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Argus Catalog REST 클라이언트 — 표준 라이브러리만 사용 (quality 배치와 동일 패턴).
 
 에이전트가 필요로 하는 최소 표면만 노출한다:

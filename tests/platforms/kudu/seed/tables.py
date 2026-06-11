@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Kudu 테스트용 테이블 — kudu-python API 로 직접 생성.
 
 Kudu 는 자체 메타데이터 카탈로그를 가지므로 HMS 가 필요 없다. 테이블 이름은

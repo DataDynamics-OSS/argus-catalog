@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """임베딩 제공자 레지스트리 — 싱글턴 매니저.
 
 활성 임베딩 제공자의 생명주기를 관리한다. catalog_configuration DB 테이블에서

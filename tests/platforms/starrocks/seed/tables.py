@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """StarRocks 테스트용 테이블 + 데이터.
 
 StarRocks 는 ENGINE/DISTRIBUTED BY/DUPLICATE KEY 같은 자체 DDL 을 요구한다.

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """AI Agent 카탈로그의 Pydantic 스키마(요청·응답 DTO).
 
 ``/api/v1/ai-agents`` 라우터와 서비스 레이어가 사용한다. JSON 컬럼은

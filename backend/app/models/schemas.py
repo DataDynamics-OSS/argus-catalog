@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """MLflow 모델 레지스트리의 Pydantic 스키마(요청·응답 DTO).
 
 ``/api/v1/models`` 라우터와 서비스 레이어가 사용하는 요청/응답 모델을 모아둔다.

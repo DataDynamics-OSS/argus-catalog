@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """로컬 파일시스템 브라우저 서비스 레이어.
 
 ``os`` / ``pathlib`` 만 사용해 로컬 리눅스 파일시스템에서 디렉토리 조회·파일

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """OCI 모델 허브 서비스 레이어(비즈니스 로직).
 
 CRUD · 태그 · 리니지 · 버전 라이프사이클 · HuggingFace 임포트까지를

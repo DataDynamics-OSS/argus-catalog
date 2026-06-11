@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """동일 데이터로 sync 를 두 번 실행했을 때 created=0, updated>=N 이어야 한다."""
 
 from __future__ import annotations

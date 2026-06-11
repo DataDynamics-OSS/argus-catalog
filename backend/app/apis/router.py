@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """API Catalog 라우터 — /api/v1/apis."""
 
 import logging

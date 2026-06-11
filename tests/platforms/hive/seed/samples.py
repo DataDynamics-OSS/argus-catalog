@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Hive 테이블에서 sample row 를 뽑는 헬퍼.
 
 현재 통합 테스트의 seed 는 HMS metadata 만 등록하고 S3/MinIO warehouse 에는 실제

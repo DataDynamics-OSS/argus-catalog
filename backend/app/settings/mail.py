@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """이메일(SMTP) 발송 — DB(catalog_configuration, category='mail')의 설정을 사용.
 
 단일 설정(비-멀티테넌트) 환경용 MailService.

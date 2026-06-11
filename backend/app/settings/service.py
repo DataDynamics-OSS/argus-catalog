@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """설정(Settings) 서비스.
 
 ``catalog_configuration`` 테이블에 저장된 카테고리별 설정 값을 읽고 쓰는

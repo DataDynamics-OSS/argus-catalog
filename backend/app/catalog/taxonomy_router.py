@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """데이터셋 분류체계(Taxonomy) API. catalog_router 와 동일 prefix(/api/v1/catalog)."""
 
 from __future__ import annotations

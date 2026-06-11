@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """생성 작업 5종 — describe / summarize / columns / tags / pii.
 
 모든 작업은 같은 흐름을 공유한다:

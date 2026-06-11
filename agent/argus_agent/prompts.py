@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """프롬프트 빌더 — 서버(backend/app/ai/prompts.py)와 동일한 생성 시맨틱.
 
 컨텍스트(스키마·샘플·용어집)를 한국어 프롬프트로 직렬화한다.

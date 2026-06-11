@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """리니지 변경 알림 ORM 모델.
 
 주요 테이블:

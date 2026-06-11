@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """LLM 제공자의 추상 베이스 클래스.
 
 모든 LLM 제공자(OpenAI, Ollama, Anthropic)가 이 인터페이스를 구현한다.

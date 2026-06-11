@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Hive Metastore 통합 테스트 fixture.
 
 HMS 는 Thrift 프로토콜을 사용하므로 ``hmsclient`` 로 직접 통신. compose 의

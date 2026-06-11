@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """OCI 모델 허브 SQLAlchemy ORM 정의.
 
 주요 테이블:

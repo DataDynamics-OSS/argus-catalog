@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """
 카탈로그 서버용 데이터 소스 메타데이터 시드 데이터.
 

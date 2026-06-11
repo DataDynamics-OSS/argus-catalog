@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """데이터 품질 ORM 모델."""
 
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, Numeric, String, Text, func

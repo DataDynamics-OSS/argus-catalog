@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Oracle 동기화 어댑터 end-to-end 검증 — ARGUS_TEST 스키마 기반."""
 
 from __future__ import annotations

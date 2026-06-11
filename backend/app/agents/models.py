@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """AI Agent 카탈로그의 SQLAlchemy ORM 모델 정의.
 
 데이터셋/모델 카탈로그와 동급의 1급 엔티티로 AI 에이전트를 등록·관리한다.

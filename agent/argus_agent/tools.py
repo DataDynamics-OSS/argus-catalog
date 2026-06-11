@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """어시스턴트 도구 — 카탈로그 API 를 LLM function calling 도구로 노출.
 
 각 도구는 (OpenAI tools 스키마, 실행 함수) 쌍으로 정의된다. 실행은

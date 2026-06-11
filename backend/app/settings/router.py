@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Catalog Server 의 설정(Settings) API.
 
 오브젝트 스토리지(MinIO/S3), 임베딩, LLM, 인증(Keycloak), CORS, 캐시 등의

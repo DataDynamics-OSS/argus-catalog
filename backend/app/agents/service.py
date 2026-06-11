@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """AI Agent 카탈로그 서비스 레이어(비즈니스 로직).
 
 라우터는 이 모듈의 함수만 호출하고 HTTP 변환만 수행한다. 데이터셋/모델

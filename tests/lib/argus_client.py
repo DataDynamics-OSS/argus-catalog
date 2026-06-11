@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Thin REST client for argus-catalog-server."""
 
 from __future__ import annotations

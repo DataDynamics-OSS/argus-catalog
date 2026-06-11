@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """StarRocks 통합 테스트 fixture.
 
 StarRocks 는 MySQL wire protocol 을 쓰므로 PyMySQL 로 접속. FE/BE 부팅이 느려

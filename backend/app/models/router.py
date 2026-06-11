@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """MLflow 모델 레지스트리 라우터.
 
 ``/api/v1/models`` 경로에서 등록 모델(``RegisteredModel``)과 버전

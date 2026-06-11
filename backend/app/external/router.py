@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """외부 시스템(Schema Registry, 데이터 파이프라인 등) 용 dataset 메타데이터/Avro 스키마 API.
 
 dataset_id(int) 와 URN(string) 양쪽 식별자를 모두 지원하며, TTL 캐시(``app.external.cache``)

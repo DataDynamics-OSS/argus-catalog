@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """데이터 카탈로그 API 엔드포인트."""
 
 import json

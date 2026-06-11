@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """모델 다운로드 로그 기록 및 사용량 통계.
 
 모델 다운로드 이벤트(``model_download_logs`` 테이블)를 적재하고, 일/주/월

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """어시스턴트 HTTP 서버 (serve 모드) — 표준 라이브러리 http.server 기반.
 
 POST /chat  : SSE 스트리밍 채팅 (백엔드가 프록시하는 엔드포인트)

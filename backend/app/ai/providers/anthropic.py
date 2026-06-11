@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Anthropic (Claude) LLM 제공자.
 
 텍스트 생성에 Anthropic Messages API 를 사용한다.

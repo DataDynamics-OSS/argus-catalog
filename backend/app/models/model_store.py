@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """모델 아티팩트 스토어 — S3/MinIO 백엔드 + OCI 매니페스트 지원.
 
 주요 책임:

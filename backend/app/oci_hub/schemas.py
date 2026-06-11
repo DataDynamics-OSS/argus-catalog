@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """OCI 모델 허브 Pydantic 스키마(요청·응답 DTO).
 
 라우터(``app/oci_hub/router.py``) 와 서비스(``app/oci_hub/service.py``) 가

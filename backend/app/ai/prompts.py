@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """AI 메타데이터 생성용 프롬프트 템플릿.
 
 각 함수는 특정 생성 작업을 위해 사용 가능한 카탈로그 컨텍스트

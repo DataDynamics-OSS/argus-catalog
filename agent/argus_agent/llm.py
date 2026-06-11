@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """LLM 클라이언트 — OpenAI 호환 chat/completions 하나로 통일.
 
 ollama(기본)·vLLM·OpenAI·LiteLLM 이 모두 같은 엔드포인트를 제공하므로

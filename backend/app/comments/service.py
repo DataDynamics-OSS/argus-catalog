@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """댓글 서비스 — 중첩 답글을 지원하는 CRUD 처리.
 
 페이지네이션은 최상위 댓글(parent_id IS NULL)만 센다.

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """설정(Settings) ORM 모델."""
 
 from sqlalchemy import Column, DateTime, Integer, String, func

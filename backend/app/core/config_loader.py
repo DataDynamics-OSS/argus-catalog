@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """properties 변수 치환을 지원하는 설정 로더.
 
 config.properties(Java 스타일 key=value)와 config.yml 을 읽어,

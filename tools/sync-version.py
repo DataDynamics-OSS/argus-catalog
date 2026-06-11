@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """제품 버전 단일 소스 동기화 도구.
 
 루트 ``VERSION`` 파일을 단일 소스(single source of truth)로 삼아, 모노레포 전반의

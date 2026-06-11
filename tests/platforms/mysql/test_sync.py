@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """MySQL 동기화 어댑터 end-to-end 검증 — Sakila 샘플 DB 기반."""
 
 from __future__ import annotations

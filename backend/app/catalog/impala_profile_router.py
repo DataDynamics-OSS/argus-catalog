@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Impala 쿼리 프로파일 분석 프록시.
 
 프로파일 분석 요청을 metadata-sync 서비스로 전달한다. metadata-sync 는 Impala 접속

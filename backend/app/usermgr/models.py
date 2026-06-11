@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """사용자 관리(User management) 모듈의 SQLAlchemy ORM 모델.
 
 테이블 구성:

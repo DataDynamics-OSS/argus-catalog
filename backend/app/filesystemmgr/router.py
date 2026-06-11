@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """로컬 파일시스템 브라우저 라우터.
 
 ``/api/v1/filesystem`` 경로에서 다음을 제공한다:

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """어시스턴트 tool-use 루프 — 질문 → 도구 선택·실행 반복 → 최종 답변.
 
 이벤트 제너레이터로 구현되어 SSE 서버(server.py)가 그대로 흘려보낸다.

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """보안 유틸리티 및 미들웨어."""
 
 import logging

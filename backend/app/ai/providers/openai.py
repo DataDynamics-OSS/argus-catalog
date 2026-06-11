@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """OpenAI API LLM 제공자.
 
 OpenAI Chat Completions API 및 호환 엔드포인트

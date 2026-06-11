@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """변경 관리(Change Management) 모듈.
 
 스키마/메타데이터 변경 요청(CR)을 결재 워크플로우로 처리하고

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """리니지 변경 알림 API 엔드포인트.
 
 엔드포인트:

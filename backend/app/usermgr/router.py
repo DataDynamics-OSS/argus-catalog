@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """사용자 관리(User management) API.
 
 사용자/역할 CRUD 를 제공하는 FastAPI 라우터. 모든 엔드포인트는 ``/usermgr``

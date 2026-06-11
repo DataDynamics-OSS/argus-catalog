@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """리니지 변경 알림 서비스 레이어(Alert Rule Engine 포함).
 
 핵심 비즈니스 로직:

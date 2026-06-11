@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """사용자 관리(User management) 스키마.
 
 요청 검증과 응답 직렬화에 사용하는 Pydantic 모델을 모은다. 구성은 세 부분:

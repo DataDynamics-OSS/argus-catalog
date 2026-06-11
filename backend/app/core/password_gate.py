@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """강제 비밀번호 변경 게이트 미들웨어.
 
 최초 로그인 시 비밀번호 변경이 필요한 계정(``must_change_password=true``, 예: LDAP

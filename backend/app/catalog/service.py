@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """데이터 카탈로그 서비스 계층.
 
 데이터셋, 데이터 소스, 태그, 용어집 용어, 소유자에 대한 CRUD 작업을 제공한다.

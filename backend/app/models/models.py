@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """MLflow 모델 레지스트리의 SQLAlchemy ORM 모델 정의.
 
 Unity Catalog OSS 의 ``RegisteredModel`` / ``ModelVersion`` 패턴을 따른다.

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """사용 기반 컬럼 관계 — 쿼리 워크로드의 JOIN 키를 데이터셋/필드로 해석·집계한다.
 
 확장(metadata-sync)이 SQL 에서 추출한 JOIN 키 컬럼쌍(테이블/컬럼 이름)을 받아 해당

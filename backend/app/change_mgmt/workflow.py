@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Temporal 워크플로우 — 결재/통지/적용 오케스트레이션.
 
 흐름:

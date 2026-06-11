@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Iceberg REST Catalog 동기화 어댑터의 end-to-end 검증.
 
 흐름:

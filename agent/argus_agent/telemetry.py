@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """셀프-텔레메트리 (A6) — 어시스턴트를 카탈로그 AI Agent 레지스트리에 등록하고
 호출 지표를 push 한다.
 

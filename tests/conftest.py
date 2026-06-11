@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Top-level pytest fixtures shared by all platform test suites.
 
 argus-catalog-server 와 argus-catalog-metadata-sync 는 **호스트에 이미 실행 중**

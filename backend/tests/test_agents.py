@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """AI Agent 카탈로그 단위 테스트 (자기완결형, in-memory SQLite).
 
 외부 DB/서비스 없이 SQLite 메모리 엔진에 에이전트 테이블만 생성해 서비스

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """LoRA fine-tuning script for Argus Catalog metadata generation model.
 
 Trains a LoRA adapter on Qwen2.5-7B-Instruct using catalog metadata

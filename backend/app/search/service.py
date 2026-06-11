@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """시맨틱·하이브리드 검색 서비스.
 
 pgvector 기반 코사인 유사도 시맨틱 검색을 제공하며, 키워드와 시맨틱

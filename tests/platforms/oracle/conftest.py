@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Oracle 통합 테스트 fixture — mysql/postgresql 와 동일 패턴.
 
 gvenzl/oracle-free 컨테이너의 PDB(FREEPDB1) 에 APP_USER(=스키마 ARGUS_TEST)를 쓰며,

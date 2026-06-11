@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """파티션 transform 매핑 정밀 검증.
 
 ``iceberg.partition_columns`` 와 ``iceberg.partition_transforms`` 가

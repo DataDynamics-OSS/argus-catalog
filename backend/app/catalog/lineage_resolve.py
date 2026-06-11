@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """쿼리 기반 lineage 의 dataset_id 해석.
 
 확장(metadata-sync)은 ``argus_query_lineage`` 에 테이블 이름(source_table/target_table)만

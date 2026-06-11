@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Reusable assertion helpers for dataset/schema comparisons.
 
 플랫폼별 테스트가 같은 패턴(동기화 후 카탈로그 응답 검증) 을 반복하므로

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Iceberg REST Catalog 테이블에서 sample row 를 뽑아 CSV 로 직렬화하는 헬퍼.
 
 pyiceberg 의 ``Table.scan().to_arrow()`` 로 Arrow Table 을 얻은 뒤 head(n) 으로

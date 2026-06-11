@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """변경 관리(change-mgmt) 엔드투엔드 통합 테스트.
 
 Temporal 워크플로우 엔진과 실제 DB 를 사용해 CR 라이프사이클 전체 + 액티비티

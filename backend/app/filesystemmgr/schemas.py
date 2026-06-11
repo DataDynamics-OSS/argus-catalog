@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """로컬 파일시스템 브라우저 Pydantic 스키마(요청·응답 DTO).
 
 라우터(``app/filesystemmgr/router.py``) 와 서비스(``app/filesystemmgr/service.py``) 가

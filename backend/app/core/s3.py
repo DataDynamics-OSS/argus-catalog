@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """카탈로그 서버용 S3 호환 오브젝트 스토리지 클라이언트.
 
 aioboto3 를 통해 AWS S3 및 MinIO 와 호환되는 비동기 S3 작업을 제공한다.

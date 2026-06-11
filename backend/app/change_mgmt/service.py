@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """변경 관리 서비스 — DB CRUD + Temporal 워크플로우 트리거."""
 
 from __future__ import annotations

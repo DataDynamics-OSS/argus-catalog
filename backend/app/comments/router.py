@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """댓글(Comment) API 엔드포인트.
 
 다형성 댓글 시스템의 CRUD 를 제공한다.

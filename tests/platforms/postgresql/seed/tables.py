@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """PostgreSQL 통합 테스트 데이터는 ``compose.yml`` 의 docker-entrypoint-initdb.d
 로 컨테이너 첫 기동 시 northwind SQL 이 직접 적재된다. 여기서는 ``seed_all`` /
 ``drop_all`` 시그니처만 유지해 다른 platform 의 패턴과 정렬한다.

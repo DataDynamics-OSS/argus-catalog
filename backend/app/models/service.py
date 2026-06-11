@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """MLflow 모델 레지스트리 서비스 레이어(비즈니스 로직).
 
 Unity Catalog OSS 패턴을 따라 ``RegisteredModel`` 과 ``ModelVersion`` 의

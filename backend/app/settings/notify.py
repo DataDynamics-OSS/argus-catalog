@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Slack / Mattermost 알림 발송 — DB(catalog_configuration, category='notify') 설정 사용.
 
 단일 설정(비-멀티테넌트) + incoming webhook 방식의 notify 서비스.

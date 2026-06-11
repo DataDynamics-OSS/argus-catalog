@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Merge LoRA adapter into base model and export for Ollama.
 
 Steps:

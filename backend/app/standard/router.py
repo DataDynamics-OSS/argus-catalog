@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """데이터 표준(Data Standards) API 엔드포인트.
 
 표준 사전(Dictionary) 단위로 단어(Word)·도메인(Domain)·용어(Term)·코드 그룹·코드 값을

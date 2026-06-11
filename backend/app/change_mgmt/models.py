@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """변경 관리(Change Management) ORM 모델.
 
 주요 테이블:

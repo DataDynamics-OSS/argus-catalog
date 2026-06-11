@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """인증 엔드포인트.
 
 Keycloak OIDC 와 로컬 JWT 두 인증 모드를 모두 지원한다. 모든 분기는

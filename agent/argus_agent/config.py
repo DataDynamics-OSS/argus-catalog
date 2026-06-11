@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """에이전트 설정 — 우선순위: CLI 인자 > 환경변수 > 기본값.
 
 Docker 에서는 환경변수(.env), 네이티브에서는 CLI 인자가 자연스럽도록

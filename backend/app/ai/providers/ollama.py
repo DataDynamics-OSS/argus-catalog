@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Ollama LLM 제공자.
 
 로컬에서 실행 중인 Ollama 인스턴스를 텍스트 생성에 사용한다.

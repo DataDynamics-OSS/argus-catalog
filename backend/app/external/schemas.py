@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """외부 메타데이터 API 용 Pydantic 스키마."""
 
 from pydantic import BaseModel, Field

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """FastAPI 인증 — Keycloak OIDC 와 로컬 JWT 를 지원한다.
 
 JWT 토큰 검증과 FastAPI 의존성(dependency) 함수를 제공한다.

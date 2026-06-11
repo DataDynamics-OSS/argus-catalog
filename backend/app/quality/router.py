@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """데이터 품질 API 엔드포인트.
 
 프로파일링, 품질 규칙 CRUD, 검사 실행, 점수 추적을 제공한다.

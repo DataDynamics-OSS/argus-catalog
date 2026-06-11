@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Kudu 테이블에서 sample row 를 뽑아 CSV 로 직렬화하는 헬퍼.
 
 kudu-python 은 SQL 이 없으므로 scanner 로 직접 스캔해 row 를 dict 로 받는다.

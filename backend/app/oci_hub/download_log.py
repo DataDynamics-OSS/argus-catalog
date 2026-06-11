@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """OCI 모델 허브 다운로드 로그.
 
 OCI 전용 다운로드 로그 테이블(``catalog_oci_model_download_log``) 에 이벤트를

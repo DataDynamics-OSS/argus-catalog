@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Export training data for fine-tuning from catalog DB + synthetic semiconductor data.
 
 Produces ChatML-format JSONL files for supervised fine-tuning (SFT).

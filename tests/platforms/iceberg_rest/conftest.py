@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Iceberg REST Catalog 테스트용 fixture.
 
 compose 스택을 세션 단위로 한 번 띄우고, 매 테스트마다 깨끗한 namespace 와

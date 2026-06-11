@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """데이터 카탈로그용 SQLAlchemy ORM 모델.
 
 DataHub 를 본떠 모델링한 핵심 엔티티 유형:
@@ -133,7 +134,7 @@ class Dataset(Base):
     is_synced = Column(String(5), default="false")
     status = Column(String(20), nullable=False, default="active")
 
-    # --- 확장 메타데이터 (docs/dataset-extended-metadata-design.md) ---
+    # --- 확장 메타데이터 (design/dataset-extended-metadata-design.md) ---
     # A. 생명주기·운영
     ingestion_frequency = Column(String(50))   # REALTIME/HOURLY/DAILY/WEEKLY/MONTHLY/MANUAL 또는 cron
     ingestion_time = Column(String(5))         # 수집 시각 "HH:mm"(일/주/월) 또는 분 "mm"(시간별)

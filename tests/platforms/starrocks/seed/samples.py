@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """StarRocks 테이블에서 sample row 를 뽑아 CSV 로 직렬화하는 헬퍼.
 
 StarRocks 는 MySQL wire protocol 을 쓰지만 ``LIMIT`` 에 named parameter binding 이

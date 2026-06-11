@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """댓글(Comment) ORM 모델.
 
 entity_type + entity_id 를 통해 어떤 엔티티(dataset, model, glossary 등)에도 붙일 수 있는

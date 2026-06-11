@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """애플리케이션 설정.
 
 설정은 설정 디렉터리의 두 파일에서 로드된다:

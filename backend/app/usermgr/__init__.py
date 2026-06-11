@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """사용자 관리(User management) 모듈.
 
 사용자 계정과 역할 관리를 위한 CRUD 기능을 제공한다. 이 모듈은 표준

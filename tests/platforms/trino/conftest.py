@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Trino 통합 테스트 fixture.
 
 스택은 Trino coordinator + Hive Metastore + MinIO (S3 호환) 의 조합. Trino 는

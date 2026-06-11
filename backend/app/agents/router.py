@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """AI Agent 카탈로그 라우터.
 
 ``/api/v1/ai-agents`` 경로에서 에이전트의 CRUD, 대시보드 통계, 상세,

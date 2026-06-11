@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """다운로드/게시 지표 차트를 채우기 위한 테스트 데이터 시드 스크립트.
 
 MLflow 모델 대시보드와 OCI 모델 허브 대시보드의 차트는 모두 ``downloaded_at``

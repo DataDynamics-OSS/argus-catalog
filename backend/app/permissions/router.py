@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """권한 매트릭스 API.
 
 - GET  /permissions/menus, /permissions/features : 전체 맵 {key: [role_id]} (admin)

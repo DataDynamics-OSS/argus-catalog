@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """데이터 품질 서비스 레이어.
 
 Method A+B 하이브리드:

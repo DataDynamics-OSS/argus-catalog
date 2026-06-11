@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """OpenAPI(Swagger) 2.0 / 3.x 스펙 파서.
 
 업로드/URL 로 받은 스펙(JSON/YAML 문자열)을 dict 로 로드한 뒤, 카탈로그에 저장할

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """카탈로그 서버 - FastAPI 애플리케이션 진입점."""
 
 import argparse

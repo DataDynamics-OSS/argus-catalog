@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """argus-agent CLI — 메타데이터 생성 에이전트의 진입점.
 
 사용 예:

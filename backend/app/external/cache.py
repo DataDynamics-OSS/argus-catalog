@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """외부 API 용 TTL 만료 기능을 갖춘 스레드 안전 LRU 캐시.
 
 특징:

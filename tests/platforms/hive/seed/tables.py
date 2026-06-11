@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Hive Metastore 시드 — Thrift API 로 database/table metadata 직접 생성.
 
 HiveServer2 가 없으므로 SQL 을 못 쓴다. ``hmsclient`` 의 thrift 인터페이스로

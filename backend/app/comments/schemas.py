@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """댓글 요청/응답 검증용 Pydantic 스키마."""
 
 from datetime import datetime
