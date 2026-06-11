@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 질문 / 토론
+    url: https://github.com/DataDynamics-OSS/argus-catalog/discussions
+    about: 버그·기능 제안이 아닌 일반적인 질문은 Discussions 를 이용해 주세요.

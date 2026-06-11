@@ -1,0 +1,68 @@
+name: 🐛 버그 리포트
+description: 동작이 기대와 다른 문제를 신고합니다
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        버그를 제보해 주셔서 감사합니다. 재현에 필요한 정보를 최대한 자세히 적어 주세요.
+        (보안 취약점은 공개 이슈가 아니라 비공개로 제보해 주세요.)
+  - type: textarea
+    id: description
+    attributes:
+      label: 문제 설명
+      description: 어떤 문제가 발생했나요?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 재현 절차
+      description: 문제를 재현하는 단계
+      placeholder: |
+        1. '...' 으로 이동
+        2. '...' 클릭
+        3. 오류 발생
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 기대 동작
+      description: 원래 어떻게 동작해야 하나요?
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: 관련 컴포넌트
+      options:
+        - backend
+        - frontend
+        - sdk
+        - agent
+        - quality
+        - tests
+        - 기타 / 모름
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 실행 환경
+      description: OS, Python/Node 버전, 브라우저, 배포 방식 등
+      placeholder: |
+        - OS: Ubuntu 24.04
+        - Python: 3.11
+        - 배포: docker compose
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: 로그 / 스크린샷
+      description: 관련 로그나 스크린샷 (민감정보는 가려 주세요)
+      render: shell
+    validations:
+      required: false
