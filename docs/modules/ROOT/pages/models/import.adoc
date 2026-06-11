@@ -1,0 +1,74 @@
+= 모델 반입 (SDK · 에어갭)
+
+외부(HuggingFace 등)의 모델을 사내망으로 반입한다. Python SDK 와 `argus-model` CLI 로
+OCI 모델 저장소(S3/MinIO)에 모델을 적재하며, **에어갭(폐쇄망) 환경**도 지원한다.
+
+== 설치
+
+[source,bash]
+----
+pip install argus-catalog-sdk   # 또는 sdk/ 에서 로컬 설치
+----
+
+== CLI — `argus-model`
+
+[cols="2,3",options="header"]
+|===
+| 명령 | 설명
+
+| `argus-model list` | 등록된 모델 목록
+| `argus-model import-hf HF_ID NAME` | HuggingFace Hub 에서 임포트(서버 측 다운로드)
+| `argus-model push LOCAL_DIR NAME` | 로컬 디렉터리를 새 버전으로 푸시(클라이언트 측 업로드)
+| `argus-model import-local DIR NAME` | 서버 로컬 디렉터리에서 임포트(에어갭)
+| `argus-model pull NAME VERSION DEST` | 모델 파일을 로컬로 내려받기
+| `argus-model files NAME VERSION` | 버전의 파일 목록
+| `argus-model manifest NAME VERSION` | OCI manifest 조회
+| `argus-model delete NAME` | 모델 영구 삭제
+|===
+
+[source,bash]
+----
+# HuggingFace 모델 반입
+argus-model import-hf bert-base-uncased argus.ml.bert --server http://localhost:4600
+
+# 로컬 디렉터리 푸시
+argus-model push ./my-model argus.ml.custom --description "사내 분류 모델"
+----
+
+== 에어갭 반입
+
+외부 인터넷이 차단된 환경에서는 다음 절차로 반입한다.
+
+. 인터넷 가능 구간에서 모델을 내려받아 파일로 준비한다.
+. 파일을 사내(서버 접근 가능) 위치로 전송한다.
+. 서버 로컬 디렉터리에서 임포트한다.
+
+[source,bash]
+----
+argus-model import-local /data/models/bert argus.ml.bert
+----
+
+== Python SDK
+
+[source,python]
+----
+from argus_catalog_sdk import ModelClient
+
+client = ModelClient("http://localhost:4600", username="admin", password="...")
+
+# HuggingFace 에서 임포트
+client.import_huggingface("bert-base-uncased", "argus.ml.bert")
+
+# 모델을 로컬로 내려받기
+client.pull("argus.ml.bert", version=1, dest="/tmp/bert")
+----
+
+[NOTE]
+====
+MLflow 로 등록한 모델의 학습·추론은 MLflow 클라이언트를 사용한다. 이 SDK 는 OCI 모델
+저장소 관리(업로드·다운로드·HuggingFace 임포트·에어갭 전송)를 담당한다.
+자세한 적용 범위는 `sdk/README.md` 를 참고한다.
+====
+
+// TODO: screenshot - 모델 반입 / OCI Hub
+// image::models-import/import.png[모델 반입, 800]

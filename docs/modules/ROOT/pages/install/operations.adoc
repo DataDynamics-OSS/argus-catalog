@@ -1,0 +1,133 @@
+= 운영 가이드
+
+== 헬스체크
+
+[source,bash]
+----
+curl http://<server>:4600/health
+# {"status":"ok","service":"argus-catalog-server","uptime":12345,"version":"0.1.0"}
+----
+
+UI 의 헬스 — Next.js 의 응답 코드. 로드 밸런서에서 `/` 또는 `/login` 의 200 응답을 확인.
+
+== 로그
+
+[cols="1,3"]
+|===
+| 위치 | 설명
+
+| `${log.dir}/argus-catalog-server.log` | 서버 로그. 일별 롤링 (자정 기준), 30 일 보관.
+| stdout / stderr | systemd · Docker 환경에서 함께 캡쳐.
+| `catalog_ai_generation_log` | LLM 호출 이력 (토큰 사용량 · 적용 여부).
+|===
+
+로그 레벨은 `log.level` 설정으로 변경 (DEBUG / INFO / WARNING / ERROR). DEBUG 는
+SQL 쿼리 전체가 출력되므로 운영 환경에서는 INFO 권장.
+
+== 메트릭 · 모니터링
+
+* `/health` — uptime, version.
+* 외부 모니터링 도구 (Prometheus 등) 는 향후 지원.
+* 데이터 측면 모니터링은 *대시보드* 페이지의 통계 차트와 임베딩 커버리지 (`/api/v1/catalog/search/embeddings/stats`) 를 활용.
+
+== 백업
+
+대상은 두 곳.
+
+. *PostgreSQL DB* — 모든 메타데이터.
++
+[source,bash]
+----
+pg_dump -U argus -F c -f argus_catalog_$(date +%F).dump argus_catalog
+----
+
+. *모델 아티팩트*
+* 로컬 모드 — `${data.dir}/model-artifacts/` 백업.
+* S3 / MinIO 모드 — 버킷 복제 또는 라이프사이클 정책.
+
+복구는 역순. DB 복구 후 서버 재기동 → 시드는 *이미 존재하는 행은 건너뜀* 으로 안전.
+
+== 업그레이드
+
+. 새 버전 패키지 / 컨테이너 이미지 준비.
+. *DB 백업* 수행.
+. 서버 정지 → 패키지 교체.
+. *새 버전의 스키마 DDL 적용* (`argus-catalog-postgresql.sql` / `argus-catalog-mariadb.sql`) → 기동.
+. `/health` 의 `version` 값으로 업그레이드 확인.
+
+[IMPORTANT]
+====
+스키마는 *SQL DDL 이 전담*한다. 서버는 시작 시 테이블/컬럼을 자동 생성·변경하지 않는다
+(런타임 `create_all` 및 `reconcile_schema` 제거). 업그레이드 시 새 버전 DDL 과 기존
+스키마의 차이를 확인해 적용할 것 — 향후 Alembic 도입 예정.
+====
+
+== 자주 발생하는 이슈
+
+=== `ERROR: type "vector" does not exist`
+
+pgvector 확장 미설치 또는 미활성. 슈퍼유저로 실행.
+
+[source,bash]
+----
+sudo -u postgres psql -d argus_catalog -c "CREATE EXTENSION IF NOT EXISTS vector;"
+----
+
+=== embedding 컬럼이 text 로 잡힘
+
+pgvector 가 없는 상태에서 서버를 먼저 띄우면 임베딩 테이블이 text 컬럼으로
+생성된다. 해결:
+
+[source,bash]
+----
+sudo -u postgres psql -d argus_catalog -c "
+DELETE FROM catalog_dataset_embeddings;
+ALTER TABLE catalog_dataset_embeddings
+  ALTER COLUMN embedding TYPE vector(384) USING embedding::vector(384);
+"
+
+curl -X POST http://<server>:4600/api/v1/catalog/search/embeddings/backfill
+----
+
+=== `RuntimeError: sentence-transformers is required`
+
+Local 임베딩 사용 시.
+
+[source,bash]
+----
+pip install "sentence-transformers>=3.0.0"
+----
+
+OpenAI · Ollama 만 쓰면 설치 불필요.
+
+=== 메타데이터 동기화 실패
+
+* 플랫폼의 *Test Connection* 으로 자격 증명 / 네트워크 확인.
+* 서버 로그의 `sync` 모듈 메시지 확인.
+* MySQL/MariaDB 는 `aiomysql`, PostgreSQL 은 `asyncpg` 드라이버 — 방화벽 · TLS 설정 확인.
+
+=== 모델 버전 `PENDING_REGISTRATION` 에서 멈춤
+
+MLflow 클라이언트가 finalize 호출 전에 종료된 경우. *1 시간 경과* 후 stuck 으로
+판단. 해당 버전 삭제 후 재등록.
+
+=== Keycloak 로그인 거부 (`No Argus role assigned`)
+
+사용자에게 `argus-*` Realm Role 이 하나도 부여되지 않음. Keycloak Admin → Users
+→ Role Mapping 에서 `argus-user` 이상의 역할 부여.
+
+== 감사 추적
+
+* 사용자별 작업 — JWT `sub` 와 함께 서버 로그에 기록 (INFO 레벨 이상).
+* AI 메타데이터 생성 — `catalog_ai_generation_log` 테이블 (입력 / 출력 / 토큰 / 적용 여부).
+* 스키마 변경 — `catalog_schema_snapshots`.
+* 모델 Stage 전이 — `catalog_model_versions.stage_changed_by` / `stage_changed_at`.
+* 알림 전달 — `argus_alert_notification`.
+
+== 보안
+
+* 토큰은 sessionStorage 에 저장 — 탭 종료 시 무효화.
+* 시크릿은 설정 응답에서 `••••••••` 으로 마스킹.
+* 보안 헤더 자동 부착: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `X-XSS-Protection: 1`.
+* CORS 는 *DB 백킹 동적 설정* — 운영 중 변경 가능.
+* API 는 UI 의 `middleware.ts` 가 프록시하므로 백엔드 포트를 외부에 직접 노출하지 않아도 된다.

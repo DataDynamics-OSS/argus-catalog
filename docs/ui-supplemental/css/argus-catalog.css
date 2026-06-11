@@ -1,0 +1,154 @@
+/* Argus Catalog 매뉴얼 — Antora 기본 UI 위 글꼴·색상 오버라이드.
+ *
+ * 글꼴 전략은 argus-catalog-ui (Next.js localFont) 와 동일한 셀프 호스팅
+ * WOFF2 자산을 그대로 사용한다.
+ *   - Pretendard Variable   본문(sans) — 한글·영문 변수 글꼴.
+ *   - Roboto Condensed Var  헤더 보조 — 좁은 글자폭이 필요한 곳.
+ *   - Noto Sans KR          fallback — Pretendard 미지원 글리프 보강.
+ *   - D2Coding              코드(mono) — 한글 코드 가독성.
+ *
+ * Antora 기본 site.css 가 body / code / pre 에 직접 Roboto 를 지정하므로
+ * 같은 셀렉터를 같은 우선순위로 재선언해 source-order 로 덮어쓴다.
+ */
+
+/* ─────────────── @font-face ─────────────── */
+
+@font-face {
+  font-family: "Pretendard Variable";
+  font-weight: 45 920;
+  font-style: normal;
+  font-display: swap;
+  src: url("../font/PretendardVariable.woff2") format("woff2-variations"),
+       url("../font/PretendardVariable.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Roboto Condensed";
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+  src: url("../font/RobotoCondensed-Variable.woff2") format("woff2-variations"),
+       url("../font/RobotoCondensed-Variable.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Noto Sans KR";
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+  src: url("../font/NotoSansKR-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Noto Sans KR";
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+  src: url("../font/NotoSansKR-500.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Noto Sans KR";
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+  src: url("../font/NotoSansKR-700.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "D2Coding";
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+  src: url("../font/D2Coding-Regular.woff2") format("woff2");
+}
+@font-face {
+  font-family: "D2Coding";
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+  src: url("../font/D2Coding-Bold.woff2") format("woff2");
+}
+
+/* ─────────────── 글꼴 변수 ─────────────── */
+
+:root {
+  --font-sans: "Pretendard Variable", "Noto Sans KR",
+               system-ui, -apple-system, "Segoe UI",
+               "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  --font-display: "Roboto Condensed", "Pretendard Variable",
+                  system-ui, sans-serif;
+  --font-mono: "D2Coding", ui-monospace, SFMono-Regular, Menlo, Monaco,
+               Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+/* ─────────────── 본문 ─────────────── */
+
+body {
+  font-family: var(--font-sans);
+  /* 한글 hinting · 자간 미세 조정. */
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, h4, h5, h6,
+.title, .navbar-brand, .toolbar .home-link {
+  font-family: var(--font-display);
+  letter-spacing: -0.005em;
+}
+
+code, kbd, pre, samp, tt,
+.literalblock pre, .listingblock pre {
+  font-family: var(--font-mono);
+}
+
+/* ─────────────── 색상 (기존 유지) ─────────────── */
+
+:root {
+  --color-link: #2563eb;
+  --color-link-hover: #1d4ed8;
+  --nav-line-color: #2563eb;
+}
+
+a, a:visited { color: var(--color-link); }
+a:hover { color: var(--color-link-hover); }
+
+.nav-list a.is-current,
+.nav-list a:hover {
+  color: var(--color-link);
+}
+
+.toolbar .home-link {
+  font-weight: 600;
+}
+
+pre, code {
+  background: #f8fafc;
+}
+
+/* ─────────────── 레이아웃 — 본문·TOC·이미지 반응형 ─────────────── */
+
+/* Antora 기본 .doc { max-width: 46rem } 가 본문 폭을 ~736px 으로 가두므로
+ * 와이드 화면에서 가용 공간을 본문이 채울 수 있도록 완화한다.
+ *   - 좌측 nav ~15rem + 우측 TOC ~13rem ≒ 28rem 을 빼고 가용 폭을 사용
+ *   - 가독성 보호를 위해 최대 72rem 으로 상한 (영문 기준 ~110자/줄)
+ * 1024px 미만에서는 Antora 가 사이드바를 숨기므로 원본 폭(40rem) 유지.
+ */
+@media screen and (min-width: 1024px) {
+  .doc {
+    max-width: min(72rem, calc(100vw - 28rem)) !important;
+  }
+}
+
+/* 이미지를 컨테이너 폭에 맞춰 늘어나도록.
+ * AsciiDoc `image::x[alt, 800]` 이 HTML 에 박는 `width="800"` 인라인 속성을
+ * !important 로 무력화한다. 결과적으로 본문이 넓어지면 이미지도 함께 커지고,
+ * 본문이 좁아지면 (모바일) 100% 까지 축소된다.
+ */
+.doc .imageblock img,
+.doc .imageblock object,
+.doc .imageblock svg,
+.doc .image > img {
+  width: 100% !important;
+  height: auto !important;
+  max-width: 100%;
+}

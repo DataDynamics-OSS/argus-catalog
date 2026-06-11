@@ -1,0 +1,5 @@
+name: argus-catalog
+title: Argus Catalog
+version: ~
+nav:
+  - modules/ROOT/nav.adoc

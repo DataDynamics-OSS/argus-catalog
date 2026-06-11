@@ -1,0 +1,237 @@
+= 설치
+
+기본 스택은 *Docker / Linux 패키지* 두 방식 모두 지원한다. 본 페이지는 패키지
+방식을 기준으로 설명한다.
+
+== 설치 흐름 요약
+
+. PostgreSQL · pgvector · (옵션) MinIO · Keycloak 준비
+. 서버 (`argus-catalog-server`) 설치 및 설정
+. UI (`argus-catalog-ui`) 설치
+. 초기 설정 (Settings · 플랫폼 등록)
+
+== 1. 사전 준비
+
+=== PostgreSQL + pgvector
+
+[source,bash]
+----
+# Ubuntu
+sudo apt install postgresql postgresql-contrib
+sudo apt install postgresql-16-pgvector
+
+# RHEL / Rocky
+sudo dnf install postgresql-server
+sudo dnf install pgvector_16
+----
+
+DB · 사용자 · 확장 생성.
+
+[source,bash]
+----
+sudo -u postgres psql <<SQL
+CREATE USER argus WITH PASSWORD 'argus';
+CREATE DATABASE argus_catalog OWNER argus;
+\c argus_catalog
+CREATE EXTENSION IF NOT EXISTS vector;
+SQL
+----
+
+[NOTE]
+====
+`CREATE EXTENSION vector` 는 *슈퍼유저* 만 가능. `argus` 계정으로 만든 후
+별도 세션에서 슈퍼유저로 확장만 활성화해야 한다.
+====
+
+스키마 DDL 을 적용한다. *서버는 더 이상 시작 시 테이블을 자동 생성하지 않으므로(런타임 `create_all` 제거), 이 단계는 필수다.* (collector/lineage 포함 92개 테이블 + 컬럼 주석)
+
+[source,bash]
+----
+psql -U argus -d argus_catalog -f packaging/config/argus-catalog-postgresql.sql
+----
+
+이어서 데모 데이터가 필요하면 시드를 *순서대로* 적용한다(스키마 적용 후 실행).
+
+[source,bash]
+----
+psql -U argus -d argus_catalog -f packaging/config/argus-catalog-seed-demo.sql
+psql -U argus -d argus_catalog -f packaging/config/argus-catalog-seed-sakila.sql
+psql -U argus -d argus_catalog -f packaging/config/argus-catalog-seed-ai.sql
+psql -U argus -d argus_catalog -f packaging/config/argus-catalog-seed-api.sql
+----
+
+=== MinIO (옵션)
+
+[source,bash]
+----
+wget https://dl.min.io/server/minio/release/linux-amd64/minio
+chmod +x minio
+./minio server /data/minio --console-address ":9001"
+# 기본 계정: minioadmin / minioadmin
+----
+
+=== Keycloak (옵션)
+
+[source,bash]
+----
+docker run -p 8180:8080 \
+  -e KC_BOOTSTRAP_ADMIN_USERNAME=admin \
+  -e KC_BOOTSTRAP_ADMIN_PASSWORD=admin \
+  quay.io/keycloak/keycloak:26.0 start-dev
+----
+
+미설치 시 서버는 자동으로 Local JWT 모드로 동작한다.
+
+== 2. 서버 설치
+
+[source,bash]
+----
+cd argus-catalog-server
+python3.11 -m venv .venv && source .venv/bin/activate
+
+pip install -r requirements.txt
+pip install -e ".[dev]"     # 또는 make dev
+
+cp packaging/config/config.properties packaging/config/my-config.properties
+$EDITOR packaging/config/my-config.properties
+----
+
+=== `config.properties` 주요 키
+
+[source,properties]
+----
+# 서버
+server.host=0.0.0.0
+server.port=4600
+
+# 로깅
+log.level=INFO
+log.dir=/var/log/argus-catalog-server
+
+# 데이터 디렉토리 (로컬 모드의 모델 아티팩트 위치)
+data.dir=/var/lib/argus-catalog-server
+
+# CORS
+cors.origins=*
+
+# DB
+db.type=postgresql
+db.host=localhost
+db.port=5432
+db.name=argus_catalog
+db.username=argus
+db.password=argus
+
+# 인증 (Keycloak)
+auth.type=keycloak
+auth.keycloak.server_url=http://localhost:8180
+auth.keycloak.realm=argus
+auth.keycloak.client_id=argus-client
+auth.keycloak.client_secret=argus-client-secret
+----
+
+전체 키는 xref:ops/settings.adoc[설정] 페이지 참조.
+
+=== 서버 기동
+
+[source,bash]
+----
+# 프로덕션
+argus-catalog-server \
+  --config-yaml packaging/config/config.yml \
+  --config-properties packaging/config/my-config.properties
+
+# 개발 (auto-reload)
+make run
+----
+
+기동 확인.
+
+[source,bash]
+----
+curl http://localhost:4600/health
+# {"status":"ok","service":"argus-catalog-server","uptime":5,"version":"0.1.0"}
+----
+
+== 3. UI 설치
+
+[source,bash]
+----
+cd argus-catalog-ui
+
+# Node 20+ · pnpm 9+ 필요
+npm install -g pnpm@9
+pnpm install
+
+# 서버 주소 설정
+echo "API_BASE_URL=http://localhost:4600" > apps/web/.env.development
+
+# 개발 모드
+pnpm dev          # http://localhost:3000
+
+# 프로덕션 빌드
+pnpm build && pnpm start
+----
+
+== 4. 초기 설정
+
+UI 로그인 후 다음 순서로 진행한다.
+
+. *Settings → Auth* — Keycloak 자동 시드 (*Initialize*) 또는 Local JWT 확인.
+. *Settings → Embedding* — 임베딩 프로바이더 선택 → *Test* → *Save*.
+. *Settings → LLM* — AI 메타데이터 생성 (선택).
+. *Settings → Object Storage* — S3 / MinIO (ML 모델 사용 시).
+. *Platforms* — 사내 데이터 소스 등록 → 연결 정보 → *Test Connection* → *Sync*.
+
+자세한 메뉴별 사용법은 xref:catalog/datasets.adoc[데이터 카탈로그] 와
+xref:models/registry.adoc[모델 레지스트리] 참조.
+
+== Keycloak 자동 설정
+
+Settings → Auth 의 *Initialize* 버튼은 다음을 자동 생성한다.
+
+* Realm — `argus`
+* Client — `argus-client` (Confidential, Standard Flow · Direct Access Grants 활성)
+* Realm Role — `argus-admin`, `argus-superuser`, `argus-user`
+* 기본 역할 — `argus-user` 를 default 로 부여
+
+수동 셋업 단계는 다음과 같다.
+
+. Admin 콘솔 (`http://<keycloak>:8180/admin`) 로그인.
+. *Create realm* → 이름 `argus`.
+. *Clients → Create client* — Client ID `argus-client`, Confidential, Standard Flow + Direct Access Grants + Service Accounts ON. Redirect URI: `http://<ui-host>:3000/*`, `http://<server-host>:4600/*`. Web Origins: `+` 포함.
+. Credentials 탭에서 Client Secret 을 `argus-client-secret` 으로 지정 (또는 임의 값 → 서버 설정에 반영).
+. *Realm Roles* — `argus-admin`, `argus-superuser`, `argus-user` 생성.
+. *Default roles* → `default-roles-argus` 에 `argus-user` 추가.
+. *Users → Create user* — 이메일·Email Verified 필수. Credentials 탭에서 비밀번호 설정 (`Temporary: OFF`).
+. *Role mapping* — 사용자에게 `argus-admin` / `argus-superuser` 부여 (필요 시).
+
+== systemd 서비스 (옵션)
+
+`/etc/systemd/system/argus-catalog-server.service`.
+
+[source,ini]
+----
+[Unit]
+Description=Argus Catalog Server
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=argus
+WorkingDirectory=/opt/argus-catalog-server
+Environment="PATH=/opt/argus-catalog-server/.venv/bin"
+ExecStart=/opt/argus-catalog-server/.venv/bin/argus-catalog-server \
+  --config-yaml /etc/argus-catalog/config.yml \
+  --config-properties /etc/argus-catalog/config.properties
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+----
+
+[source,bash]
+----
+sudo systemctl daemon-reload
+sudo systemctl enable --now argus-catalog-server
+----

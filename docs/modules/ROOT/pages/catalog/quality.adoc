@@ -1,0 +1,83 @@
+= 데이터 품질
+
+원본 DB 에 직접 연결해 컬럼 통계를 수집하는 *프로파일링* 과, 그 결과를
+규칙으로 평가하는 *품질 검사* 가 결합된 하이브리드 방식.
+
+// TODO: screenshot - 데이터셋 상세의 Quality 탭 (점수 + 결과 + 프로파일)
+image::catalog-quality/dashboard.png[품질 대시보드, 800]
+
+== 진입 경로
+
+데이터셋 상세 → *Quality* 탭. 상단에 점수 · *Profile* / *Run Check* / *Add Rule*
+버튼이 노출된다.
+
+== 프로파일링
+
+원본 DB 의 통계를 수집해 컬럼별 분포를 파악한다.
+
+수집 항목::
+* 총 건수 (`COUNT(*)`)
+* NULL 건수 / 비율
+* 유니크 값 수 / 비율
+* 최솟값 · 최댓값
+* (숫자형) 평균
+
+수집 방식::
+* *방법 A — 원본 DB 직접 SQL* — 플랫폼 연결 설정으로 async 접속해 통계 SQL 실행. MySQL · MariaDB · PostgreSQL 지원.
+* *방법 B — 스키마 폴백* — 원본 DB 접속 실패 시 카탈로그의 스키마 정보만으로 기본 프로파일 생성 (통계값 0).
+
+// TODO: screenshot - 컬럼 프로파일 결과 테이블
+// image::catalog-quality/profile.png[컬럼 프로파일, 800]
+
+== 품질 규칙 (8종)
+
+[cols="1,3,1"]
+|===
+| 종류 | 설명 | 원본 DB 필요
+
+| `NOT_NULL` | NULL 비율이 threshold 이하 | No
+| `UNIQUE` | 유니크 비율이 threshold 이상 | No
+| `MIN_VALUE` | 최솟값이 expected 이상 | No
+| `MAX_VALUE` | 최댓값이 expected 이하 | No
+| `ROW_COUNT` | 총 건수가 expected 이상 | No
+| `FRESHNESS` | 마지막 프로파일 이후 N 시간 이내 | No
+| `ACCEPTED_VALUES` | 컬럼 값이 허용 목록에 포함 | Yes
+| `REGEX` | 컬럼 값이 정규식 매칭 | Yes
+|===
+
+규칙 등록 시 *심각도* 를 지정한다.
+
+* *BREAKING* — 즉시 대응 (예: PK NULL, 행 수 0).
+* *WARNING* — 확인 필요 (예: NULL 비율 증가, 범위 초과).
+* *INFO* — 참고용 (예: 유니크 비율 변동).
+
+== 검사 실행
+
+*Run Check* 버튼 한 번으로 다음이 순차 실행된다.
+
+. 최신 프로파일이 없으면 자동으로 프로파일 먼저 수행.
+. 활성 규칙(`is_active = true`) 전체 조회.
+. 각 규칙을 프로파일 데이터와 대조해 PASS / FAIL 판정.
+. 결과를 저장하고 점수 산출.
+
+== 품질 점수
+
+----
+score = PASS 규칙 수 / 전체 규칙 수 × 100%
+----
+
+상단 점수 카드와 함께, 결과 표에는 규칙별 *실제값 / 임계값 / 상세* 가 표시된다.
+
+* *점수 이력* — 최근 30 회 점수 추이 그래프.
+* *심각도별 카운트* — BREAKING / WARNING / INFO 별 PASS · FAIL 집계.
+
+== 사용 시나리오
+
+데이터 신뢰성 확인 (분석가)::
+Quality 탭 → *Profile* 클릭 → NULL · 유니크 비율 · 값 범위 확인 → 이상치 발견 시 원천 담당자 확인.
+
+핵심 테이블 SLO 설정 (DBA)::
+주문 · 결제 같은 핵심 테이블에 PK NOT_NULL + UNIQUE (BREAKING), 금액 MIN_VALUE >= 0 (WARNING), ROW_COUNT >= 1000 (WARNING) 등록 → 주기적으로 *Run Check* → 점수 이력으로 모니터링.
+
+전사 품질 거버넌스::
+플랫폼·데이터셋 단위 점수 분포 확인 → 낮은 데이터셋을 우선 정제. xref:ops/alerts.adoc[알림] 룰과 결합해 점수 하락 시 자동 통보.

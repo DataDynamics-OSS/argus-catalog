@@ -1,0 +1,148 @@
+= SDK 가이드
+
+`argus-catalog-sdk` — OCI 기반 모델 저장소 조작을 위한 Python SDK + `argus-model`
+CLI. MLflow 모델 등록·로딩은 MLflow 클라이언트 (`mlflow.sklearn.log_model()`,
+`mlflow.pyfunc.load_model()`) 를 그대로 사용한다.
+
+== 설치
+
+[source,bash]
+----
+pip install argus-catalog-sdk
+
+# HuggingFace 임포트까지 사용하려면
+pip install "argus-catalog-sdk[huggingface]"
+----
+
+== SDK 기본 사용
+
+[source,python]
+----
+from argus_catalog_sdk import ModelClient
+
+client = ModelClient("http://catalog-server:4600")
+
+# 모델 목록
+result = client.list_models(search="iris")
+for m in result["items"]:
+    print(m["name"], m["max_version_number"], m["latest_version_status"])
+
+# 모델 등록
+client.create_model(
+    name="argus.ml.iris_classifier",
+    description="Iris flower classifier",
+    owner="ml-team",
+)
+----
+
+=== 파일 업로드 / 다운로드
+
+[source,python]
+----
+# 소형 파일 — 서버 경유
+client.upload_file("argus.ml.iris", version=1, filepath="/path/to/model.pkl")
+
+# 대형 파일 — Presigned URL 로 S3 직접 PUT
+client.upload_via_presigned("argus.ml.bert", version=1,
+                            filepath="/path/to/model.safetensors")
+
+# 일괄 다운로드
+client.pull("argus.ml.bert", version=1, dest="/tmp/bert")
+
+# 로컬 디렉토리 → 새 버전으로 일괄 업로드
+client.push("/path/to/my-model", "argus.ml.custom",
+            description="My custom model", owner="data-team")
+----
+
+=== HuggingFace · Airgap 임포트
+
+[source,python]
+----
+# 온라인
+client.import_huggingface(
+    hf_model_id="bert-base-uncased",
+    model_name="argus.ml.bert",
+    revision="main",
+    description="BERT base uncased",
+    owner="nlp-team",
+)
+
+# 에어갭 (USB / SCP 로 파일 전송 후)
+client.import_local(
+    local_dir="/data/transferred/bert",
+    model_name="argus.ml.bert",
+)
+----
+
+=== Finalize · 삭제
+
+[source,python]
+----
+# 업로드 완료 후 manifest 생성 + 버전 확정
+client.finalize("argus.ml.custom", version=1,
+                annotations={"ai.argus.model.task": "classification"})
+
+# 소프트 삭제 (목록에서 숨김)
+client.delete_model("argus.ml.old_model")
+
+# 하드 삭제 (DB + 저장소 완전 삭제)
+client.hard_delete_models(["argus.ml.old_model", "argus.ml.test"])
+----
+
+== `argus-model` CLI
+
+[source,bash]
+----
+# 목록
+argus-model list
+argus-model list --search iris --page 2 --page-size 10
+
+# Pull / Push
+argus-model pull argus.ml.iris_classifier 1 /tmp/iris-model
+argus-model push /path/to/model argus.ml.custom --description "My custom model"
+
+# HuggingFace · Airgap
+argus-model import-hf bert-base-uncased argus.ml.bert
+argus-model import-local /data/transferred/bert argus.ml.bert
+
+# 파일 / 매니페스트
+argus-model files argus.ml.iris_classifier 1
+argus-model manifest argus.ml.iris_classifier 1
+
+# 삭제
+argus-model delete argus.ml.old_model --yes
+----
+
+서버는 `--server http://<host>:4600` 플래그로 지정. 기본값은 `http://localhost:4600`.
+
+== Airgap 워크플로우
+
+[source,bash]
+----
+# ── 인터넷 환경 ──
+argus-model import-hf bert-base-uncased argus.ml.bert \
+    --server http://online-catalog:4600
+argus-model pull argus.ml.bert 1 /usb/bert-export/ \
+    --server http://online-catalog:4600
+
+# USB / SCP 전송
+scp -r /usb/bert-export/ airgap-server:/data/transferred/bert/
+
+# ── Airgap 환경 ──
+argus-model import-local /data/transferred/bert argus.ml.bert \
+    --server http://airgap-catalog:4600
+----
+
+자세한 OCI 매니페스트 구조는 xref:models/oci-hub.adoc[OCI Model Hub] 참조.
+
+== 인증 토큰
+
+SSO 환경에서는 사용자 토큰을 헤더로 전달한다 (향후 SDK 에서 환경변수 지원 예정).
+
+[source,python]
+----
+client = ModelClient(
+    "http://catalog:4600",
+    headers={"Authorization": "Bearer <access_token>"},
+)
+----

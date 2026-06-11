@@ -1,0 +1,65 @@
+= Docker Compose 배포
+
+Docker Compose 로 풀스택(backend · frontend · Temporal · 의존 서비스)을 한 번에
+기동한다. 로컬 개발/데모용 스택과 인프라 전용 스택을 제공한다.
+
+[WARNING]
+====
+이 스택의 기본 계정·비밀번호(`admin`·`minioadmin`·`argus` 등)는 **로컬/데모용**이다.
+운영 배포는 xref:install/production.adoc[운영 배포] 를 따른다.
+====
+
+== 구성 파일
+
+저장소 `deploy/` 디렉터리에 있다.
+
+[cols="2,3",options="header"]
+|===
+| 파일 | 용도
+
+| `docker-compose.yml` | 풀스택 — backend·frontend·Temporal·의존 서비스 일괄 기동
+| `docker-compose.infra.yml` | 인프라만 — MinIO·Temporal·Keycloak(+Sakila)
+| `docker-compose.prod.yml` | 운영 오버라이드(xref:install/production.adoc[운영 배포] 참고)
+| `config/` | 카탈로그 서버 설정과 Keycloak realm
+|===
+
+== 빠른 시작
+
+[source,bash]
+----
+# 풀스택 (UI + API + 인프라)
+docker compose -f deploy/docker-compose.yml up -d --build
+
+# 또는 인프라만 (백엔드는 로컬에서 make run 으로)
+docker compose -f deploy/docker-compose.infra.yml up -d
+----
+
+종료:
+
+[source,bash]
+----
+docker compose -f deploy/docker-compose.yml down       # 컨테이너만
+docker compose -f deploy/docker-compose.yml down -v    # 볼륨까지 삭제(데이터 초기화)
+----
+
+== 엔드포인트 & 기본 계정 (로컬)
+
+[cols="2,2,2",options="header"]
+|===
+| 서비스 | URL | 기본 계정
+
+| Web UI | http://localhost:3000 | 카탈로그 `admin`
+| API (Swagger) | http://localhost:4600/docs | —
+| Temporal UI | http://localhost:8233 | —
+| MinIO Console | http://localhost:9001 | `minioadmin` / `minioadmin`
+| Keycloak | http://localhost:8180 | `admin` / `admin`
+|===
+
+[NOTE]
+====
+풀스택 `docker-compose.yml` 은 로컬 인증 모드로 동작하며 첫 기동 시 `admin/admin`
+관리자 계정을 시드한다. Temporal 은 기본 활성(`temporal.enabled=true`)이며,
+xref:governance/change-management.adoc[변경 관리] 에 사용된다.
+====
+
+자세한 구성·샘플 데이터는 `deploy/README.md` 를 참고한다.

@@ -1,0 +1,188 @@
+= External API
+
+외부 시스템이 Argus Catalog 의 데이터셋 메타데이터·Avro 스키마를 안정적이고
+빠르게 조회하기 위한 전용 API. 내부 LRU + TTL 캐시로 *반복 요청 < 1 ms* 응답.
+
+== 진입 베이스
+
+----
+http://<server>:4600/api/v1/external/...
+----
+
+== 인증
+
+서버의 *Auth* 설정에 따른다.
+
+* Local JWT — `Authorization: Bearer <token>` (`/api/v1/auth/login` 으로 발급).
+* Keycloak — OIDC 발급 토큰 동일.
+
+외부 시스템용 *Service Account* 토큰을 별도 발급해 사용하는 것을 권장.
+
+== URN 기반 조회 (권장)
+
+외부 시스템은 보통 내부 dataset_id 를 알 수 없으므로 URN 으로 조회한다.
+
+URN 형식::
+----
+{platform_id}.{path}.{ENV}.{type}
+
+예: mysql-19d0bfe954e2cfdaa.sakila.actor.PROD.dataset
+----
+
+[cols="1,3"]
+|===
+| 호출 | 설명
+
+| `GET /metadata?urn={urn}` | 메타데이터 JSON.
+| `GET /avro-schema?urn={urn}` | Avro 스키마.
+| `GET /metadata?urn={urn}&no_cache=true` | 캐시 무시, DB 강제 조회.
+|===
+
+[source,bash]
+----
+curl "http://<server>:4600/api/v1/external/metadata?urn=mysql-19d0bfe9.sakila.actor.PROD.dataset"
+----
+
+== ID 기반 조회 (내부 시스템)
+
+[cols="1,3"]
+|===
+| 호출 | 설명
+
+| `GET /datasets/{id}/metadata` | 메타데이터.
+| `GET /datasets/{id}/avro-schema` | Avro 스키마.
+|===
+
+== 메타데이터 응답
+
+[source,json]
+----
+{
+  "dataset_id": 123,
+  "urn": "mysql-19d0bfe9.sakila.actor.PROD.dataset",
+  "name": "sakila.actor",
+  "description": "Actor 마스터 테이블",
+  "origin": "PROD",
+  "qualified_name": "mysql-19d0bfe9.sakila.actor",
+  "table_type": "TABLE",
+  "platform": {
+    "platform_id": "mysql-19d0bfe9",
+    "name": "Sakila MySQL",
+    "type": "mysql"
+  },
+  "schema": [
+    {
+      "field_path": "actor_id",
+      "field_type": "NUMBER",
+      "native_type": "smallint(5) unsigned",
+      "description": "배우 고유 식별자",
+      "nullable": "false",
+      "is_primary_key": "true",
+      "is_unique": "true",
+      "ordinal": 1,
+      "pii_type": null
+    }
+  ],
+  "tags": ["영화", "마스터"],
+  "owners": [{"name": "data-team", "type": "TECHNICAL_OWNER"}],
+  "_cache": {"cached": true, "hit": true, "ttl_seconds": 300}
+}
+----
+
+== Avro 스키마 응답
+
+[source,json]
+----
+{
+  "type": "record",
+  "name": "actor",
+  "namespace": "mysql-19d0bfe9.sakila",
+  "fields": [
+    {"name": "actor_id", "type": "int", "doc": "배우 고유 식별자",
+     "metadata": {"native_type": "smallint(5) unsigned", "primary_key": true}},
+    {"name": "rating",
+     "type": ["null", {"type":"bytes","logicalType":"decimal","precision":5,"scale":2}],
+     "metadata": {"native_type": "decimal(5,2)"}},
+    {"name": "last_update",
+     "type": {"type":"long","logicalType":"timestamp-millis"},
+     "metadata": {"native_type": "timestamp"}}
+  ]
+}
+----
+
+=== Avro 타입 매핑
+
+[cols="1,1,2"]
+|===
+| Catalog 타입 | Native 예시 | Avro
+
+| NUMBER | `tinyint`, `smallint`, `int` | `int`
+| NUMBER | `bigint` | `long`
+| NUMBER | `float` | `float`
+| NUMBER | `double` | `double`
+| NUMBER | `decimal(p,s)` | `{"type":"bytes","logicalType":"decimal","precision":p,"scale":s}`
+| STRING | `varchar`, `text` | `string`
+| DATE | `date` | `{"type":"int","logicalType":"date"}`
+| DATE | `timestamp` | `{"type":"long","logicalType":"timestamp-millis"}`
+| BOOLEAN | `bool` | `boolean`
+| BYTES | `bytea`, `blob` | `bytes`
+| MAP | `json`, `jsonb` | `{"type":"map","values":"string"}`
+|===
+
+NULL 허용 컬럼은 Avro union 으로 변환된다 (`["null", type]`).
+
+== 캐시 동작
+
+3 단계 캐시 키.
+
+* `urn_map:{urn}` — URN → dataset_id 매핑.
+* `metadata:{urn}` — 메타데이터 JSON.
+* `avro:{urn}` — Avro 스키마.
+
+[cols="1,1,3"]
+|===
+| 상황 | 응답 | 비고
+
+| HIT | < 1 ms | OrderedDict 조회만.
+| MISS (최초) | ~20 ms | URN 인덱스 + JOIN 5 개.
+| 같은 URN 다른 타입 | ~15 ms | 매핑 캐시만 HIT.
+|===
+
+자동 무효화::
+* 데이터셋 PUT / DELETE — `metadata`, `avro`, `urn_map` 모두 제거.
+* 스키마 PUT — `metadata`, `avro` 제거.
+* 태그 변경 — `metadata` 만 제거.
+* 플랫폼 sync — 해당 플랫폼의 모든 데이터셋 캐시 일괄 제거.
+
+== 캐시 설정·통계
+
+[cols="1,3"]
+|===
+| 호출 | 설명
+
+| `GET /cache/stats` | size, hits, misses, hit_rate.
+| `GET /cache/config` | max_size, ttl_seconds, enabled.
+| `PUT /cache/config` | 런타임 변경 (재시작 불필요).
+| `DELETE /datasets/{id}/cache` | 데이터셋 단위 무효화.
+| `DELETE /cache` | 전체 캐시 초기화.
+|===
+
+[source,bash]
+----
+curl -X PUT http://<server>:4600/api/v1/external/cache/config \
+  -H "Content-Type: application/json" \
+  -d '{"max_size": 2000, "ttl_seconds": 600, "enabled": true}'
+----
+
+UI 의 *Settings → Cache* 탭에서도 동일한 설정과 통계 카드가 제공된다.
+
+== 사용 시나리오
+
+스트림 컨슈머::
+Kafka / Flink Job 에서 토픽 메시지의 Avro 스키마를 매번 받아 동적으로 디코딩.
+
+ETL 워크플로우::
+스키마·태그·소유자가 바뀌면 알림과 동시에 ETL 도 자동 재구성 가능.
+
+데이터 카탈로그 미러::
+사내 다른 시스템에 정합성 있는 메타데이터를 비동기로 전파.

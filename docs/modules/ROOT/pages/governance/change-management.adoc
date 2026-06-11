@@ -1,0 +1,53 @@
+= 변경 관리 (Change Management)
+
+스키마/메타데이터 변경을 요청·검토·승인하는 워크플로다. Temporal 워크플로 엔진으로
+영향 분석·결정 기록·통지를 자동화한다.
+
+== 개요
+
+변경 요청(CR, Change Request)은 다음 라이프사이클을 따른다.
+
+. **작성(Draft)** — 변경 요청 생성
+. **제출(Submit)** — 워크플로 시작 → 영향 분석 수행
+. **검토·결정(Decision)** — 영향받는 소비자(consumer)의 승인/거절
+. **적용·통지** — 결정에 따른 상태 갱신 및 통지 발송
+
+Temporal 워크플로가 다음 활동(activity)을 순차 실행한다.
+
+[cols="1,3",options="header"]
+|===
+| 활동 | 설명
+
+| `analyze_impact` | 다운스트림 데이터셋·컬럼 영향 분석(리니지 기반)
+| `record_decision` | 승인/거절 결정 기록
+| `update_cr_status` | CR 상태 갱신
+| `send_notifications` | 영향받는 소비자에게 통지 발송
+|===
+
+[NOTE]
+====
+변경 관리는 Temporal 에 의존한다. `temporal.enabled=false` 이면 CR 조회는 가능하지만
+**제출(submit)은 비활성화**된다. 설정은 xref:install/docker.adoc[Docker Compose 배포] 의
+Temporal 구성을 참고한다.
+====
+
+== 주요 엔드포인트
+
+기본 경로는 `/api/v1/changes` 이다.
+
+[cols="2,3",options="header"]
+|===
+| 엔드포인트 | 설명
+
+| `POST /changes` | 변경 요청(CR) 생성
+| `GET /changes` | CR 목록
+| `GET /changes/inbox` | 내 검토 대기 목록(inbox)
+| `GET /changes/{cr_id}` | CR 상세
+| `POST /changes/{cr_id}/submit` | 제출(워크플로 시작 → 영향 분석)
+| `POST /changes/{cr_id}/decisions` | 승인/거절 결정
+| `POST /changes/{cr_id}/cancel` | 취소
+| `POST /changes/consumers` | 소비자(consumer) 등록
+|===
+
+// TODO: screenshot - 변경 관리 / 영향 분석
+// image::governance-change-management/impact.png[영향 분석, 800]

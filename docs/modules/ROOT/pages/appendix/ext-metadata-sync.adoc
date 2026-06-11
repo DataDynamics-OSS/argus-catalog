@@ -1,0 +1,458 @@
+= Metadata Sync
+
+이기종 데이터 플랫폼의 메타데이터를 *중앙 수집* 해 Argus Catalog Server 로
+동기화하는 배치/서비스. 카탈로그 UI 의 *Platforms → Sync* 도 이 서비스를 경유한다.
+
+== 모드
+
+[cols="1,3"]
+|===
+| 모드 | 설명
+
+| `server`
+| FastAPI REST API (port 4610) 상시 구동 + 주기적 스케줄러
+| `batch`
+| 1 회 실행 후 종료. cron · K8s CronJob 과 결합
+|===
+
+== 실행
+
+[source,bash]
+----
+# 개발 설치
+make dev
+
+# API 서버 모드
+make server
+# 또는
+metadata-sync --mode server
+
+# 배치 모드
+metadata-sync --mode batch
+metadata-sync --mode batch --platform hive
+----
+
+== API
+
+[cols="1,2,3"]
+|===
+| Method | Path | 설명
+
+| GET | `/health` | 헬스체크
+| GET | `/sync/status` | 전체 플랫폼 상태
+| GET | `/sync/{platform}/status` | 특정 플랫폼 상태
+| POST | `/sync/{platform}/run` | 즉시 동기화
+| GET | `/sync/{platform}/discover` | 테이블 목록 미리보기
+| PUT/GET | `/sync/{platform}/schedule` | 주기 설정·조회
+| PUT | `/sync/hive/connection` | Hive 연결 설정
+| POST | `/sync/hive/test` | Hive 연결 테스트
+| POST | `/collector/hive/query` | Hive Query Hook 수신
+| POST | `/collector/impala/query` | Impala Query Agent 수신
+| POST | `/collector/trino/query` | Trino Listener 수신
+| POST | `/collector/starrocks/query` | StarRocks Audit 수신
+|===
+
+== 디렉토리 구조
+
+----
+argus-catalog-metadata-sync/
+├── src/sync/
+│   ├── main.py                 # CLI 엔트리포인트 (server/batch)
+│   ├── api.py                  # FastAPI REST API
+│   ├── core/
+│   │   ├── base.py             # BasePlatformSync 추상 클래스
+│   │   ├── catalog_client.py   # Catalog Server REST 클라이언트
+│   │   ├── config.py           # YAML 설정 로더
+│   │   ├── database.py         # SQLAlchemy 세션
+│   │   └── scheduler.py        # 주기 스케줄러
+│   └── platforms/
+│       ├── hive/               # Hive Metastore Thrift
+│       ├── impala/             # Cloudera Manager API
+│       ├── greenplum/          # PostgreSQL 프로토콜 + GP 확장
+│       └── kudu/               # kudu-python
+├── config/sync.yml
+├── tests/
+├── pyproject.toml
+└── Makefile
+----
+
+== 지원 플랫폼 (10종)
+
+[cols="1,2,3"]
+|===
+| 플랫폼 | 연결 방식 | 주요 수집 항목
+
+| MySQL | SQLAlchemy / PyMySQL → `information_schema` | PK · 인덱스 · 파티션 · 엔진 (InnoDB/MyISAM 등). DB = schema.
+| PostgreSQL | SQLAlchemy / psycopg2 → `pg_catalog` | PK · 파티션 키 · 테이블 통계. Greenplum 과 쿼리 패턴 공유.
+| MSSQL | SQLAlchemy / pymssql → `sys.*`, `INFORMATION_SCHEMA` | PK · 파티션 · filegroup.
+| Oracle | SQLAlchemy / oracledb → `ALL_*` dictionary views | PK · 파티션 · tablespace · 테이블 통계. database 개념 없음 — schema = owner.
+| Greenplum | psycopg2 + GP 시스템 카탈로그 | 분산키 · 파티션 (GP6/GP7) · 스토리지 (HEAP/AORO/AOCO).
+| Hive | HMS Thrift (port 9083) 또는 HMS Backend RDBMS 직접 SQL | 테이블 · serde · DDL · 파티션. *두 backend* 모두 동일한 메타데이터 생성.
+| Impala | Cloudera Manager API + Query Profile | 쿼리 이력 · 프로파일 · 리니지 (Hive Metastore 공유 시 메타데이터는 Hive sync 로 처리).
+| Kudu | kudu-python + Kerberos/TLS | Tablet · PK · 인코딩 · 압축. `impala::` 네이밍 파싱.
+| StarRocks | pymysql (MySQL 프로토콜) → `information_schema` + `tables_config` | *Table Model* (DUP_KEYS / AGG_KEYS / UNQ_KEYS / PRI_KEYS) · 분산키 · 파티션 키 · sort key · bucket 수.
+| Trino | trino Python driver (SQLAlchemy dialect) → `information_schema` | Catalog → Schema → Table 순회. `SHOW CREATE TABLE` 보관. *Multi-catalog* 엔진.
+|===
+
+[NOTE]
+====
+*카탈로그가 인식하는 데이터셋 플랫폼 종류는 20+ 종* (xref:catalog/platforms.adoc[]) 이며, 그 중
+*자동 메타데이터 수집을 지원하는 플랫폼이 위 10종* 이다. 나머지 (Kafka · S3 ·
+Snowflake · BigQuery · Elasticsearch · MongoDB 등) 는 *수동 등록 + AI 메타데이터
+자동 생성* 또는 외부 SDK 로 통합한다.
+====
+
+== 플랫폼별 동기화 상세
+
+=== MySQL
+
+[source,yaml]
+----
+platforms:
+  mysql:
+    enabled: false
+    host: "localhost"
+    port: 3306
+    username: "argus"
+    password: ""
+    databases: []                  # 화이트리스트 (빈값=전체)
+    exclude_databases: ["mysql", "information_schema", "performance_schema", "sys"]
+    origin: "PROD"
+    schedule:
+      interval_minutes: 60
+      enabled: true
+----
+
+MySQL 은 별도 schema 개념이 없으므로 `qualified_name = database.table`. 컬럼별
+PK / Unique / 인덱스 종류 · 자동 증가 · 기본값 수집.
+
+=== PostgreSQL
+
+[source,yaml]
+----
+platforms:
+  postgresql:
+    enabled: false
+    host: "localhost"
+    port: 5432
+    username: "argus"
+    password: ""
+    databases: []                  # 화이트리스트
+    exclude_databases: ["template0", "template1", "postgres"]
+    schemas: []
+    exclude_schemas: ["pg_catalog", "information_schema"]
+    origin: "PROD"
+    schedule:
+      interval_minutes: 60
+      enabled: true
+----
+
+PostgreSQL 은 cross-database 쿼리 불가 → DB 마다 별도 SQLAlchemy 엔진 생성.
+파티션 테이블 (`pg_partitioned_table`) 의 부모/자식 관계와 파티션 키 수집.
+qualified_name = `database.schema.table`.
+
+=== MSSQL
+
+[source,yaml]
+----
+platforms:
+  mssql:
+    enabled: false
+    host: "localhost"
+    port: 1433
+    username: "argus"
+    password: ""
+    databases: []
+    exclude_databases: ["master", "tempdb", "model", "msdb"]
+    schemas: []
+    exclude_schemas: ["sys", "INFORMATION_SCHEMA"]
+    origin: "PROD"
+    driver: "ODBC Driver 18 for SQL Server"   # pyodbc 사용 시
+    schedule:
+      interval_minutes: 60
+      enabled: true
+----
+
+`sys.partitions` · `sys.partition_schemes` 로 파티션·filegroup 정보 수집.
+qualified_name = `database.schema.table` (3-part).
+
+=== Oracle
+
+[source,yaml]
+----
+platforms:
+  oracle:
+    enabled: false
+    host: "localhost"
+    port: 1521
+    service_name: "ORCL"           # 또는 sid: "ORCL"
+    username: "argus"
+    password: ""
+    schemas: []                    # 수집 대상 owner 목록
+    exclude_schemas: ["SYS", "SYSTEM", "OUTLN", "DBSNMP", "APPQOSSYS", "XDB"]
+    origin: "PROD"
+    schedule:
+      interval_minutes: 60
+      enabled: true
+----
+
+Oracle 은 *database 개념 없음* — schema = owner. qualified_name = `schema.table`.
+`ALL_TABLES` · `ALL_TAB_COLUMNS` · `ALL_CONS_COLUMNS` · `ALL_PART_TABLES` 에서
+PK · 파티션 · tablespace · row 수 추정치 수집.
+
+=== Greenplum
+
+PostgreSQL 프로토콜 (psycopg2 / SQLAlchemy) 로 시스템 카탈로그 접속. Greenplum
+고유의 *분산키 (distribution key)*, *파티션키*, *스토리지 포맷*
+(`HEAP` / `AORO` / `AOCO`) 까지 수집.
+
+GP7 (`pg_partitioned_table`) 과 GP6 (`pg_partition`) 둘 다 지원 — 자동 감지.
+
+[source,yaml]
+----
+platforms:
+  greenplum:
+    enabled: false
+    host: "localhost"
+    port: 5432
+    username: "gpadmin"
+    password: ""
+    databases: []                    # 화이트리스트 (빈값=전체)
+    exclude_databases: ["template0", "template1", "postgres"]
+    schemas: []
+    exclude_schemas: ["pg_catalog", "information_schema", "gp_toolkit", "pg_toast"]
+    origin: "PROD"
+    schedule:
+      interval_minutes: 60
+      enabled: true
+----
+
+수집 항목:
+
+[cols="2,2,2"]
+|===
+| GP 속성 | Catalog 필드 | 비고
+
+| `relname` | `name` | 테이블명
+| `database.schema.table` | `qualified_name` | 전체 경로
+| `obj_description()` | `description` | 코멘트
+| `pg_roles.rolname` | `owners[].owner_name` | TECHNICAL_OWNER
+| `relkind` → mapping | `table_type` | `r=TABLE`, `p=PARTITIONED_TABLE`, `v=VIEW`, `m=MATERIALIZED_VIEW`, `f=FOREIGN_TABLE`
+| `reloptions` | `storage_format` | HEAP / AORO / AOCO
+| `gp_distribution_policy` | `is_distribution_key` | *GP 전용*
+|===
+
+스토리지 포맷 판정 — `pg_class.reloptions` 의 `appendoptimized` / `orientation`
+값으로 자동 분류.
+
+* Multi-database 접속 — Greenplum 은 cross-DB 쿼리 불가 → DB 마다 별도 엔진 생성.
+* 초기 접속에서 `gp_distribution_policy` 존재 여부로 *vanilla PostgreSQL 거부*.
+
+=== Kudu
+
+`kudu-python` 으로 Kudu master 접속. 네이티브 DB 개념이 없어 Impala 의
+`impala::database.table_name` 네이밍 컨벤션을 파싱해 db / table 분리.
+
+[source,yaml]
+----
+platforms:
+  kudu:
+    enabled: false
+    master_addresses: "localhost:7051"   # 콤마 구분, 멀티 마스터
+    table_filter: ""
+    default_database: "default"
+    parse_impala_naming: true
+    origin: "PROD"
+    kerberos:
+      enabled: false
+      principal: "kudu/_HOST@EXAMPLE.COM"
+      keytab: "/etc/security/keytabs/kudu.keytab"
+      sasl_protocol_name: "kudu"
+    tls:
+      require_authentication: false
+      encryption_policy: "optional"        # optional | required_remote | required
+      trusted_certificates:
+        - "/etc/security/certs/ca.pem"
+    schedule:
+      interval_minutes: 60
+      enabled: true
+----
+
+테이블 이름 파싱:
+
+[cols="2,1,2"]
+|===
+| Raw | database | table_name
+
+| `impala::mydb.my_table` | `mydb` | `my_table`
+| `impala::my_table` | `default` | `my_table`
+| `my_table` | `default` | `my_table`
+|===
+
+수집 속성 — `name`, `qualified_name`, `description`, `owner` (TECHNICAL_OWNER),
+`table_type=TABLE`, `storage_format=KUDU`, 컬럼별 `nullable` / PK / `encoding` /
+`compression`. Properties 키 — `kudu.table_id`, `kudu.num_replicas`,
+`kudu.live_row_count`, `kudu.on_disk_size`.
+
+=== Hive
+
+두 가지 backend 중 하나로 HMS 메타데이터 수집. *둘 다 동일한 HiveTableMetadata*
+객체를 만들어 카탈로그로 전송한다.
+
+[cols="1,3"]
+|===
+| `hive.sync_mode` | 동작
+
+| `thrift` (기본)
+| HMS Thrift RPC (port 9083) 직접 접속. `hmsclient` 사용. Kerberos 인증 가능.
+| `sql`
+| HMS Backend RDBMS (MySQL / PostgreSQL) 에 SQL 로 직접 질의. *Kerberos 우회* 가능 — 보안 정책상 Thrift 포트를 못 여는 환경 대안.
+|===
+
+[source,yaml]
+----
+platforms:
+  hive:
+    enabled: false
+    sync_mode: "thrift"            # thrift | sql
+    # thrift 모드
+    metastore_uris: "thrift://localhost:9083"
+    kerberos_enabled: false
+    krb5_principal: "hive/_HOST@EXAMPLE.COM"
+    keytab: "/etc/security/keytabs/hive.keytab"
+    # sql 모드 (HMS backend 직접)
+    backend_type: "mysql"          # mysql | postgresql
+    backend_host: "hms-db"
+    backend_port: 3306
+    backend_database: "metastore"
+    backend_username: "hive"
+    backend_password: ""
+    # 공통
+    databases: []
+    exclude_databases: ["sys", "information_schema"]
+    origin: "PROD"
+----
+
+수집 항목 — 테이블 · 컬럼 · serde · partition · 스토리지 포맷 (Parquet / ORC /
+Avro / TextFile 등) · DDL · row 수 추정치.
+
+쿼리 이벤트는 별도로 xref:appendix/ext-hive.adoc[Hive Query Hook] 이
+`/collector/hive/query` 로 비동기 전송.
+
+=== Impala
+
+쿼리 이력은 Cloudera Manager API (`/api/v\{N\}/clusters/.../impala/queries`) 로
+수집하고 *Impala Query Profile* 을 파싱해 리니지를 추출한다. 실시간 쿼리는
+xref:appendix/ext-impala.adoc[Impala Query Agent] 가 `/collector/impala/query` 로 push.
+
+[source,yaml]
+----
+platforms:
+  impala:
+    enabled: false
+    cm_host: "cm-server"
+    cm_port: 7180
+    cm_username: "admin"
+    cm_password: ""
+    cm_cluster_name: "Cluster 1"
+    use_ssl: false
+    fetch_profile: true            # 상세 프로파일 다운로드 (느림)
+    schedule:
+      interval_minutes: 15
+      enabled: true
+----
+
+[NOTE]
+====
+Impala 의 *테이블 메타데이터* 자체는 보통 Hive Metastore 를 공유하므로 Hive
+sync 로 처리. 이 모듈은 *쿼리 이력 + 프로파일* 수집에 특화.
+====
+
+=== StarRocks
+
+MySQL 프로토콜 (pymysql) 로 `information_schema` 와 `tables_config` 를 join 하여
+StarRocks 고유 속성을 수집한다.
+
+[source,yaml]
+----
+platforms:
+  starrocks:
+    enabled: false
+    fe_host: "localhost"
+    fe_port: 9030                  # MySQL 프로토콜 포트
+    username: "root"
+    password: ""
+    databases: []
+    exclude_databases: ["information_schema", "_statistics_"]
+    origin: "PROD"
+    schedule:
+      interval_minutes: 60
+      enabled: true
+----
+
+StarRocks 고유 수집 항목:
+
+[cols="2,3"]
+|===
+| 속성 | 설명
+
+| Table Model | `DUP_KEYS` · `AGG_KEYS` · `UNQ_KEYS` · `PRI_KEYS`
+| Distribution Key | 해시 분산 키 컬럼
+| Partition Key | 레인지 / 리스트 파티션 키
+| Sort Key | 정렬 키 (Primary Key Table)
+| Bucket 수 | 버킷 분할 수
+| Replication Num | 복제 수
+|===
+
+쿼리 이벤트는 별도로 xref:appendix/ext-starrocks.adoc[StarRocks Audit Plugin] 이
+`/collector/starrocks/query` 로 전송.
+
+=== Trino
+
+Trino Python driver (SQLAlchemy dialect) 로 Coordinator 에 접속해 *Catalog →
+Schema → Table* 순으로 순회. `SHOW CREATE TABLE` 결과를 properties 에 보관해
+connector 별 파티션·bucket 정보까지 유지한다.
+
+[source,yaml]
+----
+platforms:
+  trino:
+    enabled: false
+    host: "trino-coordinator"
+    port: 8080
+    user: "argus"
+    password: ""                   # JWT 또는 Basic 인증 시
+    http_scheme: "http"            # http | https
+    catalogs: []                   # 화이트리스트 (빈값=전체)
+    exclude_catalogs: ["system", "jmx", "memory", "tpch", "tpcds"]
+    origin: "PROD"
+    schedule:
+      interval_minutes: 60
+      enabled: true
+----
+
+Trino 는 *multi-catalog 엔진* — 각 catalog 가 connector (hive / iceberg / mysql /
+postgresql / delta / kafka 등) 와 매핑된다. qualified_name = `catalog.schema.table`.
+Catalog 마다 connector 종류가 properties 에 기록돼 카탈로그 UI 에서 *Trino 를
+거쳐 접근하는 외부 시스템* 을 파악할 수 있다.
+
+쿼리 이벤트는 별도로 xref:appendix/ext-trino.adoc[Trino Query Listener] 가
+`/collector/trino/query` 로 전송.
+
+== 새 플랫폼 추가
+
+. `src/sync/platforms/{platform}/sync.py` 생성.
+. `BasePlatformSync` 상속 — `connect()`, `disconnect()`, `discover()`, `sync()` 구현.
+. `config.py` 에 플랫폼 설정 모델 추가.
+. `api.py` 에 플랫폼 등록 로직 추가.
+
+== 기술 스택
+
+* Python 3.11+
+* FastAPI (원격 제어 API)
+* `hmsclient` — Hive Metastore Thrift
+* `requests` — Cloudera Manager API
+* `sqlglot` — SQL lineage 파싱 (fallback)
+* `schedule` — 주기적 동기화
+* SQLAlchemy 2.0 + asyncpg / aiomysql
+* Pydantic v2

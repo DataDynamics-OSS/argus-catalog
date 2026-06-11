@@ -1,0 +1,115 @@
+= 설정
+
+시스템 전역 런타임 설정. `argus-admin` 만 접근 가능.
+
+// TODO: screenshot - Settings 메인 (탭 영역)
+image::ops-settings/overview.png[설정, 800]
+
+== 진입 경로
+
+좌측 사이드바 *Administration → Settings* (`/dashboard/settings`).
+
+설정은 DB (`catalog_configuration`) 에 카테고리·키 단위로 저장되며 *변경 즉시
+서버에 재로드* 된다 (재시작 불필요).
+
+탭은 다음 5 개.
+
+* *Auth* — 인증 방식.
+* *CORS* — 허용 오리진.
+* *Object Storage* — S3 / MinIO.
+* *Embedding* — 시맨틱 검색 임베딩 프로바이더.
+* *LLM* — AI 메타데이터 자동 생성.
+
+== Auth
+
+[cols="1,3"]
+|===
+| 키 | 설명
+
+| `auth_type` | `keycloak` (권장) / `local`.
+| `auth_keycloak_server_url` | Keycloak 서버 URL (`http://localhost:8180`).
+| `auth_keycloak_realm` | Realm 이름 (`argus`).
+| `auth_keycloak_client_id` | Client ID (`argus-client`).
+| `auth_keycloak_client_secret` | Client Secret. 응답에서 마스킹.
+| `auth_keycloak_admin_role` | 관리자 역할 (`argus-admin`).
+| `auth_keycloak_superuser_role` | 슈퍼유저 역할.
+| `auth_keycloak_user_role` | 기본 사용자 역할.
+|===
+
+*Initialize* 버튼으로 Keycloak Realm · Client · Role 을 자동 시드할 수 있다.
+
+== CORS
+
+콤마 구분 오리진. 동적 미들웨어로 즉시 반영.
+
+----
+http://localhost:3000,http://my-internal-host:3000
+----
+
+`*` 은 개발 환경에서만 권장.
+
+== Object Storage
+
+ML 모델 아티팩트 저장소. 설정하지 않으면 로컬 파일시스템 모드.
+
+[cols="1,3"]
+|===
+| 키 | 기본값
+
+| `object_storage_endpoint` | `http://localhost:9000`
+| `object_storage_access_key` | `minioadmin`
+| `object_storage_secret_key` | (마스킹)
+| `object_storage_bucket` | `model-artifacts`
+| `presigned_url_expiry` | `3600` 초
+|===
+
+*Test Connection* 으로 버킷 접근을 검증. 버킷이 없으면 자동 생성된다.
+
+== Embedding
+
+시맨틱 검색용 임베딩 프로바이더 설정.
+
+[cols="1,3"]
+|===
+| 키 | 설명
+
+| `embedding_enabled` | 기능 활성화.
+| `embedding_provider` | `local` / `openai` / `ollama`.
+| `embedding_model` | 모델 식별자 또는 로컬 경로 (에어갭).
+| `embedding_api_key` | OpenAI 키 (마스킹).
+| `embedding_api_url` | Azure / Ollama URL 오버라이드.
+| `embedding_dimension` | 벡터 차원.
+|===
+
+*Test* 버튼은 텍스트 한 줄을 실제로 임베딩해 응답 시간 / 차원 / 모델을 보여준다.
+저장 시 프로바이더가 즉시 재초기화된다.
+
+상세 운영 절차는 xref:ops/search.adoc[검색] 참조.
+
+== LLM
+
+AI 메타데이터 자동 생성 (테이블 설명, 컬럼 설명, 태그 추천, PII 탐지).
+
+[cols="1,3"]
+|===
+| 키 | 설명
+
+| `llm_enabled` | 기능 활성화.
+| `llm_provider` | `openai` / `ollama` / `anthropic`.
+| `llm_model` | 모델 (`gpt-4o-mini`, `llama3.1`, `claude-sonnet-4-...`).
+| `llm_api_key` | API 키 (마스킹).
+| `llm_api_url` | 커스텀 URL.
+| `llm_temperature` | 기본 0.3.
+| `llm_max_tokens` | 기본 1024.
+| `llm_auto_generate_on_sync` | 동기화 후 빈 설명 자동 생성.
+| `llm_language` | 생성 언어 (`ko`, `en` ...).
+|===
+
+생성 이력은 `catalog_ai_generation_log` 테이블에 토큰 사용량과 함께 기록돼 감사
+추적이 가능하다.
+
+== 비밀번호 / 시크릿 마스킹
+
+설정 API 의 응답에서 시크릿 필드 (`*_secret`, `*_api_key`, `*_password`) 는
+`••••••••` 으로 마스킹된다. 빈 값으로 PUT 하면 기존 값을 유지한다 (덮어쓰지
+않음).

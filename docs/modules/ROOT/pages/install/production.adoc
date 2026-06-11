@@ -1,0 +1,126 @@
+= 운영 배포
+
+운영 환경에 Argus Catalog 를 배포하는 절차를 설명한다. 시크릿 주입, 데이터 영속,
+외부 관리형 서비스, TLS/리버스 프록시, 백업을 다룬다.
+
+[WARNING]
+====
+저장소의 `docker-compose.yml` 단독은 **로컬 개발/데모용**이다. 기본 계정·비밀번호
+(`admin`·`minioadmin`·`argus` 등)는 개발 편의용 값이므로 운영에 그대로 쓰면 안 된다.
+운영에는 아래 오버라이드(`docker-compose.prod.yml`)와 외부 시크릿을 사용한다.
+====
+
+== 배포 모델
+
+작은 규모는 단일 호스트에 컨테이너로 전체 스택을 띄울 수 있고, 규모가 커지면 DB·오브젝트
+스토리지·Temporal 을 **외부 관리형 서비스**로 분리하거나 Kubernetes 로 배포한다.
+
+* **단일 호스트(컴포즈)** — `docker-compose.yml` + `docker-compose.prod.yml` 오버라이드
+* **외부 관리형** — 컨테이너 DB/MinIO/Temporal 대신 관리형 PostgreSQL·S3·Temporal 사용
+* **Kubernetes** — 이미지 빌드·레지스트리 push 후 매니페스트/Helm 으로 배포
+
+== 1. 시크릿 준비
+
+`deploy/.env.example` 을 복사해 값을 채운다. 이 파일은 절대 커밋하지 않는다(`.gitignore` 대상).
+
+[source,bash]
+----
+cp deploy/.env.example deploy/.env
+openssl rand -base64 36   # ARGUS_SECRET_KEY / ARGUS_JWT_SECRET 등에 사용
+----
+
+.deploy/.env 항목
+[cols="1,2,1",options="header"]
+|===
+| 변수 | 용도 | 주입 경로
+
+| `ARGUS_SECRET_KEY` | 외부 연동 자격증명 암호화 키(Fernet) | 백엔드 환경변수
+| `ARGUS_JWT_SECRET` | 로컬 JWT 서명키 | 백엔드 환경변수
+| `DB_PASSWORD` | catalog-postgres 비밀번호 | 컨테이너 env
+| `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | MinIO 키 | 컨테이너 env
+| `TEMPORAL_DB_PASSWORD` | Temporal 메타 DB | 컨테이너 env
+| `DATA_DIR` | DB·MinIO 데이터 보관 호스트 경로 | bind mount
+| `MINIO_IMAGE` | MinIO 이미지 핀 | 컨테이너 image
+|===
+
+[NOTE]
+====
+`ARGUS_SECRET_KEY`·`ARGUS_JWT_SECRET` 은 백엔드가 **환경변수로 직접** 읽는다. 미설정 시
+개발용 기본키로 동작하며 경고 로그를 남기므로, 운영에서는 반드시 충분히 긴 무작위 값으로 설정한다.
+====
+
+== 2. config 정합 (중요)
+
+백엔드는 **DB/오브젝트 스토리지 접속 정보를 `deploy/config/config.properties` 에서 읽는다**
+(환경변수가 아님). 따라서 `.env` 의 크리덴셜과 `config.properties` 의 값을 반드시 일치시킨다.
+
+[cols="1,1",options="header"]
+|===
+| deploy/.env | deploy/config/config.properties
+
+| `DB_PASSWORD` | `db.password`
+| `MINIO_ROOT_USER` | `os.access_key`
+| `MINIO_ROOT_PASSWORD` | `os.secret_key`
+|===
+
+외부 관리형 DB/S3 를 쓰는 경우, 컨테이너를 제거하고 `config.properties` 의 `db.host`·
+`os.endpoint` 등을 외부 엔드포인트로 지정한다.
+
+== 3. 기동
+
+[source,bash]
+----
+docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.prod.yml \
+  --env-file deploy/.env up -d --build
+----
+
+`docker-compose.prod.yml` 오버라이드가 추가하는 것:
+
+* `.env` 기반 크리덴셜 주입
+* 백엔드/워커에 `ARGUS_SECRET_KEY`·`ARGUS_JWT_SECRET` 주입
+* `restart: always` (호스트 재부팅 시 자동 복구)
+* MinIO 이미지 핀, 데이터 bind mount
+
+미설정 시크릿이 있으면 `:?` 가드로 기동이 실패한다.
+
+== 4. 데이터 보존 & 백업
+
+운영 오버라이드는 상태 데이터를 **명시적 호스트 경로(bind mount)** 에 보관하므로, 컨테이너를
+삭제·재생성해도 데이터가 보존된다.
+
+[cols="1,1",options="header"]
+|===
+| 데이터 | 위치
+
+| 앱 DB(PostgreSQL) | `++${DATA_DIR}++/catalog-postgres`
+| 모델 아티팩트(MinIO) | `++${DATA_DIR}++/minio`
+| Temporal 메타 DB | `++${DATA_DIR}++/temporal-postgres`
+| 환경설정 파일 | `deploy/config/` (호스트, read-only 마운트)
+|===
+
+`DATA_DIR` 은 백업 가능한 절대 경로를 권장한다(예: `/var/lib/argus-catalog/data`).
+
+[WARNING]
+====
+`docker compose ... down -v` 는 볼륨을 삭제한다. 운영에서는 `-v` 를 사용하지 않는다.
+====
+
+[source,bash]
+----
+# 앱 DB 논리 백업
+docker exec argus-catalog-postgres pg_dump -U argus argus_catalog > backup-$(date +%F).sql
+# 데이터 디렉터리 전체 백업(DB 파일 + MinIO 오브젝트)
+tar czf argus-data-$(date +%F).tgz -C "$DATA_DIR" .
+----
+
+== 5. 보안 권장 사항
+
+* **TLS / 리버스 프록시** — 외부 노출은 리버스 프록시(nginx·Traefik 등) 뒤에서 TLS 종단.
+  내부 포트(`5432`·`9000`·`7233`)는 호스트로 노출하지 않는다(방화벽으로 차단).
+* **기본 관리자** — 로컬 인증 모드는 첫 기동 시 `admin/admin` 계정을 시드한다.
+  첫 로그인 후 즉시 비밀번호를 변경한다.
+* **이미지 핀** — `:latest` 대신 검증된 버전으로 고정한다.
+* **외부 관리형 서비스** — DB·오브젝트 스토리지·Temporal 은 관리형 사용을 권장한다.
+
+전체 운영 보안 체크리스트는 저장소 루트 README 의 *운영 환경 보안 설정* 과
+`deploy/README.md` 의 *운영 배포* 절을 참고한다.

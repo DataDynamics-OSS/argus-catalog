@@ -1,0 +1,188 @@
+= Hive Query Hook
+
+Hive 의 `ExecuteWithHookContext` 인터페이스 구현. 쿼리 *시작 / 성공 / 실패*
+3 시점에 Metadata Sync 로 이벤트를 REST 전송.
+
+== 요구사항
+
+* Hive 3.1.3 (Cloudera CDP 7.1.9 SP1)
+* JDK 11+ (`java.net.http.HttpClient`, `Map.of()` 사용)
+
+== 빌드
+
+[source,bash]
+----
+mvn -Dmaven.test.skip=true clean package
+----
+
+산출물:
+
+* `target/hive-query-hook-1.0.1.jar` — Hook 클래스만
+* `target/hive-query-hook-1.0.1-jar-with-dependencies.jar` — Jackson 포함 (*배포용*)
+
+== 동작 흐름
+
+----
+Client → HiveServer2 → Query Parse → Query Plan
+                            ↓
+                   PRE_EXEC_HOOK   (status=RUNNING)
+                            ↓
+                       Query 실행
+                            ↓
+              ┌─────────────┴─────────────┐
+              ▼                           ▼
+       POST_EXEC_HOOK             ON_FAILURE_HOOK
+       (status=SUCCESS)           (status=FAILED)
+----
+
+== Hook 종류
+
+[cols="2,2,1,2"]
+|===
+| Hook | 설정 키 | 호출 시점 | 용도
+
+| `PRE_EXEC_HOOK` | `hive.exec.pre.hooks` | 실행 직전 | 시작 기록 · 실행 중 상태
+| `POST_EXEC_HOOK` | `hive.exec.post.hooks` | 성공 완료 | 소요시간 · 성공 상태
+| `ON_FAILURE_HOOK` | `hive.exec.failure.hooks` | 실패 | 에러 메시지 · 실패 상태
+|===
+
+== 설정 (hive-site.xml)
+
+[source,xml]
+----
+<property>
+  <name>hive.exec.pre.hooks</name>
+  <value>org.opencloudengine.argus.catalog.collector.hql.hook.QueryAuditHook</value>
+</property>
+<property>
+  <name>hive.exec.post.hooks</name>
+  <value>org.opencloudengine.argus.catalog.collector.hql.hook.QueryAuditHook</value>
+</property>
+<property>
+  <name>hive.exec.failure.hooks</name>
+  <value>org.opencloudengine.argus.catalog.collector.hql.hook.QueryAuditHook</value>
+</property>
+
+<property>
+  <name>QueryAuditHook.enabled</name>
+  <value>true</value>
+</property>
+<property>
+  <name>QueryAuditHook.target.url</name>
+  <value>http://<metadata-sync>:4610/collector/hive/query</value>
+</property>
+<property>
+  <name>QueryAuditHook.platform.id</name>
+  <value>hive-019538a3e7c84f2b1</value>
+</property>
+----
+
+기존 Hook 이 있다면 *콤마로 추가*. 예시.
+
+----
+org.apache.atlas.hive.hook.HiveHook,org.opencloudengine.argus.catalog.collector.hql.hook.QueryAuditHook
+----
+
+== 배포
+
+* 빌드한 `*-jar-with-dependencies.jar` 를 *모든 HiveServer2 노드* 에 동일 경로로 배포.
+* `hive-site.xml` 의 `hive.aux.jars.path` 로 JAR 경로 지정 (로컬 또는 HDFS).
+
+Vanilla Hadoop.
+
+[source,xml]
+----
+<property>
+  <name>hive.aux.jars.path</name>
+  <value>/opt/lib-ext/</value>
+</property>
+----
+
+Cloudera CDP — *Cloudera Manager → Hive On Tez → Configuration → Hive Auxiliary
+JARs Directory* 에 경로 지정.
+
+== Cloudera Manager 설정
+
+*Hive Service Advanced Configuration Snippet (Safety Valve) for hive-site.xml*
+에 다음 6개 항목 추가:
+
+[cols="2,3"]
+|===
+| Name | Value
+
+| `hive.exec.pre.hooks` | `org.opencloudengine.argus.catalog.collector.hql.hook.QueryAuditHook`
+| `hive.exec.post.hooks` | `org.opencloudengine.argus.catalog.collector.hql.hook.QueryAuditHook`
+| `hive.exec.failure.hooks` | `org.opencloudengine.argus.catalog.collector.hql.hook.QueryAuditHook`
+| `QueryAuditHook.enabled` | `true`
+| `QueryAuditHook.target.url` | `http://<metadata-sync>:4610/collector/hive/query`
+| `QueryAuditHook.platform.id` | `hive-019538a3e7c84f2b1`
+|===
+
+== 전송 페이로드
+
+PRE_EXEC_HOOK (RUNNING)::
+[source,json]
+----
+{
+  "queryId": "hive_20260321143012_abcd1234",
+  "shortUsername": "alice",
+  "username": "alice@REALM.COM",
+  "operationName": "QUERY",
+  "startTime": "1742536212000",
+  "query": "SELECT * FROM db.table WHERE dt = '2026-03-21'",
+  "status": "RUNNING",
+  "platformId": "hive-019538a3e7c84f2b1",
+  "inputs": ["db.table"],
+  "outputs": []
+}
+----
+
+POST_EXEC_HOOK (SUCCESS)::
+[source,json]
+----
+{
+  "queryId": "hive_20260321143012_abcd1234",
+  "shortUsername": "alice",
+  "operationName": "QUERY",
+  "startTime": "1742536212000",
+  "endTime": "1742536215000",
+  "durationMs": "3000",
+  "query": "INSERT INTO analytics.summary SELECT a.id, b.name FROM sales.orders a JOIN catalog.products b ON a.pid = b.id",
+  "status": "SUCCESS",
+  "platformId": "hive-019538a3e7c84f2b1",
+  "inputs": ["sales.orders", "catalog.products"],
+  "outputs": ["analytics.summary"]
+}
+----
+
+ON_FAILURE_HOOK (FAILED)::
+[source,json]
+----
+{
+  "queryId": "hive_20260321143012_abcd1234",
+  "shortUsername": "alice",
+  "operationName": "QUERY",
+  "startTime": "1742536212000",
+  "endTime": "1742536214000",
+  "durationMs": "2000",
+  "errorMsg": "SemanticException [Error 10001]: Table not found 'db.unknown_table'",
+  "query": "SELECT * FROM db.unknown_table",
+  "status": "FAILED",
+  "platformId": "hive-019538a3e7c84f2b1",
+  "inputs": [],
+  "outputs": []
+}
+----
+
+== operationName 주요 값
+
+[cols="2,3"]
+|===
+| 값 | 설명
+
+| `QUERY` | SELECT, INSERT, CTAS 등 일반 쿼리
+| `CREATETABLE` / `DROPTABLE` | 테이블 생성·삭제
+| `ALTERTABLE_ADDCOLS` / `_RENAME` | 컬럼 추가·이름 변경
+| `CREATEDATABASE` / `DROPDATABASE` | DB 생성·삭제
+| `LOAD` / `EXPORT` / `IMPORT` | 데이터 로드·내보내기·가져오기
+|===

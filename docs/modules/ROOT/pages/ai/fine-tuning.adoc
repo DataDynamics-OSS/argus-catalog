@@ -1,0 +1,343 @@
+= Fine-tuning 가이드
+
+xref:ai/metadata-generation.adoc[AI 메타데이터 자동 생성] 의 품질을 고객사 도메인에
+맞춰 *극대화* 하기 위한 LLM Fine-tuning 파이프라인. 범용 LLM 대신 고객사 데이터로
+학습한 전용 모델을 사내 Ollama 에서 서빙한다.
+
+// TODO: screenshot - Fine-tuned 모델로 생성된 결과 vs 범용 LLM 결과 비교
+// image::ai-fine-tuning/comparison.png[모델 비교, 800]
+
+== 왜 Fine-tuning 이 필요한가
+
+범용 LLM 은 다음 한계가 있다.
+
+[cols="1,3"]
+|===
+| 한계 | 예시
+
+| 약어 해석 불가 | `eqp_stat_cd` → "장비상태코드"를 알 수 없음
+| 도메인 지식 부족 | 반도체 Fab 의 FDC / SPC / Yield 용어 모름
+| 설명 스타일 불일치 | 고객사 선호 톤·표현이 반영되지 않음
+| 비용 / 레이턴시 | 외부 API 호출 비용 + 네트워크 지연
+| 보안 | 메타데이터가 외부 API 로 전송 (에어갭 불가)
+|===
+
+Fine-tuning 으로 *도메인 특화*, *스타일 일관성*, *자체 서빙*, *비용 0* 을 달성한다.
+
+== 데이터 플라이휠 (Data Flywheel)
+
+----
+[Stage 1 — 즉시]
+용어사전 시드 → 프롬프트 컨텍스트 주입 → 범용 LLM 생성 → 사용자 검수 (Apply/Reject)
+                                                       ↓
+[Stage 2 — Fine-tuning]
+applied=True 데이터 축적 → 학습 데이터 추출 → LoRA Fine-tuning → 병합 + GGUF + Ollama 등록
+                                                                            ↓
+[Stage 3 — 운영]
+Fine-tuned 모델로 생성 → 검수 → 추가 학습 데이터 축적 → 주기적 재학습
+----
+
+== Stage 1: 프롬프트 강화
+
+Fine-tuning 없이도 *즉시* 품질을 올린다. 3 가지 컨텍스트를 프롬프트에 자동 주입.
+
+[cols="1,2,3"]
+|===
+| 컨텍스트 | 출처 | 효과
+
+| 용어사전
+| `catalog_standard_word` 테이블
+| 약어 → 한글/영문 의미 매핑 (예: `LOT` → 로트, `EQP` → 장비)
+
+| 리니지
+| `argus_dataset_lineage` 테이블
+| 업/다운스트림 데이터 흐름 이해
+
+| Few-shot
+| `catalog_ai_generation_log` (applied=True) 또는 수동 description
+| 설명 스타일·톤 학습
+|===
+
+설계 원칙:
+
+* 용어사전은 *컬럼명에 실제 등장하는 약어만* 필터링 (토큰 효율)
+* Few-shot 은 *같은 플랫폼 타입* 의 승인된 예시 우선
+* 모든 컨텍스트는 *선택적* — 데이터 없으면 빈 문자열 (하위 호환)
+
+자세한 사용자 워크플로우는 xref:ai/metadata-generation.adoc[AI 메타데이터 자동 생성] 참조.
+
+== Stage 2: Fine-tuning
+
+=== 2.1 학습 데이터 추출
+
+두 데이터 소스를 JSONL (ChatML 포맷) 으로 변환.
+
+소스 1 — 카탈로그 DB의 기존 메타데이터::
+[cols="2,1,3"]
+|===
+| 태스크 | 건수 | 추출 기준
+
+| 데이터셋 설명 | 17 | `description IS NOT NULL AND LENGTH >= 10`
+| 컬럼 설명 | 10 | 2개 이상 컬럼에 설명 있는 데이터셋
+| 태그 추천 | 15 | 1개 이상 태그 매핑된 데이터셋
+|===
+
+소스 2 — 합성 도메인 데이터::
+반도체 Fab 의 경우 15 개 표준 테이블 (`mes.tb_lot_mst`, `fdc.tb_fdc_trace`,
+`spc.tb_spc_data`, `yield.tb_wafer_sort` 등) 에 전문가 수준의 설명을
+직접 작성해 45 건 추가.
+
+JSONL 포맷 (ChatML).
+
+[source,json]
+----
+{
+  "messages": [
+    {"role": "system", "content": "You are a data catalog assistant..."},
+    {"role": "user", "content": "Generate a concise description for this database table.\n\n== Terminology glossary ==\n  LOT: 로트 (Lot)\n  ...\n\nTable: mes.tb_lot_mst\nColumns:\n  lot_id (VARCHAR(30)) PK NOT NULL\n  ..."},
+    {"role": "assistant", "content": "{\"description\": \"로트 마스터 테이블. ...\", \"confidence\": 0.95}"}
+  ]
+}
+----
+
+추출 스크립트.
+
+[source,bash]
+----
+cd argus-catalog-server
+
+# DB + 합성 데이터 합산
+python3 scripts/export_training_data.py --output-dir ./training_data
+
+# DB 없이 합성 데이터만 (초기 부트스트랩)
+python3 scripts/export_training_data.py --output-dir ./training_data --skip-db
+----
+
+=== 2.2 베이스 모델 선정
+
+[cols="2,1,1,2"]
+|===
+| 후보 | 한국어 | JSON 안정성 | 라이선스
+
+| *Qwen2.5-7B-Instruct (권장)* | 우수 | 매우 좋음 | Apache 2.0
+| EXAONE-3.5-7.8B | 최우수 | 좋음 | 비상업 무료
+| Llama-3.1-8B | 보통 | 좋음 | Llama License
+|===
+
+Apache 2.0 + 한국어 + JSON 안정성으로 *Qwen2.5-7B-Instruct* 권장.
+
+=== 2.3 LoRA 하이퍼파라미터
+
+[cols="2,1,3"]
+|===
+| 파라미터 | 값 | 이유
+
+| LoRA rank (r) | 16 | 7B 모델 대비 적절한 표현력 (40 M params, 0.53%)
+| LoRA alpha | 32 | r 의 2배 (일반 권장값)
+| Target modules | q/k/v/o/gate/up/down_proj | Attention + FFN 전체
+| Learning rate | 2e-4 | LoRA 표준 범위
+| Epochs | 5 | 87건 소량 데이터에 적합
+| Batch size | 2 × 4 (accum) = 8 | GPU 메모리 활용
+| Precision | BF16 | 고VRAM GPU(120 GB급)로 양자화 불필요
+| Max seq length | 2048 | 프롬프트 + 응답 포함
+|===
+
+학습 결과 (예시 — 87 건 데이터):
+
+[cols="1,1,1,1"]
+|===
+| Epoch | Train Loss | Eval Loss | Token Accuracy
+
+| 1 | 0.7164 | 0.9466 | 82.0 %
+| 2 | 0.4638 | 0.5934 | 90.3 %
+| 3 | 0.2501 | 0.5061 | 92.4 %
+| 4 | 0.1428 | 0.4862 | 92.5 %
+| 5 | 0.1838 | 0.4847 | 92.6 %
+|===
+
+학습 시간 *10 분* (고VRAM GPU 기준), Best eval loss *0.48*, Trainable params
+*40 M / 7.6 B (0.53 %)*.
+
+=== 2.4 실행
+
+[source,bash]
+----
+python3 scripts/finetune.py \
+    --base-model Qwen/Qwen2.5-7B-Instruct \
+    --train-file ./training_data/train.jsonl \
+    --eval-file ./training_data/eval.jsonl \
+    --output-dir ./output/argus-metadata-7b-lora \
+    --epochs 5 --batch-size 2 --grad-accum 4 --lora-r 16
+----
+
+=== 2.5 모델 병합 + GGUF + Ollama 등록
+
+----
+Qwen2.5-7B-Instruct (베이스) + LoRA adapter
+    ↓ merge_and_unload()
+Merged SafeTensors (FP16, ~15 GB)
+    ↓ llama.cpp convert_hf_to_gguf.py
+GGUF FP16 (15.2 GB)
+    ↓ ollama create
+argus-metadata:latest (Ollama)
+----
+
+[source,bash]
+----
+# 1. LoRA 병합
+python3 scripts/merge_and_convert.py \
+    --base-model Qwen/Qwen2.5-7B-Instruct \
+    --lora-dir ./output/argus-metadata-7b-lora/checkpoint-40 \
+    --output-dir ./output/argus-metadata-7b-merged
+
+# 2. GGUF 변환 (llama.cpp 필요)
+cd /path/to/llama.cpp
+python3 convert_hf_to_gguf.py \
+    /path/to/argus-metadata-7b-merged \
+    --outfile argus-metadata-7b-f16.gguf --outtype f16
+
+# 3. Ollama 등록 — Modelfile
+cat > Modelfile << 'EOF'
+FROM ./argus-metadata-7b-f16.gguf
+
+SYSTEM "You are a data catalog assistant that generates metadata for database tables. Always respond with valid JSON only, no markdown fences or extra text."
+
+PARAMETER temperature 0.3
+PARAMETER num_predict 1024
+PARAMETER top_p 0.9
+PARAMETER stop "<|im_end|>"
+PARAMETER stop "<|endoftext|>"
+EOF
+
+ollama create argus-metadata -f Modelfile
+----
+
+== Stage 3: 운영 연동
+
+Fine-tuned 모델은 *코드 변경 없이* Catalog Server 의 AI 모듈과 그대로 연동된다.
+
+xref:ops/settings.adoc#_llm[설정 → LLM] 또는 DB 에서 한 줄 변경.
+
+[source,sql]
+----
+UPDATE catalog_configuration SET value = 'ollama'          WHERE key = 'llm_provider';
+UPDATE catalog_configuration SET value = 'argus-metadata'  WHERE key = 'llm_model';
+UPDATE catalog_configuration SET value = 'http://<ollama-host>:11434' WHERE key = 'llm_api_url';
+UPDATE catalog_configuration SET value = 'true'            WHERE key = 'llm_enabled';
+----
+
+== 운영 흐름
+
+. UI 또는 자동 동기화가 `POST /api/v1/ai/datasets/{id}/describe` 호출
+. 서버가 데이터셋 + 스키마 + 용어사전 + 리니지 + Few-shot 로드
+. 프롬프트 빌드 후 `argus-metadata` 모델 호출
+. 결과를 `catalog_ai_generation_log` 에 저장 (`applied=false`)
+. 사용자 검수 → *Apply* 시 `applied=true` 로 마킹
+. *applied=true* 행이 다음 Fine-tuning 학습 데이터로 자동 누적
+
+== 재학습 (Continuous Improvement)
+
+=== 트리거
+
+* 신규 `applied=True` 데이터가 이전 학습 대비 *+50 건* 이상.
+* 고객사에 신규 도메인 테이블 대량 등록.
+* Reject 비율 *30 %* 이상.
+
+=== 절차
+
+[source,bash]
+----
+# 1. 최신 학습 데이터 추출
+python3 scripts/export_training_data.py --output-dir ./training_data_v2
+
+# 2. 베이스 모델에서 다시 학습 (이전 모델 누적 학습 X)
+python3 scripts/finetune.py \
+    --train-file ./training_data_v2/train.jsonl \
+    --eval-file ./training_data_v2/eval.jsonl \
+    --output-dir ./output/argus-metadata-7b-lora-v2
+
+# 3. 병합 + GGUF + Ollama 재등록
+----
+
+=== 고객사별 모델 관리
+
+각 고객사가 자체 데이터로 별도 모델을 학습해 독립 운영 가능.
+
+----
+고객사 A (제조)  → argus-metadata-mfg   : 반도체 MES/FDC/SPC 특화
+고객사 B (금융)  → argus-metadata-fin   : 거래/계좌/리스크 특화
+고객사 C (공공)  → argus-metadata-gov   : 민원/예산/인사 특화
+----
+
+== 도메인 시드 — 반도체 Fab 예시
+
+용어사전 시드를 사전 등록하면 *Fine-tuning 없이도* 약어 해석 품질이 크게
+향상된다 (Stage 1).
+
+[cols="1,1,3"]
+|===
+| 구성 요소 | 수량 | 내용
+
+| StandardWord | 197 | 공정(30), 장비(19), 웨이퍼/로트(22), 계측/품질(20), 레시피(16), FDC/SPC(16), 자재(10), 설비(9), 비즈니스(10), 공통접미(45)
+| StandardDomain | 33 | 식별자(7), 명칭(2), 코드(2), 수량(4), 측정값(7종), 날짜(3), 기타(3)
+| CodeGroup | 12 + 77 코드값 | E10 장비상태 · 로트상태 · 결함유형 · WM-811K 웨이퍼결함패턴 등
+| StandardTerm | 136 | 단어 조합 + 도메인 연결로 물리 컬럼명 자동 생성
+|===
+
+데이터 출처 — SEMI 표준 (E10 / E30 GEM / E116), ISA-95 / IEC 62264, STDF V4,
+WM-811K, NIST / IC Knowledge / Lam Research / Samsung 용어집.
+
+로딩.
+
+[source,bash]
+----
+# 검증 (API 호출 없음)
+python3 scripts/seed/semiconductor/seed_semiconductor.py --dry-run
+
+# 카탈로그 서버에 로딩
+python3 scripts/seed/semiconductor/seed_semiconductor.py \
+  --base-url http://<server>:4600
+----
+
+== 인프라 요구사항
+
+Fine-tuning 서버 예시.
+
+[cols="1,3"]
+|===
+| 항목 | 사양
+
+| GPU | NVIDIA GB10 (120 GB unified memory)
+| CPU | Grace (ARM aarch64), 20 코어
+| RAM | 128 GB
+| 디스크 | 1.9 TB NVMe (학습 산출물 + GGUF)
+| OS | Ubuntu 24.04 LTS
+| Ollama | 0.13+
+|===
+
+학습 환경 — Python 3.12, PyTorch 2.11 (cu130), transformers 5.3, peft 0.18,
+trl 0.29, datasets 4.8, accelerate 1.13.
+
+[NOTE]
+====
+GPU 가 부족한 환경에서는 *QLoRA + 4-bit 양자화* 로 단일 16 GB GPU 에서도 7B
+모델 fine-tuning 가능. `--load-in-4bit` 옵션 검토.
+====
+
+== 관련 파일
+
+----
+argus-catalog-server/
+├── app/ai/
+│   ├── prompts.py              # 용어사전·리니지·Few-shot 섹션 빌더
+│   └── service.py              # 컨텍스트 로더 (3개)
+└── scripts/
+    ├── seed/semiconductor/     # 도메인 시드 데이터
+    │   ├── dictionary.json
+    │   ├── words.json / domains.json / terms.json
+    │   ├── code_groups.json
+    │   └── seed_semiconductor.py
+    ├── export_training_data.py # 학습 데이터 추출
+    ├── finetune.py             # LoRA Fine-tuning
+    └── merge_and_convert.py    # 병합 + SafeTensors
+----

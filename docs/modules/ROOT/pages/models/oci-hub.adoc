@@ -1,0 +1,142 @@
+= OCI Model Hub
+
+HuggingFace 스타일 모델 브라우저 + S3/MinIO 기반 OCI Manifest 모델 저장소.
+프레임워크에 무관하게 모델을 적재·검색·배포한다.
+
+// TODO: screenshot - OCI Hub 메인 (카드 그리드)
+image::models-oci-hub/hub.png[OCI Model Hub, 800]
+
+== 진입 경로
+
+좌측 사이드바 *Model Catalog → OCI Model Hub* (`/dashboard/oci-hub`).
+관리자는 *OCI Files* 메뉴로 S3 객체 단위 파일 브라우저에도 접근 가능.
+
+== 모델 브라우저
+
+// TODO: screenshot - 카드뷰 + 필터 (태스크 / 프레임워크 / 라이선스)
+image::models-oci-hub/browse.png[모델 브라우저, 800]
+
+* *카드 뷰* — 모델당 한 장. 다운로드 수 · 태그 · README 요약 노출.
+* *필터* — Task (`text-classification`, `image-classification` 등), 프레임워크, 라이선스.
+* *검색* — 이름 부분 일치.
+
+카드 클릭 시 모델 상세로 이동. README 본문, 파일 목록, OCI Manifest 를 확인할 수 있다.
+
+== S3 저장 구조
+
+----
+model-artifacts/                    ← MinIO 또는 S3 버킷
+  {model_name}/
+    v{version}/
+      model.pkl                     ← 모델 가중치
+      config.json                   ← 설정
+      tokenizer.json                ← 토크나이저 (HF)
+      MLmodel                       ← MLflow 메타데이터 (해당 시)
+      conda.yaml / requirements.txt
+      manifest.json                 ← finalize 시 자동 생성
+----
+
+== OCI Manifest
+
+finalize 시 OCI Image Manifest 스펙에 맞춰 `manifest.json` 이 생성된다.
+
+[source,json]
+----
+{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.manifest.v1+json",
+  "config": {
+    "mediaType": "application/vnd.argus.model.config.v1+json",
+    "digest": "sha256:abc123...",
+    "size": 512
+  },
+  "layers": [
+    {
+      "mediaType": "application/vnd.argus.model.weights",
+      "digest": "sha256:def456...",
+      "size": 177230,
+      "annotations": {
+        "org.opencontainers.image.title": "model.pkl"
+      }
+    }
+  ],
+  "annotations": {
+    "ai.argus.model.name": "argus.ml.iris_classifier",
+    "ai.argus.model.version": "1",
+    "ai.argus.model.source": "huggingface:bert-base-uncased"
+  }
+}
+----
+
+모든 파일은 SHA256 digest 로 식별 (content-addressable). 무결성 검증과
+중복 제거에 사용된다.
+
+== 업로드 / 다운로드
+
+대형 파일은 *Presigned URL* 방식으로 서버를 우회해 S3 와 직접 통신한다.
+
+[cols="1,3"]
+|===
+| 동작 | 흐름
+
+| 작은 파일 업로드 | `POST /api/v1/model-store/{name}/versions/{ver}/upload` (multipart)
+| 큰 파일 업로드 | `POST .../upload-url` 로 Presigned PUT URL 발급 → 클라이언트가 S3 에 직접 PUT
+| 단일 파일 다운로드 | `GET .../download-url?filename=X` → Presigned GET URL
+| 일괄 다운로드 | `GET .../download-urls` → 모든 파일의 URL 목록
+|===
+
+== HuggingFace 임포트
+
+// TODO: screenshot - HF 임포트 다이얼로그
+image::models-oci-hub/hf-import.png[HuggingFace 임포트, 800]
+
+온라인 환경에서 HuggingFace Hub 모델을 한 번에 가져온다.
+
+[source,bash]
+----
+# CLI
+argus-model import-hf bert-base-uncased argus.ml.bert --server http://catalog:4600
+
+# Python SDK
+from argus_catalog_sdk import ModelClient
+client = ModelClient("http://catalog:4600")
+client.import_huggingface("bert-base-uncased", "argus.ml.bert")
+----
+
+서버는 다음을 수행한다.
+
+. `huggingface_hub.snapshot_download()` 로 임시 다운로드.
+. S3 의 `{model}/v{N}/` 하위에 모든 파일 업로드.
+. `config.json` 에서 `model_type`, `architectures` 등 추출.
+. OCI manifest 생성 후 저장.
+. DB 메타데이터 기록.
+
+== Airgap 임포트
+
+// TODO: screenshot - airgap 임포트 절차 (다이어그램 또는 단계 카드)
+image::models-oci-hub/airgap-import.png[Airgap 임포트, 800]
+
+폐쇄망에서는 2 단계.
+
+. *온라인 환경* — 모델 다운로드 후 USB / 파일 전송.
++
+[source,bash]
+----
+argus-model import-hf bert-base-uncased argus.ml.bert --server http://online-catalog:4600
+argus-model pull argus.ml.bert 1 /usb/bert-export/
+----
+
+. *Airgap 환경* — 서버가 접근 가능한 경로에 파일을 옮기고 import.
++
+[source,bash]
+----
+argus-model import-local /data/transferred/bert argus.ml.bert \
+  --server http://airgap-catalog:4600
+----
+
+서버는 로컬 디렉토리를 스캔해 S3 에 업로드하고, manifest 를 생성한다.
+
+== 다운로드 추적
+
+`/api/v1/oci-models/{name}` 의 *download_count* 와 다운로드 로그가 자동 누적된다.
+모델 상세에서 시간대별 다운로드 추이를 확인할 수 있다.

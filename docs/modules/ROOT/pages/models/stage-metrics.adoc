@@ -1,0 +1,99 @@
+= Stage · 메트릭 · 리니지
+
+모델 버전의 배포 단계, 버전별 성능 비교, 학습 데이터셋 연결 추적.
+
+== Stage 전이
+
+// TODO: screenshot - 버전 카드의 Stage 변경 다이얼로그
+// image::models-stage-metrics/stage.png[Stage 전이, 800]
+
+각 모델 버전은 4 단계 라이프사이클을 가진다.
+
+----
+NONE → STAGING → PRODUCTION → ARCHIVED
+----
+
+[cols="1,3"]
+|===
+| Stage | 의미
+
+| NONE | 초기 상태 (등록 직후).
+| STAGING | 검증 중 (테스트 환경 배포).
+| PRODUCTION | 운영 환경 배포 중.
+| ARCHIVED | 이전 버전 (보관).
+|===
+
+전이는 *모델 상세 → Versions* 의 행 메뉴 또는 API 호출로 수행한다.
+
+[source,bash]
+----
+PUT /api/v1/models/{name}/versions/{ver}/stage
+{ "stage": "PRODUCTION", "changed_by": "ops-team" }
+----
+
+전이마다 *변경자* 와 *변경 시각* 이 자동 기록돼 감사 추적이 가능하다.
+
+== 메트릭 비교
+
+// TODO: screenshot - 버전별 메트릭 차트 (라인/막대)
+image::models-stage-metrics/metrics.png[메트릭 비교, 800]
+
+학습·평가 결과를 버전마다 기록해 추세를 본다.
+
+[source,bash]
+----
+POST /api/v1/models/{name}/versions/3/metrics
+{
+  "metrics": {
+    "accuracy": 0.91,
+    "f1": 0.88,
+    "latency_ms": 18,
+    "model_size_mb": 5.2
+  }
+}
+----
+
+조회::
+[source,bash]
+----
+GET /api/v1/models/{name}/metrics
+→ [
+    {"version": 1, "metrics": {"accuracy": 0.82, "f1": 0.78}},
+    {"version": 2, "metrics": {"accuracy": 0.87, "f1": 0.83}},
+    {"version": 3, "metrics": {"accuracy": 0.91, "f1": 0.88}}
+  ]
+----
+
+UI 의 *Metrics* 탭은 위 결과를 선/막대 차트로 시각화한다. 메트릭 명은 자유롭게
+지정할 수 있고, 동일한 키는 자동으로 같은 시리즈로 묶인다.
+
+== 모델-데이터셋 리니지
+
+// TODO: screenshot - Lineage 탭 (학습 데이터셋 카드)
+image::models-stage-metrics/lineage.png[모델 리니지, 800]
+
+모델이 어떤 데이터셋으로 학습되었는지 기록한다. 원천 데이터 변경 시 *재학습
+필요성 판단* 의 근거.
+
+[source,bash]
+----
+POST /api/v1/models/{name}/lineage
+{
+  "dataset_id": 42,
+  "model_version": 3,
+  "relation_type": "TRAINING_DATA",
+  "description": "2025년 고객 주문 데이터"
+}
+----
+
+[cols="1,3"]
+|===
+| relation_type | 의미
+
+| TRAINING_DATA | 학습에 사용된 데이터.
+| EVALUATION_DATA | 평가/검증 데이터.
+| FEATURE_SOURCE | 피처 추출 원천.
+|===
+
+연결된 데이터셋 카드를 클릭하면 카탈로그의 데이터셋 상세로 이동한다.
+거꾸로 데이터셋 상세에서도 "이 데이터로 학습된 모델" 목록을 확인할 수 있다.

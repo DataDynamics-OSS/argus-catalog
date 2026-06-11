@@ -1,0 +1,393 @@
+= 임베딩 운영
+
+xref:ops/search.adoc[검색] 의 시맨틱 모드를 받쳐주는 *임베딩 파이프라인* 운영 가이드.
+프로바이더 설치 · 에어갭 배포 · 차원 마이그레이션 · 트러블슈팅.
+
+// TODO: screenshot - Settings → Embedding 탭 (커버리지 통계 + 테스트 버튼)
+image::ops-embedding/settings.png[임베딩 설정, 800]
+
+== pgvector 와 프로바이더의 역할 분리
+
+[cols="1,3,1"]
+|===
+| 구성 요소 | 역할 | 의존
+
+| *pgvector*
+| 벡터 *저장 + 검색* — PostgreSQL 확장
+| 필수 (어떤 프로바이더든 벡터 저장 필요)
+
+| *Embedding Provider*
+| 텍스트 → 벡터 *생성*
+| 3 종 중 택 1 — Local / OpenAI / Ollama
+|===
+
+----
+"고객 구매 테이블"
+    ↓
+[Embedding Provider]  ← 교체 가능 (Local / OpenAI / Ollama)
+    ↓
+[0.012, -0.034, ...]  ← 384 또는 1536 차원
+    ↓
+[pgvector]  ← 항상 고정
+    ├─ 저장: INSERT INTO catalog_dataset_embeddings
+    └─ 검색: ORDER BY embedding <=> query_vec
+----
+
+== pgvector 설치
+
+[source,bash]
+----
+# Ubuntu/Debian
+sudo apt install postgresql-16-pgvector
+
+# RHEL/Rocky
+sudo dnf install pgvector_16
+
+# macOS
+brew install pgvector
+
+# Docker — pgvector 통합 이미지
+docker run -d pgvector/pgvector:pg16
+----
+
+확장 활성화는 *슈퍼유저* 만 가능 — 일반 DB 사용자는 권한 부족 에러.
+
+[source,bash]
+----
+sudo -u postgres psql -d argus_catalog \
+  -c "CREATE EXTENSION IF NOT EXISTS vector;"
+----
+
+== Local 프로바이더 (sentence-transformers)
+
+기본값. 인터넷 불필요 — 에어갭 환경 지원.
+
+[cols="1,1,1,2"]
+|===
+| 항목 | 값 | 한국어 | 비고
+
+| 기본 모델 | `all-MiniLM-L6-v2` | △ | 384 차원, 80 MB, 영문 위주
+| 한국어 권장 | `paraphrase-multilingual-MiniLM-L12-v2` | O | 384 차원, 470 MB
+| 영문 고품질 | `BAAI/bge-small-en-v1.5` | X | 384 차원, 130 MB
+| 다국어 고품질 | `BAAI/bge-m3` | O | 1024 차원, 2.2 GB
+|===
+
+설치.
+
+[source,bash]
+----
+# CPU
+pip install "sentence-transformers>=3.0.0"
+
+# GPU (CUDA 12.x)
+pip install "sentence-transformers>=3.0.0" torch \
+  --index-url https://download.pytorch.org/whl/cu121
+
+# GPU (CUDA 11.8)
+pip install "sentence-transformers>=3.0.0" torch \
+  --index-url https://download.pytorch.org/whl/cu118
+----
+
+OpenAI / Ollama 만 사용한다면 sentence-transformers 설치 불필요 — 코드에서
+lazy import.
+
+== 에어갭 배포
+
+인터넷 없는 환경에서 Local 프로바이더를 쓰려면 모델 파일을 미리 옮긴다.
+
+. *인터넷 환경에서 다운로드*
++
+[source,bash]
+----
+# sentence-transformers
+python -c "
+from sentence_transformers import SentenceTransformer
+model = SentenceTransformer('all-MiniLM-L6-v2')
+model.save('/tmp/all-MiniLM-L6-v2')
+"
+
+# 또는 huggingface-cli
+pip install huggingface_hub
+huggingface-cli download sentence-transformers/all-MiniLM-L6-v2 \
+  --local-dir /tmp/all-MiniLM-L6-v2
+----
+
+. *에어갭 서버로 전송*
++
+[source,bash]
+----
+tar -czf all-MiniLM-L6-v2.tar.gz -C /tmp all-MiniLM-L6-v2
+# USB / SCP 로 전송 후
+tar -xzf all-MiniLM-L6-v2.tar.gz -C /opt/models/
+----
+
+. *Settings → Embedding 에서 로컬 경로 지정*
++
+Model 필드에 `/opt/models/all-MiniLM-L6-v2` 입력 → Save.
++
+또는 API.
++
+[source,bash]
+----
+curl -X PUT http://<server>:4600/api/v1/settings/embedding \
+  -H "Content-Type: application/json" \
+  -d '{
+    "enabled": true,
+    "provider": "local",
+    "model": "/opt/models/all-MiniLM-L6-v2",
+    "dimension": 384
+  }'
+----
+
+== Ollama 프로바이더
+
+로컬 Ollama 인스턴스를 임베딩 서버로 사용.
+
+[source,bash]
+----
+# 설치
+curl -fsSL https://ollama.com/install.sh | sh
+
+# 모델 pull
+ollama pull all-minilm        # 384 차원, 23 MB
+ollama pull nomic-embed-text  # 768 차원, 274 MB (한국어 양호)
+ollama pull mxbai-embed-large # 1024 차원, 670 MB
+
+# 동작 확인
+curl http://localhost:11434/api/embeddings \
+  -d '{"model": "all-minilm", "prompt": "test"}'
+----
+
+에어갭은 Ollama 모델 파일을 수동 복사해 배포.
+
+== OpenAI / Azure 프로바이더
+
+API 키만 있으면 즉시. Azure OpenAI 는 `api_url` 만 다르게 설정.
+
+[source,bash]
+----
+# OpenAI
+curl -X PUT http://<server>:4600/api/v1/settings/embedding \
+  -d '{
+    "enabled": true,
+    "provider": "openai",
+    "model": "text-embedding-3-small",
+    "api_key": "sk-...",
+    "dimension": 1536
+  }'
+
+# Azure OpenAI — api_url 만 변경
+curl -X PUT http://<server>:4600/api/v1/settings/embedding \
+  -d '{
+    "provider": "openai",
+    "api_url": "https://my-resource.openai.azure.com/openai/deployments/my-embedding",
+    "api_key": "...",
+    "model": "text-embedding-3-small",
+    "dimension": 1536
+  }'
+----
+
+== 백필 / 통계
+
+데이터셋 생성·수정 시 *비동기 자동 임베딩*. 기존 데이터셋은 일괄 백필.
+
+[source,bash]
+----
+# 커버리지 통계
+curl http://<server>:4600/api/v1/catalog/search/embeddings/stats
+# → {"total_datasets": 135, "embedded_datasets": 120, "coverage_pct": 88.9,
+#    "provider": "local", "model": "all-MiniLM-L6-v2", "dimension": 384}
+
+# 전체 백필
+curl -X POST http://<server>:4600/api/v1/catalog/search/embeddings/backfill
+
+# 전체 초기화 (프로바이더 전환 전)
+curl -X DELETE http://<server>:4600/api/v1/catalog/search/embeddings
+----
+
+== 프로바이더 전환
+
+벡터 공간이 다르므로 *반드시 재임베딩* 필요.
+
+. *Settings → Embedding* 에서 새 프로바이더 저장 + 재초기화.
+. *Embeddings → Reset* 으로 기존 임베딩 삭제.
+. *Backfill* 로 전체 재임베딩.
+. *차원이 다를 때* (예: 384 → 1536) — pgvector 컬럼 차원도 변경.
++
+[source,sql]
+----
+ALTER TABLE catalog_dataset_embeddings
+  ALTER COLUMN embedding TYPE vector(1536);
+----
+
+== 임베딩 소스 텍스트
+
+데이터셋의 메타데이터를 `|` 구분자로 결합해 임베딩.
+
+----
+{name} | {description} | {qualified_name} | {platform_name} | {platform_type} | {tags...} | {owners...}
+----
+
+예시.
+
+----
+fact_daily_sales | 일별 매출 집계 테이블 | warehouse.fact_daily_sales | Sakila MySQL | mysql | sales | analytics | data-team
+----
+
+`source_text` 가 바뀌지 않은 데이터셋은 재임베딩이 자동 skip 된다 (중복 방지).
+
+== DB 스키마
+
+[source,sql]
+----
+CREATE EXTENSION IF NOT EXISTS vector;
+
+CREATE TABLE catalog_dataset_embeddings (
+    id SERIAL PRIMARY KEY,
+    dataset_id INT NOT NULL UNIQUE
+        REFERENCES catalog_datasets(id) ON DELETE CASCADE,
+    embedding vector(384) NOT NULL,
+    source_text TEXT NOT NULL,
+    model_name VARCHAR(200) NOT NULL,
+    provider VARCHAR(50) NOT NULL,
+    dimension INT NOT NULL DEFAULT 384,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- IVFFlat 인덱스 (코사인 유사도)
+CREATE INDEX idx_dataset_embeddings_ivfflat
+    ON catalog_dataset_embeddings
+    USING ivfflat (embedding vector_cosine_ops)
+    WITH (lists = 100);
+----
+
+== 트러블슈팅
+
+=== `ERROR: type "vector" does not exist`
+
+pgvector 확장 미설치. 슈퍼유저로 활성화.
+
+[source,bash]
+----
+sudo -u postgres psql -d argus_catalog \
+  -c "CREATE EXTENSION IF NOT EXISTS vector;"
+----
+
+=== embedding 컬럼이 `text` 로 잡힘
+
+pgvector 가 없는 상태에서 서버를 먼저 띄우면 SQLAlchemy 가 `vector(384)` 를
+인식하지 못해 `text` 로 fallback. 검색 시 `ERROR: 연산자 없음: text <=> vector`.
+
+[source,bash]
+----
+sudo -u postgres psql -d argus_catalog -c "
+DELETE FROM catalog_dataset_embeddings;
+ALTER TABLE catalog_dataset_embeddings
+  ALTER COLUMN embedding TYPE vector(384) USING embedding::vector(384);
+"
+
+curl -X POST http://<server>:4600/api/v1/catalog/search/embeddings/backfill
+----
+
+권장 설치 순서 — *pgvector 확장 설치 → 서버 시작*.
+
+=== `RuntimeError: sentence-transformers is required`
+
+Local 프로바이더만 발생.
+
+[source,bash]
+----
+pip install "sentence-transformers>=3.0.0"
+----
+
+OpenAI / Ollama 만 쓰면 설치 불필요.
+
+=== `OSError: Can't load model 'all-MiniLM-L6-v2'` (에어갭)
+
+모델을 사전 다운로드 후 로컬 경로 지정. *에어갭 배포* 섹션 참조.
+
+=== `torch.cuda.OutOfMemoryError`
+
+[source,bash]
+----
+# CPU 모드 강제
+export CUDA_VISIBLE_DEVICES=""
+
+# 또는 더 작은 모델 (all-MiniLM-L6-v2 → 80 MB)
+----
+
+=== `PostgresSyntaxError: 구문 오류, ":" 부근`
+
+SQLAlchemy `text()` 안에서 `::vector` 캐스트를 사용하면 바인드 파라미터 `:param`
+과 충돌한다. `CAST(... AS vector)` 형태로 사용한다 (서버 코드 수정 시 주의).
+
+=== 프로바이더 변경 후 검색 결과 이상
+
+기존 임베딩 삭제 후 백필 필요 (벡터 공간이 다름). *프로바이더 전환* 섹션 참조.
+
+== 모델 품질 참고 (MTEB 기준)
+
+[cols="2,1,1,1,1,1"]
+|===
+| 모델 | MTEB | 차원 | 한국어 | 에어갭 | 비용
+
+| `all-MiniLM-L6-v2` | 56.3 | 384 | X | O | 무료
+| `paraphrase-multilingual-MiniLM-L12-v2` | 53.8 | 384 | O | O | 무료
+| `bge-small-en-v1.5` | 62.2 | 384 | X | O | 무료
+| `text-embedding-3-small` (OpenAI) | 62.3 | 1536 | O | X | $0.02/1M
+| `text-embedding-3-large` (OpenAI) | 64.6 | 3072 | O | X | $0.13/1M
+| `nomic-embed-text` (Ollama) | 62.4 | 768 | O | O | 무료
+|===
+
+권장:
+
+* 영문 + 에어갭 — `all-MiniLM-L6-v2` (기본)
+* 한국어 + 에어갭 — `paraphrase-multilingual-MiniLM-L12-v2` 또는 `nomic-embed-text` (Ollama)
+* 최고 품질 — `text-embedding-3-small` / `bge-m3`
+
+== 서버 시작 시 동작
+
+. PostgreSQL `vector` 확장 활성화.
+. `embedding_*` 설정 시드 (최초 1 회).
+. `embedding_enabled = true` 일 때만 프로바이더 초기화 — false 시 *Embedding is disabled* 로그 후 건너뜀.
+. 서버 종료 시 프로바이더 정리.
+
+== 커스텀 프로바이더 (개발자)
+
+`EmbeddingProvider` 추상 클래스를 구현하면 새 프로바이더를 추가할 수 있다.
+
+[source,python]
+----
+# app/embedding/providers/my_provider.py
+from app.embedding.base import EmbeddingProvider
+
+class MyProvider(EmbeddingProvider):
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        ...
+
+    def dimension(self) -> int:
+        return 768
+
+    def model_name(self) -> str:
+        return "my-custom-model"
+
+    def provider_name(self) -> str:
+        return "custom"
+----
+
+`app/embedding/registry.py` 의 `initialize_provider()` 에 분기 추가.
+
+== 관련 API
+
+[cols="1,3"]
+|===
+| Method | Path
+
+| GET | `/api/v1/settings/embedding`
+| PUT | `/api/v1/settings/embedding`
+| POST | `/api/v1/settings/embedding/test`
+| GET | `/api/v1/catalog/search/embeddings/stats`
+| POST | `/api/v1/catalog/search/embeddings/backfill`
+| DELETE | `/api/v1/catalog/search/embeddings`
+|===

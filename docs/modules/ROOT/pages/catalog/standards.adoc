@@ -1,0 +1,137 @@
+= 데이터 표준
+
+조직의 데이터 명명 규칙과 용어를 사전 (Dictionary) 단위로 관리하고, 실제 데이터셋
+컬럼과의 매핑으로 *표준 준수율* 을 자동 측정한다.
+
+// TODO: screenshot - 데이터 표준 메인 (5개 탭 강조)
+// image::catalog-standards/overview.png[데이터 표준, 800]
+
+== 4계층 구조
+
+좌측 사이드바 *Governance → Data Standards* 에서 진입.
+
+[cols="1,3"]
+|===
+| 계층 | 역할
+
+| 표준 사전 (Dictionary)
+| 사전 단위 격리 — 한 조직이 여러 사전을 동시에 운영 가능 (예: 본사 / 자회사 / 프로젝트).
+| 표준 단어 (Word)
+| 원자 단위 — "고객", "전화", "번호" 등.
+| 표준 도메인 (Domain)
+| 데이터 타입 표준 — "번호" → `VARCHAR(20)`.
+| 표준 용어 (Term)
+| 단어 조합 + 도메인 — "고객전화번호" → `cust_tel_no`, `VARCHAR(20)`.
+|===
+
+추가로 *코드 그룹 (Code Group)* — 코드형 도메인의 허용 값 집합 (예: 성별 → M/F/U).
+
+화면은 상단의 *사전 선택 드롭다운* 으로 사전을 고른 뒤, 아래 5개 탭에서 작업한다.
+
+* *Words* / *Domains* / *Terms* / *Codes* / *Compliance*
+
+== 표준 단어
+
+// TODO: screenshot - Words 탭 (목록 + 등록 다이얼로그)
+image::catalog-standards/overview.png[표준 단어, 800]
+
+[cols="1,3"]
+|===
+| 속성 | 설명
+
+| 한글명 / 영문명 / 약어
+| 예: 고객 / Customer / CUST.
+| 유형
+| `GENERAL` (일반), `SUFFIX` (분류어, 도메인과 연결), `PREFIX` (접두어).
+| 금칙어
+| 사용 금지 단어. 대체 단어를 안내 텍스트로 제공.
+| 이음동의어 그룹
+| 같은 의미의 단어를 묶어 표준 단어 지정.
+|===
+
+== 표준 도메인
+
+`SUFFIX` 단어와 연결돼 데이터 타입을 결정한다.
+
+[cols="1,1,1,1"]
+|===
+| 도메인 | 그룹 | 데이터 타입 | 기본 길이
+
+| 번호 | 문자형 | VARCHAR | 20
+| 명 | 문자형 | VARCHAR | 200
+| 코드 | 문자형 | VARCHAR | 20
+| 금액 | 숫자형 | DECIMAL | 15,2
+| 일자 | 일시형 | DATE | -
+|===
+
+image::catalog-standards/domain.png[도메인, 800]
+
+== 자동 용어 생성
+
+// TODO: screenshot - Term 등록 다이얼로그 (형태소 분석 결과 표시)
+image::catalog-standards/term-analyze.png[형태소 분석, 800]
+
+용어 등록 시 *Greedy Longest Match* 형태소 분석으로 단어 사전을 분해하고,
+영문명·약어·물리명·도메인을 자동 추천한다.
+
+----
+입력: "고객전화번호"
+  ↓
+분해: 고객(GENERAL) + 전화(GENERAL) + 번호(SUFFIX)
+  ↓
+영문명:   Customer Telephone Number
+영문약어: CUST_TEL_NO
+물리명:   cust_tel_no
+도메인:   번호 (VARCHAR(20))
+----
+
+추천 결과는 사용자가 확인·수정한 뒤 *등록* 한다.
+
+== 코드 그룹
+
+코드형 도메인의 허용 값 집합. 예시.
+
+[cols="1,2,3"]
+|===
+| 코드 | 한글명 | 영문명
+
+| M | 남성 | Male
+| F | 여성 | Female
+| U | 미상 | Unknown
+|===
+
+image::catalog-standards/codes.png[코드 그룹, 800]
+
+== 자동 매핑
+
+용어와 데이터셋 컬럼의 매핑을 일괄 실행한다.
+
+* *수동 매핑* — 데이터셋 상세의 *Terms* 탭에서 컬럼별로 용어 선택.
+* *자동 매핑* — Compliance 탭에서 *Auto-map* 실행. 물리명 / 약어 / 의미가
+  매칭되는 컬럼을 일괄 연결.
+
+매핑 결과는 세 가지로 분류된다.
+
+[cols="1,3"]
+|===
+| 분류 | 의미
+
+| MATCHED
+| 표준과 일치 (물리명·타입 모두 일치).
+| SIMILAR
+| 유사 (의미는 같으나 명명 다름).
+| VIOLATION
+| 위반 (표준과 다른 타입·길이 사용).
+|===
+
+== 준수율 측정
+
+// TODO: screenshot - Compliance 탭 (프로그레스 바 + 통계)
+image::catalog-standards/compliance.png[표준 준수율, 800]
+
+----
+준수율 = (MATCHED 컬럼 수 / 전체 컬럼 수) × 100%
+----
+
+대시보드에서 전체·플랫폼별·데이터셋별 준수율을 한눈에 확인. 낮은 데이터셋을
+드릴다운해 위반 컬럼 목록과 권장 조치를 본다.

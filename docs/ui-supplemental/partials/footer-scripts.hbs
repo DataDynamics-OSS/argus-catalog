@@ -1,0 +1,17 @@
+<script id="site-script" src="{{{uiRootPath}}}/js/site.js" data-ui-root-path="{{{uiRootPath}}}"></script>
+<script async src="{{{uiRootPath}}}/js/vendor/highlight.js"></script>
+{{#if env.SITE_SEARCH_PROVIDER}}
+{{> search-scripts}}
+{{/if}}
+<script>
+  // 좌측 사이드바 nav 트리를 기본적으로 모두 펼친다.
+  // Antora 기본 동작은 현재 페이지의 조상 항목만 펼치지만, 외부 고객 매뉴얼에서는
+  // 전체 구조를 한눈에 보이게 하는 것이 유리. 클릭으로 접고 펴는 동작은 그대로 유지.
+  (function () {
+    var nav = document.querySelector('.nav-container [data-panel="menu"]');
+    if (!nav) return;
+    nav.querySelectorAll('.nav-item').forEach(function (item) {
+      item.classList.add('is-active');
+    });
+  })();
+</script>

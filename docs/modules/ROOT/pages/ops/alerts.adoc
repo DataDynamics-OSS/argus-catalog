@@ -1,0 +1,148 @@
+= 알림
+
+이기종 시스템 간 *스키마 변경의 영향* 을 자동 감지하고 담당자에게 통보한다.
+
+PostgreSQL 의 `employees.salary` 컬럼이 삭제되면, 이 컬럼이 Impala 의
+`emp_fact.salary_amt` 와 매핑돼 있을 경우 BREAKING 알림을 자동 생성해 ETL
+담당자에게 즉시 보낸다.
+
+// TODO: screenshot - Alerts 페이지 (목록 + 필터)
+image::ops-alerts/list.png[알림 목록, 800]
+
+== 진입 경로
+
+좌측 사이드바 *Governance → Alerts*. 헤더의 *벨 아이콘* 도 30 초 주기로 미해결
+건수를 폴링해 빨강·주황 배지로 표시한다.
+
+탭 구성:
+
+* *Alerts* — 생성된 알림 목록.
+* *Rules* — 알림 규칙 카드 목록.
+
+== Rule 정의
+
+룰은 *무엇을 감시 (Scope) + 언제 발동 (Trigger) + 어떻게 통보 (Notify)* 의 3 요소.
+
+=== Scope (감시 대상)
+
+// TODO: screenshot - Rule 생성 다이얼로그 (Scope 선택)
+image::ops-alerts/create-rule.png[알림 룰 생성, 800]
+
+[cols="1,3"]
+|===
+| Scope | 의미
+
+| DATASET | 특정 데이터셋 하나.
+| TAG | 태그가 붙은 모든 데이터셋. 태그 부착·해제만으로 감시 범위 가변.
+| LINEAGE | 특정 리니지 관계 (A → B). 매핑 기반 정밀 분석.
+| PLATFORM | 한 플랫폼의 모든 데이터셋.
+| ALL | 카탈로그 전체.
+|===
+
+=== Trigger (발동 조건)
+
+[cols="1,3"]
+|===
+| Trigger | 의미
+
+| ANY | 모든 스키마 변경.
+| SCHEMA_CHANGE | 지정한 change_type (`DROP`, `MODIFY`, `ADD`) 만.
+| COLUMN_WATCH | 지정한 컬럼이 변경될 때만.
+| MAPPING_BROKEN | 컬럼 매핑이 깨질 때만.
+| SYNC_STALE | N 시간 이상 sync 안 됨 (예약).
+|===
+
+=== Severity
+
+자동 (`severity_override=null`) 또는 강제 지정.
+
+자동 판정 기준::
+* BREAKING — 매핑된 컬럼 DROP (파이프라인 깨짐).
+* WARNING — 매핑된 컬럼 타입 변경.
+* INFO — 매핑 없는 컬럼 변경, 컬럼 추가.
+
+=== Notify
+
+* *channels* — `IN_APP` · `WEBHOOK` · `EMAIL` (콤마 구분).
+* *webhook_url* — Slack · Teams 등 (WEBHOOK 시).
+* *subscribers* — 이메일 콤마 구분.
+* *notify_owners* — true 시 데이터셋 Owner 에게 IN_APP 알림 추가.
+
+== Rule 예시
+
+PII 컬럼 삭제 감시::
+[source,json]
+----
+{
+  "rule_name": "PII 데이터 컬럼 삭제 감시",
+  "scope_type": "TAG",
+  "scope_id": 5,
+  "trigger_type": "SCHEMA_CHANGE",
+  "trigger_config": "{\"change_types\": [\"DROP\"]}",
+  "severity_override": "BREAKING",
+  "channels": "IN_APP,WEBHOOK",
+  "webhook_url": "https://hooks.slack.com/xxx",
+  "subscribers": "security-team@co.com,dpo@co.com",
+  "notify_owners": "true"
+}
+----
+
+== Webhook Payload
+
+[source,json]
+----
+{
+  "alert_type": "SCHEMA_CHANGE",
+  "severity": "BREAKING",
+  "rule_name": "PII 데이터 컬럼 삭제 감시",
+  "source":   { "dataset": "employees", "platform": "PostgreSQL" },
+  "affected": { "dataset": "emp_fact", "platform": "Impala" },
+  "change_summary": "'salary' dropped (mapped to salary_amt)",
+  "changes": [
+    {
+      "changed_column": "salary",
+      "mapped_to": "salary_amt",
+      "change_type": "DROP",
+      "severity": "BREAKING"
+    }
+  ],
+  "timestamp": "2026-03-23T14:30:00Z"
+}
+----
+
+== Alert 생명주기
+
+----
+OPEN → ACKNOWLEDGED → RESOLVED
+                   → DISMISSED
+----
+
+[cols="1,3"]
+|===
+| 상태 | 의미
+
+| OPEN | 새로 생성된 알림.
+| ACKNOWLEDGED | 담당자가 확인 (아직 미해결).
+| RESOLVED | 문제 해결 완료.
+| DISMISSED | 조치 불필요로 판단.
+|===
+
+상태 전이는 알림 상세의 액션 버튼 또는 다음 API.
+
+[source,bash]
+----
+PUT /api/v1/alerts/{id}/status   { "status": "RESOLVED" }
+----
+
+== 리니지 화면 연동
+
+데이터셋 상세의 *Lineage* 탭에서 엣지 클릭 → 해당 리니지에 적용된 Rule 확인.
+*Add Rule* 버튼으로 LINEAGE scope 가 미리 설정된 Rule 생성 다이얼로그 진입.
+
+== 이력
+
+알림 이력과 Webhook 전달 결과는 *Alerts* 탭에 누적되며, 상태 / 심각도 /
+데이터셋 필터로 좁혀볼 수 있다.
+
+// TODO: screenshot - 알림 상세 + 영향 분석 표
+image::ops-alerts/detail.png[알림 상세, 800]

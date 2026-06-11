@@ -1,0 +1,7 @@
+build/
+.antora-cache/
+node_modules/
+package-lock.json
+# `make fonts` 가 다운로드 — repo 에 커밋하지 않음.
+pdf/fonts/*.otf
+pdf/fonts/*.ttf

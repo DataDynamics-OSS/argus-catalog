@@ -1,0 +1,128 @@
+= Impala Query Agent
+
+ASM 기반 *bytecode instrumentation agent*. Impala Frontend 의
+`createExecRequest` 메서드를 계측해 쿼리 이벤트를 비동기 수집.
+
+== 요구사항
+
+* Impala 4.0+ (Apache Impala, Java Frontend)
+* Impala 3.x (CDP 7.x) 도 호환
+* JDK 11+
+
+== 빌드
+
+[source,bash]
+----
+mvn clean install
+----
+
+산출물:
+
+* `target/impala-query-agent-1.0.0.jar` — ASM + Jackson 포함 (shade plugin)
+
+== 동작 원리
+
+----
+Impala Daemon (impalad) JVM
+├─ Frontend.createExecRequest(TQueryCtx, ...)
+│   └─ ASM Instrumented
+│       ├─ onMethodEnter → QueryInterceptor.onQueryStart()
+│       ├─ ... original method ...
+│       └─ onMethodExit  → QueryInterceptor.onQueryComplete()
+│
+└─ QuerySender (async thread)
+    └─ POST /collector/impala/query → Metadata Sync (4610)
+----
+
+ASM Instrumentation 대상:
+
+* *클래스* — `org.apache.impala.service.Frontend`
+* *메서드* — `createExecRequest` (public overload)
+  ** Impala 3.x — `createExecRequest(TQueryCtx, StringBuilder)`
+  ** Impala 4.0+ — `createExecRequest(PlanCtx)` → `PlanCtx.getQueryContext()` 로 TQueryCtx 추출
+* 데이터 접근 — *Reflection* 사용 (Thrift 객체 컴파일 의존성 없음)
+* *버전 자동 감지* — `PlanCtx` 클래스 존재 여부로 3.x / 4.x 판별
+
+== 버전 호환성
+
+[cols="1,3,1,2"]
+|===
+| Impala 버전 | createExecRequest 시그니처 | 첫 인자 | TQueryCtx 접근
+
+| 3.x (CDP 7.x) | `(TQueryCtx, StringBuilder)` | TQueryCtx | 직접 사용
+| 4.0 ~ 4.4+ | `(PlanCtx)` | PlanCtx | `getQueryContext()`
+|===
+
+`TQueryCtx.client_request.stmt`, `session.connected_user`, `session.delegated_user`
+와 `TExecRequest.query_exec_request.query_plan` 내부 구조는 3.x ~ 4.x 전체 동일.
+
+== 수집 정보
+
+[cols="2,3"]
+|===
+| 필드 | 설명
+
+| `timestamp` | 쿼리 시작 시각 (epoch ms)
+| `query` | SQL 텍스트 (`TQueryCtx.client_request.stmt`)
+| `plan` | 실행 계획 (`TExecRequest.query_exec_request.query_plan`)
+| `connectedUser` | 인증된 연결 사용자
+| `delegateUser` | 위임 사용자 (proxy)
+| `effectiveUser` | 실제 실행 사용자 (delegate 우선, 없으면 connected)
+| `platformId` | Argus Catalog 플랫폼 ID (agent 파라미터)
+|===
+
+== 전송 페이로드
+
+[source,json]
+----
+{
+  "timestamp": 1742536200000,
+  "query": "SELECT a.id, b.name FROM db.table_a a JOIN db.table_b b ON a.id = b.id",
+  "plan": "01:EXCHANGE [UNPARTITIONED]\n|  ...\n00:SCAN HDFS [db.table_a a]\n   ...",
+  "connectedUser": "alice",
+  "delegateUser": "bob",
+  "effectiveUser": "bob",
+  "platformId": "impala-19d0bfe954e3fd2cd"
+}
+----
+
+== 설정
+
+Impala Daemon JVM 옵션.
+
+[source,bash]
+----
+JAVA_TOOL_OPTIONS="-javaagent:/opt/argus/impala-query-agent-1.0.0.jar=targetUrl=http://<metadata-sync>:4610/collector/impala/query,platformId=impala-19d0bfe954e3fd2cd"
+----
+
+Agent 파라미터:
+
+[cols="2,1,2,3"]
+|===
+| 파라미터 | 필수 | 기본값 | 설명
+
+| `targetUrl` | Yes | - | 수집 엔드포인트 URL
+| `platformId` | Yes | - | Argus Catalog 플랫폼 ID
+| `enabled` | No | `true` | Agent 활성화
+|===
+
+== Cloudera Manager 설정
+
+*Cloudera Manager → Impala → Configuration → Impala Daemon Java
+Configuration Options for Impala Daemon* (또는 Safety Valve) 에 추가:
+
+----
+-javaagent:/opt/argus/impala-query-agent-1.0.0.jar=targetUrl=http://<metadata-sync>:4610/collector/impala/query,platformId=impala-19d0bfe954e3fd2cd
+----
+
+== 배포 순서
+
+. 빌드한 `impala-query-agent-1.0.0.jar` 를 *모든 Impala Daemon 노드* 에 배포.
+. Cloudera Manager 에서 JVM 옵션 추가 → Impala 서비스 재시작.
+. Metadata Sync 서버의 `/collector/impala/query` 수신 확인.
+
+== 주의사항
+
+* 비동기 전송 (daemon thread) → Impala 쿼리 처리에 영향 없음.
+* ASM 은 maven-shade-plugin 으로 relocate — Impala 내부 라이브러리와 충돌 방지.
+* Reflection 기반 — 메서드가 없으면 null 반환으로 호환성 유지.

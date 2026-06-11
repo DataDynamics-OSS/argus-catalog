@@ -1,0 +1,146 @@
+= Trino Query Listener
+
+Trino 의 *EventListener SPI* 구현. SQL 파싱 없이 네이티브로 입출력 테이블·컬럼
+정보를 제공해 가장 정확한 리니지를 만든다.
+
+== 요구사항
+
+* Trino 400+ (EventListener SPI)
+* JDK 17+
+
+== 빌드
+
+[source,bash]
+----
+mvn clean install
+----
+
+산출물:
+
+* `target/trino-query-listener-1.0.0.jar` — Plugin JAR (Jackson 포함, shade plugin)
+
+== Hive / Impala 와의 차이
+
+[cols="2,2,2"]
+|===
+| 항목 | Hive / Impala | Trino
+
+| 수집 방식 | Hook / ASM bytecode | EventListener SPI (공식 플러그인)
+| SQL 파싱 | SQLGlot 파서 필요 | *불필요* (네이티브 IO metadata)
+| Input 테이블 | Hook / 파서 | `QueryIOMetadata.getInputs()`
+| Output 테이블 | Hook / 파서 | `QueryIOMetadata.getOutput()`
+| 컬럼 정보 | 파서 | `QueryInputMetadata.getColumns()`
+|===
+
+== 수집 정보
+
+[cols="2,3,3"]
+|===
+| 필드 | 소스 | 설명
+
+| `queryId` | `QueryMetadata.getQueryId()` | Trino 쿼리 고유 ID
+| `query` | `QueryMetadata.getQuery()` | SQL 텍스트
+| `queryState` | `QueryMetadata.getQueryState()` | FINISHED · FAILED
+| `queryType` | `QueryContext.getQueryType()` | SELECT · INSERT 등
+| `user` / `principal` | `QueryContext.getUser/Principal()` | 실행 사용자 / Kerberos / OAuth
+| `source` | `QueryContext.getSource()` | 클라이언트 (trino-cli, dbeaver)
+| `catalog` / `schema` | `QueryContext` | 기본 카탈로그·스키마
+| `plan` | `QueryMetadata.getPlan()` | 실행 계획
+| `inputs` | `QueryIOMetadata.getInputs()` | 입력 테이블 + 컬럼
+| `output` | `QueryIOMetadata.getOutput()` | 출력 테이블 + 컬럼
+| `wallTimeMs` / `cpuTimeMs` | `QueryStatistics` | 소요 시간 / CPU
+| `failureInfo` | `QueryCompletedEvent` | 에러 코드 · 메시지
+| `platformId` | 설정 | Argus Catalog 플랫폼 ID
+|===
+
+== 동작 흐름
+
+----
+Trino Coordinator
+├─ Query Execution Engine
+│   ├─ queryCreated()
+│   └─ queryCompleted() ──▶ QueryAuditListener
+│                              ├─ buildPayload()
+│                              └─ QuerySender (async)
+│                                  └─ POST /collector/trino/query
+│                                          → Metadata Sync (4610)
+----
+
+== 전송 페이로드
+
+[source,json]
+----
+{
+  "queryId": "20260321_143012_00001_abcde",
+  "query": "INSERT INTO analytics.summary SELECT a.id, b.name FROM catalog.sales.orders a JOIN catalog.master.users b ON a.user_id = b.id",
+  "queryState": "FINISHED",
+  "queryType": "INSERT",
+  "user": "alice",
+  "principal": "alice@REALM.COM",
+  "source": "trino-cli",
+  "catalog": "hive",
+  "schema": "default",
+  "createTime": 1742536200000,
+  "executionStartTime": 1742536200500,
+  "endTime": 1742536260000,
+  "wallTimeMs": 60000,
+  "cpuTimeMs": 45000,
+  "plan": "Fragment 0 [SINGLE]\n  Output ...",
+  "inputs": [
+    {
+      "catalog": "hive", "schema": "sales", "table": "orders",
+      "columns": ["id", "user_id", "amount"]
+    },
+    {
+      "catalog": "hive", "schema": "master", "table": "users",
+      "columns": ["id", "name"]
+    }
+  ],
+  "output": {
+    "catalog": "hive", "schema": "analytics", "table": "summary",
+    "columns": ["id", "name"]
+  },
+  "physicalInputBytes": 1073741824,
+  "physicalInputRows": 1000000,
+  "outputBytes": 52428800,
+  "outputRows": 50000,
+  "peakMemoryBytes": 268435456,
+  "platformId": "trino-019538a3e7c84f2b1"
+}
+----
+
+== 배포
+
+. Coordinator 노드의 플러그인 디렉토리에 JAR 배포.
++
+[source,bash]
+----
+mkdir -p <trino-install>/plugin/argus-query-audit/
+cp target/trino-query-listener-1.0.0.jar <trino-install>/plugin/argus-query-audit/
+----
+
+. `etc/event-listener.properties` 작성.
++
+[source,properties]
+----
+event-listener.name=argus-query-audit
+target-url=http://<metadata-sync>:4610/collector/trino/query
+platform-id=trino-019538a3e7c84f2b1
+----
+
+. `etc/config.properties` 에 추가.
++
+[source,properties]
+----
+event-listener.config-files=etc/event-listener.properties
+----
+
+. Trino 서비스 재시작.
+
+. Metadata Sync 의 `/collector/trino/query` 수신 확인.
+
+[TIP]
+====
+여러 EventListener 를 함께 사용하려면 `event-listener.config-files` 에 콤마로
+추가 파일을 나열한다.
+====

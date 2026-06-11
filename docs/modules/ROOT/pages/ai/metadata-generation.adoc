@@ -1,0 +1,321 @@
+= AI 메타데이터 자동 생성
+
+LLM 으로 데이터셋의 *테이블 설명 · 컬럼 설명 · 태그 · PII* 를 자동 생성한다.
+Ollama (로컬), OpenAI, Anthropic (Claude) 프로바이더를 지원한다.
+
+// TODO: screenshot - 데이터셋 상세의 AI Generate 드롭다운
+image::ai-metadata-generation/ai-generate-menu.png[AI Generate 드롭다운, 800]
+
+== 동작 개요
+
+----
+┌────────────┐    ┌──────────────┐    ┌────────────────────┐
+│  UI        │───▶│ AI Service   │───▶│ LLM Provider       │
+│  (트리거)  │◀───│ (컨텍스트    │◀───│ Ollama / OpenAI /  │
+│            │    │  조립·파싱)  │    │ Claude             │
+└────────────┘    └──────┬───────┘    └────────────────────┘
+                         │
+            ┌────────────┼────────────┐
+            ▼            ▼            ▼
+       Dataset/Schema  Parquet     ai_generation_log
+                       샘플 데이터  (감사 이력)
+----
+
+== LLM 프로바이더
+
+[cols="1,2,3,3"]
+|===
+| 프로바이더 | 기본 모델 | API URL | 특성
+
+| `ollama` | `qwen2.5:7b` | `http://localhost:11434` | 로컬 실행. API 키 불필요. 한국어 우수. 에어갭 가능.
+| `openai` | `gpt-4o-mini` | `https://api.openai.com/v1` | 클라우드 API. 고품질. API 키 필요.
+| `anthropic` | `claude-sonnet-4-...` | `https://api.anthropic.com` | 클라우드 API. 고품질. API 키 필요.
+|===
+
+=== Ollama 권장 모델
+
+[cols="2,1,1,3"]
+|===
+| 모델 | 크기 | 한국어 | 권장 용도
+
+| `qwen2.5:7b` | 4.4 GB | 우수 | *한국어 메타데이터 기본 권장*
+| `qwen2.5:14b` | 8.7 GB | 우수 | 한국어 고품질 (RAM 16 GB+)
+| `llama3.1:8b` | 4.7 GB | 보통 | 범용 영문
+| `gemma2:9b` | 5.4 GB | 보통 | 다국어
+| `EEVE-Korean-10.8B` | 6.5 GB | 최우수 | 한국어 특화
+|===
+
+Ollama 설치·모델 준비.
+
+[source,bash]
+----
+curl -fsSL https://ollama.ai/install.sh | sh
+ollama pull qwen2.5:7b
+ollama list
+curl http://localhost:11434/api/tags
+----
+
+== 설정
+
+UI — *Settings → LLM / AI* 탭.
+
+. *Enable AI Metadata Generation* 토글 ON.
+. Provider · Model · API URL · Generation Language 지정.
+. *Test Connection* 으로 검증 → *Save*.
+
+API 로도 동일하게 설정 가능.
+
+[source,bash]
+----
+curl -X PUT http://<server>:4600/api/v1/settings/llm \
+  -H "Content-Type: application/json" \
+  -d '{
+    "enabled": true,
+    "provider": "ollama",
+    "model": "qwen2.5:7b",
+    "api_key": "",
+    "api_url": "http://localhost:11434",
+    "temperature": 0.3,
+    "max_tokens": 1024,
+    "auto_generate_on_sync": false,
+    "language": "ko"
+  }'
+----
+
+image::ai-metadata-generation/ai-setting.png[AI Generate 설정, 800]
+
+설정 항목.
+
+[cols="1,1,3"]
+|===
+| 키 | 기본값 | 설명
+
+| `enabled` | false | 기능 활성화
+| `provider` | openai | openai / ollama / anthropic
+| `model` | gpt-4o-mini | 모델 식별자
+| `api_key` | (빈값) | API 키 (Ollama 불필요)
+| `api_url` | (빈값) | 엔드포인트 오버라이드
+| `temperature` | 0.3 | 0.0~1.0, 낮을수록 사실적
+| `max_tokens` | 1024 | 응답 토큰 한도
+| `auto_generate_on_sync` | false | sync 후 빈 설명 자동 채움
+| `language` | ko | 생성 언어 (`ko`, `en`, `ja`, `zh`)
+|===
+
+== 4가지 생성 유형
+
+[cols="1,2,3"]
+|===
+| 기능 | 엔드포인트 | 설명
+
+| 테이블 설명 | `POST /api/v1/ai/datasets/{id}/describe` | 테이블 목적·내용 텍스트
+| 컬럼 설명 | `POST .../describe-columns` | 모든 컬럼 용도 일괄 생성
+| 태그 추천 | `POST .../suggest-tags` | 기존 태그 활용 + 새 태그 제안
+| PII 탐지 | `POST .../detect-pii` | 개인정보 컬럼 탐지
+|===
+
+`POST /api/v1/ai/datasets/{id}/generate-all` 은 위 4 개를 한 번에 수행.
+
+== 프롬프트 컨텍스트
+
+LLM 에 전달되는 정보.
+
+[cols="1,2"]
+|===
+| 정보 | 출처
+
+| 테이블명, DB명 | `catalog_datasets`
+| 컬럼명, 타입, 제약조건 | `catalog_dataset_schemas`
+| DDL | `platform_properties.ddl`
+| 샘플 데이터 (최대 5행) | `samples/{platform}/{dataset}/sample.parquet`
+| 행 수 추정치 | `platform_properties.estimated_rows`
+| 플랫폼 타입 | `catalog_platforms.type`
+|===
+
+샘플 데이터는 메타데이터 동기화 시 자동 수집된 Parquet 파일을 재사용.
+
+== 사용 방법
+
+=== UI에서 개별 생성
+
+. 데이터셋 상세 → 우측 상단 *AI Generate* 드롭다운.
+. 기능 선택 — Generate Description / Generate Column Descriptions / Suggest Tags / Detect PII.
+. Description / Columns 는 *미리보기 다이얼로그* 에서 결과 확인 → *Apply* 또는 *Dismiss*.
+. Tags / PII 는 *즉시 적용* + 토스트 메시지.
+
+// TODO: screenshot - 미리보기 다이얼로그 (Description / Columns)
+// image::ai-metadata-generation/preview-dialog.png[AI 미리보기, 800]
+
+=== API로 개별 생성
+
+[source,bash]
+----
+# 미리보기 (apply=false)
+curl -X POST http://<server>:4600/api/v1/ai/datasets/1/describe \
+  -H "Content-Type: application/json" \
+  -d '{"apply": false}'
+
+# 즉시 적용 (apply=true)
+curl -X POST http://<server>:4600/api/v1/ai/datasets/1/describe \
+  -H "Content-Type: application/json" \
+  -d '{"apply": true}'
+
+# 전체 생성
+curl -X POST http://<server>:4600/api/v1/ai/datasets/1/generate-all \
+  -H "Content-Type: application/json" \
+  -d '{"apply": true}'
+----
+
+=== 일괄 생성 (Bulk)
+
+UI *Settings → LLM / AI → Bulk AI Generation* 또는 API 호출.
+
+[source,bash]
+----
+# 설명 없는 데이터셋에만 description 자동 생성
+curl -X POST http://<server>:4600/api/v1/ai/bulk-generate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "generation_types": ["description"],
+    "apply": true,
+    "empty_only": true
+  }'
+
+# 특정 플랫폼만 전체 생성
+curl -X POST http://<server>:4600/api/v1/ai/bulk-generate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "generation_types": ["description", "columns", "tags", "pii"],
+    "apply": true,
+    "empty_only": true,
+    "platform_id": 1
+  }'
+----
+
+=== 동기화 후 자동 생성
+
+`auto_generate_on_sync: true` 설정 시, 메타데이터 동기화 후 빈 설명에 대해
+백그라운드 자동 생성. xref:catalog/platforms.adoc#_메타데이터_동기화[플랫폼 → 메타데이터 동기화] 참조.
+
+== 응답 스키마
+
+테이블 설명::
+[source,json]
+----
+{
+  "dataset_id": 1,
+  "description": "영화 텍스트 정보(제목, 설명)를 전문 검색용으로 저장하는 테이블",
+  "confidence": 0.87,
+  "applied": false,
+  "log_id": 42
+}
+----
+
+컬럼 설명::
+[source,json]
+----
+{
+  "dataset_id": 1,
+  "columns": [
+    {"field_path": "film_id", "description": "영화 고유 식별자 (PK)", "confidence": 0.95, "had_existing": false},
+    {"field_path": "title", "description": "영화 제목", "confidence": 0.92, "had_existing": false}
+  ],
+  "total_generated": 2,
+  "applied": false
+}
+----
+
+태그 추천::
+[source,json]
+----
+{
+  "dataset_id": 1,
+  "suggested_tags": ["영화", "미디어"],
+  "new_tags": [{"name": "콘텐츠", "description": "콘텐츠 관련 데이터"}],
+  "applied_tags": ["영화"],
+  "created_tags": ["콘텐츠"]
+}
+----
+
+PII 탐지::
+[source,json]
+----
+{
+  "dataset_id": 1,
+  "pii_columns": [
+    {"name": "email", "pii_type": "EMAIL", "confidence": 0.95,
+     "reason": "Column name and sample values match email pattern"},
+    {"name": "phone_number", "pii_type": "PHONE", "confidence": 0.88,
+     "reason": "Column contains phone number format"}
+  ]
+}
+----
+
+PII 유형 — `EMAIL`, `PHONE`, `SSN`, `NAME`, `ADDRESS`, `CREDIT_CARD`, `IP_ADDRESS`,
+`DATE_OF_BIRTH`, `NATIONAL_ID`, `OTHER`. 탐지 결과는
+`catalog_dataset_schemas.pii_type` 컬럼에 저장된다.
+
+== 제안 관리
+
+미리보기 모드(`apply=false`) 결과는 `catalog_ai_generation_log` 에 보존되며 나중에
+개별 적용·거부할 수 있다.
+
+[source,bash]
+----
+# 미적용 제안 목록
+curl http://<server>:4600/api/v1/ai/datasets/1/suggestions
+
+# 적용 / 거부
+curl -X POST http://<server>:4600/api/v1/ai/suggestions/42/apply
+curl -X POST http://<server>:4600/api/v1/ai/suggestions/42/reject
+----
+
+== 통계 / 감사
+
+[source,bash]
+----
+curl http://<server>:4600/api/v1/ai/stats
+----
+
+응답 예.
+
+[source,json]
+----
+{
+  "total_generations": 156,
+  "applied_count": 120,
+  "pending_count": 36,
+  "total_prompt_tokens": 89420,
+  "total_completion_tokens": 34210,
+  "description_coverage": {
+    "total_datasets": 200,
+    "described_datasets": 120,
+    "coverage_pct": 60.0
+  },
+  "provider": "ollama",
+  "model": "qwen2.5:7b"
+}
+----
+
+모든 호출은 `catalog_ai_generation_log` 테이블에 *입력 / 출력 / 토큰 / 적용
+여부* 와 함께 기록된다 — 감사 추적용.
+
+== API 엔드포인트 전체
+
+[cols="1,3"]
+|===
+| Method | Path
+
+| POST | `/api/v1/ai/datasets/{id}/describe`
+| POST | `/api/v1/ai/datasets/{id}/describe-columns`
+| POST | `/api/v1/ai/datasets/{id}/suggest-tags`
+| POST | `/api/v1/ai/datasets/{id}/detect-pii`
+| POST | `/api/v1/ai/datasets/{id}/generate-all`
+| POST | `/api/v1/ai/bulk-generate`
+| GET | `/api/v1/ai/datasets/{id}/suggestions`
+| POST | `/api/v1/ai/suggestions/{id}/apply`
+| POST | `/api/v1/ai/suggestions/{id}/reject`
+| GET | `/api/v1/ai/stats`
+| GET | `/api/v1/settings/llm`
+| PUT | `/api/v1/settings/llm`
+| POST | `/api/v1/settings/llm/test`
+|===

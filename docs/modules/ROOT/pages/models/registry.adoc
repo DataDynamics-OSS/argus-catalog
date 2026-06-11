@@ -1,0 +1,120 @@
+= 모델 레지스트리
+
+Unity Catalog OSS 호환 모델 레지스트리. MLflow 클라이언트로 직접 모델을
+등록 / 조회 / 로딩할 수 있다.
+
+// TODO: screenshot - MLflow Models 목록 페이지
+image::models-registry/list.png[모델 목록, 800]
+
+== 진입 경로
+
+좌측 사이드바 *Model Catalog → MLflow Models* (`/dashboard/models`).
+
+== MLflow 연동
+
+별도 Tracking 서버 없이 Argus Catalog 자체를 Model Registry 로 지정한다.
+
+[source,python]
+----
+import mlflow
+
+mlflow.set_registry_uri("uc:http://<catalog-server>:4600")
+
+# 학습
+from sklearn.ensemble import RandomForestClassifier
+model = RandomForestClassifier(n_estimators=100).fit(X, y)
+
+# 등록 — 한 줄
+mlflow.sklearn.log_model(
+    model, "model",
+    registered_model_name="argus.ml.iris_classifier",
+)
+
+# 로딩
+loaded = mlflow.pyfunc.load_model("models:/argus.ml.iris_classifier/1")
+----
+
+사전 요구사항:
+
+[source,bash]
+----
+pip install "mlflow[skinny]>=3.0"
+pip install "mlflow-unity-catalog>=0.1.0"
+----
+
+== 모델 이름 (3-part)
+
+UC 플러그인은 *3-part name* (`catalog.schema.model`) 을 요구한다.
+
+[cols="1,1"]
+|===
+| 올바른 예 | 의미
+
+| `argus.ml.iris_classifier` | catalog=argus, schema=ml, model=iris_classifier
+| `prod.recommendation.user_sim` | catalog=prod, schema=recommendation, model=user_sim
+| `datateam.fraud.detector_v2` | catalog=datateam, schema=fraud, model=detector_v2
+|===
+
+잘못된 형식 (`iris_classifier`, `ml.iris_classifier`) 은 ValueError 가 난다.
+
+== 지원 프레임워크
+
+MLflow flavor 가 지원하는 거의 모든 프레임워크.
+
+[cols="1,2,2"]
+|===
+| 프레임워크 | Flavor | 예시
+
+| scikit-learn | `mlflow.sklearn` | `mlflow.sklearn.log_model(...)`
+| PyTorch | `mlflow.pytorch` | `mlflow.pytorch.log_model(...)`
+| TensorFlow | `mlflow.tensorflow` | `mlflow.tensorflow.log_model(...)`
+| XGBoost | `mlflow.xgboost` | `mlflow.xgboost.log_model(...)`
+| LightGBM | `mlflow.lightgbm` | `mlflow.lightgbm.log_model(...)`
+| HuggingFace | `mlflow.transformers` | `mlflow.transformers.log_model(...)`
+| ONNX | `mlflow.onnx` | `mlflow.onnx.log_model(...)`
+| SparkML | `mlflow.spark` | `mlflow.spark.log_model(...)`
+| 커스텀 | `mlflow.pyfunc` | `mlflow.pyfunc.log_model(...)`
+|===
+
+== 아티팩트 저장 경로
+
+[cols="1,3"]
+|===
+| 저장 방식 | 위치
+
+| 로컬 (`storage_type=local`)
+| `{data_dir}/model-artifacts/{model}/versions/{N}/`
+| S3 / MinIO (`storage_type=s3`)
+| `s3://{bucket}/{model}/v{N}/`
+|===
+
+S3 저장은 xref:models/oci-hub.adoc[OCI Model Hub] 와 통합 — 동일한 객체를 OCI Manifest 로
+조회·배포할 수 있다.
+
+== 모델 카드
+
+// TODO: screenshot - 모델 카드 편집 (Markdown 에디터)
+//image::models-registry/card.png[모델 카드, 800]
+
+모델의 거버넌스 정보를 한 화면에 정리한다.
+
+[cols="1,3"]
+|===
+| 필드 | 내용
+
+| Purpose | 비즈니스 목적
+| Performance | 정량 지표 (AUC, F1 등)
+| Limitations | 알려진 제한 · 편향
+| Training Data | 학습 데이터 출처 · 기간 · 규모
+| Framework | 사용 프레임워크 · 버전
+| License | 사용 허가 범위
+| Contact | 담당자 이메일
+|===
+
+== 목록 화면 필터
+
+모델 목록 화면 상단에서 다음 필터가 가능하다.
+
+* *search* — 이름 부분 일치
+* *status* — 최신 버전의 Status
+* *python_version* / *sklearn_version* — 파싱된 메타데이터 기준

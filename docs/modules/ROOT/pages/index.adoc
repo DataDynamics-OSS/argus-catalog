@@ -1,0 +1,88 @@
+= Argus Catalog 소개
+
+Argus Catalog는 *Airgap* 환경에서 *데이터 카탈로그* 와 *ML 모델 레지스트리* 를 하나의 시스템으로
+통합 제공하는 메타데이터 관리 플랫폼이다. DataHub 스타일의 데이터 메타데이터
+관리와 Unity Catalog OSS 호환 모델 레지스트리를 동시에 운영하여, 데이터부터
+모델까지의 자산을 단일 카탈로그로 추적할 수 있다.
+
+Argus Catalog는 Data 및 AI를 활용하는 기업들에게 있어서 가장 기초적인 정보이면서 동시에 매우 중요한 기반이 되는 
+메타데이터를 비용 부담없이 손쉽게 관리할 수 있도록 하기 위해서 시작한 프로젝트이다.
+
+// TODO: screenshot - 대시보드 메인 (제품 첫 인상)
+image::index/dashboard.png[Argus Catalog 대시보드, 800]
+
+== 핵심 가치
+
+데이터 카탈로그::
+데이터셋 · 플랫폼 · 스키마 · 리니지 · 태그 · 용어집 · 소유자 · 품질 · 표준을
+단일 그래프로 관리.
+
+Cross-Platform 리니지::
+이기종 시스템 간 데이터 흐름을 데이터셋·컬럼 수준으로 추적, 파이프라인 단위
+입력/출력 등록.
+
+ML 모델 레지스트리::
+MLflow 호환 등록 · Stage 전이 · 메트릭 비교 · 모델 카드 · OCI Model Hub 까지
+일원화.
+
+시맨틱 검색::
+pgvector 기반 *키워드 + 시맨틱 하이브리드* 검색. "고객 거래 내역" 같은 자연어
+질의로 `fact_purchases` · `order_history` 같이 의미가 유사한 데이터셋을 함께
+찾는다.
++
+* *임베딩 대상* — 데이터셋의 이름 · 설명 · qualified name · 플랫폼 · 태그 ·
+  소유자를 `|` 구분자로 결합한 텍스트.
+* *기본 모델* — `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`
+  (384 차원, 약 470 MB, 50+ 개 언어). 한국어·영어 혼용 메타데이터에 적합하며
+  Air-gapped 환경에서도 로컬 추론. 영문 위주라면 더 가벼운
+  `all-MiniLM-L6-v2` (80 MB), 최고 품질은 OpenAI `text-embedding-3-small`
+  (1536 차원).
+* *저장* — pgvector `vector(384)` 컬럼 + IVFFlat 코사인 유사도 인덱스.
+  데이터셋 생성·수정 시 백그라운드로 자동 임베딩 (`source_text` 미변경 시 skip).
+* *검색 방식* — 시맨틱 점수 70 % + 키워드 점수 30 % 가중 결합. 임베딩 비활성
+  시 키워드 단독으로 자동 폴백.
+
+자세한 모델·운영 가이드는 xref:ops/embedding.adoc[임베딩 운영] · xref:ops/search.adoc[검색] 참조.
+
+자동 수집 Extension::
+Hive · Impala · Trino · StarRocks 의 *쿼리 이벤트* 와 Greenplum · Kudu 의
+*메타데이터* 를 사내에 설치된 Extension 이 비동기로 직접 수집 — 별도 ETL 없이
+실시간 리니지·쿼리 이력 확보. xref:appendix/extensions.adoc[자세히].
+
+외부 통합 SDK::
+`argus-model` CLI + Python SDK 로 OCI 모델 저장소 (HuggingFace 임포트 ·
+Airgap Push/Pull · Presigned URL 대용량 전송) 와 External API 를 코드로 자동화.
+xref:appendix/sdk.adoc[자세히].
+
+== 시스템 구성
+
+[cols="1,3"]
+|===
+| 컴포넌트 | 역할
+
+| `argus-catalog-server`
+| FastAPI 기반 카탈로그 관리 API.
+
+| `argus-catalog-ui`
+| 사용자 / 관리자 웹 UI (Next.js).
+
+| `argus-catalog-sdk`
+| 외부 시스템 통합용 Python SDK.
+
+| `argus-catalog-extensions`
+| Trino · Impala · StarRocks · Hive 등 플랫폼별 메타데이터 / 쿼리 수집 확장.
+|===
+
+== 사용자 그룹
+
+* *데이터 소비자* — 데이터셋 검색·이해·신뢰성 확인.
+* *데이터 엔지니어* — 메타데이터 등록·동기화·리니지 관리.
+* *ML 엔지니어 / MLOps* — 모델 등록·버전·Stage·OCI 임포트.
+* *데이터 거버넌스 / 관리자* — 표준·품질·알림·권한 운영.
+
+== 매뉴얼 사용법
+
+* 처음 사용한다면 xref:getting-started.adoc[시작하기] 부터.
+* 메뉴별 사용법은 좌측 사이드바의 *데이터 카탈로그 · ML 모델 · 운영* 카테고리를 참조.
+* 자체 설치·운영하는 경우 xref:install/requirements.adoc[설치 / 운영] 섹션 참조.
+* 외부 통합 개발은 xref:appendix/sdk.adoc[부록] 의 SDK · API · Extension 가이드.

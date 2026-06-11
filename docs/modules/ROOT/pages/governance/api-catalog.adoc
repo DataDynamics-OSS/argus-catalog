@@ -1,0 +1,50 @@
+= API 카탈로그
+
+OpenAPI/REST API 스펙을 등록하고, 버전 간 변경(diff)·린트(lint)를 검사하며,
+URN 기반으로 메타데이터·리니지·사용량을 관리한다. 데이터·모델과 함께 **API 를
+거버넌스 대상**으로 다룬다.
+
+== 개요
+
+API 카탈로그는 사내 REST API 를 등록·검색하고 다음을 제공한다.
+
+* **스펙 관리** — OpenAPI 스펙 업로드, 버전 관리, 엔드포인트 자동 추출
+* **변경 추적** — 스펙 버전 간 diff(추가/삭제/변경 엔드포인트)
+* **품질 린트** — 스펙 규칙 검사 및 점수
+* **사용량·리니지** — 호출 기록(invocation), 데이터셋/서비스 간 리니지
+* **게이트웨이** — 등록된 API 를 카탈로그를 통해 호출(invoke)
+* **자격증명·알림** — 암호화 저장 자격증명, 스펙 변경 알림
+
+== 주요 엔드포인트
+
+기본 경로는 `/api/v1/apis` 이다.
+
+[cols="2,3",options="header"]
+|===
+| 엔드포인트 | 설명
+
+| `POST /apis` | API 등록
+| `GET /apis` | 목록·검색(페이지네이션)
+| `GET /apis/{name}` | 상세 조회
+| `POST /apis/{name}/specs` | OpenAPI 스펙 업로드(새 버전)
+| `GET /apis/{name}/diff` | 스펙 버전 간 diff
+| `GET /apis/{name}/lint` | 스펙 린트(점수·findings)
+| `POST /apis/{name}/endpoints` | 엔드포인트 등록/수정
+| `POST /apis/invoke` | 게이트웨이 호출
+| `GET /apis/{name}/usage` | 사용량 통계
+| `GET /apis/{name}/invocations` | 호출 기록
+| `GET·POST /apis/{name}/lineage` | 리니지 조회/등록
+| `GET /apis/{name}/credentials` | 자격증명(암호화 저장)
+| `GET /apis/{name}/alerts` | 스펙 변경 알림
+|===
+
+== 사용 흐름
+
+. `POST /apis` 로 API 를 등록한다.
+. `POST /apis/{name}/specs` 로 OpenAPI 스펙을 업로드하면 엔드포인트가 자동 추출된다.
+. 새 스펙 버전을 올리면 `GET /apis/{name}/diff` 로 변경점을, `GET /apis/{name}/lint` 로
+  품질을 확인한다.
+. 데이터셋·서비스와의 관계를 `POST /apis/{name}/lineage` 로 연결한다.
+
+// TODO: screenshot - API 카탈로그 목록/상세
+// image::governance-api-catalog/overview.png[API 카탈로그, 800]

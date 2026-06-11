@@ -1,0 +1,83 @@
+= 플랫폼
+
+플랫폼은 데이터가 실재하는 시스템을 의미한다. MySQL · PostgreSQL 같은 DBMS
+부터 Kafka · S3 같은 비정형 저장소까지 단일 카탈로그로 묶는다.
+
+// TODO: screenshot - 플랫폼 목록 페이지 (카드 뷰)
+image::catalog-platforms/list.png[플랫폼 목록, 800]
+
+== 지원 플랫폼
+
+20 종 플랫폼을 기본 제공한다.
+
+[cols="1,3"]
+|===
+| 카테고리 | 플랫폼
+
+| 관계형 DBMS
+| MySQL, PostgreSQL, Oracle, MSSQL, Greenplum, Snowflake, BigQuery, Redshift
+| 분석 엔진
+| Hive, Impala, Trino, StarRocks, Kudu
+| 메시지 / 스트림
+| Kafka
+| 스토리지
+| S3, HDFS
+| 검색 / 문서
+| Elasticsearch, MongoDB
+| 통합 카탈로그
+| Unity Catalog
+| 사용자 정의
+| Java, Python (코드 자산 등록용)
+|===
+
+기본 시드 외 신규 플랫폼은 *+ Add Platform* 에서 직접 등록 가능.
+
+== 플랫폼 등록
+
+// TODO: screenshot - 플랫폼 등록 폼
+image::catalog-platforms/create.png[플랫폼 등록, 800]
+
+다음 정보를 입력한다.
+
+* *이름* — 사내에서 식별 가능한 이름 (예: `prod-mysql-billing`).
+* *종류* — 위 목록에서 선택.
+* *연결 설정* — 호스트 · 포트 · 인증. 종류별로 폼이 동적으로 바뀐다.
+* *환경* — 기본 환경 (PROD/STAGING/DEV).
+
+등록 직후 *Test Connection* 으로 연결을 검증한다. 인증 비밀번호는 마스킹되어
+저장되며 응답에서는 `••••••••` 으로 노출된다.
+
+== 메타데이터 동기화
+
+// TODO: screenshot - 동기화 실행 결과 (다이얼로그 또는 토스트)
+// image::catalog-platforms/sync.png[메타데이터 동기화, 800]
+
+MySQL · MariaDB · PostgreSQL 은 자동 메타데이터 수집을 지원한다.
+플랫폼 카드의 *Sync* 버튼으로 실행한다.
+
+수집 대상::
+* 모든 데이터베이스 · 스키마 · 테이블 · 뷰
+* 각 테이블의 컬럼 (이름 · 타입 · NULL 허용 · 기본값)
+* 키 정보 (PK · Unique · Index)
+* DDL 원문
+* 행 수 추정치
+* (옵션) 샘플 데이터 — Parquet 으로 캐시 저장
+
+후처리::
+* 데이터셋 신규 등록 또는 기존 데이터셋 업데이트
+* 스키마 변경분은 `catalog_schema_snapshots` 에 스냅샷으로 남음
+* LLM 자동 생성이 켜져 있으면 빈 설명이 한국어/영어로 자동 채움
+* xref:ops/alerts.adoc[알림] 규칙이 활성이면 변경분에 대해 평가
+
+== 환경별 동작
+
+플랫폼은 환경 (`PROD` · `STAGING` · `DEV`) 단위로 동기화 결과를 분리한다.
+동일 호스트를 환경만 달리해 두 번 등록하면 두 환경의 데이터셋이 각각 적재된다.
+
+== 연결 정보 관리
+
+연결 설정은 *Platform Detail → Configuration* 탭에서 수정한다.
+
+* 호스트 · 포트 변경 후 *Test Connection* 으로 재검증.
+* 비밀번호 변경 시 빈 칸을 두면 기존 값을 유지한다.
+* 변경 이력은 시스템 감사 로그에 남는다.

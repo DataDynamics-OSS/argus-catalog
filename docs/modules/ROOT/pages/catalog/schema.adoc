@@ -1,0 +1,55 @@
+= 스키마
+
+데이터셋 상세의 *Schema* 탭은 컬럼 정의와 변경 이력을 한자리에서 관리한다.
+
+// TODO: screenshot - 데이터셋 상세의 스키마 탭 (ag-grid 편집)
+image::catalog-schema/overview.png[스키마 탭, 800]
+
+== 컬럼 정의
+
+ag-grid 기반 인라인 편집. 컬럼별로 다음 속성을 관리한다.
+
+[cols="1,3"]
+|===
+| 항목 | 설명
+
+| 이름
+| 컬럼 물리명. 동기화 결과로 자동 채움.
+| 타입
+| 소스 DB 타입을 그대로 반영 (`VARCHAR(20)`, `BIGINT` 등).
+| NULL 허용
+| boolean. PK 컬럼은 자동 NOT NULL.
+| 기본값
+| DDL 의 DEFAULT 절.
+| 설명
+| 사용자 입력 또는 AI 자동 생성.
+| 용어 매핑
+| 표준 용어와 연결. xref:catalog/standards.adoc[데이터 표준] 참조.
+|===
+
+편집 후 *Save* 로 일괄 반영. 동기화로 다시 덮어쓰지 않도록 *Manual* 플래그가
+자동 부착된다.
+
+== 키 제약
+
+PK · Unique · Index 는 컬럼 좌측 아이콘으로 표시된다.
+
+* *PK* — 노란색 열쇠. 복합 키는 동일한 PK 그룹 번호로 표시.
+* *Unique* — 파란색 U. 다중 컬럼 Unique 인덱스는 같은 그룹.
+* *Index* — 회색 i. 검색용 보조 인덱스.
+
+키 정보는 동기화 시 소스 DB 의 `information_schema` 또는 메타 카탈로그에서 수집한다.
+
+== 변경 이력
+
+// TODO: screenshot - 스키마 diff 뷰 (변경 항목 색상 표시)
+image::catalog-schema/history.png[스키마 변경 이력, 800]
+
+동기화 또는 수동 편집 시점마다 스냅샷이 생성된다.
+
+* *추가된 컬럼* — 녹색.
+* *삭제된 컬럼* — 빨간색.
+* *타입 변경* — 노란색. 이전/이후 값 모두 표시.
+
+스냅샷은 xref:ops/alerts.adoc[알림] 의 영향 분석 입력으로도 사용된다.
+컬럼 DROP → BREAKING, 타입 변경 → WARNING 으로 자동 분류된다.

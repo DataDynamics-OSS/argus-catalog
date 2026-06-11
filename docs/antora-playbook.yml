@@ -1,0 +1,30 @@
+site:
+  title: Argus Catalog Documentation
+  start_page: argus-catalog::index.adoc
+
+content:
+  sources:
+    - url: ..
+      branches: HEAD
+      start_path: docs
+      edit_url: false
+
+asciidoc:
+  attributes:
+    source-highlighter: highlight.js
+    icons: font
+    sectnums: ''
+    toc: macro
+    toclevels: 3
+    # 본문 placeholder({platform_id}, {N} 등)는 의도적으로 그대로 노출.
+    # 미정의 attribute 경고를 끈다.
+    attribute-missing: skip
+
+ui:
+  bundle:
+    url: https://gitlab.com/antora/antora-ui-default/-/jobs/artifacts/HEAD/raw/build/ui-bundle.zip?job=bundle-stable
+    snapshot: true
+  supplemental_files: ./ui-supplemental
+
+output:
+  dir: ./build/site

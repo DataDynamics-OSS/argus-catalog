@@ -1,0 +1,78 @@
+= 리니지
+
+이기종 시스템 간 데이터 흐름을 데이터셋·컬럼 수준으로 추적한다.
+
+// TODO: screenshot - 리니지 그래프 전체 뷰 (다중 플랫폼 노드 색상)
+image::catalog-lineage/graph.png[리니지 그래프, 800]
+
+== 그래프 화면
+
+데이터셋 상세의 *Lineage* 탭에서 진입.
+
+* *노드* — 데이터셋. 플랫폼 종류별로 다른 아이콘/색상.
+* *엣지* — 데이터 흐름. 굵기는 매핑 컬럼 수에 비례.
+* *컨트롤* — 줌, 드래그, 업/다운스트림 토글, 깊이(hops) 조절.
+
+업스트림 (입력) 과 다운스트림 (출력) 을 각각 N hops 까지 펼친다. 큰 그래프는
+*Focus on Node* 로 특정 데이터셋 중심으로 부분 뷰만 그릴 수 있다.
+
+== Cross-Platform 리니지
+
+리니지 관계는 플랫폼이 달라도 동일한 그래프에 표시된다.
+
+예시 흐름::
+Kafka 토픽 → Spark 잡 → Hive 테이블 → ETL → MySQL 마트 → BI 도구
+
+이 흐름이 한 화면에 표현되며, 각 단계의 변환 종류 (`ETL`, `CDC`, `FILE_EXPORT`,
+`REPLICATION` 등) 가 엣지 라벨로 노출된다.
+
+== 컬럼 수준 매핑
+
+// TODO: screenshot - 컬럼 매핑 뷰 (입력 컬럼 → 출력 컬럼 선)
+image::catalog-lineage/column-mapping.png[컬럼 매핑, 800]
+
+엣지를 클릭하면 컬럼-컬럼 매핑이 펼쳐진다.
+
+[cols="1,3"]
+|===
+| 매핑 종류 | 설명
+
+| DIRECT
+| 1:1 직접 복사.
+| CAST
+| 타입 변환.
+| EXPRESSION
+| 표현식 (`UPPER(x)`, `CONCAT(a, b)` 등). 표현식 텍스트가 함께 저장됨.
+| DERIVED
+| 다중 입력에서 파생.
+|===
+
+컬럼 매핑은 영향 분석의 입력이 된다. 업스트림 컬럼 DROP 시 매핑된 다운스트림
+컬럼이 자동으로 영향 대상으로 나열된다.
+
+== 리니지 출처
+
+엣지에는 출처가 기록된다.
+
+* *QUERY_AGGREGATED* — Extension (Trino · Impala · StarRocks · Hive 등) 이 쿼리
+  로그에서 자동 집계.
+* *PIPELINE* — 파이프라인 레지스트리에 등록된 정의 기반.
+* *MANUAL* — UI 또는 SDK 로 직접 등록.
+
+UI 의 필터로 출처별로 표시/숨김할 수 있다.
+
+== 파이프라인 레지스트리
+
+// TODO: screenshot - 파이프라인 등록·목록 화면
+// image::catalog-lineage/pipelines.png[파이프라인 레지스트리, 800]
+
+데이터셋 상세의 *Pipelines* 탭 또는 카탈로그 메뉴의 *Pipelines* 에서 진입.
+파이프라인 단위로 입력/출력 데이터셋을 등록한다.
+
+* *이름* — 식별자 (예: `airflow.dag.customer_etl`).
+* *종류* — Airflow / Kestra / NiFi / 기타.
+* *입력 / 출력 데이터셋* — URN 으로 선택.
+* *스케줄 · 상태* — 외부 시스템의 메타데이터.
+
+Argus Catalog 의 xref:appendix/extensions.adoc[Extension] 을 설치하면 Airflow DAG ·
+Kestra Flow · NiFi Flow 가 자동 등록된다.

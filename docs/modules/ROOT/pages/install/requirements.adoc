@@ -1,0 +1,87 @@
+= 시스템 요구사항
+
+== 최소 사양
+
+[cols="1,3"]
+|===
+| 항목 | 요구사항
+
+| OS
+| Linux (RHEL 8+, Ubuntu 20.04+), macOS 12+
+| CPU
+| 4 core 이상
+| 메모리
+| 8 GB 이상 (로컬 임베딩 사용 시 16 GB 권장)
+| 디스크
+| 50 GB 이상. ML 모델 아티팩트 규모에 따라 증가
+| Python
+| 3.11 이상 (서버)
+| Node.js
+| 20 이상 (UI)
+| pnpm
+| 9.0 이상
+|===
+
+권장 사양 (50 만 데이터셋 / 100 사용자 동시 접속 기준)::
+* CPU 8 core, 메모리 32 GB, 디스크 500 GB SSD.
+* 로컬 임베딩에 GPU (CUDA 11.8+) 사용 시 추론 성능 약 5~10 배.
+
+== 의존 컴포넌트
+
+[cols="1,1,3"]
+|===
+| 컴포넌트 | 필수/옵션 | 용도
+
+| PostgreSQL 12+ (권장)
+| 필수 (택 1)
+| 메타데이터 저장. *pgvector 확장* 필요 (시맨틱 검색용).
+
+| MariaDB 10.5+
+| 옵션
+| PostgreSQL 대신 사용 가능. 단 시맨틱 검색은 미지원.
+
+| MinIO 또는 AWS S3
+| 옵션
+| ML 모델 아티팩트 저장. 미설정 시 로컬 파일시스템 모드.
+
+| Keycloak 22+
+| 옵션
+| SSO / OIDC 인증. 미설정 시 Local JWT 모드.
+
+| Ollama
+| 옵션
+| 로컬 임베딩 / LLM. OpenAI · 로컬 sentence-transformers 와 양자 택일.
+
+| GPU (CUDA)
+| 옵션
+| 로컬 임베딩 / LLM 가속.
+|===
+
+== 네트워크 포트
+
+[cols="1,1,3"]
+|===
+| 포트 | 컴포넌트 | 설명
+
+| 4600 | argus-catalog-server | REST API
+| 3000 | argus-catalog-ui | Next.js 웹 UI
+| 5432 | PostgreSQL | 메타데이터 DB (PostgreSQL)
+| 3306 | MariaDB | 메타데이터 DB (MariaDB)
+| 9000 / 9001 | MinIO | API / 콘솔
+| 8180 | Keycloak | OIDC IdP
+| 11434 | Ollama | 임베딩 · LLM
+|===
+
+== 외부 통신
+
+* 인터넷 접근이 가능한 환경
+** HuggingFace Hub — 로컬 임베딩 모델 자동 다운로드, OCI Hub HuggingFace 임포트
+** OpenAI / Anthropic API — 임베딩 · LLM 사용 시
+* *에어갭 환경*
+** 모델 파일을 사내에 배포 후 *로컬 경로* 로 지정 — xref:install/setup.adoc[설치]·xref:ops/settings.adoc[설정] 참조.
+** OCI Hub 의 Airgap Import 사용.
+
+== 라이선스
+
+Apache License 2.0 — 자체 운영에 제한 없음. 제품 라이선스 키 발급 절차는 별도
+영업 계약에 따른다.

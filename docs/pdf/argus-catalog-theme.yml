@@ -1,0 +1,59 @@
+extends: default
+
+font:
+  catalog:
+    merge: true
+    Nanum Gothic:
+      normal: NanumGothic-Regular.ttf
+      bold: NanumGothic-Bold.ttf
+      italic: NanumGothic-Regular.ttf
+      bold_italic: NanumGothic-Bold.ttf
+    Nanum Gothic Coding:
+      normal: NanumGothicCoding-Regular.ttf
+      bold: NanumGothicCoding-Bold.ttf
+      italic: NanumGothicCoding-Regular.ttf
+      bold_italic: NanumGothicCoding-Bold.ttf
+  fallbacks:
+    - Nanum Gothic
+
+base:
+  font_family: Nanum Gothic
+  font_size: 10.5
+  line_height_length: 14
+
+heading:
+  font_family: Nanum Gothic
+
+title_page:
+  title:
+    font_family: Nanum Gothic
+  subtitle:
+    font_family: Nanum Gothic
+  authors:
+    font_family: Nanum Gothic
+  revision:
+    font_family: Nanum Gothic
+
+code:
+  font_family: Nanum Gothic Coding
+
+codespan:
+  font_family: Nanum Gothic Coding
+
+abstract:
+  font_family: Nanum Gothic
+
+admonition:
+  label:
+    font_family: Nanum Gothic
+
+table:
+  font_family: Nanum Gothic
+  head:
+    font_family: Nanum Gothic
+
+footer:
+  font_family: Nanum Gothic
+
+header:
+  font_family: Nanum Gothic

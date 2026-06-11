@@ -1,0 +1,325 @@
+= 인증
+
+Argus Catalog 는 두 가지 인증 모드를 지원한다. 운영 환경에는 *Keycloak SSO* 를,
+스탠드얼론·개발 환경에는 *Local JWT* 를 사용한다.
+
+// TODO: screenshot - 로그인 화면 (Keycloak 모드 / Local 모드 차이)
+image::ops-authentication/login.png[로그인 화면, 600]
+
+== 인증 모드
+
+[cols="1,3"]
+|===
+| 모드 | 설명
+
+| Keycloak (권장)
+| OpenID Connect (OIDC) 기반 SSO. Keycloak 이 JWT 발급·검증·세션 관리. 사내 LDAP / AD 연동 가능.
+| Local JWT
+| 로컬 사용자 DB + HS256 JWT. 별도 IdP 없이 단독 운영. 개발 환경 또는 단일 사용자 환경용.
+|===
+
+전환은 xref:ops/settings.adoc#_auth[설정 → Auth] 에서. 변경 즉시 적용된다.
+
+== 시스템 구성 (Keycloak 모드)
+
+----
+┌─────────────────┐    OIDC / JWT     ┌──────────────────────┐
+│  Keycloak       │ ←───────────────→ │  argus-catalog-      │
+│  (Port 8180)    │   토큰 발급 / 검증│  server (Port 4600)  │
+└────────┬────────┘                   └───────────┬──────────┘
+         │                                        │
+         │ PostgreSQL (keycloak DB)               │ PostgreSQL (argus_catalog DB)
+         ▼                                        ▼
+┌─────────────────┐                   ┌──────────────────────┐
+│  PostgreSQL     │                   │  argus-catalog-ui    │
+│  (Port 5432)    │                   │  (Port 3000)         │
+└─────────────────┘                   └──────────────────────┘
+----
+
+image::ops-authentication/keycloak.png[Keycloak 설정, 800]
+
+
+== 로그인 흐름
+
+. 사용자가 `/` 접속 → 미인증 시 `/login` 으로 리디렉션.
+. 사용자명 / 비밀번호 입력 → `POST /api/v1/auth/login` → Keycloak 이 Access / Refresh JWT 발급.
+. 토큰은 브라우저 `sessionStorage` (`argus_tokens` 키) 에 저장.
+. 이후 모든 API 호출은 `authFetch()` 가 `Authorization: Bearer <token>` 헤더 자동 첨부.
+. Access 토큰 만료 60 초 전 자동으로 `/api/v1/auth/refresh` 호출.
+. 401 응답 시 클라이언트가 자동으로 `/login` 리디렉션.
+. Logout 시 Keycloak 의 Refresh 토큰 무효화 + sessionStorage 초기화.
+
+== 토큰 / 세션 정책
+
+[cols="1,3"]
+|===
+| 항목 | 값 (Keycloak 기본)
+
+| Access Token 수명
+| 1 시간 (Local JWT 모드 기본: 8 시간)
+| Refresh Token Idle Timeout
+| 30 분
+| Refresh Token Max Lifespan
+| 10 시간
+| 토큰 저장
+| 브라우저 `sessionStorage` (탭 종료 시 무효화)
+| JWKS 캐시
+| 서버 메모리, TTL 1 시간
+| Brute Force 보호
+| Keycloak 측 활성화
+|===
+
+== 역할 (Realm Roles)
+
+기본 제공되는 시스템 역할 3 종.
+
+[cols="1,3,1"]
+|===
+| 역할 | 권한 범위 | 기본 부여
+
+| `argus-admin`
+| 전체 권한 — 사용자 · 설정 · 모든 객체 CRUD
+| 수동
+
+| `argus-superuser`
+| 관리 권한 — 사용자 관리 제외 거의 모든 작업
+| 수동
+
+| `argus-user`
+| 읽기 + 본인이 소유한 데이터셋 / 모델의 수정
+| 자동 (default-roles-argus)
+|===
+
+`argus-*` 역할이 *하나도 없는* 사용자는 로그인이 거부된다 (403 Forbidden).
+
+== OIDC 엔드포인트
+
+[cols="1,3"]
+|===
+| 용도 | URL
+
+| Token | `\{server\}/realms/\{realm\}/protocol/openid-connect/token`
+| Authorization | `\{server\}/realms/\{realm\}/protocol/openid-connect/auth`
+| UserInfo | `\{server\}/realms/\{realm\}/protocol/openid-connect/userinfo`
+| JWKS | `\{server\}/realms/\{realm\}/protocol/openid-connect/certs`
+| Logout | `\{server\}/realms/\{realm\}/protocol/openid-connect/logout`
+| Well-Known | `\{server\}/realms/\{realm\}/.well-known/openid-configuration`
+|===
+
+기본값 — server = `http://localhost:8180`, realm = `argus`.
+
+== 서버 인증 API
+
+[cols="1,3,1"]
+|===
+| Method | Path | 인증 필요
+
+| POST | `/api/v1/auth/login` | No
+| POST | `/api/v1/auth/refresh` | No
+| GET | `/api/v1/auth/me` | Yes
+| POST | `/api/v1/auth/logout` | No
+|===
+
+호출 예시.
+
+[source,bash]
+----
+# 로그인
+curl -s -X POST http://<server>:4600/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"admin"}'
+
+# 현재 사용자 정보
+curl -s http://<server>:4600/api/v1/auth/me \
+  -H "Authorization: Bearer <access_token>"
+
+# 토큰 갱신
+curl -s -X POST http://<server>:4600/api/v1/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token":"<refresh_token>"}'
+----
+
+== Keycloak 설치
+
+Docker 로 빠르게 띄울 수 있다.
+
+[source,bash]
+----
+docker run -d --name argus-keycloak \
+  -p 8180:8080 \
+  -e KC_BOOTSTRAP_ADMIN_USERNAME=admin \
+  -e KC_BOOTSTRAP_ADMIN_PASSWORD=admin \
+  quay.io/keycloak/keycloak:26.1 start-dev
+----
+
+기본 구성.
+
+[cols="1,3"]
+|===
+| 항목 | 기본값
+
+| Image | `quay.io/keycloak/keycloak:26.1`
+| Admin Console | `http://localhost:8180/admin`
+| Admin 계정 | `admin` / `admin`
+| Realm | `argus`
+| 모드 | `start-dev` (개발용 — 프로덕션은 `start` + DB 분리)
+|===
+
+PostgreSQL 사용 시 `keycloak` 라는 별도 DB 를 만들고 `pg_hba.conf` 에 컨테이너
+네트워크 접근을 허용한다.
+
+----
+host    all    argus    172.16.0.0/12    md5
+----
+
+== Keycloak 자동 설정 (권장)
+
+UI 의 *Settings → Auth → Initialize* 버튼이 다음을 자동 수행한다.
+
+* Realm `argus` 생성
+* Client `argus-client` 생성 (Confidential, Standard Flow · Direct Access Grants 활성)
+* Realm Role 3종 (`argus-admin`, `argus-superuser`, `argus-user`) 생성
+* `argus-user` 를 default role 로 부여
+
+== Keycloak 수동 설정
+
+Admin 콘솔 (`http://<keycloak>:8180/admin`) 에서 단계별 셋업.
+
+=== 1. Realm 생성
+
+. 좌측 상단 realm 드롭다운 (master) → *Create realm*
+. *Realm name*: `argus` / *Enabled*: ON → *Create*
+
+=== 2. Client 생성
+
+. *Clients → Create client*
+. Client ID: `argus-client`, *Client authentication*: ON (Confidential)
+. Next → *Standard flow* / *Direct access grants* / *Service accounts roles* 모두 ON
+. Next → *Valid redirect URIs*: `http://<ui>:3000/*`, `http://<server>:4600/*`
+. *Web origins*: `http://<ui>:3000`, `http://<server>:4600`, `+`
+. Save → *Credentials* 탭에서 Client Secret 확인 / `argus-client-secret` 으로 설정
+
+=== 3. Realm Roles 생성
+
+*Realm roles → Create role* 에서 3개 생성.
+
+[cols="1,2"]
+|===
+| 역할 | 설명
+
+| `argus-admin` | Argus Administrator
+| `argus-superuser` | Argus Super User
+| `argus-user` | Argus User
+|===
+
+=== 4. Default Role 지정
+
+신규 사용자가 자동으로 `argus-user` 를 받도록.
+
+. *Realm roles → default-roles-argus → Associated roles → Assign role*
+. 필터를 *Filter by realm roles* 로 변경 → `argus-user` 선택 → Assign
+
+=== 5. 사용자 생성
+
+. *Users → Create user*
+. Username, Email 필수. *Email verified*: ON
+. Create → *Credentials* 탭 → *Set password* → *Temporary*: OFF → Save
+
+=== 6. 역할 부여
+
+. *Users → \{user\} → Role mapping → Assign role*
+. 필터를 *Filter by realm roles* 로 변경 → 원하는 역할 선택 → Assign
+
+[TIP]
+====
+default role 로 `argus-user` 가 자동 부여돼 있으므로, `argus-admin` /
+`argus-superuser` 만 수동 부여하면 된다.
+====
+
+== 서버 설정
+
+`config.yml`.
+
+[source,yaml]
+----
+auth:
+  type: keycloak
+  keycloak:
+    server_url: http://localhost:8180
+    realm: argus
+    client_id: argus-client
+    client_secret: argus-client-secret
+    admin_role: argus-admin
+    superuser_role: argus-superuser
+    user_role: argus-user
+----
+
+`config.properties`.
+
+[source,properties]
+----
+auth.type=keycloak
+auth.keycloak.server_url=http://localhost:8180
+auth.keycloak.realm=argus
+auth.keycloak.client_id=argus-client
+auth.keycloak.client_secret=argus-client-secret
+auth.keycloak.admin_role=argus-admin
+auth.keycloak.superuser_role=argus-superuser
+auth.keycloak.user_role=argus-user
+----
+
+UI 의 *Settings → Auth* 에서도 동일 항목을 런타임 변경할 수 있다 (재시작 불필요).
+
+== 트러블슈팅
+
+[cols="1,2,2"]
+|===
+| 증상 | 원인 | 해결
+
+| `Invalid client or Invalid client credentials`
+| `argus-client` 미존재 또는 Client Secret 불일치
+| Clients → argus-client → Credentials 확인
+
+| `Account is not fully set up`
+| 사용자 이메일 미입력 또는 *Required actions* 보류
+| Email + Email verified ON 후 Required actions 제거
+
+| `Invalid user credentials`
+| 비밀번호 오류
+| Users → 사용자 → Credentials → Set password 재설정
+
+| `No Argus role assigned`
+| 사용자에게 `argus-*` Realm Role 부여 안 됨
+| Users → 사용자 → Role mapping 에서 역할 추가
+
+| Realm role 이 *Assign role* 화면에 안 보임
+| 필터가 *Filter by clients* 로 돼 있음
+| *Filter by realm roles* 로 변경
+|===
+
+== Keycloak Admin API
+
+토큰 발급 후 사용자 / 역할 / 그룹을 스크립트로 관리할 수 있다.
+
+[source,bash]
+----
+# 관리자 토큰
+TOKEN=$(curl -s -X POST "http://<keycloak>:8180/realms/master/protocol/openid-connect/token" \
+  -d "username=admin&password=admin&grant_type=password&client_id=admin-cli" \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+# 사용자 목록
+curl -s "http://<keycloak>:8180/admin/realms/argus/users" \
+  -H "Authorization: Bearer $TOKEN"
+
+# 사용자 생성
+curl -s -X POST "http://<keycloak>:8180/admin/realms/argus/users" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "newuser",
+    "email": "newuser@example.com",
+    "enabled": true,
+    "credentials": [{"type": "password", "value": "password123", "temporary": false}]
+  }'
+----
