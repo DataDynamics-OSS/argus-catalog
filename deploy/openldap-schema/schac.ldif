@@ -1,0 +1,25 @@
+# SCHAC 스키마 (부분집합) — 생년월일 속성 schacDateOfBirth 를 OpenLDAP 에 추가한다.
+#
+# person/inetOrgPerson 코어 스키마에는 생년월일 속성이 없어, 사실상 표준인
+# SCHAC(SCHema for ACademia)의 schacDateOfBirth(YYYYMMDD)를 보조 objectClass 로 정의한다.
+# OID 는 SCHAC 공식 값(arc 1.3.6.1.4.1.25178). 여기서는 ldap-user-sync 테스트에 필요한
+# schacDateOfBirth + 이를 담는 보조 objectClass 만 정의한 최소 부분집합이다.
+#
+# cn=config 형식이라 네트워크에서 cn=admin,cn=config 로 bind 해 ldapadd 로 적재할 수 있다
+# (compose 의 seed 사이드카가 사용자 적재 전에 먼저 로드한다).
+
+dn: cn=schac,cn=schema,cn=config
+objectClass: olcSchemaConfig
+cn: schac
+olcAttributeTypes: ( 1.3.6.1.4.1.25178.1.2.3
+  NAME 'schacDateOfBirth'
+  DESC 'Date of birth (YYYYMMDD per SCHAC/ISO-8601 basic)'
+  EQUALITY numericStringMatch
+  SUBSTR numericStringSubstringsMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.36
+  SINGLE-VALUE )
+olcObjectClasses: ( 1.3.6.1.4.1.25178.1.0.2.1
+  NAME 'schacPersonalCharacteristics'
+  DESC 'SCHAC personal characteristics (subset: schacDateOfBirth)'
+  AUXILIARY
+  MAY ( schacDateOfBirth ) )

@@ -1,0 +1,72 @@
+# 변경 관리(change-mgmt) 워크플로우용 Temporal 개발 스택.
+#
+# 구성:
+#   - temporal-postgresql : Temporal 전용 메타데이터 저장소 (카탈로그 DB와 분리)
+#   - temporal            : Temporal 서버 (auto-setup — 스키마/네임스페이스 자동 생성)
+#   - temporal-ui         : 웹 UI (워크플로우 실행 상태 확인)
+#
+# 기동:
+#   docker compose -f backend/deploy/temporal/docker-compose.yml up -d
+#
+# 엔드포인트:
+#   - gRPC      : localhost:7233   (TEMPORAL_TARGET 기본값)
+#   - Web UI    : http://localhost:8233
+#   - Namespace : default (auto-setup 가 생성)
+#
+# 종료/정리:
+#   docker compose -f backend/deploy/temporal/docker-compose.yml down        # 컨테이너만
+#   docker compose -f backend/deploy/temporal/docker-compose.yml down -v     # 볼륨까지
+
+name: argus-temporal
+
+services:
+  temporal-postgresql:
+    image: postgres:16
+    container_name: argus-temporal-postgresql
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+    volumes:
+      - temporal-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    expose:
+      - 5432
+
+  temporal:
+    image: temporalio/auto-setup:1.25.2
+    container_name: argus-temporal
+    depends_on:
+      temporal-postgresql:
+        condition: service_healthy
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - POSTGRES_SEEDS=temporal-postgresql
+    ports:
+      - "7233:7233"
+    healthcheck:
+      test: ["CMD", "tctl", "--address", "temporal:7233", "cluster", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  temporal-ui:
+    image: temporalio/ui:2.34.0
+    container_name: argus-temporal-ui
+    depends_on:
+      - temporal
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_CORS_ORIGINS=http://localhost:4600,http://localhost:3000
+    ports:
+      - "8233:8080"
+
+volumes:
+  temporal-pgdata:

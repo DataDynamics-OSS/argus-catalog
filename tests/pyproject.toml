@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "argus-catalog-tests"
-version = "0.1.0"
+version = "0.1.1"
 description = "End-to-end integration tests for Argus Catalog metadata sync adapters"
 requires-python = ">=3.11"
 dependencies = [

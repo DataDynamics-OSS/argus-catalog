@@ -1,0 +1,76 @@
+{
+  "realm": "argus",
+  "enabled": true,
+  "registrationAllowed": false,
+  "roles": {
+    "realm": [
+      { "name": "argus-admin", "description": "Argus Catalog 관리자" },
+      { "name": "argus-superuser", "description": "Argus Catalog 슈퍼유저" },
+      { "name": "argus-user", "description": "Argus Catalog 일반 사용자" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "argus-client",
+      "name": "Argus Catalog Client",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "argus-client-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": true,
+      "redirectUris": ["http://localhost:3000/*", "http://localhost:4600/*"],
+      "webOrigins": ["http://localhost:3000", "http://localhost:4600"],
+      "defaultClientScopes": ["profile", "email", "roles", "web-origins"],
+      "protocolMappers": [
+        {
+          "name": "realm roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "realm_access.roles",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "argus-admin",
+      "enabled": true,
+      "email": "argus-admin@example.com",
+      "emailVerified": true,
+      "firstName": "Argus",
+      "lastName": "Admin",
+      "credentials": [{ "type": "password", "value": "argus-admin", "temporary": false }],
+      "realmRoles": ["argus-admin"]
+    },
+    {
+      "username": "argus-superuser",
+      "enabled": true,
+      "email": "argus-superuser@example.com",
+      "emailVerified": true,
+      "firstName": "Argus",
+      "lastName": "Superuser",
+      "credentials": [{ "type": "password", "value": "argus-superuser", "temporary": false }],
+      "realmRoles": ["argus-superuser"]
+    },
+    {
+      "username": "argus-user",
+      "enabled": true,
+      "email": "argus-user@example.com",
+      "emailVerified": true,
+      "firstName": "Argus",
+      "lastName": "User",
+      "credentials": [{ "type": "password", "value": "argus-user", "temporary": false }],
+      "realmRoles": ["argus-user"]
+    }
+  ]
+}

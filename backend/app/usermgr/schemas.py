@@ -85,6 +85,9 @@ class UserAddRequest(BaseModel):
     phone_number: str | None = Field(None, max_length=30)
     password: str = Field(..., min_length=4, max_length=128)
     role: RoleName = Field(RoleName.USER, description="역할 이름 (Admin/Superuser/User)")
+    # True 면 최초 로그인 시 비밀번호 변경을 강제한다(LDAP 동기화 계정은 초기 비번이
+    # 생년월일이므로 동기화 도구가 True 로 보낸다). 일반 생성은 기본 False.
+    must_change_password: bool = Field(False, description="최초 로그인 시 비밀번호 강제 변경 여부")
 
 
 class UserModifyRequest(BaseModel):

@@ -68,6 +68,8 @@ class UserInfoResponse(BaseModel):
     is_admin: bool
     is_superuser: bool
     avatar_preset_id: str | None = None
+    # 최초 로그인 시 비밀번호 강제 변경 대상 여부(프론트 게이트가 사용). 기본 False.
+    must_change_password: bool = False
 
 
 class AvatarUpdateRequest(BaseModel):
@@ -149,7 +151,7 @@ async def _login_local(req: LoginRequest, session: AsyncSession) -> TokenRespons
         logger.warning("로컬 로그인 차단(비활성 계정): username=%s", req.username)
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="비활성화된 계정입니다.")
 
-    # JWT 토큰 생성
+    # JWT 토큰 생성 — must_change_password 를 claim 으로 실어 게이트가 판단하게 한다
     access_token = create_local_token(
         sub=str(user.id),
         username=user.username,
@@ -157,6 +159,7 @@ async def _login_local(req: LoginRequest, session: AsyncSession) -> TokenRespons
         first_name=user.first_name,
         last_name=user.last_name,
         role=role_code,
+        must_change_password=user.must_change_password,
     )
     # 리프레시 토큰 — 더 긴 만료 시간
     refresh_token = create_local_token(
@@ -167,6 +170,7 @@ async def _login_local(req: LoginRequest, session: AsyncSession) -> TokenRespons
         last_name=user.last_name,
         role=role_code,
         expire_minutes=60 * 24 * 7,  # 7일
+        must_change_password=user.must_change_password,
     )
 
     logger.info("로컬 로그인: %s (role=%s)", user.username, role_code)
@@ -316,11 +320,13 @@ async def _refresh_local(req: RefreshRequest, session: AsyncSession) -> TokenRes
     access_token = create_local_token(
         sub=str(user.id), username=user.username, email=user.email,
         first_name=user.first_name, last_name=user.last_name, role=role_code,
+        must_change_password=user.must_change_password,
     )
     refresh_token = create_local_token(
         sub=str(user.id), username=user.username, email=user.email,
         first_name=user.first_name, last_name=user.last_name, role=role_code,
         expire_minutes=60 * 24 * 7,
+        must_change_password=user.must_change_password,
     )
 
     logger.info("로컬 토큰 갱신: username=%s role=%s", user.username, role_code)
@@ -410,11 +416,31 @@ async def _resolve_profile(
     return row[0], row[1], row[2], row[3], row[4], row[5]
 
 
+async def _load_must_change_password(session: AsyncSession, user: "CurrentUser") -> bool:
+    """강제 비밀번호 변경 플래그를 DB 에서 fresh 로 읽는다(로컬 모드 전용).
+
+    토큰 claim 은 로그인 시점 스냅숏이라, 변경 직후 게이트가 즉시 풀리도록 DB 를 우선한다.
+    Keycloak 모드는 로컬 비밀번호가 없으므로 항상 False.
+    """
+    if settings.auth_type != "local":
+        return False
+    from app.usermgr.models import ArgusUser
+    try:
+        uid = int(user.sub)
+    except (TypeError, ValueError):
+        return False
+    val = (await session.execute(
+        select(ArgusUser.must_change_password).where(ArgusUser.id == uid)
+    )).scalar()
+    return bool(val)
+
+
 @router.get("/me", response_model=UserInfoResponse)
 async def get_me(user: CurrentUser, session: AsyncSession = Depends(get_session)):
     """현재 로그인한 사용자 정보 반환. 아바타 preset 도 함께 채워서 응답한다."""
     avatar_preset_id = await _load_avatar_preset_id(session, user.sub)
     first_name, last_name, email, organization, department, phone_number = await _resolve_profile(session, user)
+    must_change_password = await _load_must_change_password(session, user)
     return UserInfoResponse(
         sub=user.sub,
         username=user.username,
@@ -430,6 +456,7 @@ async def get_me(user: CurrentUser, session: AsyncSession = Depends(get_session)
         is_admin=user.is_admin,
         is_superuser=user.is_superuser,
         avatar_preset_id=avatar_preset_id,
+        must_change_password=must_change_password,
     )
 
 
@@ -554,7 +581,7 @@ async def update_me(
 # 비밀번호 변경 (로컬 모드 전용)
 # ---------------------------------------------------------------------------
 
-@router.post("/change-password")
+@router.post("/change-password", response_model=TokenResponse)
 async def change_password(
     req: ChangePasswordRequest,
     current_user: CurrentUser,
@@ -562,30 +589,52 @@ async def change_password(
 ):
     """현재 사용자의 비밀번호 변경. 로컬 인증 모드 전용.
 
-    Keycloak 사용자는 Keycloak Account Console 의 비밀번호 변경 기능을 사용해야 한다.
+    성공 시 ``must_change_password`` 플래그를 해제하고, 해당 플래그가 False 인 새
+    토큰 쌍을 재발급해 반환한다 → 강제 변경 게이트가 즉시 풀린다(최초 로그인 강제
+    변경 흐름). Keycloak 사용자는 Keycloak Account Console 을 사용해야 한다.
     """
     if settings.auth_type != "local":
         logger.warning("keycloak 모드에서 비밀번호 변경 거부: sub=%s", current_user.sub)
         raise HTTPException(status_code=400, detail="비밀번호 변경은 로컬 인증 모드에서만 사용할 수 있습니다.")
 
-    from app.usermgr.models import ArgusUser
+    from app.usermgr.models import ArgusRole, ArgusUser
 
     result = await session.execute(
-        select(ArgusUser).where(ArgusUser.id == int(current_user.sub))
+        select(ArgusUser, ArgusRole.role_id.label("role_code"))
+        .join(ArgusRole, ArgusUser.role_id == ArgusRole.id)
+        .where(ArgusUser.id == int(current_user.sub))
     )
-    user = result.scalars().first()
-    if not user:
+    row = result.first()
+    if not row:
         logger.warning("비밀번호 변경 대상 없음: sub=%s", current_user.sub)
         raise HTTPException(status_code=404, detail="사용자을(를) 찾을 수 없습니다.")
+
+    user, role_code = row
 
     if user.password_hash != _hash_password(req.current_password):
         logger.warning("비밀번호 변경 실패(현재 비밀번호 불일치): username=%s", user.username)
         raise HTTPException(status_code=400, detail="현재 비밀번호가 올바르지 않습니다.")
 
     user.password_hash = _hash_password(req.new_password)
+    user.must_change_password = False  # 강제 변경 게이트 해제
     await session.commit()
-    logger.info("비밀번호 변경 완료: %s", user.username)
-    return {"status": "ok", "message": "Password changed successfully"}
+    logger.info("비밀번호 변경 완료: %s (강제변경 플래그 해제)", user.username)
+
+    # 플래그가 해제된 새 토큰 쌍 재발급 → 클라이언트가 교체하면 게이트가 즉시 풀린다
+    access_token = create_local_token(
+        sub=str(user.id), username=user.username, email=user.email,
+        first_name=user.first_name, last_name=user.last_name, role=role_code,
+        must_change_password=False,
+    )
+    refresh_token = create_local_token(
+        sub=str(user.id), username=user.username, email=user.email,
+        first_name=user.first_name, last_name=user.last_name, role=role_code,
+        expire_minutes=60 * 24 * 7, must_change_password=False,
+    )
+    return TokenResponse(
+        access_token=access_token, refresh_token=refresh_token,
+        token_type="bearer", expires_in=480 * 60, refresh_expires_in=60 * 24 * 7 * 60,
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,68 @@
+app:
+  name: argus-catalog-server
+  debug: ${app.debug:false}
+
+server:
+  host: ${server.host:0.0.0.0}
+  port: ${server.port:4600}
+
+logging:
+  level: ${log.level:INFO}
+  dir: ${log.dir:/var/log/argus-catalog-server}
+  filename: ${log.filename:argus-catalog-server.log}
+  rolling:
+    type: daily
+    backup_count: 30
+
+data:
+  dir: ${data.dir:/var/lib/argus-catalog-server}
+
+cors:
+  origins: ${cors.origins:*}
+
+auth:
+  type: ${auth.type:local}
+  keycloak:
+    server_url: ${auth.keycloak.server_url:http://localhost:8180}
+    realm: ${auth.keycloak.realm:argus}
+    client_id: ${auth.keycloak.client_id:argus-client}
+    client_secret: ${auth.keycloak.client_secret:argus-client-secret}
+    admin_role: ${auth.keycloak.admin_role:argus-admin}
+    superuser_role: ${auth.keycloak.superuser_role:argus-superuser}
+    user_role: ${auth.keycloak.user_role:argus-user}
+
+database:
+  type: ${db.type:postgresql}
+  host: ${db.host:catalog-postgres}
+  port: ${db.port:5432}
+  name: ${db.name:argus_catalog}
+  username: ${db.username:argus}
+  password: ${db.password:argus}
+  pool:
+    size: ${db.pool.size:5}
+    max_overflow: ${db.pool.max_overflow:10}
+    recycle: ${db.pool.recycle:3600}
+  echo: ${db.echo:false}
+
+external:
+  cache:
+    max_size: 1000
+    ttl_seconds: 300
+    enabled: true
+
+# Object Storage (MinIO / S3) — 컨테이너 네트워크의 minio 서비스를 가리킨다.
+object_storage:
+  endpoint: ${os.endpoint:http://minio:9000}
+  access_key: ${os.access_key:minioadmin}
+  secret_key: ${os.secret_key:minioadmin}
+  region: ${os.region:us-east-1}
+  use_ssl: ${os.use_ssl:false}
+  bucket: ${os.bucket:model-artifacts}
+  presigned_url_expiry: ${os.presigned_url_expiry:3600}
+
+# 변경 관리 워크플로우용 Temporal — 컨테이너 네트워크의 temporal 서비스를 가리킨다.
+temporal:
+  enabled: ${temporal.enabled:true}
+  target: ${temporal.target:temporal:7233}
+  namespace: ${temporal.namespace:default}
+  task_queue: ${temporal.task_queue:change-mgmt}

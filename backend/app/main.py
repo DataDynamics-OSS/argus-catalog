@@ -31,6 +31,7 @@ from app.core.database import (
     reconcile_schema,
 )
 from app.core.logging import setup_logging
+from app.core.password_gate import PasswordChangeGateMiddleware
 from app.core.security import SecurityHeadersMiddleware
 from app.external.router import router as external_router
 from app.filesystemmgr.router import router as filesystem_router
@@ -163,6 +164,8 @@ app = FastAPI(
 )
 
 app.add_middleware(SecurityHeadersMiddleware)
+# 강제 비밀번호 변경 게이트(로컬 모드) — 화이트리스트 외 API 를 차단
+app.add_middleware(PasswordChangeGateMiddleware)
 
 
 class DynamicCORSMiddleware:

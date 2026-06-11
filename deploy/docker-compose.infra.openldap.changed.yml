@@ -1,0 +1,68 @@
+# Argus Catalog — ldap-user-sync 테스트용 OpenLDAP (changed 상태)
+#
+# 2차 sync 검증용 디렉터리. deploy/changed.ldif (seed 대비 3명 삭제·4명 추가·2명 부서변경)를
+# OpenLDAP 에 적재한다. seed 스택과 동일하게 389 포트를 호스트에 개방한다.
+#
+# seed → changed 차이가 sync 에서 검증하는 동작:
+#   - DEACTIVATE : nryu, tkoh, mjkim       (LDAP 에서 사라짐 → 비활성화)
+#   - ADD        : jslim, ywsong, bckwon, dwyoon  (LDAP 신규 → 생성)
+#   - UPDATE     : iuhong(물류데이터팀→물류전략팀), hyseo(SCM팀→글로벌SCM팀)
+#
+# 구성/동작은 seed 스택과 동일(osixia 서버 + ldapadd 사이드카). 마운트하는 LDIF 만 다르다.
+#
+# 권장 테스트 흐름:
+#   1) seed 스택 up  → ldap-user-sync sync (19명 생성 + state 기록) → seed 스택 down
+#   2) changed 스택 up → ldap-user-sync sync (3 비활성화·4 추가·2 업데이트)
+#   (catalog DB 와 state_file 은 두 스택에 걸쳐 유지되므로 비활성화 로직이 성립한다)
+#
+# 기동:
+#   docker compose -f deploy/docker-compose.infra.openldap.changed.yml up -d
+#
+# 종료:
+#   docker compose -f deploy/docker-compose.infra.openldap.changed.yml down
+#
+# ※ seed 스택과 포트 389 를 공유하므로 동시 실행 불가 — 전환 시 반드시 한쪽을 먼저 down.
+
+name: argus-catalog-openldap-changed
+
+services:
+  # --------------------------------------------------------------- OpenLDAP 서버
+  openldap:
+    image: osixia/openldap:1.5.0
+    container_name: argus-infra-openldap-changed
+    environment:
+      LDAP_ORGANISATION: "datadynamics"
+      LDAP_DOMAIN: "example.com"          # → base dn dc=example,dc=com
+      LDAP_ADMIN_PASSWORD: "admin"        # → cn=admin,dc=example,dc=com
+      LDAP_CONFIG_PASSWORD: "config"      # → cn=admin,cn=config (SCHAC 스키마 적재용)
+    command: ["--copy-service"]
+    ports:
+      - "389:389"                          # LDAP (호스트 개방)
+    healthcheck:
+      test: ["CMD-SHELL", "ldapsearch -x -H ldap://localhost:389 -b dc=example,dc=com -s base -D cn=admin,dc=example,dc=com -w admin >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+
+  # --------------------------------------------- changed.ldif 적재 (일회성 사이드카)
+  ldap-seed:
+    image: osixia/openldap:1.5.0
+    container_name: argus-infra-openldap-changed-init
+    depends_on:
+      openldap:
+        condition: service_healthy
+    #   ① SCHAC 스키마를 cn=config 에 로드(schacDateOfBirth 속성 활성화)
+    #   ② changed.ldif 사용자 적재(-c: 서버가 이미 만든 dc=example 루트 충돌만 무시)
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - >
+        ldapadd -c -x -H ldap://openldap:389 -D "cn=admin,cn=config" -w config -f /schema/schac.ldif
+        && echo "[ldap-seed] SCHAC 스키마 로드 완료" ;
+        ldapadd -c -x -H ldap://openldap:389 -D "cn=admin,dc=example,dc=com" -w admin -f /ldif/changed.ldif
+        && echo "[ldap-seed] changed.ldif 적재 완료"
+        || echo "[ldap-seed] 완료(기존 suffix 엔트리는 건너뜀)"
+    volumes:
+      - ./changed.ldif:/ldif/changed.ldif:ro
+      - ./openldap-schema/schac.ldif:/schema/schac.ldif:ro
+    restart: "no"

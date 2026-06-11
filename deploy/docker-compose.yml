@@ -1,0 +1,158 @@
+# Argus Catalog — 통합 배포 스택 (backend + frontend + Temporal + 의존 서비스).
+#
+# 한 방에 전체 기동:
+#   docker compose -f deploy/docker-compose.yml up -d --build
+#
+# 엔드포인트 (호스트의 모든 인터페이스에 바인딩 — 예: 192.0.2.10):
+#   - Web UI       : http://<host>:3000
+#   - API          : http://<host>:4600  (Swagger: /docs)
+#   - Temporal UI  : http://<host>:8233
+#   - MinIO Console: http://<host>:9001  (minioadmin / minioadmin)
+#
+# 종료:
+#   docker compose -f deploy/docker-compose.yml down        # 컨테이너만
+#   docker compose -f deploy/docker-compose.yml down -v     # 볼륨까지 (데이터 삭제)
+#
+# 구성: catalog-postgres(앱 DB) · minio(S3) · temporal+temporal-postgresql+temporal-ui
+#       · backend(API) · backend-worker(change-mgmt 워커, 동일 이미지) · frontend(Next.js)
+
+name: argus-catalog
+
+x-backend-build: &backend-build
+  build:
+    context: ..
+    dockerfile: deploy/backend.Dockerfile
+
+services:
+  # --------------------------------------------------------------------- 앱 DB
+  catalog-postgres:
+    image: postgres:16
+    container_name: argus-catalog-postgres
+    environment:
+      POSTGRES_USER: argus
+      POSTGRES_PASSWORD: argus
+      POSTGRES_DB: argus_catalog
+    volumes:
+      - catalog-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U argus -d argus_catalog"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  # ------------------------------------------------------------------- S3(MinIO)
+  minio:
+    image: minio/minio:latest
+    container_name: argus-catalog-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # 콘솔
+    volumes:
+      - minio-data:/data
+
+  # ----------------------------------------------------------- Temporal 메타 DB
+  temporal-postgresql:
+    image: postgres:16
+    container_name: argus-temporal-postgresql
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+    volumes:
+      - temporal-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  # ---------------------------------------------------------------- Temporal 서버
+  temporal:
+    image: temporalio/auto-setup:1.25.2
+    container_name: argus-temporal
+    depends_on:
+      temporal-postgresql:
+        condition: service_healthy
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - POSTGRES_SEEDS=temporal-postgresql
+    ports:
+      - "7233:7233"
+    healthcheck:
+      test: ["CMD", "tctl", "--address", "temporal:7233", "cluster", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  # ------------------------------------------------------------------ Temporal UI
+  temporal-ui:
+    image: temporalio/ui:2.34.0
+    container_name: argus-temporal-ui
+    depends_on:
+      - temporal
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_CORS_ORIGINS=http://localhost:3000
+    ports:
+      - "8233:8080"
+
+  # ----------------------------------------------------------------- 백엔드 API
+  backend:
+    <<: *backend-build
+    container_name: argus-catalog-backend
+    depends_on:
+      catalog-postgres:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    volumes:
+      - ./config:/etc/argus-catalog-server:ro
+    ports:
+      - "4600:4600"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:4600/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  # --------------------------------------------------- change-mgmt Temporal 워커
+  backend-worker:
+    <<: *backend-build
+    container_name: argus-catalog-worker
+    command: ["python", "-m", "app.change_mgmt.worker"]
+    depends_on:
+      catalog-postgres:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+    volumes:
+      - ./config:/etc/argus-catalog-server:ro
+
+  # ------------------------------------------------------------------ 프론트엔드
+  frontend:
+    build:
+      context: ..
+      dockerfile: deploy/frontend.Dockerfile
+    container_name: argus-catalog-frontend
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      - API_BASE_URL=http://backend:4600
+    ports:
+      - "3000:3000"
+
+volumes:
+  catalog-pgdata:
+  minio-data:
+  temporal-pgdata:

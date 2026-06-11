@@ -1,7 +1,7 @@
 # Argus Metadata Agent — 표준 라이브러리만 사용하므로 런타임 의존성이 없다.
 [project]
 name = "argus-agent"
-version = "0.1.0"
+version = "0.1.1"
 description = "Argus Catalog 메타데이터 생성 에이전트 (LLM 기반, 독립 실행)"
 requires-python = ">=3.10"
 dependencies = []

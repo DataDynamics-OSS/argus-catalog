@@ -143,6 +143,7 @@ async def add_user(session: AsyncSession, req: UserAddRequest) -> UserResponse:
         phone_number=req.phone_number,
         password_hash=_hash_password(req.password),
         status=UserStatus.ACTIVE.value,
+        must_change_password=req.must_change_password,
         role_id=role.id,
     )
     session.add(user)

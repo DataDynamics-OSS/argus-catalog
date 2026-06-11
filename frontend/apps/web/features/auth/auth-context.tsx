@@ -29,9 +29,11 @@ type AuthState = {
   authType: AuthType | null
   isAuthenticated: boolean
   isLoading: boolean
-  login: (username: string, password: string) => Promise<void>
+  login: (username: string, password: string) => Promise<UserInfo>
   logout: () => Promise<void>
   setAvatar: (avatarPresetId: string | null) => Promise<void>
+  // 비밀번호 변경 등으로 받은 새 토큰으로 세션을 교체하고 사용자 정보를 다시 읽는다.
+  applyTokens: (tokens: TokenResponse) => Promise<UserInfo>
 }
 
 const AuthContext = createContext<AuthState | null>(null)
@@ -162,9 +164,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [scheduleRefresh])
 
-  const login = useCallback(
-    async (username: string, password: string) => {
-      const tokens = await apiLogin(username, password)
+  // 토큰 쌍으로 세션을 확립한다(저장 → 사용자 조회 → 상태반영 → 자동갱신 예약).
+  // 로그인과 비밀번호 변경 후 토큰 교체에서 공통으로 사용한다.
+  const establishSession = useCallback(
+    async (tokens: TokenResponse): Promise<UserInfo> => {
       saveTokens(tokens)
       const userInfo = await fetchMe(tokens.access_token)
       setAccessToken(tokens.access_token)
@@ -174,8 +177,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         refresh_token: tokens.refresh_token,
         expires_at: Date.now() + tokens.expires_in * 1000,
       })
+      return userInfo
     },
     [scheduleRefresh]
+  )
+
+  const login = useCallback(
+    async (username: string, password: string) => {
+      const tokens = await apiLogin(username, password)
+      return establishSession(tokens)
+    },
+    [establishSession]
+  )
+
+  const applyTokens = useCallback(
+    (tokens: TokenResponse) => establishSession(tokens),
+    [establishSession]
   )
 
   const logout = useCallback(async () => {
@@ -212,8 +229,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       login,
       logout,
       setAvatar,
+      applyTokens,
     }),
-    [user, accessToken, authType, isLoading, login, logout, setAvatar]
+    [user, accessToken, authType, isLoading, login, logout, setAvatar, applyTokens]
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

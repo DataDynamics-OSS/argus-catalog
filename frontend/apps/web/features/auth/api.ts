@@ -30,6 +30,8 @@ export type UserInfo = {
   is_admin: boolean
   is_superuser: boolean
   avatar_preset_id: string | null
+  // 최초 로그인 시 비밀번호 강제 변경 대상 여부(true 면 변경 전까지 게이트)
+  must_change_password?: boolean
 }
 
 export async function login(
@@ -68,6 +70,33 @@ export async function fetchMe(accessToken: string): Promise<UserInfo> {
   })
   if (!res.ok) {
     throw new Error("사용자 정보 조회 실패")
+  }
+  return res.json()
+}
+
+/**
+ * 비밀번호 변경. 성공 시 백엔드가 must_change_password=false 인 새 토큰 쌍을 재발급한다
+ * (강제 변경 게이트 해제). 호출 측은 반환된 토큰으로 교체해야 한다.
+ */
+export async function changePassword(
+  accessToken: string,
+  currentPassword: string,
+  newPassword: string
+): Promise<TokenResponse> {
+  const res = await fetch(`${BASE}/change-password`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      current_password: currentPassword,
+      new_password: newPassword,
+    }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || "비밀번호 변경 실패")
   }
   return res.json()
 }

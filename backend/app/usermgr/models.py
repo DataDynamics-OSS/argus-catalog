@@ -8,7 +8,7 @@
       (현재는 아바타 preset). 토큰의 ``sub`` 를 키로 사용한다.
 """
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, func
 
 from app.core.database import Base
 
@@ -83,6 +83,9 @@ class ArgusUser(Base):
     phone_number = Column(String(30))
     password_hash = Column(String(255), nullable=False)
     status = Column(String(20), nullable=False, default="active")
+    # True 면 최초 로그인 시 비밀번호 변경을 강제한다(LDAP 동기화 계정은 초기 비번이
+    # 생년월일이라 반드시 변경시킨다). 비밀번호 변경 성공 시 False 로 해제된다.
+    must_change_password = Column(Boolean, nullable=False, default=False, server_default="false")
     role_id = Column(Integer, ForeignKey("argus_roles.id"), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

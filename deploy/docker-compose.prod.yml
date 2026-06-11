@@ -1,0 +1,63 @@
+# Argus Catalog — 운영 배포 오버라이드.
+#
+# 베이스(docker-compose.yml)에 겹쳐 적용한다. 시크릿/크리덴셜은 deploy/.env 에서 주입한다.
+#
+#   cp deploy/.env.example deploy/.env          # 값 채우기(커밋 금지)
+#   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.prod.yml \
+#     --env-file deploy/.env up -d --build
+#
+# ⚠️ 백엔드는 DB/오브젝트 스토리지 접속정보를 config/config.properties 에서 읽는다.
+#    .env 의 DB/MinIO 크리덴셜과 config/config.properties(db.password·os.access_key·
+#    os.secret_key)를 반드시 일치시킬 것. 외부 관리형 서비스 사용 시에는 해당 컨테이너를
+#    제거하고 config.properties 를 외부 엔드포인트로 지정한다(README 운영 배포 참고).
+
+name: argus-catalog
+
+services:
+  catalog-postgres:
+    environment:
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?deploy/.env 에 DB_PASSWORD 를 설정하세요}
+    # 데이터를 명시적 호스트 경로(bind mount)에 보관 — 컨테이너 삭제/재생성에도 보존.
+    volumes:
+      - ${DATA_DIR:-./data}/catalog-postgres:/var/lib/postgresql/data
+    restart: always
+
+  minio:
+    image: ${MINIO_IMAGE:-minio/minio:latest}
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?deploy/.env 에 MINIO_ROOT_USER 를 설정하세요}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?deploy/.env 에 MINIO_ROOT_PASSWORD 를 설정하세요}
+    volumes:
+      - ${DATA_DIR:-./data}/minio:/data
+    restart: always
+
+  temporal-postgresql:
+    environment:
+      POSTGRES_PASSWORD: ${TEMPORAL_DB_PASSWORD:?deploy/.env 에 TEMPORAL_DB_PASSWORD 를 설정하세요}
+    volumes:
+      - ${DATA_DIR:-./data}/temporal-postgres:/var/lib/postgresql/data
+    restart: always
+
+  temporal:
+    environment:
+      POSTGRES_PWD: ${TEMPORAL_DB_PASSWORD:?deploy/.env 에 TEMPORAL_DB_PASSWORD 를 설정하세요}
+    restart: always
+
+  temporal-ui:
+    restart: always
+
+  backend:
+    environment:
+      # 백엔드가 환경변수로 직접 읽는 운영 시크릿
+      ARGUS_SECRET_KEY: ${ARGUS_SECRET_KEY:?deploy/.env 에 ARGUS_SECRET_KEY 를 설정하세요}
+      ARGUS_JWT_SECRET: ${ARGUS_JWT_SECRET:?deploy/.env 에 ARGUS_JWT_SECRET 를 설정하세요}
+    restart: always
+
+  backend-worker:
+    environment:
+      ARGUS_SECRET_KEY: ${ARGUS_SECRET_KEY:?deploy/.env 에 ARGUS_SECRET_KEY 를 설정하세요}
+      ARGUS_JWT_SECRET: ${ARGUS_JWT_SECRET:?deploy/.env 에 ARGUS_JWT_SECRET 를 설정하세요}
+    restart: always
+
+  frontend:
+    restart: always

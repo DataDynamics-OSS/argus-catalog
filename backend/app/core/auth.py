@@ -54,6 +54,8 @@ class TokenUser:
     department: str = ""
     roles: list[str] = field(default_factory=list)
     realm_roles: list[str] = field(default_factory=list)
+    # True 면 최초 로그인 후 비밀번호 변경 전까지 일반 API 접근을 차단한다(게이트).
+    must_change_password: bool = False
 
     @property
     def _all_roles(self) -> list[str]:
@@ -184,8 +186,14 @@ def create_local_token(
     last_name: str,
     role: str,
     expire_minutes: int = LOCAL_JWT_EXPIRE_MINUTES,
+    must_change_password: bool = False,
 ) -> str:
-    """사용자에 대한 로컬 JWT 토큰을 생성한다."""
+    """사용자에 대한 로컬 JWT 토큰을 생성한다.
+
+    ``must_change_password`` 를 claim 으로 실어, 게이트 미들웨어가 DB 조회 없이
+    토큰만으로 강제 변경 여부를 판단하게 한다. 비밀번호 변경 시 플래그가 False 인
+    새 토큰을 재발급해 게이트가 즉시 풀리도록 한다.
+    """
     now = int(time.time())
     payload = {
         "sub": sub,
@@ -194,6 +202,7 @@ def create_local_token(
         "given_name": first_name,
         "family_name": last_name,
         "roles": [role],
+        "must_change_password": must_change_password,
         "iat": now,
         "exp": now + expire_minutes * 60,
         "iss": "argus-catalog-local",
@@ -242,6 +251,7 @@ def _build_token_user(payload: dict) -> TokenUser:
             department=payload.get("department", "") or "",
             roles=payload.get("roles", []),
             realm_roles=[],
+            must_change_password=bool(payload.get("must_change_password", False)),
         )
 
     # Keycloak 모드 — realm_roles 에 role_id 와 일치하는 역할 이름이 담긴다

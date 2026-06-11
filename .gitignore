@@ -23,3 +23,9 @@ logs/
 next-env.d.ts
 
 # 오픈소스 publish 스크립트 (내부 전용 — 공개 저장소에 노출 금지)
+
+# 운영 배포 시크릿 (deploy/.env.example 만 커밋, 실제 값은 금지)
+deploy/.env
+
+# 운영 배포 데이터 보관 경로(bind mount 기본값 DATA_DIR=./data)
+deploy/data/

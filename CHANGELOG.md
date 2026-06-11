@@ -6,8 +6,17 @@
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-06-11
+
 ### Added
-- (다음 릴리스의 변경 사항을 여기에 누적합니다)
+- **로컬 개발/데모 배포 공개** — `deploy/` (MinIO·Temporal·Keycloak·OpenLDAP·Sakila
+  인프라 + 풀스택 docker-compose)와 사용 안내(`deploy/README.md`)를 공개 배포에 포함
+- **운영 배포 산출물** — `deploy/docker-compose.prod.yml`(오버라이드: 시크릿 주입·
+  `restart: always`·이미지 핀·**데이터 bind mount 영속**) + `deploy/.env.example`(시크릿/
+  `DATA_DIR` 템플릿) + README 운영 배포·데이터 보존/백업 섹션
+
+### Changed
+- `deploy/docker-compose.yml` 의 예시 엔드포인트를 문서용 IP(`192.0.2.10`)로 정리
 
 ## [0.1.0] - 2026-05-27
 
@@ -26,5 +35,6 @@
 - **알림** — 스키마 변경 영향 분석 + 품질 실패 트리거, Webhook 통지
 - 백엔드(FastAPI) · 프론트엔드(Next.js) · Python SDK(`argus-model`) · AI 에이전트 구성
 
-[Unreleased]: https://github.com/DataDynamics-OSS/argus-catalog/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/DataDynamics-OSS/argus-catalog/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/DataDynamics-OSS/argus-catalog/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/DataDynamics-OSS/argus-catalog/releases/tag/v0.1.0

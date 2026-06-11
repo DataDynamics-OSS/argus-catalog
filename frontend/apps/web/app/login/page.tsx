@@ -17,26 +17,31 @@ import { useAuth } from "@/features/auth"
 
 export default function LoginPage() {
   const router = useRouter()
-  const { login, isAuthenticated } = useAuth()
+  const { login, isAuthenticated, user } = useAuth()
   const [username, setUsername] = useState("")
   const [password, setPassword] = useState("")
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
 
-  // If already authenticated, redirect
+  // If already authenticated, redirect (강제 변경 대상은 변경 화면으로)
   useEffect(() => {
     if (isAuthenticated) {
-      router.replace("/dashboard")
+      router.replace(
+        user?.must_change_password ? "/change-password-required" : "/dashboard"
+      )
     }
-  }, [isAuthenticated, router])
+  }, [isAuthenticated, user, router])
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
     setError("")
     setLoading(true)
     try {
-      await login(username, password)
-      router.replace("/dashboard")
+      const userInfo = await login(username, password)
+      // 강제 비밀번호 변경 대상이면 변경 화면으로, 아니면 대시보드로
+      router.replace(
+        userInfo.must_change_password ? "/change-password-required" : "/dashboard"
+      )
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed")
     } finally {

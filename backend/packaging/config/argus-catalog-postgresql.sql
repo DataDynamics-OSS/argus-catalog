@@ -246,10 +246,15 @@ CREATE TABLE IF NOT EXISTS argus_users (
     phone_number VARCHAR(30),
     password_hash VARCHAR(255) NOT NULL,
     status VARCHAR(20) NOT NULL,
+    -- 최초 로그인 시 비밀번호 강제 변경 플래그(LDAP 동기화 등 임시 비번 계정용)
+    must_change_password BOOLEAN NOT NULL DEFAULT false,
     role_id INT NOT NULL REFERENCES argus_roles(id),
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now()
 );
+
+-- 기존 배포(컬럼이 없던 DB)도 멱등하게 수렴시키기 위한 컬럼 추가(이미 있으면 무시)
+ALTER TABLE argus_users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT false;
 
 -- ---------------------------------------------------------------------------
 -- User Preferences (per-user UI preferences keyed by token sub)

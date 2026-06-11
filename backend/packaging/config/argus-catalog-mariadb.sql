@@ -257,10 +257,15 @@ CREATE TABLE IF NOT EXISTS argus_users (
     phone_number VARCHAR(30) COMMENT '연락처 전화번호 (선택)',
     password_hash VARCHAR(255) NOT NULL COMMENT '비밀번호 SHA-256 해시 (평문 저장 금지)',
     status VARCHAR(20) NOT NULL COMMENT '계정 상태 (active/inactive)',
+    must_change_password TINYINT(1) NOT NULL DEFAULT 0 COMMENT '최초 로그인 시 비밀번호 강제 변경(LDAP 동기화 등 임시 비번 계정)',
     role_id INT NOT NULL COMMENT '역할 참조, argus_roles(id) 참조' REFERENCES argus_roles(id),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '생성 시각',
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '수정 시각'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 기존 배포(컬럼이 없던 DB)도 멱등하게 수렴시키기 위한 컬럼 추가(이미 있으면 무시)
+ALTER TABLE argus_users ADD COLUMN IF NOT EXISTS must_change_password TINYINT(1) NOT NULL DEFAULT 0
+    COMMENT '최초 로그인 시 비밀번호 강제 변경(LDAP 동기화 등 임시 비번 계정)';
 
 
 -- ---------------------------------------------------------------------------

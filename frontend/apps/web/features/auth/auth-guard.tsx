@@ -6,14 +6,18 @@ import { useRouter } from "next/navigation"
 import { useAuth } from "./auth-context"
 
 export function AuthGuard({ children }: { children: ReactNode }) {
-  const { isAuthenticated, isLoading } = useAuth()
+  const { isAuthenticated, isLoading, user } = useAuth()
   const router = useRouter()
 
   useEffect(() => {
-    if (!isLoading && !isAuthenticated) {
+    if (isLoading) return
+    if (!isAuthenticated) {
       router.replace("/login")
+    } else if (user?.must_change_password) {
+      // 강제 변경 대상은 비밀번호를 바꾸기 전까지 보호 화면 밖으로 나갈 수 없다
+      router.replace("/change-password-required")
     }
-  }, [isLoading, isAuthenticated, router])
+  }, [isLoading, isAuthenticated, user, router])
 
   if (isLoading) {
     return (
@@ -23,7 +27,7 @@ export function AuthGuard({ children }: { children: ReactNode }) {
     )
   }
 
-  if (!isAuthenticated) {
+  if (!isAuthenticated || user?.must_change_password) {
     return null
   }
 
