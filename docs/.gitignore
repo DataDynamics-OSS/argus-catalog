@@ -1,7 +1,8 @@
+# Antora 빌드/설치 산출물 (빌드 시 재생성 — 커밋하지 않음)
 build/
 .antora-cache/
 node_modules/
 package-lock.json
-# `make fonts` 가 다운로드 — repo 에 커밋하지 않음.
-pdf/fonts/*.otf
-pdf/fonts/*.ttf
+
+# `make fonts` 가 다운로드하는 한글 폰트 (PDF 빌드용)
+pdf/fonts/
