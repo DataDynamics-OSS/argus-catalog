@@ -108,8 +108,9 @@ docs/<요약>        # 문서
 
 ## 보안 취약점 제보
 
-보안 취약점은 **공개 이슈로 올리지 말고** 메인테이너에게 비공개로 제보해 주세요.
-배포 시 `ARGUS_JWT_SECRET`, `ARGUS_SECRET_KEY` 등 운영 시크릿 설정은
+보안 취약점은 **공개 이슈로 올리지 말고** 비공개로 제보해 주세요. 자세한 절차는
+[SECURITY.md](SECURITY.md) 를 참고하세요. 배포 시 `ARGUS_JWT_SECRET`,
+`ARGUS_SECRET_KEY` 등 운영 시크릿 설정은
 [README 의 운영 보안 설정](README.md#운영-환경-보안-설정-️) 섹션을 참고하세요.
 
 ## 라이선스
