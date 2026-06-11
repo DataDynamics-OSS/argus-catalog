@@ -8,10 +8,9 @@ import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-
-from app.core.auth import AdminUser, CurrentUser
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai import service
 from app.ai.schemas import (
     AIStatsResponse,
     ApplyRejectResponse,
@@ -42,6 +41,7 @@ from app.ai.service import (
     reject_suggestion,
     suggest_tags,
 )
+from app.core.auth import AdminUser, CurrentUser
 from app.core.database import get_session
 
 logger = logging.getLogger(__name__)
@@ -217,7 +217,7 @@ async def ai_status(session: AsyncSession = Depends(get_session)):
 # ---------------------------------------------------------------------------
 
 @router.post("/datasets/{dataset_id}/describe", response_model=GenerateDescriptionResponse)
-async def api_generate_description(_guard: CurrentUser, 
+async def api_generate_description(_guard: CurrentUser,
     dataset_id: int,
     body: GenerateRequest = GenerateRequest(),
     session: AsyncSession = Depends(get_session),
@@ -234,7 +234,7 @@ async def api_generate_description(_guard: CurrentUser,
 
 
 @router.post("/datasets/{dataset_id}/summarize", response_model=GenerateSummaryResponse)
-async def api_generate_summary(_guard: CurrentUser, 
+async def api_generate_summary(_guard: CurrentUser,
     dataset_id: int,
     body: GenerateRequest = GenerateRequest(),
     session: AsyncSession = Depends(get_session),
@@ -251,7 +251,7 @@ async def api_generate_summary(_guard: CurrentUser,
 
 
 @router.post("/datasets/{dataset_id}/describe-columns", response_model=GenerateColumnsResponse)
-async def api_generate_column_descriptions(_guard: CurrentUser, 
+async def api_generate_column_descriptions(_guard: CurrentUser,
     dataset_id: int,
     body: GenerateRequest = GenerateRequest(),
     session: AsyncSession = Depends(get_session),
@@ -268,7 +268,7 @@ async def api_generate_column_descriptions(_guard: CurrentUser,
 
 
 @router.post("/datasets/{dataset_id}/suggest-tags", response_model=TagSuggestionResponse)
-async def api_suggest_tags(_guard: CurrentUser, 
+async def api_suggest_tags(_guard: CurrentUser,
     dataset_id: int,
     body: GenerateRequest = GenerateRequest(),
     session: AsyncSession = Depends(get_session),
@@ -285,7 +285,7 @@ async def api_suggest_tags(_guard: CurrentUser,
 
 
 @router.post("/datasets/{dataset_id}/detect-pii", response_model=PIIDetectionResponse)
-async def api_detect_pii(_guard: CurrentUser, 
+async def api_detect_pii(_guard: CurrentUser,
     dataset_id: int,
     body: GenerateRequest = GenerateRequest(),
     session: AsyncSession = Depends(get_session),
@@ -301,7 +301,7 @@ async def api_detect_pii(_guard: CurrentUser,
 
 
 @router.post("/datasets/{dataset_id}/generate-all", response_model=GenerateAllResponse)
-async def api_generate_all(_guard: CurrentUser, 
+async def api_generate_all(_guard: CurrentUser,
     dataset_id: int,
     body: GenerateRequest = GenerateRequest(),
     session: AsyncSession = Depends(get_session),
@@ -322,7 +322,7 @@ async def api_generate_all(_guard: CurrentUser,
 # ---------------------------------------------------------------------------
 
 @router.post("/bulk-generate", response_model=BulkGenerateResponse)
-async def api_bulk_generate(_guard: CurrentUser, 
+async def api_bulk_generate(_guard: CurrentUser,
     body: BulkGenerateRequest,
     session: AsyncSession = Depends(get_session),
 ):
@@ -380,7 +380,7 @@ async def api_get_suggestions(
 
 
 @router.post("/suggestions/{suggestion_id}/apply", response_model=ApplyRejectResponse)
-async def api_apply_suggestion(_guard: CurrentUser, 
+async def api_apply_suggestion(_guard: CurrentUser,
     suggestion_id: int,
     session: AsyncSession = Depends(get_session),
 ):
@@ -401,7 +401,7 @@ async def api_apply_suggestions(_guard: CurrentUser,
 
 
 @router.post("/suggestions/{suggestion_id}/reject", response_model=ApplyRejectResponse)
-async def api_reject_suggestion(_guard: CurrentUser, 
+async def api_reject_suggestion(_guard: CurrentUser,
     suggestion_id: int,
     session: AsyncSession = Depends(get_session),
 ):

@@ -9,16 +9,20 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import AdminUser, CurrentUser
+from app.core.database import get_session
 from app.quality import service
 from app.quality.schemas import (
     ProfileImportRequest,
+    ProfileResponse,
+    QualityResultResponse,
+    QualityRuleCreate,
+    QualityRuleResponse,
+    QualityRuleUpdate,
+    QualityScoreResponse,
     ResultsImportRequest,
-    ProfileResponse, QualityRuleCreate, QualityRuleResponse,
-    QualityRuleUpdate, QualityResultResponse, QualityScoreResponse,
     RunCheckResponse,
 )
-from app.core.auth import AdminUser, CurrentUser
-from app.core.database import get_session
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +96,7 @@ async def recommend_rules(dataset_id: int, session: AsyncSession = Depends(get_s
 async def get_quality_schedule(dataset_id: int, session: AsyncSession = Depends(get_session)):
     """데이터셋의 품질 검증 주기 설정 조회 (없으면 null)."""
     from sqlalchemy import select
+
     from app.catalog.models import DatasetProperty
     from app.quality.scheduler import QUALITY_SCHEDULE_PROPERTY
 
@@ -105,7 +110,7 @@ async def get_quality_schedule(dataset_id: int, session: AsyncSession = Depends(
 
 
 @router.put("/datasets/{dataset_id}/schedule")
-async def set_quality_schedule(_guard: CurrentUser, 
+async def set_quality_schedule(_guard: CurrentUser,
     dataset_id: int, req: dict, session: AsyncSession = Depends(get_session),
 ):
     """데이터셋의 품질 검증 주기 설정 (hourly/daily/weekly, null 이면 해제).
@@ -113,7 +118,9 @@ async def set_quality_schedule(_guard: CurrentUser,
     백그라운드 스케줄러가 10분 간격으로 주기 도래 여부를 확인해
     서버 검증(run_quality_check)을 자동 실행한다.
     """
-    from sqlalchemy import delete as sql_delete, select
+    from sqlalchemy import delete as sql_delete
+    from sqlalchemy import select
+
     from app.catalog.models import DatasetProperty
     from app.quality.scheduler import INTERVALS, QUALITY_SCHEDULE_PROPERTY
 

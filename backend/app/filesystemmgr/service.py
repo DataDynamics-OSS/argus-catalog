@@ -350,6 +350,7 @@ def _serialize_value(val):
 async def preview_parquet(path: str, max_rows: int = MAX_PREVIEW_ROWS, root_sub: str | None = None) -> TablePreviewResponse:
     """PyArrow 로 Parquet 파일을 읽어 테이블 형태로 미리보기."""
     import io
+
     import pyarrow.parquet as pq
 
     resolved = _resolve_path(path, root_sub)
@@ -385,6 +386,7 @@ async def preview_xlsx(
 ) -> TablePreviewResponse:
     """openpyxl 로 XLSX/XLS 파일을 읽어 시트 단위 테이블로 미리보기."""
     import io
+
     import openpyxl
 
     resolved = _resolve_path(path, root_sub)
@@ -423,6 +425,7 @@ async def preview_xlsx(
 async def preview_docx(path: str, root_sub: str | None = None) -> DocumentPreviewResponse:
     """mammoth 로 DOCX 파일을 HTML 로 변환해 문서 형태로 미리보기."""
     import io
+
     import mammoth
 
     resolved = _resolve_path(path, root_sub)
@@ -438,6 +441,7 @@ async def preview_docx(path: str, root_sub: str | None = None) -> DocumentPrevie
 async def preview_pptx(path: str, root_sub: str | None = None) -> DocumentPreviewResponse:
     """python-pptx 로 PPTX 의 슬라이드 텍스트·노트를 추출해 미리보기."""
     import io
+
     from pptx import Presentation
 
     resolved = _resolve_path(path, root_sub)

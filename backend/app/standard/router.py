@@ -14,20 +14,37 @@
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from app.core.auth import AdminUser
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import AdminUser
+from app.core.database import get_session
 from app.standard import service
 from app.standard.schemas import (
+    AutoMapResult,
+    CodeGroupCreate,
+    CodeGroupResponse,
+    CodeGroupUpdate,
+    CodeValueCreate,
+    CodeValueResponse,
+    ComplianceStats,
     DatasetDictionarySelection,
-    AutoMapResult, CodeGroupCreate, CodeGroupResponse, CodeGroupUpdate,
-    CodeValueCreate, CodeValueResponse, ComplianceStats, DatasetTermMapping,
-    DictionaryCreate, DictionaryResponse, DictionaryUpdate, DomainCreate,
-    DomainResponse, DomainUpdate, MorphemeResult, TermCreate, TermMappingCreate,
-    TermMappingResponse, TermResponse, TermUpdate, WordCreate, WordResponse,
+    DatasetTermMapping,
+    DictionaryCreate,
+    DictionaryResponse,
+    DictionaryUpdate,
+    DomainCreate,
+    DomainResponse,
+    DomainUpdate,
+    MorphemeResult,
+    TermCreate,
+    TermMappingCreate,
+    TermMappingResponse,
+    TermResponse,
+    TermUpdate,
+    WordCreate,
+    WordResponse,
     WordUpdate,
 )
-from app.core.database import get_session
 
 logger = logging.getLogger(__name__)
 
@@ -356,7 +373,7 @@ async def delete_mapping(_guard: AdminUser, mapping_id: int, session: AsyncSessi
 
 
 @router.delete("/datasets/{dataset_id}/mappings", status_code=200)
-async def reset_dataset_mappings(_guard: AdminUser, 
+async def reset_dataset_mappings(_guard: AdminUser,
     dataset_id: int,
     session: AsyncSession = Depends(get_session),
 ):
@@ -371,7 +388,7 @@ async def reset_dataset_mappings(_guard: AdminUser,
 # ---------------------------------------------------------------------------
 
 @router.post("/mappings/auto-map", response_model=AutoMapResult)
-async def auto_map_dataset(_guard: AdminUser, 
+async def auto_map_dataset(_guard: AdminUser,
     dictionary_id: int = Query(...),
     dataset_id: int = Query(...),
     session: AsyncSession = Depends(get_session),
@@ -440,7 +457,7 @@ async def get_dataset_dictionary(
 
 
 @router.put("/datasets/{dataset_id}/dictionary")
-async def set_dataset_dictionary(_guard: AdminUser, 
+async def set_dataset_dictionary(_guard: AdminUser,
     dataset_id: int,
     req: DatasetDictionarySelection,
     session: AsyncSession = Depends(get_session),

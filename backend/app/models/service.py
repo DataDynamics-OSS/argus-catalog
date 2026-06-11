@@ -36,11 +36,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.models.models import CatalogModel, ModelVersion, RegisteredModel
 from app.models.schemas import (
+    CatalogModelDetail,
     DataPoint,
     DownloadLogEntry,
-    CatalogModelDetail,
-    ModelDownloadStats,
     ModelDetailResponse,
+    ModelDownloadStats,
     ModelSizeInfo,
     ModelStats,
     ModelSummary,
@@ -353,10 +353,10 @@ async def get_model_stats(session: AsyncSession) -> ModelStats:
 
     # 다운로드 통계
     from app.models.download_log import (
-        get_total_download_count,
-        get_hourly_download,
         get_daily_download,
         get_download_count_by_model,
+        get_hourly_download,
+        get_total_download_count,
     )
     total_download = await get_total_download_count(session)
 
@@ -373,9 +373,9 @@ async def get_model_stats(session: AsyncSession) -> ModelStats:
 
     # 게시 통계
     from app.models.download_log import (
-        get_total_publish_count,
-        get_hourly_publish,
         get_daily_publish,
+        get_hourly_publish,
+        get_total_publish_count,
     )
     total_publish = await get_total_publish_count(session)
 
@@ -483,7 +483,7 @@ async def get_model_download_stats(
     )).scalar() or 0
 
     # 일별 다운로드(최근 30일)
-    from datetime import timezone, timedelta
+    from datetime import timedelta, timezone
     since = _dt.datetime.now(timezone.utc) - timedelta(days=30)
     daily_result = await session.execute(
         select(

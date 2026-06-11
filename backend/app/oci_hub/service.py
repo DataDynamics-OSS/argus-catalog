@@ -549,9 +549,11 @@ async def get_hub_stats(session: AsyncSession) -> dict:
     top_downloads = [{"model_name": n, "download_count": c} for n, c in dl_result]
 
     # 다운로드 추이 (OCI 전용 다운로드 로그 기반)
-    from datetime import timezone, timedelta
-    from sqlalchemy import text
     import datetime as _dt
+    from datetime import timedelta, timezone
+
+    from sqlalchemy import text
+
     from app.oci_hub.models import OciModelDownloadLog
 
     now = _dt.datetime.now(timezone.utc)

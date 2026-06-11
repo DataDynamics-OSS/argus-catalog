@@ -41,9 +41,14 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]
+# E501(라인 길이)은 ruff formatter 가 코드 길이를 관리하고, 남는 위반은 대부분
+# 한국어 주석/문자열이라 무시한다(ruff 공식 권고). E741(모호한 변수명)은 스타일 선호로 비활성화.
+ignore = ["E501", "E741"]
 
 [tool.ruff.lint.per-file-ignores]
-"app/main.py" = ["E501"]
+"app/main.py" = ["E402"]              # 미들웨어 등록 후 라우터 import (의도적 지연 import)
+"app/catalog/service.py" = ["E402"]  # 파일 중간의 의도적 지연 import
+"app/comments/service.py" = ["E712"] # SQLAlchemy boolean 컬럼 비교(== False)는 SQL 생성에 필요
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

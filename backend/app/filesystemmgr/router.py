@@ -22,9 +22,9 @@ import logging
 import mimetypes
 
 from fastapi import APIRouter, HTTPException, Query, UploadFile
-from app.core.auth import AdminUser
 from fastapi.responses import Response
 
+from app.core.auth import AdminUser
 from app.filesystemmgr import service
 from app.filesystemmgr.schemas import (
     CreateFolderRequest,
@@ -129,7 +129,7 @@ async def download_file(
 
 
 @router.post("/upload")
-async def upload_file(_guard: AdminUser, 
+async def upload_file(_guard: AdminUser,
     file: UploadFile,
     path: str = Query(..., description="Destination directory path"),
     root_sub: str | None = Query(None),
@@ -158,7 +158,7 @@ async def upload_file(_guard: AdminUser,
 
 
 @router.post("/folders", response_model=CreateFolderResponse)
-async def create_folder(_guard: AdminUser, 
+async def create_folder(_guard: AdminUser,
     body: CreateFolderRequest,
     root_sub: str | None = Query(None),
 ):
@@ -181,7 +181,7 @@ async def create_folder(_guard: AdminUser,
 
 
 @router.post("/delete", response_model=DeleteResponse)
-async def delete_paths(_guard: AdminUser, 
+async def delete_paths(_guard: AdminUser,
     body: DeleteRequest,
     root_sub: str | None = Query(None),
 ):
@@ -204,7 +204,7 @@ async def delete_paths(_guard: AdminUser,
 
 
 @router.post("/rename", response_model=RenameResponse)
-async def rename(_guard: AdminUser, 
+async def rename(_guard: AdminUser,
     body: RenameRequest,
     root_sub: str | None = Query(None),
 ):

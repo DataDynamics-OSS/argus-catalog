@@ -4,7 +4,15 @@
 """
 
 from sqlalchemy import (
-    Column, Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func,
+    Column,
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
 )
 
 from app.core.database import Base

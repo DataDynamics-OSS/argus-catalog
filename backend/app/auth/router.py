@@ -21,7 +21,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import (
-    CurrentUser, TokenUser, _build_token_user, create_local_token,
+    CurrentUser,
+    _build_token_user,
+    create_local_token,
 )
 from app.core.config import settings
 from app.core.database import get_session

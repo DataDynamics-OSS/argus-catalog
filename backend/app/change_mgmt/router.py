@@ -125,7 +125,7 @@ async def get_change_request(
 # ---------------------------------------------------------------------------
 
 @router.post("/{cr_id}/submit", response_model=schemas.ChangeRequestSubmitResponse)
-async def submit_change_request(_guard: CurrentUser, 
+async def submit_change_request(_guard: CurrentUser,
     cr_id: int,
     notify_channels: list[str] = Body(default=["EMAIL", "IN_APP"]),
     session: AsyncSession = Depends(get_session),
@@ -178,7 +178,7 @@ async def submit_decision(
 
 
 @router.post("/{cr_id}/cancel", status_code=202)
-async def cancel_change_request(_guard: CurrentUser, 
+async def cancel_change_request(_guard: CurrentUser,
     cr_id: int, session: AsyncSession = Depends(get_session)
 ):
     _require_temporal()
@@ -194,7 +194,7 @@ async def cancel_change_request(_guard: CurrentUser,
 # ---------------------------------------------------------------------------
 
 @router.post("/consumers", response_model=schemas.ConsumerResponse, status_code=201)
-async def create_consumer(_guard: CurrentUser, 
+async def create_consumer(_guard: CurrentUser,
     data: schemas.ConsumerCreate, session: AsyncSession = Depends(get_session)
 ):
     consumer = await service.create_consumer(session, data)
@@ -222,7 +222,7 @@ async def list_notifications(cr_id: int, session: AsyncSession = Depends(get_ses
     "/notifications/{log_id}/ack",
     response_model=schemas.NotificationLogResponse,
 )
-async def ack_notification(_guard: CurrentUser, 
+async def ack_notification(_guard: CurrentUser,
     log_id: int,
     comment: str | None = Body(None, embed=True),
     session: AsyncSession = Depends(get_session),

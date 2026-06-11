@@ -6,7 +6,6 @@ reply_count 는 성능을 위해 비정규화되어 있다(생성/삭제 시 갱
 """
 
 import logging
-from collections import defaultdict
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession

@@ -32,8 +32,8 @@ INTERVALS: dict[str, timedelta] = {
 
 async def _due_dataset_ids() -> list[int]:
     """주기가 도래한 데이터셋 ID 목록."""
-    from app.core.database import async_session
     from app.catalog.models import DatasetProperty
+    from app.core.database import async_session
     from app.quality.models import QualityScore
 
     now = datetime.now(timezone.utc)

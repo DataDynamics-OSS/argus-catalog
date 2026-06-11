@@ -9,8 +9,15 @@
 """
 
 from sqlalchemy import (
-    BigInteger, Boolean, Column, DateTime, ForeignKey, Integer,
-    String, Text, UniqueConstraint, func,
+    BigInteger,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 

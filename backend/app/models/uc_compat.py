@@ -32,11 +32,10 @@ MLflow 측에서 ``registered_model_name`` 이 설정됐을 때의 흐름:
 import logging
 
 from fastapi import APIRouter, Depends, Request
-
-from app.core.auth import CurrentUser
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import CurrentUser
 from app.core.database import get_session
 from app.models import service
 from app.models.schemas import (

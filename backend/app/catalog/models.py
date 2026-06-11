@@ -7,7 +7,17 @@ DataHub 를 본떠 모델링한 핵심 엔티티 유형:
 - Owner: 데이터셋 소유권 추적
 """
 
-from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    BigInteger,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 
 from app.core.database import Base
 

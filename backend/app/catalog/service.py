@@ -19,14 +19,14 @@ from app.catalog.models import (
     DatasetProperty,
     DatasetSchema,
     DatasetTag,
-    GlossaryTerm,
-    Owner,
     Datasource,
     DatasourceConfiguration,
     DatasourceDataType,
     DatasourceFeature,
     DatasourceStorageFormat,
     DatasourceTableType,
+    GlossaryTerm,
+    Owner,
     SchemaSnapshot,
     System,
     Tag,
@@ -42,25 +42,25 @@ from app.catalog.schemas import (
     DatasetResponse,
     DatasetSummary,
     DatasetUpdate,
-    GlossaryTermCreate,
-    GlossaryTermResponse,
-    OwnerCreate,
-    OwnerResponse,
-    PaginatedDatasets,
-    PipelineCreate,
-    PipelineResponse,
-    PipelineUpdate,
     DatasourceCreate,
-    DatasourceUpdate,
     DatasourceDataTypeResponse,
     DatasourceFeatureResponse,
     DatasourceMetadataResponse,
     DatasourceResponse,
     DatasourceStorageFormatResponse,
     DatasourceTableTypeResponse,
-    SchemaFieldResponse,
+    DatasourceUpdate,
+    GlossaryTermCreate,
+    GlossaryTermResponse,
+    OwnerCreate,
+    OwnerResponse,
+    PaginatedDatasets,
     PaginatedSchemaSnapshots,
+    PipelineCreate,
+    PipelineResponse,
+    PipelineUpdate,
     SchemaChangeEntry,
+    SchemaFieldResponse,
     SchemaSnapshotResponse,
     TagCreate,
     TagResponse,
@@ -1103,8 +1103,9 @@ async def update_schema_fields(
     session: AsyncSession, dataset_id: int, fields: list[dict]
 ) -> list[SchemaFieldResponse]:
     """데이터셋의 스키마 필드 전체를 교체한다."""
-    from sqlalchemy import delete as sql_delete
     from types import SimpleNamespace
+
+    from sqlalchemy import delete as sql_delete
 
     # DELETE 전에 기존 fields 를 가져와 변경 이력 스냅샷을 만든다. metadata-sync 어댑터가
     # 호출하는 경로라 dict payload 가 들어오는데, ``save_schema_snapshot`` 의 from_sync=True
@@ -1223,6 +1224,7 @@ async def update_dataset_properties(
 
 async def get_catalog_stats(session: AsyncSession) -> CatalogStats:
     from datetime import datetime, timedelta, timezone
+
     from sqlalchemy import text
 
     active_filter = Dataset.status != "removed"

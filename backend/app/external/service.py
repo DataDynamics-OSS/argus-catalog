@@ -15,8 +15,8 @@ from app.catalog.models import (
     Dataset,
     DatasetSchema,
     DatasetTag,
-    Owner,
     Datasource,
+    Owner,
     Tag,
 )
 from app.external.cache import get_cache

@@ -1,9 +1,9 @@
 """카탈로그 서버 - FastAPI 애플리케이션 진입점."""
 
 import argparse
+import asyncio
 import logging
 import sys
-import asyncio
 import time
 from contextlib import asynccontextmanager
 
@@ -13,9 +13,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
 from app.agents.router import router as agents_router
-from app.apis.router import router as apis_router
 from app.ai.router import router as ai_router
 from app.alert.router import router as alert_router
+from app.apis.router import router as apis_router
 from app.auth.router import router as auth_router  # SSO 인증용 추가
 from app.catalog.impala_profile_router import router as impala_profile_router
 from app.catalog.router import router as catalog_router
@@ -82,8 +82,8 @@ async def lifespan(app: FastAPI):
     import app.embedding.models  # noqa: F401
     import app.models.models  # noqa: F401
     import app.oci_hub.models  # noqa: F401
-    import app.settings.models  # noqa: F401
     import app.permissions.models  # noqa: F401
+    import app.settings.models  # noqa: F401
     import app.usermgr.models  # noqa: F401
 
     # 스키마 생성·변경은 SQL DDL(packaging/config/argus-catalog-*.sql)이 전담한다.

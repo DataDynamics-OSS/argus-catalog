@@ -9,9 +9,8 @@ import logging
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.catalog.models import Dataset, DatasetTag, Owner, Datasource
+from app.catalog.models import Dataset, DatasetTag, Datasource, Owner
 from app.catalog.schemas import DatasetSummary
-from app.embedding.models import DatasetEmbedding
 from app.embedding.registry import get_provider
 
 logger = logging.getLogger(__name__)

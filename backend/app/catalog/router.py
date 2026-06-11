@@ -10,27 +10,16 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.catalog import service
-from app.core.config import settings
 from app.catalog.schemas import (
     CatalogStats,
     ColumnMappingCreate,
     DatasetCreate,
     DatasetLineageCreate,
     DatasetLineageResponse,
-    FKLineageReplaceRequest,
     DatasetPropertyCreate,
     DatasetPropertyResponse,
     DatasetResponse,
     DatasetUpdate,
-    GlossaryTermCreate,
-    GlossaryTermUpdate,
-    GlossaryTermResponse,
-    OwnerCreate,
-    OwnerResponse,
-    PaginatedDatasets,
-    PipelineCreate,
-    PipelineResponse,
-    PipelineUpdate,
     DatasourceConfigurationResponse,
     DatasourceConfigurationSave,
     DatasourceConnectionTest,
@@ -39,6 +28,16 @@ from app.catalog.schemas import (
     DatasourceMetadataResponse,
     DatasourceResponse,
     DatasourceUpdate,
+    FKLineageReplaceRequest,
+    GlossaryTermCreate,
+    GlossaryTermResponse,
+    GlossaryTermUpdate,
+    OwnerCreate,
+    OwnerResponse,
+    PaginatedDatasets,
+    PipelineCreate,
+    PipelineResponse,
+    PipelineUpdate,
     SchemaFieldCreate,
     SchemaFieldResponse,
     TagCreate,
@@ -46,6 +45,7 @@ from app.catalog.schemas import (
     TagUsage,
 )
 from app.core.auth import AdminUser, CurrentUser, assert_owner_or_admin
+from app.core.config import settings
 from app.core.database import get_session
 from app.permissions.router import require_feature
 
@@ -87,7 +87,7 @@ async def test_datasource_connection(_guard: AdminUser, req: DatasourceConnectio
 
 
 @router.put("/datasources/{datasource_id}", response_model=DatasourceResponse)
-async def update_datasource(_guard: AdminUser, 
+async def update_datasource(_guard: AdminUser,
     datasource_id: int, req: DatasourceUpdate, session: AsyncSession = Depends(get_session)
 ):
     """데이터 소스 메타데이터(예: 표시 이름)를 수정한다."""
@@ -122,7 +122,7 @@ async def get_datasource_configuration(
 
 
 @router.put("/datasources/{datasource_id}/configuration", response_model=DatasourceConfigurationResponse)
-async def save_datasource_configuration(_guard: AdminUser, 
+async def save_datasource_configuration(_guard: AdminUser,
     datasource_id: int,
     req: DatasourceConfigurationSave,
     session: AsyncSession = Depends(get_session),
@@ -158,7 +158,7 @@ async def get_datasource_delete_impact(
 
 
 @router.delete("/datasources/{datasource_id}")
-async def delete_datasource(_guard: AdminUser, 
+async def delete_datasource(_guard: AdminUser,
     datasource_id: int,
     force: bool = Query(False, description="true 면 소속 데이터셋과 하위를 함께 삭제(cascade)"),
     session: AsyncSession = Depends(get_session),
@@ -177,7 +177,7 @@ async def delete_datasource(_guard: AdminUser,
 
 
 @router.post("/datasources/{datasource_id}/sync")
-async def sync_datasource(_guard: AdminUser, 
+async def sync_datasource(_guard: AdminUser,
     request: Request,
     datasource_id: int,
     database: str | None = Query(None, description="Specific database to sync (optional)"),
@@ -750,7 +750,7 @@ async def get_dataset_lineage(dataset_id: int, session: AsyncSession = Depends(g
 # ---------------------------------------------------------------------------
 
 @router.post("/datasets/{dataset_id}/tags/{tag_id}")
-async def add_dataset_tag(_guard: AdminUser, 
+async def add_dataset_tag(_guard: AdminUser,
     dataset_id: int, tag_id: int, session: AsyncSession = Depends(get_session)
 ):
     """데이터셋에 태그 부착."""
@@ -762,7 +762,7 @@ async def add_dataset_tag(_guard: AdminUser,
 
 
 @router.delete("/datasets/{dataset_id}/tags/{tag_id}")
-async def remove_dataset_tag(_guard: AdminUser, 
+async def remove_dataset_tag(_guard: AdminUser,
     dataset_id: int, tag_id: int, session: AsyncSession = Depends(get_session)
 ):
     """데이터셋에서 태그 분리."""
@@ -774,7 +774,7 @@ async def remove_dataset_tag(_guard: AdminUser,
 
 
 @router.post("/datasets/{dataset_id}/owners", response_model=OwnerResponse)
-async def add_dataset_owner(_guard: AdminUser, 
+async def add_dataset_owner(_guard: AdminUser,
     dataset_id: int, req: OwnerCreate, session: AsyncSession = Depends(get_session)
 ):
     """데이터셋에 소유자를 추가한다."""
@@ -785,7 +785,7 @@ async def add_dataset_owner(_guard: AdminUser,
 
 
 @router.delete("/datasets/{dataset_id}/owners/{owner_id}")
-async def remove_dataset_owner(_guard: AdminUser, 
+async def remove_dataset_owner(_guard: AdminUser,
     dataset_id: int, owner_id: int, session: AsyncSession = Depends(get_session)
 ):
     """데이터셋에서 소유자를 제거한다."""
@@ -795,7 +795,7 @@ async def remove_dataset_owner(_guard: AdminUser,
 
 
 @router.post("/datasets/{dataset_id}/glossary/{term_id}")
-async def add_dataset_glossary_term(_guard: AdminUser, 
+async def add_dataset_glossary_term(_guard: AdminUser,
     dataset_id: int, term_id: int, session: AsyncSession = Depends(get_session)
 ):
     """데이터셋에 용어집 용어를 연결한다."""
@@ -805,7 +805,7 @@ async def add_dataset_glossary_term(_guard: AdminUser,
 
 
 @router.delete("/datasets/{dataset_id}/glossary/{term_id}")
-async def remove_dataset_glossary_term(_guard: AdminUser, 
+async def remove_dataset_glossary_term(_guard: AdminUser,
     dataset_id: int, term_id: int, session: AsyncSession = Depends(get_session)
 ):
     """데이터셋에서 용어집 용어를 분리한다."""
@@ -966,6 +966,7 @@ async def convert_sample_to_parquet(
 
     import csv as csv_mod
     import io
+
     import pyarrow as pa
     import pyarrow.parquet as _pq
 
@@ -1107,7 +1108,7 @@ async def get_delimiter_config(
 # ---------------------------------------------------------------------------
 
 @router.post("/samples/upload")
-async def upload_sample_parquet(_guard: AdminUser, 
+async def upload_sample_parquet(_guard: AdminUser,
     request: Request,
     x_datasource_id: str = Header(..., alias="X-Datasource-Id"),
     x_dataset_name: str = Header(..., alias="X-Dataset-Name"),
@@ -1160,7 +1161,7 @@ async def get_pipeline(pipeline_id: int, session: AsyncSession = Depends(get_ses
 
 
 @router.put("/pipelines/{pipeline_id}", response_model=PipelineResponse)
-async def update_pipeline(_guard: AdminUser, 
+async def update_pipeline(_guard: AdminUser,
     pipeline_id: int, data: PipelineUpdate, session: AsyncSession = Depends(get_session),
 ):
     """데이터 파이프라인을 수정한다."""
@@ -1185,7 +1186,7 @@ async def delete_pipeline(_guard: AdminUser, pipeline_id: int, session: AsyncSes
 # ---------------------------------------------------------------------------
 
 @router.post("/lineage", response_model=DatasetLineageResponse, status_code=201)
-async def create_lineage(_guard: AdminUser, 
+async def create_lineage(_guard: AdminUser,
     data: DatasetLineageCreate, session: AsyncSession = Depends(get_session),
 ):
     """타 데이터 소스 간 데이터셋 리니지 관계를 등록한다."""
@@ -1228,7 +1229,7 @@ async def get_lineage(lineage_id: int, session: AsyncSession = Depends(get_sessi
 
 
 @router.put("/lineage/{lineage_id}/column-mappings", response_model=DatasetLineageResponse)
-async def update_lineage_column_mappings(_guard: AdminUser, 
+async def update_lineage_column_mappings(_guard: AdminUser,
     lineage_id: int,
     column_mappings: list[ColumnMappingCreate],
     session: AsyncSession = Depends(get_session),

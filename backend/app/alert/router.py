@@ -15,7 +15,6 @@
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from app.core.auth import AdminUser
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.alert import service
@@ -28,6 +27,7 @@ from app.alert.schemas import (
     AlertUpdateStatus,
     PaginatedAlerts,
 )
+from app.core.auth import AdminUser
 from app.core.database import get_session
 
 logger = logging.getLogger(__name__)
@@ -50,7 +50,7 @@ async def get_alert_summary(session: AsyncSession = Depends(get_session)):
 # ---------------------------------------------------------------------------
 
 @router.post("/rules", response_model=AlertRuleResponse, status_code=201)
-async def create_rule(_guard: AdminUser, 
+async def create_rule(_guard: AdminUser,
     data: AlertRuleCreate, session: AsyncSession = Depends(get_session),
 ):
     """알림 규칙을 생성한다."""
@@ -77,7 +77,7 @@ async def get_rule(rule_id: int, session: AsyncSession = Depends(get_session)):
 
 
 @router.put("/rules/{rule_id}", response_model=AlertRuleResponse)
-async def update_rule(_guard: AdminUser, 
+async def update_rule(_guard: AdminUser,
     rule_id: int, data: AlertRuleUpdate, session: AsyncSession = Depends(get_session),
 ):
     """알림 규칙 부분 갱신. ``is_active`` 토글로 일시 정지/재개가 가능하다."""
@@ -129,7 +129,7 @@ async def get_alert(alert_id: int, session: AsyncSession = Depends(get_session))
 
 
 @router.put("/{alert_id}/status", response_model=AlertResponse)
-async def update_alert_status(_guard: AdminUser, 
+async def update_alert_status(_guard: AdminUser,
     alert_id: int,
     data: AlertUpdateStatus,
     session: AsyncSession = Depends(get_session),

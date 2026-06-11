@@ -1,9 +1,7 @@
 """AI 메타데이터 생성 API 용 Pydantic 스키마."""
 
-from datetime import datetime
 
 from pydantic import BaseModel, Field
-
 
 # ---------------------------------------------------------------------------
 # 요청 스키마

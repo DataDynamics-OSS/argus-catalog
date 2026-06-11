@@ -12,7 +12,7 @@ import re
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.catalog.models import Dataset, Organization, Datasource, System
+from app.catalog.models import Dataset, Datasource, Organization, System
 from app.catalog.schemas import (
     OrganizationCreate,
     OrganizationResponse,
@@ -20,8 +20,8 @@ from app.catalog.schemas import (
     SystemCreate,
     SystemResponse,
     SystemUpdate,
-    TopologyOrganization,
     TopologyDatasource,
+    TopologyOrganization,
     TopologyResponse,
     TopologySystem,
     TopologyUnassigned,

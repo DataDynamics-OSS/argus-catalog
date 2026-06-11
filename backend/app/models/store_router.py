@@ -15,10 +15,10 @@ import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile
-from app.core.auth import AdminUser
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import AdminUser
 from app.core.config import settings
 from app.core.database import get_session
 from app.models import model_store, service
@@ -95,7 +95,7 @@ class ImportResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 @router.post("/{model_name}/versions/{version}/upload")
-async def upload_file(_guard: AdminUser, 
+async def upload_file(_guard: AdminUser,
     model_name: str,
     version: int,
     file: UploadFile,
@@ -112,7 +112,7 @@ async def upload_file(_guard: AdminUser,
 
 
 @router.post("/{model_name}/versions/{version}/upload-url", response_model=UploadUrlResponse)
-async def get_upload_url(_guard: AdminUser, 
+async def get_upload_url(_guard: AdminUser,
     model_name: str,
     version: int,
     body: UploadUrlRequest,
@@ -252,7 +252,7 @@ async def get_manifest(
 # ---------------------------------------------------------------------------
 
 @router.post("/{model_name}/versions/{version}/finalize", response_model=FinalizeResponse)
-async def finalize_version(_guard: AdminUser, 
+async def finalize_version(_guard: AdminUser,
     model_name: str,
     version: int,
     body: FinalizeRequest | None = None,
@@ -318,7 +318,8 @@ async def import_huggingface(current: AdminUser,
                 raise HTTPException(status_code=404, detail=f"모델 '{body.model_name}'을(를) 찾을 수 없습니다.")
 
         # storage_type 을 s3 로 갱신
-        from sqlalchemy import select, update
+        from sqlalchemy import update
+
         from app.models.models import RegisteredModel
         await session.execute(
             update(RegisteredModel).where(
@@ -354,8 +355,9 @@ async def import_huggingface(current: AdminUser,
         )
 
         # catalog_models 메타데이터 저장
-        from app.models.models import CatalogModel
         import json as _json
+
+        from app.models.models import CatalogModel
         cm = CatalogModel(
             model_version_id=version_resp.id,
             model_name=body.model_name,
@@ -394,7 +396,7 @@ async def import_huggingface(current: AdminUser,
 # ---------------------------------------------------------------------------
 
 @router.post("/import/local", response_model=ImportResponse)
-async def import_local(current: AdminUser, 
+async def import_local(current: AdminUser,
     body: LocalImportRequest,
     session: AsyncSession = Depends(get_session),
 ):
@@ -424,6 +426,7 @@ async def import_local(current: AdminUser,
 
         # storage_type 을 s3 로 갱신
         from sqlalchemy import update
+
         from app.models.models import RegisteredModel
         await session.execute(
             update(RegisteredModel).where(
@@ -459,8 +462,9 @@ async def import_local(current: AdminUser,
         )
 
         # catalog_models 저장
-        from app.models.models import CatalogModel
         import json as _json
+
+        from app.models.models import CatalogModel
         cm = CatalogModel(
             model_version_id=version_resp.id,
             model_name=body.model_name,

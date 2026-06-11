@@ -14,18 +14,22 @@ import logging
 
 import aioboto3
 from fastapi import APIRouter, Depends
-from app.core.auth import AdminUser
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
+from app.core.auth import AdminUser
 from app.core.database import get_session
-from app.settings.service import (
-    get_config_by_category, load_auth_settings, load_cors_settings,
-    load_embedding_settings, load_llm_settings, load_os_settings, update_config,
-)
 from app.settings.mail import EmailConfig, load_mail_config, send_mail
 from app.settings.notify import NotifyConfig, load_notify_config, send_notify
+from app.settings.service import (
+    get_config_by_category,
+    load_auth_settings,
+    load_cors_settings,
+    load_embedding_settings,
+    load_llm_settings,
+    load_os_settings,
+    update_config,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +83,7 @@ async def get_object_storage_config(session: AsyncSession = Depends(get_session)
 
 
 @router.put("/object-storage")
-async def update_object_storage_config(_guard: AdminUser, 
+async def update_object_storage_config(_guard: AdminUser,
     body: ObjectStorageConfig,
     session: AsyncSession = Depends(get_session),
 ):
@@ -215,7 +219,7 @@ async def get_embedding_config(session: AsyncSession = Depends(get_session)):
 
 
 @router.put("/embedding")
-async def update_embedding_config(_guard: AdminUser, 
+async def update_embedding_config(_guard: AdminUser,
     body: EmbeddingConfig,
     session: AsyncSession = Depends(get_session),
 ):
@@ -283,7 +287,7 @@ async def get_change_config(session: AsyncSession = Depends(get_session)):
 
 
 @router.put("/change")
-async def update_change_config(_guard: AdminUser, 
+async def update_change_config(_guard: AdminUser,
     body: ChangeMgmtConfig,
     session: AsyncSession = Depends(get_session),
 ):
@@ -333,7 +337,7 @@ async def get_llm_config(session: AsyncSession = Depends(get_session)):
 
 
 @router.put("/llm")
-async def update_llm_config(_guard: AdminUser, 
+async def update_llm_config(_guard: AdminUser,
     body: LLMConfig,
     session: AsyncSession = Depends(get_session),
 ):
@@ -487,7 +491,7 @@ async def get_auth_secret(session: AsyncSession = Depends(get_session)):
 
 
 @router.put("/auth")
-async def update_auth_config(_guard: AdminUser, 
+async def update_auth_config(_guard: AdminUser,
     body: AuthConfig,
     session: AsyncSession = Depends(get_session),
 ):
@@ -725,7 +729,7 @@ async def get_cors_config(session: AsyncSession = Depends(get_session)):
 
 
 @router.put("/cors")
-async def update_cors_config(_guard: AdminUser, 
+async def update_cors_config(_guard: AdminUser,
     body: CorsConfig,
     session: AsyncSession = Depends(get_session),
 ):
@@ -755,7 +759,7 @@ async def get_mail_config(session: AsyncSession = Depends(get_session)):
 
 
 @router.put("/mail")
-async def update_mail_config(_guard: AdminUser, 
+async def update_mail_config(_guard: AdminUser,
     body: EmailConfig,
     session: AsyncSession = Depends(get_session),
 ):
@@ -786,7 +790,7 @@ async def update_mail_config(_guard: AdminUser,
 
 
 @router.post("/mail/test", response_model=TestResponse)
-async def test_mail(_guard: AdminUser, 
+async def test_mail(_guard: AdminUser,
     body: MailTestRequest,
     session: AsyncSession = Depends(get_session),
 ):
@@ -818,7 +822,7 @@ async def get_notify_config(session: AsyncSession = Depends(get_session)):
 
 
 @router.put("/notify")
-async def update_notify_config(_guard: AdminUser, 
+async def update_notify_config(_guard: AdminUser,
     body: NotifyConfig,
     session: AsyncSession = Depends(get_session),
 ):
@@ -842,7 +846,7 @@ async def update_notify_config(_guard: AdminUser,
 
 
 @router.post("/notify/test", response_model=TestResponse)
-async def test_notify(_guard: AdminUser, 
+async def test_notify(_guard: AdminUser,
     body: NotifyTestRequest,
     session: AsyncSession = Depends(get_session),
 ):

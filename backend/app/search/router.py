@@ -7,9 +7,9 @@
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from app.core.auth import AdminUser
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import AdminUser
 from app.core.database import get_session
 from app.embedding import service as embedding_service
 from app.embedding.registry import get_provider

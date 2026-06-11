@@ -21,7 +21,16 @@ MLflow 가 UC 호환 API (``/api/2.1/unity-catalog/``) 로 모델을 등록하�
 """
 
 from sqlalchemy import (
-    BigInteger, Column, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func,
+    BigInteger,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
 )
 
 from app.core.database import Base

@@ -8,7 +8,6 @@
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from app.core.auth import CurrentUser
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.comments import service
@@ -18,6 +17,7 @@ from app.comments.schemas import (
     CommentUpdate,
     PaginatedComments,
 )
+from app.core.auth import CurrentUser
 from app.core.database import get_session
 
 logger = logging.getLogger(__name__)
@@ -39,7 +39,7 @@ async def list_comments(
 
 
 @router.post("", response_model=CommentResponse)
-async def create_comment(_guard: CurrentUser, 
+async def create_comment(_guard: CurrentUser,
     req: CommentCreate,
     session: AsyncSession = Depends(get_session),
 ):
@@ -54,7 +54,7 @@ async def create_comment(_guard: CurrentUser,
 
 
 @router.put("/{comment_id}", response_model=CommentResponse)
-async def update_comment(_guard: CurrentUser, 
+async def update_comment(_guard: CurrentUser,
     comment_id: int,
     req: CommentUpdate,
     session: AsyncSession = Depends(get_session),
@@ -69,7 +69,7 @@ async def update_comment(_guard: CurrentUser,
 
 
 @router.delete("/{comment_id}")
-async def delete_comment(_guard: CurrentUser, 
+async def delete_comment(_guard: CurrentUser,
     comment_id: int,
     session: AsyncSession = Depends(get_session),
 ):

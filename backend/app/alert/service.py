@@ -37,8 +37,8 @@ from app.catalog.models import (
     DatasetColumnMapping,
     DatasetLineage,
     DatasetTag,
-    Owner,
     Datasource,
+    Owner,
     Tag,
 )
 

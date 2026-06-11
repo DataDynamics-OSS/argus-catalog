@@ -24,8 +24,8 @@ from app.core.auth import AdminUser, CurrentUser, assert_owner_or_admin
 from app.core.database import get_session
 from app.models import service
 from app.models.schemas import (
-    ModelDownloadStats,
     ModelDetailResponse,
+    ModelDownloadStats,
     ModelStats,
     ModelVersionCreate,
     ModelVersionFinalize,
@@ -59,7 +59,7 @@ async def get_model_stats(session: AsyncSession = Depends(get_session)):
 # ---------------------------------------------------------------------------
 
 @router.post("", response_model=RegisteredModelResponse)
-async def create_registered_model(current: CurrentUser, 
+async def create_registered_model(current: CurrentUser,
     req: RegisteredModelCreate, session: AsyncSession = Depends(get_session),
 ):
     """새 모델을 등록한다(이름 중복 시 409)."""
@@ -128,7 +128,7 @@ async def get_registered_model(
 
 
 @router.patch("/{model_name}", response_model=RegisteredModelResponse)
-async def update_registered_model(current: CurrentUser, 
+async def update_registered_model(current: CurrentUser,
     model_name: str,
     req: RegisteredModelUpdate,
     session: AsyncSession = Depends(get_session),
@@ -149,7 +149,7 @@ async def update_registered_model(current: CurrentUser,
 
 
 @router.delete("/{model_name}")
-async def delete_registered_model(current: CurrentUser, 
+async def delete_registered_model(current: CurrentUser,
     model_name: str, session: AsyncSession = Depends(get_session),
 ):
     """모델 소프트 삭제(목록에서만 숨김, 아티팩트는 보존)."""
@@ -191,7 +191,7 @@ async def hard_delete_models(
 # ---------------------------------------------------------------------------
 
 @router.post("/{model_name}/versions", response_model=ModelVersionResponse)
-async def create_model_version(_guard: AdminUser, 
+async def create_model_version(_guard: AdminUser,
     model_name: str,
     req: ModelVersionCreate,
     session: AsyncSession = Depends(get_session),
@@ -236,7 +236,7 @@ async def get_model_version(
 
 
 @router.patch("/{model_name}/versions/{version}", response_model=ModelVersionResponse)
-async def update_model_version(_guard: AdminUser, 
+async def update_model_version(_guard: AdminUser,
     model_name: str,
     version: int,
     req: ModelVersionUpdate,
@@ -253,7 +253,7 @@ async def update_model_version(_guard: AdminUser,
 
 
 @router.patch("/{model_name}/versions/{version}/finalize", response_model=ModelVersionResponse)
-async def finalize_model_version(_guard: AdminUser, 
+async def finalize_model_version(_guard: AdminUser,
     model_name: str,
     version: int,
     req: ModelVersionFinalize,
@@ -269,7 +269,7 @@ async def finalize_model_version(_guard: AdminUser,
 
 
 @router.delete("/{model_name}/versions/{version}")
-async def delete_model_version(_guard: AdminUser, 
+async def delete_model_version(_guard: AdminUser,
     model_name: str, version: int, session: AsyncSession = Depends(get_session),
 ):
     """모델 버전 삭제."""
@@ -290,15 +290,17 @@ async def delete_model_version(_guard: AdminUser,
 # ---------------------------------------------------------------------------
 
 @router.put("/{model_name}/versions/{version}/stage")
-async def update_version_stage(_guard: AdminUser, 
+async def update_version_stage(_guard: AdminUser,
     model_name: str, version: int,
     body: dict,
     session: AsyncSession = Depends(get_session),
 ):
     """버전 스테이지 변경(NONE → STAGING → PRODUCTION → ARCHIVED)."""
-    from app.models.models import RegisteredModel, ModelVersion
-    from sqlalchemy import select
     from datetime import datetime, timezone
+
+    from sqlalchemy import select
+
+    from app.models.models import ModelVersion, RegisteredModel
 
     stage = body.get("stage", "NONE")
     changed_by = body.get("changed_by", "")
@@ -334,13 +336,14 @@ async def update_version_stage(_guard: AdminUser,
 # ---------------------------------------------------------------------------
 
 @router.post("/{model_name}/lineage")
-async def add_model_dataset_lineage(_guard: AdminUser, 
+async def add_model_dataset_lineage(_guard: AdminUser,
     model_name: str, body: dict,
     session: AsyncSession = Depends(get_session),
 ):
     """모델과 학습/평가 데이터셋 연결(리니지 추가)."""
-    from app.models.models import RegisteredModel, ModelDatasetLineage
     from sqlalchemy import select
+
+    from app.models.models import ModelDatasetLineage, RegisteredModel
 
     model = (await session.execute(
         select(RegisteredModel).where(RegisteredModel.name == model_name)
@@ -366,9 +369,10 @@ async def add_model_dataset_lineage(_guard: AdminUser,
 @router.get("/{model_name}/lineage")
 async def get_model_dataset_lineage(model_name: str, session: AsyncSession = Depends(get_session)):
     """모델에 연결된 데이터셋 리니지 목록."""
-    from app.models.models import RegisteredModel, ModelDatasetLineage
-    from app.catalog.models import Dataset, Datasource
     from sqlalchemy import select
+
+    from app.catalog.models import Dataset, Datasource
+    from app.models.models import ModelDatasetLineage, RegisteredModel
 
     model = (await session.execute(
         select(RegisteredModel).where(RegisteredModel.name == model_name)
@@ -402,12 +406,13 @@ async def get_model_dataset_lineage(model_name: str, session: AsyncSession = Dep
 
 
 @router.delete("/{model_name}/lineage/{lineage_id}")
-async def delete_model_dataset_lineage(_guard: AdminUser, 
+async def delete_model_dataset_lineage(_guard: AdminUser,
     model_name: str, lineage_id: int, session: AsyncSession = Depends(get_session),
 ):
     """모델-데이터셋 리니지 링크 삭제."""
-    from app.models.models import ModelDatasetLineage
     from sqlalchemy import select
+
+    from app.models.models import ModelDatasetLineage
 
     l = (await session.execute(
         select(ModelDatasetLineage).where(ModelDatasetLineage.id == lineage_id)
@@ -426,13 +431,14 @@ async def delete_model_dataset_lineage(_guard: AdminUser,
 # ---------------------------------------------------------------------------
 
 @router.post("/{model_name}/versions/{version}/metrics")
-async def add_model_metrics(_guard: AdminUser, 
+async def add_model_metrics(_guard: AdminUser,
     model_name: str, version: int, body: dict,
     session: AsyncSession = Depends(get_session),
 ):
     """모델 버전에 메트릭을 추가/갱신. body 예: {"metrics": {"accuracy": 0.95, "f1": 0.88}}."""
-    from app.models.models import RegisteredModel, ModelMetric
     from sqlalchemy import select
+
+    from app.models.models import ModelMetric, RegisteredModel
 
     model = (await session.execute(
         select(RegisteredModel).where(RegisteredModel.name == model_name)
@@ -466,8 +472,9 @@ async def add_model_metrics(_guard: AdminUser,
 @router.get("/{model_name}/metrics")
 async def get_model_metrics(model_name: str, session: AsyncSession = Depends(get_session)):
     """모델 전 버전의 메트릭(버전 간 비교용) 조회."""
-    from app.models.models import RegisteredModel, ModelMetric
     from sqlalchemy import select
+
+    from app.models.models import ModelMetric, RegisteredModel
 
     model = (await session.execute(
         select(RegisteredModel).where(RegisteredModel.name == model_name)
@@ -498,8 +505,9 @@ async def get_model_metrics(model_name: str, session: AsyncSession = Depends(get
 @router.get("/{model_name}/card")
 async def get_model_card(model_name: str, session: AsyncSession = Depends(get_session)):
     """모델 카드(거버넌스 문서) 조회. 없으면 빈 필드 반환."""
-    from app.models.models import RegisteredModel, ModelCard
     from sqlalchemy import select
+
+    from app.models.models import ModelCard, RegisteredModel
 
     model = (await session.execute(
         select(RegisteredModel).where(RegisteredModel.name == model_name)
@@ -529,8 +537,9 @@ async def get_model_card(model_name: str, session: AsyncSession = Depends(get_se
 @router.put("/{model_name}/card")
 async def update_model_card(_guard: AdminUser, model_name: str, body: dict, session: AsyncSession = Depends(get_session)):
     """모델 카드 생성 또는 갱신."""
-    from app.models.models import RegisteredModel, ModelCard
     from sqlalchemy import select
+
+    from app.models.models import ModelCard, RegisteredModel
 
     model = (await session.execute(
         select(RegisteredModel).where(RegisteredModel.name == model_name)

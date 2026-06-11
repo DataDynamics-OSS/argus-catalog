@@ -11,7 +11,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents import service
-from app.core.auth import AdminUser, CurrentUser, OptionalUser, assert_owner_or_admin
 from app.agents.schemas import (
     AIAgentCard,
     AIAgentCreate,
@@ -26,17 +25,18 @@ from app.agents.schemas import (
     AIAgentMeteringResponse,
     AIAgentPolicyBundle,
     AIAgentStats,
+    AIAgentStatusHistoryResponse,
     AIAgentSummary,
     AIAgentToolCreate,
     AIAgentToolResponse,
     AIAgentUpdate,
     AIAgentVersionCreate,
-    AIAgentStatusHistoryResponse,
     AIAgentVersionResponse,
     HookEventIngest,
     HookEventResponse,
     PaginatedAIAgents,
 )
+from app.core.auth import AdminUser, CurrentUser, OptionalUser, assert_owner_or_admin
 from app.core.database import get_session
 
 logger = logging.getLogger(__name__)
@@ -64,7 +64,7 @@ async def get_ai_agent_stats(session: AsyncSession = Depends(get_session)):
 
 
 @router.post("", response_model=AIAgentSummary)
-async def create_ai_agent(current: CurrentUser, 
+async def create_ai_agent(current: CurrentUser,
     req: AIAgentCreate,
     session: AsyncSession = Depends(get_session),
 ):
@@ -114,7 +114,7 @@ async def get_ai_agent(name: str, session: AsyncSession = Depends(get_session)):
 
 
 @router.patch("/{name}", response_model=AIAgentSummary)
-async def update_ai_agent(current: CurrentUser, 
+async def update_ai_agent(current: CurrentUser,
     name: str,
     req: AIAgentUpdate,
     user: OptionalUser,
@@ -148,7 +148,7 @@ async def delete_ai_agent(name: str, current: CurrentUser, session: AsyncSession
 
 
 @router.post("/{name}/tools", response_model=AIAgentToolResponse)
-async def add_ai_agent_tool(_guard: AdminUser, 
+async def add_ai_agent_tool(_guard: AdminUser,
     name: str,
     req: AIAgentToolCreate,
     session: AsyncSession = Depends(get_session),
@@ -162,7 +162,7 @@ async def add_ai_agent_tool(_guard: AdminUser,
 
 
 @router.post("/{name}/mcp-servers", response_model=AIAgentMcpServerResponse)
-async def add_ai_agent_mcp_server(_guard: AdminUser, 
+async def add_ai_agent_mcp_server(_guard: AdminUser,
     name: str,
     req: AIAgentMcpServerCreate,
     session: AsyncSession = Depends(get_session),
@@ -176,7 +176,7 @@ async def add_ai_agent_mcp_server(_guard: AdminUser,
 
 
 @router.post("/{name}/lineage", response_model=AIAgentLineageResponse)
-async def add_ai_agent_lineage(_guard: AdminUser, 
+async def add_ai_agent_lineage(_guard: AdminUser,
     name: str,
     req: AIAgentLineageCreate,
     session: AsyncSession = Depends(get_session),
@@ -216,7 +216,7 @@ async def list_ai_agent_status_history(
 
 
 @router.post("/{name}/versions", response_model=AIAgentVersionResponse)
-async def create_ai_agent_version(_guard: AdminUser, 
+async def create_ai_agent_version(_guard: AdminUser,
     name: str,
     req: AIAgentVersionCreate,
     session: AsyncSession = Depends(get_session),
@@ -239,7 +239,7 @@ async def create_ai_agent_version(_guard: AdminUser,
 
 
 @router.delete("/{name}/tools/{tool_id}")
-async def delete_ai_agent_tool(_guard: AdminUser, 
+async def delete_ai_agent_tool(_guard: AdminUser,
     name: str, tool_id: int, session: AsyncSession = Depends(get_session)
 ):
     """에이전트 도구를 삭제한다."""
@@ -250,7 +250,7 @@ async def delete_ai_agent_tool(_guard: AdminUser,
 
 
 @router.delete("/{name}/mcp-servers/{mcp_id}")
-async def delete_ai_agent_mcp_server(_guard: AdminUser, 
+async def delete_ai_agent_mcp_server(_guard: AdminUser,
     name: str, mcp_id: int, session: AsyncSession = Depends(get_session)
 ):
     """에이전트 MCP 서버 연결을 해제한다."""
@@ -261,7 +261,7 @@ async def delete_ai_agent_mcp_server(_guard: AdminUser,
 
 
 @router.delete("/{name}/lineage/{lineage_id}")
-async def delete_ai_agent_lineage(_guard: AdminUser, 
+async def delete_ai_agent_lineage(_guard: AdminUser,
     name: str, lineage_id: int, session: AsyncSession = Depends(get_session)
 ):
     """에이전트 리니지를 삭제한다."""
@@ -287,7 +287,7 @@ async def list_ai_agent_evals(name: str, session: AsyncSession = Depends(get_ses
 
 
 @router.post("/{name}/evals", response_model=AIAgentEvalResponse)
-async def add_ai_agent_eval(_guard: AdminUser, 
+async def add_ai_agent_eval(_guard: AdminUser,
     name: str, req: AIAgentEvalCreate, session: AsyncSession = Depends(get_session)
 ):
     """평가 결과를 기록한다(평판 점수 자동 갱신)."""

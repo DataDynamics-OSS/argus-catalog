@@ -42,8 +42,9 @@ router = APIRouter(prefix="/oci-models", tags=["oci-model-hub"])
 @router.get("/server-info")
 async def get_server_info():
     """임포트 가이드 코드 샘플에 표시할 서버 host/port (``0.0.0.0`` 은 실제 IP 로 해석)."""
-    from app.core.config import settings
     import socket
+
+    from app.core.config import settings
     # 실제 hostname/IP 조회 — 0.0.0.0 은 클라이언트에 쓸모가 없음
     host = settings.host
     if host == "0.0.0.0":
@@ -83,7 +84,7 @@ async def list_models(
 
 
 @router.post("", response_model=OciModelDetail)
-async def create_model(current: CurrentUser, 
+async def create_model(current: CurrentUser,
     req: OciModelCreate, session: AsyncSession = Depends(get_session),
 ):
     """새 OCI 모델 등록(이름 중복 시 409)."""
@@ -109,7 +110,7 @@ async def get_model(
 
 
 @router.patch("/{name}", response_model=OciModelDetail)
-async def update_model(current: CurrentUser, 
+async def update_model(current: CurrentUser,
     name: str, req: OciModelUpdate, session: AsyncSession = Depends(get_session),
 ):
     """모델 메타데이터 부분 갱신(설명·태스크·프레임워크·언어 등)."""
@@ -123,7 +124,7 @@ async def update_model(current: CurrentUser,
 
 
 @router.delete("/{name}")
-async def delete_model(current: CurrentUser, 
+async def delete_model(current: CurrentUser,
     name: str, session: AsyncSession = Depends(get_session),
 ):
     """모델과 관련 데이터(버전·태그·리니지) 일괄 삭제. S3 파일도 함께 정리."""
@@ -160,7 +161,7 @@ async def update_readme(
 # ---------------------------------------------------------------------------
 
 @router.post("/{name}/tags/{tag_id}")
-async def add_tag(_guard: AdminUser, 
+async def add_tag(_guard: AdminUser,
     name: str, tag_id: int, session: AsyncSession = Depends(get_session),
 ):
     """모델에 태그 추가(모델 또는 태그 미존재 시 404)."""
@@ -172,7 +173,7 @@ async def add_tag(_guard: AdminUser,
 
 
 @router.delete("/{name}/tags/{tag_id}")
-async def remove_tag(_guard: AdminUser, 
+async def remove_tag(_guard: AdminUser,
     name: str, tag_id: int, session: AsyncSession = Depends(get_session),
 ):
     """모델에서 태그 분리."""
@@ -196,8 +197,9 @@ async def get_lineage(
     if not detail:
         raise HTTPException(status_code=404, detail=f"모델 '{name}'을(를) 찾을 수 없습니다.")
     # 리니지를 올바른 타입으로 재조회
-    from app.oci_hub.models import OciModel, OciModelLineage
     from sqlalchemy import select
+
+    from app.oci_hub.models import OciModel, OciModelLineage
     m = (await session.execute(select(OciModel).where(OciModel.name == name))).scalars().first()
     entries = (await session.execute(
         select(OciModelLineage).where(OciModelLineage.model_id == m.id)
@@ -206,7 +208,7 @@ async def get_lineage(
 
 
 @router.post("/{name}/lineage", response_model=LineageResponse)
-async def add_lineage(_guard: AdminUser, 
+async def add_lineage(_guard: AdminUser,
     name: str, req: LineageCreate, session: AsyncSession = Depends(get_session),
 ):
     """리니지 엔트리 추가(데이터셋 / 부모 모델 등 외부 자원과 연결)."""
@@ -224,7 +226,7 @@ async def add_lineage(_guard: AdminUser,
 
 
 @router.delete("/{name}/lineage/{lineage_id}")
-async def remove_lineage(_guard: AdminUser, 
+async def remove_lineage(_guard: AdminUser,
     name: str, lineage_id: int, session: AsyncSession = Depends(get_session),
 ):
     """리니지 엔트리 삭제."""
@@ -252,7 +254,7 @@ class FinalizeVersionRequest(BaseModel):
     readme: str | None = None
 
 @router.post("/{name}/versions/{version}/finalize", response_model=OciModelVersionResponse)
-async def finalize_version(_guard: AdminUser, 
+async def finalize_version(_guard: AdminUser,
     name: str, version: int,
     body: FinalizeVersionRequest | None = None,
     session: AsyncSession = Depends(get_session),

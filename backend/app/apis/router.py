@@ -240,7 +240,7 @@ async def add_favorite(_guard: CurrentUser, name: str, req: FavoriteCreate, user
 
 
 @router.delete("/{name}/favorites")
-async def remove_favorite(_guard: CurrentUser, 
+async def remove_favorite(_guard: CurrentUser,
     name: str, method: str = Query(...), path: str = Query(...),
     user: OptionalUser = None, session: AsyncSession = Depends(get_session),
 ):

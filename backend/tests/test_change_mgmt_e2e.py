@@ -34,6 +34,7 @@ import json
 import sys
 
 from sqlalchemy import delete, select
+from temporalio.worker import Worker
 
 import app.catalog.models  # noqa: F401  (FK 대상 메타데이터 등록)
 import app.change_mgmt.models  # noqa: F401
@@ -44,7 +45,7 @@ from app.catalog.models import (
     DatasetSchema,
     Datasource,
 )
-from app.change_mgmt import models, schemas, service, temporal_client
+from app.change_mgmt import schemas, service, temporal_client
 from app.change_mgmt.activities import (
     analyze_impact,
     apply_change,
@@ -55,7 +56,6 @@ from app.change_mgmt.activities import (
 )
 from app.change_mgmt.workflow import ChangeApprovalWorkflow
 from app.core.database import async_session
-from temporalio.worker import Worker
 
 POLL_INTERVAL = 0.4
 POLL_MAX = 60

@@ -10,7 +10,14 @@ entity_type + entity_id 를 통해 어떤 엔티티(dataset, model, glossary 등
 """
 
 from sqlalchemy import (
-    Boolean, Column, DateTime, ForeignKey, Integer, String, Text, func,
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    func,
 )
 
 from app.core.database import Base

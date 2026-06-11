@@ -11,7 +11,7 @@
 import asyncio
 import logging
 
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.catalog.models import Dataset, DatasetSchema, Datasource, GlossaryTerm

@@ -11,7 +11,8 @@
 import logging
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import delete as sql_delete, select
+from sqlalchemy import delete as sql_delete
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import AdminUser, CurrentUser
