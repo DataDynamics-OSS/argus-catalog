@@ -1,6 +1,5 @@
 app:
   name: argus-catalog-server
-  version: 0.1.0
   debug: ${app.debug:false}
 
 server:

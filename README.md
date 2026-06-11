@@ -86,6 +86,11 @@ pnpm dev       # 개발 서버 (Turbopack, port 3000)
 운영에서는 `ARGUS_JWT_SECRET`, `ARGUS_SECRET_KEY` 를 충분히 긴 무작위 값으로 설정하고
 모든 기본 크리덴셜을 교체해야 합니다.
 
+## 버전 관리
+
+[Semantic Versioning](https://semver.org/lang/ko/) 을 따르며, 루트 `VERSION` 파일이
+단일 소스입니다. 규칙·릴리스 절차는 [VERSIONING.md](VERSIONING.md) 참고.
+
 ## 라이선스
 
 [Apache License 2.0](LICENSE)

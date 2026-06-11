@@ -4,8 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "argus-catalog-server"
-version = "0.1.0"
-description = "Argus Catalog Server - Data catalog management server"
+# 버전 단일 소스: app/__init__.py 의 __version__ 에서 동적으로 가져온다.
+dynamic = ["version"]
+description = "Argus Catalog Server - Catalog Management Server"
 readme = "README.md"
 license = {text = "Apache-2.0"}
 requires-python = ">=3.11"
@@ -31,6 +32,9 @@ dev = [
 
 [project.scripts]
 argus-catalog-server = "app.main:run"
+
+[tool.setuptools.dynamic]
+version = {attr = "app.__version__"}
 
 [tool.setuptools.packages.find]
 include = ["app*"]

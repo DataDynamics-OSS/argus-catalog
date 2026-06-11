@@ -8,6 +8,7 @@
 import os
 from pathlib import Path
 
+from app import __version__
 from app.core.config_loader import load_config
 
 _CONFIG_DIR = Path(os.environ.get("ARGUS_CATALOG_SERVER_CONFIG_DIR", "/etc/argus-catalog-server"))
@@ -37,7 +38,8 @@ class Settings:
 
     def __init__(self) -> None:
         self.app_name: str = _get("app", "name", "argus-catalog-server")
-        self.app_version: str = _get("app", "version", "0.1.0")
+        # 버전은 코드(app.__version__)를 단일 소스로 사용한다. config.yml 로 재정의하지 않는다.
+        self.app_version: str = __version__
         self.debug: bool = _to_bool(_get("app", "debug", False))
 
         self.host: str = _get("server", "host", "0.0.0.0")

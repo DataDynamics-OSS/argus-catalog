@@ -59,6 +59,7 @@ _  ___ |  /   _  /_/ // /_/ /_(__  )     / /___  / /_/ // /_ / /_/ /_  / / /_/ /
 
 def _print_banner() -> None:
     logger.info(BANNER)
+    # 로고 아래 버전(단일 소스 app.__version__) — 아래 설정 라인들과 정렬된 라벨 형식.
     logger.info("버전              : %s", settings.app_version)
     logger.info("설정 YAML         : %s", settings.config_yaml_path)
     logger.info("설정 Properties   : %s", settings.config_properties_path)

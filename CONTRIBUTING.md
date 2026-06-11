@@ -14,6 +14,7 @@ Argus Catalog 에 관심을 가져 주셔서 감사합니다! 버그 리포트, 
 - [코드 스타일](#코드-스타일)
 - [테스트](#테스트)
 - [Pull Request 절차](#pull-request-절차)
+- [버전 관리](#버전-관리)
 - [보안 취약점 제보](#보안-취약점-제보)
 - [라이선스](#라이선스)
 
@@ -105,6 +106,13 @@ docs/<요약>        # 문서
 5. 리뷰 피드백에 따라 보완합니다. CI 가 통과해야 머지됩니다.
 
 작은 단위로 나눠 주시면 리뷰가 빠릅니다.
+
+## 버전 관리
+
+버전은 [Semantic Versioning](https://semver.org/lang/ko/) 을 따르며, 저장소 루트의
+`VERSION` 파일 **하나**가 단일 소스입니다. 매니페스트를 개별 수정하지 말고
+`python tools/sync-version.py --set X.Y.Z` 로 일괄 갱신하세요. 자세한 규칙·릴리스 절차는
+[VERSIONING.md](VERSIONING.md) 를 참고하세요.
 
 ## 보안 취약점 제보
 
