@@ -3,7 +3,7 @@
  */
 
 import type { ModelSummary } from "./data/schema"
-import { authFetch } from "@/features/auth/auth-fetch" // Added for SSO AUTH
+import { authFetch, throwOnError } from "@/features/auth/auth-fetch" // Added for SSO AUTH
 
 const BASE = "/api/v1/models"
 
@@ -177,7 +177,7 @@ export async function deleteModel(name: string): Promise<void> {
   const res = await authFetch(`${BASE}/${encodeURIComponent(name)}`, {
     method: "DELETE",
   })
-  if (!res.ok) throw new Error(`모델 삭제 실패: ${res.status}`)
+  if (!res.ok) await throwOnError(res, "모델 삭제 실패")
 }
 
 export async function hardDeleteModels(

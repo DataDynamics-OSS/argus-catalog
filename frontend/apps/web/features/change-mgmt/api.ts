@@ -1,4 +1,4 @@
-import { authFetch } from "@/features/auth/auth-fetch"
+import { authFetch, throwOnError } from "@/features/auth/auth-fetch"
 
 const BASE = "/api/v1/changes"
 
@@ -172,7 +172,7 @@ export async function getMyInboxCount(): Promise<number> {
 
 export async function cancelChangeRequest(crId: number): Promise<void> {
   const res = await authFetch(`${BASE}/${crId}/cancel`, { method: "POST" })
-  if (!res.ok) throw new Error(`변경 요청 취소 실패: ${res.status}`)
+  if (!res.ok) await throwOnError(res, "변경 요청 취소 실패")
 }
 
 export interface NotificationLog {

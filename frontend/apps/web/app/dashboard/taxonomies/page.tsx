@@ -54,6 +54,7 @@ import {
 } from "@/features/taxonomy/api"
 import { fetchDatasets, type PaginatedDatasets } from "@/features/datasets/api"
 import { DatasetsGrid } from "@/features/datasets/components/datasets-grid"
+import { GridPagination } from "@/components/grid-pagination"
 
 type Sel = { kind: "category"; id: number } | { kind: "uncategorized" } | null
 
@@ -63,6 +64,9 @@ export default function TaxonomiesPage() {
   const [tree, setTree] = useState<TaxonomyTree | null>(null)
   const [selected, setSelected] = useState<Sel>(null)
   const [datasets, setDatasets] = useState<PaginatedDatasets>({ items: [], total: 0, page: 1, page_size: 50 })
+  // 우측 그리드 페이지네이션 — page 는 1-base(서버), pageSize 는 페이지당 행 수.
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(50)
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set())
   const [rootOpen, setRootOpen] = useState(true)
   const [asideWidth, setAsideWidth] = useState(288) // 트리 폭(px), w-72 = 18rem 기준
@@ -118,24 +122,27 @@ export default function TaxonomiesPage() {
   useEffect(() => { loadTaxonomies() }, [loadTaxonomies])
   useEffect(() => { if (taxId != null) loadTree(taxId) }, [taxId, loadTree])
 
-  const loadDatasets = useCallback(async (sel: Sel) => {
+  const loadDatasets = useCallback(async (sel: Sel, pg: number, ps: number) => {
     // 선택이 없으면 전체 데이터셋, 분류 선택 시 해당 분류, 미분류 선택 시 미분류만 표시.
-    const empty = { items: [], total: 0, page: 1, page_size: 50 }
+    const empty = { items: [], total: 0, page: 1, page_size: ps }
     let params: Parameters<typeof fetchDatasets>[0]
     if (!sel) {
-      params = { pageSize: 50 }
+      params = { page: pg, pageSize: ps }
     } else if (sel.kind === "category") {
-      params = { categoryId: sel.id, pageSize: 50 }
+      params = { categoryId: sel.id, page: pg, pageSize: ps }
     } else {
       if (taxId == null) { setDatasets(empty); return }
-      params = { taxonomyId: taxId, uncategorized: true, pageSize: 50 }
+      params = { taxonomyId: taxId, uncategorized: true, page: pg, pageSize: ps }
     }
     setDatasets(await fetchDatasets(params).catch(() => empty))
   }, [taxId])
 
-  useEffect(() => { loadDatasets(selected) }, [selected, loadDatasets, tree])
+  useEffect(() => { loadDatasets(selected, page, pageSize) }, [selected, page, pageSize, loadDatasets, tree])
 
-  const refresh = async () => { if (taxId != null) await loadTree(taxId); await loadDatasets(selected) }
+  // 선택 변경 시 1페이지로 복귀(트리/미분류/분류체계 전환 공통).
+  const selectNode = useCallback((sel: Sel) => { setSelected(sel); setPage(1) }, [])
+
+  const refresh = async () => { if (taxId != null) await loadTree(taxId); await loadDatasets(selected, page, pageSize) }
 
   // ---- taxonomy ----
   const handleTaxCreate = async () => {
@@ -152,7 +159,7 @@ export default function TaxonomiesPage() {
     try {
       await deleteTaxonomy(taxId)
       toast.success("분류체계를 삭제했습니다.")
-      setTaxId(null); setTree(null); setSelected(null)
+      setTaxId(null); setTree(null); selectNode(null)
       await loadTaxonomies()
     } catch (e) { toast.error(e instanceof Error ? e.message : "삭제 실패(하위 분류 존재?)") }
   }
@@ -173,7 +180,7 @@ export default function TaxonomiesPage() {
     } catch (e) { toast.error(e instanceof Error ? e.message : "저장 실패") }
   }
   const handleCatDelete = async (id: number) => {
-    try { await deleteCategory(id); if (selected?.kind === "category" && selected.id === id) setSelected(null); await refresh() }
+    try { await deleteCategory(id); if (selected?.kind === "category" && selected.id === id) selectNode(null); await refresh() }
     catch (e) { toast.error(e instanceof Error ? e.message : "삭제 실패(하위 분류 존재?)") }
   }
 
@@ -253,7 +260,7 @@ export default function TaxonomiesPage() {
             <div
               className={rowCls(active) + (isDragging ? " opacity-40" : "")}
               style={{ paddingLeft: depth * 16 + 6, boxShadow: indicating === "before" ? "inset 0 2px 0 0 var(--primary)" : indicating === "after" ? "inset 0 -2px 0 0 var(--primary)" : undefined }}
-              onClick={() => setSelected({ kind: "category", id: c.id })}
+              onClick={() => selectNode({ kind: "category", id: c.id })}
               draggable
               onDragStart={(e) => { e.stopPropagation(); setDragInfo({ id: c.id, parentId: c.parent_id }); e.dataTransfer.effectAllowed = "move" }}
               onDragEnd={() => { setDragInfo(null); setDropTarget(null) }}
@@ -296,7 +303,7 @@ export default function TaxonomiesPage() {
       <DashboardHeader title="분류 체계" />
       <div className="flex flex-1 flex-col gap-3 p-4 min-h-0">
         <div className="flex items-center gap-2">
-          <Select value={taxId != null ? String(taxId) : ""} onValueChange={(v) => { setTaxId(Number(v)); setSelected(null) }}>
+          <Select value={taxId != null ? String(taxId) : ""} onValueChange={(v) => { setTaxId(Number(v)); selectNode(null) }}>
             <SelectTrigger className="h-9 w-60 text-sm"><SelectValue placeholder="분류체계 선택" /></SelectTrigger>
             <SelectContent>
               {taxonomies.map((t) => <SelectItem key={t.id} value={String(t.id)} className="text-sm">{t.name}</SelectItem>)}
@@ -336,7 +343,7 @@ export default function TaxonomiesPage() {
                       </p>
                     )}
                     {tree.categories.map((c) => renderCat(c, 1))}
-                    <div className={rowCls(selected?.kind === "uncategorized")} style={{ paddingLeft: 1 * 16 + 6 }} onClick={() => setSelected({ kind: "uncategorized" })}>
+                    <div className={rowCls(selected?.kind === "uncategorized")} style={{ paddingLeft: 1 * 16 + 6 }} onClick={() => selectNode({ kind: "uncategorized" })}>
                       <span className="w-4 shrink-0" />
                       <FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                       <span className="truncate">미분류</span>
@@ -379,6 +386,20 @@ export default function TaxonomiesPage() {
                 data={datasets.items}
                 onRemove={selected?.kind === "category" ? (id) => setRemoveTarget(id) : undefined}
               />
+              {/* 페더레이션 탐색과 동일한 페이지네이션(서버 페이지). 데이터가 있으면 표시. */}
+              {datasets.total > 0 && (() => {
+                const pageCount = Math.max(1, Math.ceil(datasets.total / pageSize))
+                const safePage = Math.min(page, pageCount)
+                return (
+                  <GridPagination
+                    page={safePage - 1}
+                    pageCount={pageCount}
+                    pageSize={pageSize}
+                    onPage={(p) => setPage(p + 1)}
+                    onPageSize={(s) => { setPageSize(s); setPage(1) }}
+                  />
+                )
+              })()}
             </div>
           </main>
         </div>

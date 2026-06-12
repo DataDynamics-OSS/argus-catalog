@@ -14,7 +14,7 @@
  */
 
 import { type User } from "./data/schema"
-import { authFetch } from "@/features/auth/auth-fetch" // Added for SSO AUTH
+import { authFetch, throwOnError } from "@/features/auth/auth-fetch" // Added for SSO AUTH
 
 /** Base URL prefix for all user management API calls. */
 const BASE = "/api/v1/usermgr"
@@ -241,7 +241,7 @@ export async function modifyUser(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   })
-  if (!res.ok) throw new Error(`사용자 수정 실패: ${res.status}`)
+  if (!res.ok) await throwOnError(res, "사용자 수정 실패")
   return res.json()
 }
 

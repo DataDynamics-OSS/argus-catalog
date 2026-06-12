@@ -31,6 +31,7 @@ export const MENU_REGISTRY: MenuEntry[] = [
   { key: "taxonomies", label: "분류 체계", group: "데이터 카탈로그", url: "/dashboard/taxonomies" },
   { key: "changes", label: "변경 관리", group: "데이터 카탈로그", url: "/dashboard/changes" },
   { key: "my-approvals", label: "내 결재함", group: "데이터 카탈로그", url: "/dashboard/my-approvals" },
+  { key: "federation", label: "페더레이션", group: "데이터 카탈로그", url: "/dashboard/federation" },
   { key: "ai-agents", label: "AI Agent", group: "AI 카탈로그", url: "/dashboard/ai-agents" },
   { key: "models", label: "MLflow 모델", group: "AI 카탈로그", url: "/dashboard/models" },
   { key: "mlflow-files", label: "MLflow 모델 파일", group: "AI 카탈로그", url: "/dashboard/mlflow-files" },

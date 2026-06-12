@@ -34,6 +34,15 @@ def _to_bool(value) -> bool:
     return bool(value)
 
 
+def _csv_list(value) -> list[str]:
+    """쉼표 구분 문자열(또는 list)을 공백 제거된 문자열 리스트로 변환한다."""
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+    if isinstance(value, str):
+        return [v.strip() for v in value.split(",") if v.strip()]
+    return []
+
+
 class Settings:
     """config.yml + config.properties 에서 로드한 전역 애플리케이션 설정."""
 
@@ -116,6 +125,52 @@ class Settings:
         self.temporal_target: str = _get("temporal", "target", "localhost:7233")
         self.temporal_namespace: str = _get("temporal", "namespace", "default")
         self.temporal_task_queue: str = _get("temporal", "task_queue", "change-mgmt")
+
+        # 카탈로그 페더레이션
+        # export 서비스 토큰 — peer 가 이 인스턴스의 /federation/export/* 를 호출할 때
+        # 검증할 Bearer 토큰. 환경변수(ARGUS_FEDERATION_TOKEN) 우선, 없으면 config,
+        # 둘 다 없으면 빈 값(인증 비강제 — 개발용, /external 과 동일 정책).
+        self.federation_export_token: str = (
+            os.environ.get("ARGUS_FEDERATION_TOKEN")
+            or _get("federation", "export_token", "")
+        )
+        # HARVEST 스케줄러 — HARVEST/HYBRID peer 의 메타데이터를 주기적으로 pull.
+        self.federation_harvest_enabled: bool = _to_bool(
+            _get("federation", "harvest_enabled", True)
+        )
+        self.federation_harvest_tick_seconds: int = int(
+            _get("federation", "harvest_tick_seconds", 300)
+        )
+        # HARVEST 시 미러 데이터셋의 샘플 데이터도 받아 로컬에 저장할지(소비자가 sample 선택 +
+        # peer 가 노출 시). 저장 경로는 로컬 데이터셋과 분리(federation/samples).
+        self.federation_harvest_samples: bool = _to_bool(
+            _get("federation", "harvest_samples", True)
+        )
+        # 미러 샘플 저장 시 받아올 최대 행 수.
+        self.federation_sample_limit: int = int(
+            _get("federation", "sample_limit", 100)
+        )
+        # Export visibility 거버넌스 — 이 인스턴스가 peer 에게 노출하는 데이터셋 범위를 제한.
+        # 검색/목록/드릴다운 모두에 적용된다. (이 인스턴스가 노출자일 때의 정책)
+        self.federation_export_exclude_pii: bool = _to_bool(
+            _get("federation", "export_exclude_pii", False)
+        )
+        # 노출 제외할 민감도 등급(쉼표) — 예: "RESTRICTED,CONFIDENTIAL"
+        self.federation_export_exclude_sensitivity: list[str] = _csv_list(
+            _get("federation", "export_exclude_sensitivity", "")
+        )
+        # 노출 허용 데이터소스 이름(쉼표) — 비어 있으면 전체 허용
+        self.federation_export_datasource_allowlist: list[str] = _csv_list(
+            _get("federation", "export_datasource_allowlist", "")
+        )
+        # Circuit breaker — LIVE peer 호출(검색 fan-out·드릴다운) 내결함성.
+        # 연속 실패가 threshold 에 도달하면 cooldown 동안 회로를 열어 빠르게 실패한다.
+        self.federation_breaker_threshold: int = int(
+            _get("federation", "breaker_threshold", 3)
+        )
+        self.federation_breaker_cooldown_seconds: int = int(
+            _get("federation", "breaker_cooldown_seconds", 60)
+        )
 
 
 def init_settings(

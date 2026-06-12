@@ -487,8 +487,24 @@ async def update_glossary_term(
     return GlossaryTermResponse.model_validate(term)
 
 
+async def count_glossary_term_children(session: AsyncSession, term_id: int) -> int:
+    """직속 하위 용어 수 — 삭제 가드용.
+
+    ``catalog_glossary_terms.parent_id`` 자기참조 FK 는 ON DELETE 가 없어, 하위 용어가
+    있으면 삭제가 차단된다(분류·조직과 동일). 라우터에서 미리 막아 친절한 409 를 준다.
+    """
+    return int(await session.scalar(
+        select(func.count(GlossaryTerm.id)).where(GlossaryTerm.parent_id == term_id)
+    ) or 0)
+
+
 async def delete_glossary_term(session: AsyncSession, term_id: int) -> bool:
-    """용어집 용어를 삭제하고 모든 데이터셋 연결을 제거한다."""
+    """용어집 용어를 삭제하고 모든 데이터셋 연결을 제거한다(하위 용어가 없을 때).
+
+    데이터셋 매핑(``catalog_dataset_glossary_terms``)은 CASCADE 로 정리되지만, 하위 용어
+    (``parent_id`` 자기참조)는 CASCADE 가 없으므로 호출 전에 ``count_glossary_term_children``
+    으로 막아야 한다.
+    """
     result = await session.execute(
         select(GlossaryTerm).where(GlossaryTerm.id == term_id)
     )

@@ -1,0 +1,46 @@
+= 노출 거버넌스 · 운영
+
+== 노출 정책 (provider visibility)
+
+이 인스턴스가 peer 에게 *노출자(provider)* 로서 무엇을 내보낼지 통제한다. export 의 목록·검색·
+드릴다운 전 경로에 적용된다.
+
+[cols="1,3",options="header"]
+|===
+| 설정(`federation.*`) | 설명
+| `export_exclude_pii` | PII 포함 데이터셋을 노출에서 제외
+| `export_exclude_sensitivity` | 노출 제외 민감도 등급(쉼표, 예: `RESTRICTED,CONFIDENTIAL`)
+| `export_datasource_allowlist` | 노출 허용 데이터소스 이름(쉼표, 빈 값=전체)
+|===
+
+노출 불가 데이터셋은 드릴다운에서 404 로 숨겨 *존재 여부* 까지 가린다. 페더레이션 > *노출 정책* 탭에서
+capability 단위 노출 항목(스키마/샘플/리니지/DDL/확장 등)을 체크리스트로 관리한다.
+
+== 서비스 토큰 인증
+
+`federation.export_token`(또는 `ARGUS_FEDERATION_TOKEN`)을 설정하면 export API 가
+`Authorization: Bearer <token>` 을 *상수시간 비교* 로 검증한다(미설정 시 비강제 — 개발 기본값).
+토큰 거부는 경고 로그로 남는다(토큰 값은 기록하지 않음).
+
+== Circuit breaker
+
+LIVE peer 호출(검색 fan-out·드릴다운)을 peer 단위로 감싼다. 연속 실패가
+`federation.breaker_threshold`(기본 3)에 도달하면 `federation.breaker_cooldown_seconds`(기본 60)
+동안 회로를 열어 즉시 실패(503)시킨다. 죽은 peer 가 연합 전체를 느리게 만드는 것을 막는다.
+회로 OPEN/CLOSED 전이는 로그로 남는다.
+
+== 관측성 (observability)
+
+`GET /api/v1/federation/stats` 가 peer 별 미러 데이터셋/리니지 카운트, 최근 동기화 이력,
+circuit breaker 상태를 집계한다. 페더레이션 *관측성* 탭에서 요약 카드 + peer 상태 테이블로
+노출된다. 마지막 동기화가 없으면 "미수집"으로 표시된다.
+
+== 권한 요약
+
+[cols="2,1",options="header"]
+|===
+| 작업 | 권한
+| peer 등록/수정/삭제, 수동 가져오기, 로컬 승격(import) | admin
+| 통합 검색·탐색·상세/샘플 드릴다운·리니지·상태점검·관측성 | 로그인
+| export API(`/federation/export/*`) | 서비스 토큰(설정 시)
+|===

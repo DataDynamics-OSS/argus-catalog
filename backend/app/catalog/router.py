@@ -291,7 +291,17 @@ async def update_glossary_term(
 
 @router.delete("/glossary/{term_id}")
 async def delete_glossary_term(term_id: int, _admin: AdminUser, session: AsyncSession = Depends(get_session)):
-    """용어집 항목 삭제. 관리자만 호출 가능. 자식 항목·데이터셋 매핑은 CASCADE 로 정리된다."""
+    """용어집 항목 삭제. 관리자만 호출 가능.
+
+    데이터셋 매핑은 CASCADE 로 정리되지만, 하위 용어(parent_id)가 있으면 FK 로 차단되므로
+    먼저 막아 409 를 반환한다(분류·조직 삭제와 동일).
+    """
+    children = await service.count_glossary_term_children(session, term_id)
+    if children > 0:
+        raise HTTPException(
+            status_code=409,
+            detail=f"용어를 삭제할 수 없습니다: 하위 용어 {children}개가 있습니다.",
+        )
     if not await service.delete_glossary_term(session, term_id):
         logger.warning("용어집 항목 삭제 실패(없음): term_id=%d", term_id)
         raise HTTPException(status_code=404, detail="용어를 찾을 수 없습니다.")

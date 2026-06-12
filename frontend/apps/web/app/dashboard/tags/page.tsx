@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
 import { AlertTriangle, Database, Plus, Trash2 } from "lucide-react"
+import { toast } from "sonner"
 
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
@@ -107,8 +108,9 @@ export default function TagsPage() {
       setDeleteDialogOpen(false)
       setDeleteTarget(null)
       await load()
-    } catch {
-      // ignore
+    } catch (e) {
+      // 차단·권한 등 백엔드 메시지를 토스트로 노출.
+      toast.error(e instanceof Error ? e.message : "태그 삭제에 실패했습니다.")
     } finally {
       setDeleting(false)
     }

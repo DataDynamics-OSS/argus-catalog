@@ -2,6 +2,7 @@
 
 import { useCallback, useContext, useEffect, useMemo, useRef, useState, createContext } from "react"
 import { useSearchParams } from "next/navigation"
+import { toast } from "sonner"
 import {
   BookOpen, ChevronRight, FolderOpen, FileText, Plus, Pencil, Trash2, Check, X, MoveRight,
 } from "lucide-react"
@@ -286,9 +287,14 @@ export default function GlossaryPage() {
   const cancelRename = () => setEditingNodeId(null)
 
   const deleteNode = async (id: number) => {
-    await deleteGlossaryTerm(id)
-    if (selectedNodeId === id) setSelectedNodeId(null)
-    await load()
+    try {
+      await deleteGlossaryTerm(id)
+      if (selectedNodeId === id) setSelectedNodeId(null)
+      await load()
+    } catch (e) {
+      // 차단형(하위 용어 존재 등) 삭제 실패 — 백엔드 친절 메시지를 토스트로.
+      toast.error(e instanceof Error ? e.message : "용어 삭제에 실패했습니다.")
+    }
   }
 
   // AG Grid — term update
@@ -301,8 +307,12 @@ export default function GlossaryPage() {
   }, [])
 
   const deleteTermFromGrid = useCallback(async (id: number) => {
-    await deleteGlossaryTerm(id)
-    load()
+    try {
+      await deleteGlossaryTerm(id)
+      load()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "용어 삭제에 실패했습니다.")
+    }
   }, [load])
 
   // Grid selection for Move Term

@@ -1,0 +1,46 @@
+= 로컬 승격 (import)
+
+페더레이션 데이터셋을 로컬 카탈로그(sidebar > 데이터셋)의 *1급 데이터셋* 으로 복사하는 기능이다.
+미러는 읽기 전용이지만, import 한 데이터셋은 로컬에서 자유롭게 편집·검색된다.
+
+데이터셋 상세 화면 헤더의 *로컬로 가져오기* 버튼(admin) 또는
+`POST /api/v1/federation/datasets/import` 로 수행한다.
+
+== 동작
+
+. peer 드릴다운으로 전체 메타데이터(스키마·태그·소유자·용어집·DDL·확장·샘플)를 받는다.
+. 전용 *"Federation Imports"* 데이터소스를 찾거나 생성해 그 아래에 데이터셋을 만든다.
+. 스키마 컬럼·소유자·확장 메타데이터를 그대로 복사하고, 샘플은 로컬 parquet 으로 저장한다.
+. 로컬 임베딩을 생성해 검색에 편입한다.
+
+* *1회 스냅샷* — import 시점의 복사본이며, 이후 peer 변경은 반영되지 않는다(미러와 분리).
+* *URN* — `{datasource}.{instance_key}.{원본경로}.dataset` 형태로 유일하게 발급(peer 간 충돌 방지).
+* *중복 차단* — 같은 federated URN 을 다시 import 하면 409 로 거절한다.
+
+== 태그 정책
+
+peer 태그를 그대로 가져오면 로컬 태그 목록이 오염되므로 *매칭만* 한다.
+
+* peer 태그는 *이름이 같은 로컬 태그가 이미 있을 때만* 연결하고, 없으면 새로 만들지 않는다.
+* 매칭 여부와 무관하게 원본 태그/용어 전체는 `imported_tags`·`imported_glossary` 속성으로 보존한다.
+* 모든 import 데이터셋에는 *"페더레이션"* 마커 태그를 붙여, sidebar > 태그에서 한눈에 구분·필터한다
+  ("페더레이션" 태그가 없으면 자동 생성).
+* 용어집(glossary)도 동일하게 매칭만 적용한다.
+
+== 출처(provenance)
+
+import 데이터셋에는 다음 속성이 기록된다.
+
+[cols="1,3",options="header"]
+|===
+| 속성 키 | 값
+| `imported_from` | 원본 federated URN (`{instance_key}::{remote_urn}`)
+| `imported_from_instance` | 원본 peer 의 instance_key
+| `imported_tags` | 원본 peer 태그 전체(쉼표)
+| `imported_glossary` | 원본 peer 용어 전체(쉼표)
+|===
+
+[NOTE]
+====
+import 는 peer 드릴다운으로 전체 메타를 받으므로 *peer 도달 + 해당 데이터 노출* 이 필요하다.
+====

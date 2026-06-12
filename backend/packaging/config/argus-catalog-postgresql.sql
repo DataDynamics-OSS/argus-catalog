@@ -2972,3 +2972,137 @@ COMMENT ON COLUMN catalog_term_column_mapping.dataset_id IS '데이터셋 ID (ca
 COMMENT ON COLUMN catalog_term_column_mapping.schema_id IS '데이터셋 컬럼/스키마 ID (catalog_dataset_schemas(id) 참조, CASCADE)';
 COMMENT ON COLUMN catalog_term_column_mapping.mapping_type IS '매핑 유형 (MATCHED/SIMILAR/VIOLATION)';
 COMMENT ON COLUMN catalog_term_column_mapping.created_at IS '생성 시각';
+
+
+-- ===========================================================================
+-- Federation (카탈로그 페더레이션) — 연합 대상 peer 인스턴스 레지스트리
+-- ===========================================================================
+
+CREATE TABLE IF NOT EXISTS federation_instances (
+    id SERIAL PRIMARY KEY,
+    instance_key VARCHAR(64) NOT NULL UNIQUE,
+    name VARCHAR(200) NOT NULL,
+    base_url VARCHAR(500) NOT NULL,
+    auth_token TEXT,
+    mode VARCHAR(20) NOT NULL DEFAULT 'LIVE',
+    sync_interval_sec INT NOT NULL DEFAULT 900,
+    status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+    -- 소비자(허브) 표시 선택 — 이 peer 에서 화면에 표시할 capability 키 JSON 배열(NULL=전부)
+    display_fields TEXT,
+    description TEXT,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- 기존 배포(컬럼이 없던 DB)도 멱등하게 수렴
+ALTER TABLE federation_instances ADD COLUMN IF NOT EXISTS display_fields TEXT;
+
+COMMENT ON TABLE federation_instances IS '연합(federation) 대상 peer Argus Catalog 인스턴스 레지스트리';
+COMMENT ON COLUMN federation_instances.instance_key IS '허브 내 peer 식별 키 (URN namespace prefix)';
+COMMENT ON COLUMN federation_instances.base_url IS 'peer base URL (예: https://catalog.team-a.internal)';
+COMMENT ON COLUMN federation_instances.auth_token IS 'peer 호출용 서비스 토큰(선택). Phase 1 에서 암호화 전환 예정';
+COMMENT ON COLUMN federation_instances.mode IS '연합 모드 (HARVEST/LIVE/HYBRID)';
+COMMENT ON COLUMN federation_instances.sync_interval_sec IS 'HARVEST 동기화 주기(초) — 후속 단계 사용';
+COMMENT ON COLUMN federation_instances.status IS '상태 (ACTIVE=연합검색 포함 / PAUSED=제외)';
+
+
+-- ===========================================================================
+-- Federation HARVEST 미러 — peer 메타데이터 로컬 복제 + 허브 모델 재임베딩
+-- ===========================================================================
+
+CREATE TABLE IF NOT EXISTS federation_datasets (
+    id SERIAL PRIMARY KEY,
+    instance_id INT NOT NULL REFERENCES federation_instances(id) ON DELETE CASCADE,
+    remote_urn VARCHAR(500) NOT NULL,
+    federated_urn VARCHAR(600) NOT NULL UNIQUE,
+    name VARCHAR(255) NOT NULL,
+    display_name VARCHAR(255),
+    datasource_name VARCHAR(200),
+    datasource_type VARCHAR(100),
+    summary VARCHAR(200),
+    description TEXT,
+    qualified_name VARCHAR(500),
+    origin VARCHAR(50),
+    field_count INT NOT NULL DEFAULT 0,
+    has_sample BOOLEAN NOT NULL DEFAULT false,
+    source_text TEXT,
+    remote_created_at TIMESTAMPTZ,
+    remote_updated_at TIMESTAMPTZ,
+    harvested_at TIMESTAMPTZ DEFAULT now(),
+    UNIQUE (instance_id, remote_urn)
+);
+-- 기존 배포(컬럼이 없던 DB)도 멱등하게 수렴
+ALTER TABLE federation_datasets ADD COLUMN IF NOT EXISTS display_name VARCHAR(255);
+ALTER TABLE federation_datasets ADD COLUMN IF NOT EXISTS field_count INT NOT NULL DEFAULT 0;
+ALTER TABLE federation_datasets ADD COLUMN IF NOT EXISTS has_sample BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE federation_datasets ADD COLUMN IF NOT EXISTS remote_created_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS ix_federation_datasets_instance
+    ON federation_datasets (instance_id);
+
+CREATE TABLE IF NOT EXISTS federation_dataset_embeddings (
+    id SERIAL PRIMARY KEY,
+    federation_dataset_id INT NOT NULL UNIQUE
+        REFERENCES federation_datasets(id) ON DELETE CASCADE,
+    embedding vector(384) NOT NULL,
+    source_text TEXT NOT NULL,
+    model_name VARCHAR(200) NOT NULL,
+    provider VARCHAR(50) NOT NULL,
+    dimension INT NOT NULL DEFAULT 384,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_federation_dataset_embeddings_ivfflat
+    ON federation_dataset_embeddings
+    USING ivfflat (embedding vector_cosine_ops)
+    WITH (lists = 100);
+
+CREATE TABLE IF NOT EXISTS federation_sync_runs (
+    id SERIAL PRIMARY KEY,
+    instance_id INT NOT NULL REFERENCES federation_instances(id) ON DELETE CASCADE,
+    status VARCHAR(20) NOT NULL DEFAULT 'RUNNING',
+    datasets_total INT NOT NULL DEFAULT 0,
+    datasets_seen INT NOT NULL DEFAULT 0,
+    datasets_upserted INT NOT NULL DEFAULT 0,
+    datasets_embedded INT NOT NULL DEFAULT 0,
+    datasets_pruned INT NOT NULL DEFAULT 0,
+    phase VARCHAR(20) NOT NULL DEFAULT 'FETCH',
+    phase_done INT NOT NULL DEFAULT 0,
+    phase_total INT NOT NULL DEFAULT 0,
+    error TEXT,
+    started_at TIMESTAMPTZ DEFAULT now(),
+    finished_at TIMESTAMPTZ
+);
+-- 기존 배포(컬럼이 없던 DB)도 멱등하게 수렴
+ALTER TABLE federation_sync_runs ADD COLUMN IF NOT EXISTS datasets_total INT NOT NULL DEFAULT 0;
+ALTER TABLE federation_sync_runs ADD COLUMN IF NOT EXISTS phase VARCHAR(20) NOT NULL DEFAULT 'FETCH';
+ALTER TABLE federation_sync_runs ADD COLUMN IF NOT EXISTS phase_done INT NOT NULL DEFAULT 0;
+ALTER TABLE federation_sync_runs ADD COLUMN IF NOT EXISTS phase_total INT NOT NULL DEFAULT 0;
+CREATE INDEX IF NOT EXISTS ix_federation_sync_runs_instance
+    ON federation_sync_runs (instance_id);
+
+COMMENT ON TABLE federation_datasets IS 'HARVEST 로 가져온 peer 데이터셋 로컬 미러 (read-only)';
+COMMENT ON TABLE federation_dataset_embeddings IS 'HARVEST 미러 데이터셋의 허브 모델 재임베딩 (pgvector)';
+COMMENT ON TABLE federation_sync_runs IS '페더레이션 HARVEST 실행 이력 (관측성)';
+
+
+-- ===========================================================================
+-- Federation 리니지 미러 — peer 리니지 엣지(URN→URN) cross-instance stitching
+-- ===========================================================================
+
+CREATE TABLE IF NOT EXISTS federation_lineage (
+    id SERIAL PRIMARY KEY,
+    instance_id INT NOT NULL REFERENCES federation_instances(id) ON DELETE CASCADE,
+    source_urn VARCHAR(500) NOT NULL,
+    target_urn VARCHAR(500) NOT NULL,
+    relation_type VARCHAR(32) NOT NULL DEFAULT 'READ_WRITE',
+    lineage_source VARCHAR(32) NOT NULL DEFAULT 'QUERY_AGGREGATED',
+    description TEXT,
+    harvested_at TIMESTAMPTZ DEFAULT now(),
+    UNIQUE (instance_id, source_urn, target_urn, relation_type)
+);
+CREATE INDEX IF NOT EXISTS ix_federation_lineage_instance
+    ON federation_lineage (instance_id);
+CREATE INDEX IF NOT EXISTS ix_federation_lineage_source ON federation_lineage (source_urn);
+CREATE INDEX IF NOT EXISTS ix_federation_lineage_target ON federation_lineage (target_urn);
+
+COMMENT ON TABLE federation_lineage IS 'HARVEST 로 가져온 peer 리니지 엣지(URN→URN, cross-instance stitching)';

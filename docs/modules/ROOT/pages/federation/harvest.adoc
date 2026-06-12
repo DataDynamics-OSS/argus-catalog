@@ -1,0 +1,47 @@
+= 가져오기 (HARVEST)
+
+HARVEST 는 peer 메타데이터를 로컬 *미러* 로 가져와 허브 임베딩 모델로 재임베딩하고, 샘플 데이터까지
+로컬에 보관하는 단계다. `HARVEST`·`HYBRID` 모드 peer 에 적용된다.
+
+== 단계
+
+가져오기는 다음 단계로 진행하며, 진행률 바는 단계별 가중치로 전체 %를 계산한다.
+
+[cols="1,4",options="header"]
+|===
+| 단계 | 동작
+| 가져오기(FETCH) | peer `export/datasets` 를 페이지로 받아 미러 테이블에 upsert. 논리명(`display_name`)·컬럼 수(`field_count`)·원본 등록 시각도 함께 가져온다.
+| 재임베딩(EMBED) | `source_text` 가 바뀐 항목만 *허브 임베딩 모델* 로 재임베딩(`federation_dataset_embeddings`).
+| 샘플(SAMPLE) | `sample` 노출 시 각 데이터셋 샘플을 받아 로컬에 저장(아래 참고).
+| 정리(FINALIZE) | 전체 동기화 시 사라진 항목 prune + 리니지 엣지 가져오기.
+|===
+
+== 증분 vs 전체 동기화
+
+* *증분(기본)* — 마지막 가져오기의 watermark(`max remote_updated_at`) 이후 변경분만 가져온다.
+  변경분만 보므로 prune 은 건너뛴다. 샘플은 미보유분만 받는다.
+* *전체(`full=true`)* — 전량을 받아 사라진 항목을 prune 하고, 샘플도 전량 갱신한다.
+
+수동 실행은 인스턴스 행의 *가져오기* 버튼, 또는 API `POST /federation/instances/{id}/harvest?full=`.
+스케줄러는 ACTIVE·미러 모드 peer 를 각자 `sync_interval_sec` 주기로 자동 실행한다
+(`federation.harvest_enabled`).
+
+== 샘플 미러링
+
+`sample` capability 가 켜진 peer 라면 HARVEST 시 각 데이터셋의 샘플을 받아 로컬에 저장한다.
+
+* 저장 경로 — `data_dir/federation/samples/{instance_id}/{federation_dataset_id}.json`
+  (로컬 데이터셋 샘플 경로와 *분리된 네임스페이스*).
+* 보유 여부 — `federation_datasets.has_sample` 로 표시.
+* 서빙 — 샘플 화면은 *미러 우선*(오프라인, peer 가 꺼져도 동작), 미러가 없으면 LIVE 드릴다운으로 폴백.
+* 설정 — `federation.harvest_samples`(기본 true), `federation.sample_limit`(기본 100행).
+
+== 진행률 표시
+
+가져오기 요청은 완료 시점에만 반환되므로, UI 는 RUNNING 실행 이력을 폴링해 단계·진척을 표시한다.
+완료/실패는 진행 바 자리에 인라인 결과로 표시되고 잠시 뒤 사라진다(팝업 미사용).
+
+== 실행 이력 / 관측성
+
+`federation_sync_runs` 에 매 실행의 단계·관측/upsert/임베딩/정리 수가 기록된다. 인스턴스 행의
+*동기화 이력* 과 페더레이션 *관측성* 탭에서 확인한다(xref:federation/governance.adoc[운영] 참고).

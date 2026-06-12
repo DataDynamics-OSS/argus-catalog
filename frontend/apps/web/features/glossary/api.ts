@@ -45,5 +45,9 @@ export async function updateGlossaryTerm(
 
 export async function deleteGlossaryTerm(termId: number): Promise<void> {
   const res = await authFetch(`${BASE}/glossary/${termId}`, { method: "DELETE" })
-  if (!res.ok) throw new Error(`용어 삭제 실패: ${res.status}`)
+  if (!res.ok) {
+    // 차단형 삭제(하위 용어 존재 등)의 백엔드 친절 메시지(409 detail)를 그대로 전달.
+    const err = await res.json().catch(() => ({}))
+    throw new Error((err as { detail?: string }).detail || `용어 삭제 실패: ${res.status}`)
+  }
 }

@@ -6,6 +6,20 @@
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-06-13
+
+### Added
+- **카탈로그 페더레이션** — 여러 Argus 인스턴스를 하나로 연합해 한 화면에서 통합
+  검색·탐색. `LIVE`/`HARVEST`/`HYBRID` 모드, HARVEST 미러·허브 모델 재임베딩·샘플
+  미러링(에어갭 친화), cross-instance 리니지, 미러 데이터셋 **로컬 승격(import)**,
+  노출 거버넌스(visibility·서비스 토큰·circuit breaker)·관측성
+- 분류 체계 화면의 데이터셋 목록에 페이지네이션 추가
+
+### Changed
+- **삭제 안정성·안내 개선** — 하위 의존(FK)으로 삭제가 막히는 경우(용어집·분류·조직
+  등)를 500 대신 친절한 409 메시지로 안내하고, 미처리 무결성 오류에 대한 전역 안전망 추가
+- **API 오류 메시지 개선** — 변경·액션 실패 시 상태코드 대신 백엔드 상세 메시지(detail)를 노출
+
 ## [0.1.1] - 2026-06-11
 
 ### Added
@@ -35,6 +49,7 @@
 - **알림** — 스키마 변경 영향 분석 + 품질 실패 트리거, Webhook 통지
 - 백엔드(FastAPI) · 프론트엔드(Next.js) · Python SDK(`argus-model`) · AI 에이전트 구성
 
-[Unreleased]: https://github.com/DataDynamics-OSS/argus-catalog/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/DataDynamics-OSS/argus-catalog/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/DataDynamics-OSS/argus-catalog/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/DataDynamics-OSS/argus-catalog/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/DataDynamics-OSS/argus-catalog/releases/tag/v0.1.0

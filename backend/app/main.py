@@ -9,8 +9,10 @@ import time
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy.exc import IntegrityError
 
 from app import __version__
 from app.agents.router import router as agents_router
@@ -35,6 +37,8 @@ from app.core.logging import setup_logging
 from app.core.password_gate import PasswordChangeGateMiddleware
 from app.core.security import SecurityHeadersMiddleware
 from app.external.router import router as external_router
+from app.federation.export_router import router as federation_export_router
+from app.federation.router import router as federation_router
 from app.filesystemmgr.router import router as filesystem_router
 from app.models.router import router as models_router
 from app.models.store_router import router as model_store_router
@@ -83,6 +87,7 @@ async def lifespan(app: FastAPI):
     import app.change_mgmt.models  # noqa: F401
     import app.comments.models  # noqa: F401
     import app.embedding.models  # noqa: F401
+    import app.federation.models  # noqa: F401
     import app.models.models  # noqa: F401
     import app.oci_hub.models  # noqa: F401
     import app.permissions.models  # noqa: F401
@@ -148,8 +153,18 @@ async def lifespan(app: FastAPI):
     from app.quality.scheduler import quality_scheduler_loop
     quality_task = asyncio.create_task(quality_scheduler_loop())
 
+    # 페더레이션 HARVEST 주기 스케줄러 (HARVEST/HYBRID peer 메타데이터 pull)
+    harvest_task = None
+    if settings.federation_harvest_enabled:
+        from app.federation.scheduler import federation_harvest_loop
+        harvest_task = asyncio.create_task(federation_harvest_loop())
+    else:
+        logger.info("페더레이션 HARVEST 스케줄러 비활성화됨 (federation.harvest_enabled=false)")
+
     yield
     quality_task.cancel()
+    if harvest_task is not None:
+        harvest_task.cancel()
     from app.ai.registry import shutdown_provider as shutdown_llm
     from app.embedding.registry import shutdown_provider as shutdown_embedding
     await shutdown_embedding()
@@ -167,6 +182,23 @@ app = FastAPI(
 app.add_middleware(SecurityHeadersMiddleware)
 # 강제 비밀번호 변경 게이트(로컬 모드) — 화이트리스트 외 API 를 차단
 app.add_middleware(PasswordChangeGateMiddleware)
+
+
+@app.exception_handler(IntegrityError)
+async def integrity_error_handler(request: Request, exc: IntegrityError):
+    """DB 무결성 위반(FK 제약 등)을 500 대신 409 로 변환하는 안전망.
+
+    삭제 시 하위 의존(FK RESTRICT/NO ACTION)으로 차단되는 경우, 개별 엔드포인트의
+    사전 가드(분류·조직·용어 등)가 1차 방어다. 미처리로 새어나온 무결성 오류도 사용자에게
+    500 이 아닌 '의존 관계로 처리할 수 없음(409)' 으로 안내한다(상세 사유는 로그로).
+    """
+    logger.warning("무결성 제약 위반 (%s %s): %s", request.method, request.url.path, exc)
+    return JSONResponse(
+        status_code=409,
+        content={
+            "detail": "다른 항목과 연결되어 있어 처리할 수 없습니다. 연결된 하위 항목을 먼저 정리하세요.",
+        },
+    )
 
 
 class DynamicCORSMiddleware:
@@ -225,6 +257,8 @@ app.include_router(ai_router, prefix="/api/v1")
 app.include_router(alert_router, prefix="/api/v1")
 app.include_router(auth_router, prefix="/api/v1")  # SSO 인증용 추가
 app.include_router(external_router, prefix="/api/v1")
+app.include_router(federation_router, prefix="/api/v1")
+app.include_router(federation_export_router, prefix="/api/v1")
 app.include_router(impala_profile_router, prefix="/api/v1")
 app.include_router(change_mgmt_router, prefix="/api/v1")
 

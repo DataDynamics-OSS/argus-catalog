@@ -2,7 +2,7 @@
  * AI metadata generation API client for datasets.
  */
 
-import { authFetch } from "@/features/auth/auth-fetch"
+import { authFetch, throwOnError } from "@/features/auth/auth-fetch"
 
 const BASE = "/api/v1/ai"
 
@@ -110,7 +110,7 @@ export async function generateDescription(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
   })
-  if (!res.ok) throw new Error(`설명 생성 실패: ${res.status}`)
+  if (!res.ok) await throwOnError(res, "설명 생성 실패")
   return res.json()
 }
 
@@ -123,7 +123,7 @@ export async function generateSummary(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
   })
-  if (!res.ok) throw new Error(`요약 생성 실패: ${res.status}`)
+  if (!res.ok) await throwOnError(res, "요약 생성 실패")
   return res.json()
 }
 
@@ -136,7 +136,7 @@ export async function generateColumns(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
   })
-  if (!res.ok) throw new Error(`컬럼 생성 실패: ${res.status}`)
+  if (!res.ok) await throwOnError(res, "컬럼 생성 실패")
   return res.json()
 }
 
@@ -175,7 +175,7 @@ export async function generateAll(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
   })
-  if (!res.ok) throw new Error(`일괄 생성 실패: ${res.status}`)
+  if (!res.ok) await throwOnError(res, "일괄 생성 실패")
   return res.json()
 }
 
@@ -189,7 +189,7 @@ export async function applySuggestion(
   suggestionId: number,
 ): Promise<{ id: number; applied: boolean }> {
   const res = await authFetch(`${BASE}/suggestions/${suggestionId}/apply`, { method: "POST" })
-  if (!res.ok) throw new Error(`추천 적용 실패: ${res.status}`)
+  if (!res.ok) await throwOnError(res, "추천 적용 실패")
   return res.json()
 }
 
@@ -201,7 +201,7 @@ export async function applySuggestions(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ suggestion_ids: suggestionIds }),
   })
-  if (!res.ok) throw new Error(`제안 일괄 적용 실패: ${res.status}`)
+  if (!res.ok) await throwOnError(res, "제안 일괄 적용 실패")
   return res.json()
 }
 
@@ -209,7 +209,7 @@ export async function rejectSuggestion(
   suggestionId: number,
 ): Promise<{ id: number; rejected: boolean }> {
   const res = await authFetch(`${BASE}/suggestions/${suggestionId}/reject`, { method: "POST" })
-  if (!res.ok) throw new Error(`추천 거부 실패: ${res.status}`)
+  if (!res.ok) await throwOnError(res, "추천 거부 실패")
   return res.json()
 }
 

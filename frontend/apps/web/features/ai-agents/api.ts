@@ -3,7 +3,7 @@
  * 백엔드 `/api/v1/ai-agents` 와 통신한다.
  */
 
-import { authFetch } from "@/features/auth/auth-fetch"
+import { authFetch, throwOnError } from "@/features/auth/auth-fetch"
 import type { AIAgentSummary } from "./data/schema"
 
 const BASE = "/api/v1/ai-agents"
@@ -254,7 +254,7 @@ export async function deleteAIAgent(name: string): Promise<void> {
   const res = await authFetch(`${BASE}/${encodeURIComponent(name)}`, {
     method: "DELETE",
   })
-  if (!res.ok) throw new Error(`AI Agent 삭제 실패: ${res.status}`)
+  if (!res.ok) await throwOnError(res, "AI Agent 삭제 실패")
 }
 
 // ---------------------------------------------------------------------------
@@ -276,7 +276,7 @@ export async function addAIAgentTool(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   })
-  if (!res.ok) throw new Error(`도구 등록 실패: ${res.status}`)
+  if (!res.ok) await throwOnError(res, "도구 등록 실패")
   return res.json()
 }
 
@@ -284,7 +284,7 @@ export async function deleteAIAgentTool(name: string, toolId: number): Promise<v
   const res = await authFetch(`${BASE}/${encodeURIComponent(name)}/tools/${toolId}`, {
     method: "DELETE",
   })
-  if (!res.ok) throw new Error(`도구 삭제 실패: ${res.status}`)
+  if (!res.ok) await throwOnError(res, "도구 삭제 실패")
 }
 
 export async function addAIAgentMcpServer(
@@ -296,7 +296,7 @@ export async function addAIAgentMcpServer(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   })
-  if (!res.ok) throw new Error(`MCP 서버 등록 실패: ${res.status}`)
+  if (!res.ok) await throwOnError(res, "MCP 서버 등록 실패")
   return res.json()
 }
 
@@ -304,7 +304,7 @@ export async function deleteAIAgentMcpServer(name: string, mcpId: number): Promi
   const res = await authFetch(`${BASE}/${encodeURIComponent(name)}/mcp-servers/${mcpId}`, {
     method: "DELETE",
   })
-  if (!res.ok) throw new Error(`MCP 서버 삭제 실패: ${res.status}`)
+  if (!res.ok) await throwOnError(res, "MCP 서버 삭제 실패")
 }
 
 export async function addAIAgentLineage(
@@ -316,7 +316,7 @@ export async function addAIAgentLineage(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   })
-  if (!res.ok) throw new Error(`리니지 등록 실패: ${res.status}`)
+  if (!res.ok) await throwOnError(res, "리니지 등록 실패")
   return res.json()
 }
 
@@ -324,7 +324,7 @@ export async function deleteAIAgentLineage(name: string, lineageId: number): Pro
   const res = await authFetch(`${BASE}/${encodeURIComponent(name)}/lineage/${lineageId}`, {
     method: "DELETE",
   })
-  if (!res.ok) throw new Error(`리니지 삭제 실패: ${res.status}`)
+  if (!res.ok) await throwOnError(res, "리니지 삭제 실패")
 }
 
 export async function addAIAgentVersion(
@@ -383,7 +383,7 @@ export async function addAIAgentEval(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   })
-  if (!res.ok) throw new Error(`평가 등록 실패: ${res.status}`)
+  if (!res.ok) await throwOnError(res, "평가 등록 실패")
   return res.json()
 }
 

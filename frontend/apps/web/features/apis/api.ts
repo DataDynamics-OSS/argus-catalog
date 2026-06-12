@@ -2,7 +2,7 @@
  * API Catalog API client. 백엔드 /api/v1/apis 와 통신.
  */
 
-import { authFetch } from "@/features/auth/auth-fetch"
+import { authFetch, throwOnError } from "@/features/auth/auth-fetch"
 
 const BASE = "/api/v1/apis"
 
@@ -155,7 +155,7 @@ export async function updateEndpoint(name: string, epId: number, payload: Endpoi
 
 export async function deleteEndpoint(name: string, epId: number): Promise<void> {
   const res = await authFetch(`${BASE}/${encodeURIComponent(name)}/endpoints/${epId}`, { method: "DELETE" })
-  if (!res.ok) throw new Error(`엔드포인트 삭제 실패: ${res.status}`)
+  if (!res.ok) await throwOnError(res, "엔드포인트 삭제 실패")
 }
 
 export async function createApi(payload: ApiCreatePayload): Promise<ApiSummary> {
@@ -204,7 +204,7 @@ export async function updateApi(name: string, payload: ApiUpdatePayload): Promis
 
 export async function deleteApi(name: string): Promise<void> {
   const res = await authFetch(`${BASE}/${encodeURIComponent(name)}`, { method: "DELETE" })
-  if (!res.ok) throw new Error(`API 삭제 실패: ${res.status}`)
+  if (!res.ok) await throwOnError(res, "API 삭제 실패")
 }
 
 export async function uploadApiSpec(name: string, payload: { spec_text?: string; spec_url?: string }): Promise<ApiSummary> {
@@ -279,7 +279,7 @@ export async function fetchApiAlerts(name: string, status?: string): Promise<Api
 
 export async function acknowledgeApiAlert(name: string, alertId: number): Promise<void> {
   const res = await authFetch(`${BASE}/${encodeURIComponent(name)}/alerts/${alertId}/ack`, { method: "POST" })
-  if (!res.ok) throw new Error(`알림 확인 처리 실패: ${res.status}`)
+  if (!res.ok) await throwOnError(res, "알림 확인 처리 실패")
 }
 
 export type ApiLintFinding = { rule: string; severity: string; message: string; location: string }
@@ -296,7 +296,7 @@ export type ApiLint = {
 export async function fetchApiLint(name: string, specId?: number): Promise<ApiLint> {
   const q = specId != null ? `?spec_id=${specId}` : ""
   const res = await authFetch(`${BASE}/${encodeURIComponent(name)}/lint${q}`)
-  if (!res.ok) throw new Error(`린팅 조회 실패: ${res.status}`)
+  if (!res.ok) await throwOnError(res, "린팅 조회 실패")
   return res.json()
 }
 
@@ -321,7 +321,7 @@ export type ApiUsage = {
 
 export async function fetchApiUsage(name: string, days = 30): Promise<ApiUsage> {
   const res = await authFetch(`${BASE}/${encodeURIComponent(name)}/usage?days=${days}`)
-  if (!res.ok) throw new Error(`사용량 조회 실패: ${res.status}`)
+  if (!res.ok) await throwOnError(res, "사용량 조회 실패")
   return res.json()
 }
 
@@ -361,7 +361,7 @@ export async function addApiLineage(
 
 export async function deleteApiLineage(name: string, edgeId: number): Promise<void> {
   const res = await authFetch(`${BASE}/${encodeURIComponent(name)}/lineage/${edgeId}`, { method: "DELETE" })
-  if (!res.ok) throw new Error(`리니지 삭제 실패: ${res.status}`)
+  if (!res.ok) await throwOnError(res, "리니지 삭제 실패")
 }
 
 export type ApiCredential = {
@@ -397,7 +397,7 @@ export async function createApiCredential(
 
 export async function deleteApiCredential(name: string, credId: number): Promise<void> {
   const res = await authFetch(`${BASE}/${encodeURIComponent(name)}/credentials/${credId}`, { method: "DELETE" })
-  if (!res.ok) throw new Error(`자격증명 삭제 실패: ${res.status}`)
+  if (!res.ok) await throwOnError(res, "자격증명 삭제 실패")
 }
 
 export type InvokeResult = {
@@ -438,13 +438,13 @@ export async function addApiFavorite(name: string, method: string, path: string)
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ method, path }),
   })
-  if (!res.ok) throw new Error(`즐겨찾기 추가 실패: ${res.status}`)
+  if (!res.ok) await throwOnError(res, "즐겨찾기 추가 실패")
 }
 
 export async function removeApiFavorite(name: string, method: string, path: string): Promise<void> {
   const q = new URLSearchParams({ method, path })
   const res = await authFetch(`${BASE}/${encodeURIComponent(name)}/favorites?${q.toString()}`, { method: "DELETE" })
-  if (!res.ok) throw new Error(`즐겨찾기 삭제 실패: ${res.status}`)
+  if (!res.ok) await throwOnError(res, "즐겨찾기 삭제 실패")
 }
 
 export type ApiInvocationRecord = {

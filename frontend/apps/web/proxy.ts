@@ -6,8 +6,9 @@ export async function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl
 
   // Next 16 의 새 proxy 컨벤션에서 ``export const config.matcher`` 가 모든 경로(``/:path*``)
-  // 로 등록되는 현상이 있어, 백엔드로 보낼 경로(``/api/v1/*``)가 아니면 다음 핸들러로 넘긴다.
-  if (!pathname.startsWith("/api/v1/")) {
+  // 로 등록되는 현상이 있어, 백엔드로 보낼 경로가 아니면 다음 핸들러로 넘긴다.
+  // ``/api/v1/*`` 는 일반 API, ``/health`` 는 페더레이션 peer 상태점검(루트 경로)용으로 프록시한다.
+  if (!pathname.startsWith("/api/v1/") && pathname !== "/health") {
     return NextResponse.next()
   }
 
@@ -39,5 +40,5 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: "/api/v1/:path*",
+  matcher: ["/api/v1/:path*", "/health"],
 }

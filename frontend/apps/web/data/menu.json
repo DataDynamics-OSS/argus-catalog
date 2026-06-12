@@ -39,6 +39,12 @@
           "title": "내 결재함",
           "url": "/dashboard/my-approvals",
           "icon": "Inbox"
+        },
+        {
+          "id": "federation",
+          "title": "페더레이션",
+          "url": "/dashboard/federation",
+          "icon": "Network"
         }
       ]
     },

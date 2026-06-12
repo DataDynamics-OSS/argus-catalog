@@ -1,0 +1,39 @@
+= 카탈로그 페더레이션
+
+여러 팀이 각자 운영하는 Argus Catalog 인스턴스를 *하나로 연합(federation)* 해, 한 화면에서
+통합 검색·탐색하는 기능이다. Trino 가 여러 데이터 소스를 하나의 카탈로그로 연합하듯,
+Argus 는 *메타데이터 카탈로그* 자체를 연합한다.
+
+== 개념
+
+* *허브(hub)* — 페더레이션을 수행하는 이 인스턴스. peer 를 등록하고 통합 검색·탐색·승격한다.
+* *peer* — 연합 대상 원격 Argus Catalog 인스턴스. 자신의 메타데이터를 export API 로 노출한다.
+* *미러(mirror)* — 허브가 peer 에서 가져와 로컬에 보관하는 읽기 전용 복제본
+  (`federation_datasets`). 허브 임베딩 모델로 *재임베딩* 되어 통합 검색에 편입된다.
+* *federated URN* — 허브 안에서 peer 데이터셋을 전역 식별하는 키. `{instance_key}::{remote_urn}`.
+
+== 연합 모드
+
+각 peer 는 등록 시 모드를 고른다. 검색과 상세 조회의 데이터 출처가 달라진다.
+
+[cols="1,3,2",options="header"]
+|===
+| 모드 | 동작 | 비고
+| `LIVE`    | 검색을 요청 시점에 각 peer 로 fan-out(scatter-gather) | 항상 최신, 복제 없음
+| `HARVEST` | peer 메타데이터를 주기적으로 가져와 로컬 미러 + *재임베딩* → 통합 검색 | 빠름·일관된 시맨틱·에어갭 친화
+| `HYBRID`  | HARVEST(검색) + LIVE(상세 드릴다운) | *권장*
+|===
+
+[NOTE]
+====
+peer 마다 임베딩 provider/모델이 다르면 벡터 공간이 달라 cross-instance 유사도 비교가
+깨진다. HARVEST 가 허브 모델로 *재임베딩* 해 일관성을 확보하는 이유다.
+====
+
+== 구성 요소
+
+* xref:federation/instances.adoc[인스턴스 관리] — peer 등록·수정·삭제·상태점검, 노출 항목 선택
+* xref:federation/harvest.adoc[가져오기(HARVEST)] — 미러·재임베딩·샘플·증분/전체·진행률
+* xref:federation/browse-search.adoc[탐색·통합 검색·리니지] — 트리/그리드 탐색, 통합 검색, cross-instance 리니지
+* xref:federation/import.adoc[로컬 승격(import)] — 미러 데이터셋을 로컬 카탈로그로 복사
+* xref:federation/governance.adoc[노출 거버넌스·운영] — visibility 정책·서비스 토큰·circuit breaker·관측성

@@ -40,5 +40,9 @@ export async function fetchTagUsage(tagId: number): Promise<TagUsage> {
 
 export async function deleteTag(tagId: number): Promise<void> {
   const res = await authFetch(`${BASE}/tags/${tagId}`, { method: "DELETE" })
-  if (!res.ok) throw new Error(`태그 삭제 실패: ${res.status}`)
+  if (!res.ok) {
+    // 백엔드 친절 메시지(차단·권한 등 detail)를 그대로 전달.
+    const err = await res.json().catch(() => ({}))
+    throw new Error((err as { detail?: string }).detail || `태그 삭제 실패: ${res.status}`)
+  }
 }

@@ -15,6 +15,14 @@
 ** xref:governance/ai-agent-catalog.adoc[AI Agent 카탈로그]
 ** xref:governance/change-management.adoc[변경 관리]
 
+* 카탈로그 페더레이션
+** xref:federation/index.adoc[페더레이션 개요]
+** xref:federation/instances.adoc[인스턴스 관리]
+** xref:federation/harvest.adoc[가져오기(HARVEST)]
+** xref:federation/browse-search.adoc[탐색·통합 검색·리니지]
+** xref:federation/import.adoc[로컬 승격(import)]
+** xref:federation/governance.adoc[노출 거버넌스·운영]
+
 * ML 모델 레지스트리
 ** xref:models/registry.adoc[모델 레지스트리]
 ** xref:models/stage-metrics.adoc[Stage · 메트릭]
