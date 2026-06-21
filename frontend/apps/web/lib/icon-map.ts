@@ -22,6 +22,7 @@ import {
   Webhook,
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
+import { pluginIcons } from "@/plugins/registry"
 
 const iconMap: Record<string, LucideIcon> = {
   Bell,
@@ -47,5 +48,6 @@ const iconMap: Record<string, LucideIcon> = {
 }
 
 export function getIcon(name: string): LucideIcon {
-  return iconMap[name] ?? HelpCircle
+  // 코어 아이콘 → 플러그인 제공 아이콘 → 기본(HelpCircle) 순으로 조회.
+  return iconMap[name] ?? pluginIcons[name] ?? HelpCircle
 }

@@ -1,7 +1,7 @@
 = StarRocks Audit Plugin
 
-StarRocks 의 *AuditPlugin SPI* 구현. FE 의 AuditEventProcessor 에서 호출되어
-쿼리 이벤트를 Metadata Sync 로 비동기 전송.
+StarRocks 의 *AuditPlugin SPI* 를 구현한 확장입니다. FE 의 AuditEventProcessor 에서 호출되어
+쿼리 이벤트를 Metadata Sync 로 비동기 전송합니다.
 
 == 요구사항
 
@@ -10,16 +10,20 @@ StarRocks 의 *AuditPlugin SPI* 구현. FE 의 AuditEventProcessor 에서 호출
 
 == 빌드
 
+아래 명령으로 빌드합니다.
+
 [source,bash]
 ----
 mvn clean install
 ----
 
-산출물:
+빌드가 끝나면 다음 산출물이 만들어집니다.
 
 * `target/starrocks-audit-plugin-1.0.0-jar-with-dependencies.jar` — Plugin JAR (Jackson 포함)
 
 == 동작 원리
+
+FE 에서 쿼리가 끝나면 감사 플러그인이 호출되어 이벤트를 비동기로 전송하는 과정은 다음과 같습니다.
 
 ----
 StarRocks FE
@@ -35,6 +39,8 @@ StarRocks FE
 ----
 
 == 수집 정보
+
+플러그인이 쿼리 한 건마다 수집하는 필드와 대응하는 AuditEvent 필드는 다음과 같습니다.
 
 [cols="2,2,3"]
 |===
@@ -58,6 +64,8 @@ StarRocks FE
 |===
 
 == 전송 페이로드
+
+수집한 정보는 다음과 같은 JSON 형태로 Metadata Sync 에 전송됩니다.
 
 [source,json]
 ----
@@ -130,4 +138,4 @@ UNINSTALL PLUGIN argus-query-audit;
 * 내부 `LinkedBlockingQueue` (capacity 10,000) 로 비동기 전송. *큐가 가득 차면
   이벤트 드롭*.
 * Jackson 은 assembly JAR 에 포함 — FE 의 Jackson 과 버전 충돌이 있으면 shade 적용.
-* 플러그인은 *모든 FE 노드* 에 동일 경로로 배포해야 한다.
+* 플러그인은 *모든 FE 노드* 에 동일한 경로로 배포해야 합니다.

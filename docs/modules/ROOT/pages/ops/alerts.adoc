@@ -1,27 +1,31 @@
 = 알림
 
-이기종 시스템 간 *스키마 변경의 영향* 을 자동 감지하고 담당자에게 통보한다.
+알림은 이기종 시스템 사이에서 일어나는 *스키마 변경의 영향* 을 자동으로 감지해
+담당자에게 알려 주는 기능입니다. 어느 한쪽에서 컬럼이 바뀌면 그 영향이 어디까지
+번지는지 사람이 일일이 추적하지 않아도 됩니다.
 
-PostgreSQL 의 `employees.salary` 컬럼이 삭제되면, 이 컬럼이 Impala 의
-`emp_fact.salary_amt` 와 매핑돼 있을 경우 BREAKING 알림을 자동 생성해 ETL
-담당자에게 즉시 보낸다.
+예를 들어 PostgreSQL 의 `employees.salary` 컬럼이 삭제되었다고 해 봅시다. 이
+컬럼이 Impala 의 `emp_fact.salary_amt` 와 매핑돼 있다면, 시스템이 BREAKING 알림을
+자동으로 생성해 ETL 담당자에게 즉시 보냅니다.
 
 // TODO: screenshot - Alerts 페이지 (목록 + 필터)
 image::ops-alerts/list.png[알림 목록, 800]
 
 == 진입 경로
 
-좌측 사이드바 *Governance → Alerts*. 헤더의 *벨 아이콘* 도 30 초 주기로 미해결
-건수를 폴링해 빨강·주황 배지로 표시한다.
+좌측 사이드바에서 *Governance → Alerts* 로 들어갑니다. 헤더의 *벨 아이콘* 도 30 초
+주기로 미해결 건수를 폴링해 빨강·주황 배지로 표시하므로, 어느 화면에서나 처리할
+일이 쌓였는지 한눈에 알 수 있습니다.
 
-탭 구성:
+탭은 두 가지로 구성됩니다.
 
-* *Alerts* — 생성된 알림 목록.
-* *Rules* — 알림 규칙 카드 목록.
+* *Alerts* — 생성된 알림 목록입니다.
+* *Rules* — 알림 규칙 카드 목록입니다.
 
 == Rule 정의
 
-룰은 *무엇을 감시 (Scope) + 언제 발동 (Trigger) + 어떻게 통보 (Notify)* 의 3 요소.
+하나의 룰은 *무엇을 감시 (Scope) + 언제 발동 (Trigger) + 어떻게 통보 (Notify)* 라는
+세 가지 요소로 이루어집니다.
 
 === Scope (감시 대상)
 
@@ -32,11 +36,11 @@ image::ops-alerts/create-rule.png[알림 룰 생성, 800]
 |===
 | Scope | 의미
 
-| DATASET | 특정 데이터셋 하나.
-| TAG | 태그가 붙은 모든 데이터셋. 태그 부착·해제만으로 감시 범위 가변.
-| LINEAGE | 특정 리니지 관계 (A → B). 매핑 기반 정밀 분석.
-| PLATFORM | 한 플랫폼의 모든 데이터셋.
-| ALL | 카탈로그 전체.
+| DATASET | 특정 데이터셋 하나입니다.
+| TAG | 태그가 붙은 모든 데이터셋입니다. 태그를 붙이거나 떼는 것만으로 감시 범위가 바뀝니다.
+| LINEAGE | 특정 리니지 관계 (A → B) 입니다. 매핑을 기반으로 정밀하게 분석합니다.
+| PLATFORM | 한 플랫폼의 모든 데이터셋입니다.
+| ALL | 카탈로그 전체입니다.
 |===
 
 === Trigger (발동 조건)
@@ -45,30 +49,35 @@ image::ops-alerts/create-rule.png[알림 룰 생성, 800]
 |===
 | Trigger | 의미
 
-| ANY | 모든 스키마 변경.
-| SCHEMA_CHANGE | 지정한 change_type (`DROP`, `MODIFY`, `ADD`) 만.
-| COLUMN_WATCH | 지정한 컬럼이 변경될 때만.
-| MAPPING_BROKEN | 컬럼 매핑이 깨질 때만.
-| SYNC_STALE | N 시간 이상 sync 안 됨 (예약).
+| ANY | 모든 스키마 변경에 반응합니다.
+| SCHEMA_CHANGE | 지정한 change_type (`DROP`, `MODIFY`, `ADD`) 일 때만 발동합니다.
+| COLUMN_WATCH | 지정한 컬럼이 변경될 때만 발동합니다.
+| MAPPING_BROKEN | 컬럼 매핑이 깨질 때만 발동합니다.
+| SYNC_STALE | N 시간 이상 sync 가 안 되면 발동합니다 (예약).
 |===
 
 === Severity
 
-자동 (`severity_override=null`) 또는 강제 지정.
+심각도는 자동으로 판정하거나 (`severity_override=null`), 원하는 값으로 직접 지정할
+수 있습니다. 자동 판정은 다음 기준을 따릅니다.
 
 자동 판정 기준::
-* BREAKING — 매핑된 컬럼 DROP (파이프라인 깨짐).
-* WARNING — 매핑된 컬럼 타입 변경.
-* INFO — 매핑 없는 컬럼 변경, 컬럼 추가.
+* BREAKING — 매핑된 컬럼이 DROP 된 경우입니다 (파이프라인이 깨집니다).
+* WARNING — 매핑된 컬럼의 타입이 바뀐 경우입니다.
+* INFO — 매핑이 없는 컬럼의 변경이나 컬럼 추가입니다.
 
 === Notify
 
-* *channels* — `IN_APP` · `WEBHOOK` · `EMAIL` (콤마 구분).
-* *webhook_url* — Slack · Teams 등 (WEBHOOK 시).
-* *subscribers* — 이메일 콤마 구분.
-* *notify_owners* — true 시 데이터셋 Owner 에게 IN_APP 알림 추가.
+통보 방식은 다음 항목으로 정합니다.
+
+* *channels* — `IN_APP` · `WEBHOOK` · `EMAIL` 중에서 선택합니다 (콤마로 구분).
+* *webhook_url* — Slack · Teams 등의 수신 주소입니다 (WEBHOOK 을 쓸 때).
+* *subscribers* — 알림을 받을 이메일을 콤마로 구분해 적습니다.
+* *notify_owners* — true 로 두면 데이터셋 Owner 에게 IN_APP 알림을 추가로 보냅니다.
 
 == Rule 예시
+
+실제로 룰이 어떻게 생겼는지 예시 하나를 살펴보겠습니다.
 
 PII 컬럼 삭제 감시::
 [source,json]
@@ -88,6 +97,8 @@ PII 컬럼 삭제 감시::
 ----
 
 == Webhook Payload
+
+WEBHOOK 채널로 통보할 때는 다음과 같은 형태의 JSON 페이로드가 전송됩니다.
 
 [source,json]
 ----
@@ -112,6 +123,8 @@ PII 컬럼 삭제 감시::
 
 == Alert 생명주기
 
+생성된 알림은 다음 흐름을 따라 상태가 바뀝니다.
+
 ----
 OPEN → ACKNOWLEDGED → RESOLVED
                    → DISMISSED
@@ -121,13 +134,14 @@ OPEN → ACKNOWLEDGED → RESOLVED
 |===
 | 상태 | 의미
 
-| OPEN | 새로 생성된 알림.
-| ACKNOWLEDGED | 담당자가 확인 (아직 미해결).
-| RESOLVED | 문제 해결 완료.
-| DISMISSED | 조치 불필요로 판단.
+| OPEN | 새로 생성된 알림입니다.
+| ACKNOWLEDGED | 담당자가 확인했지만 아직 해결되지 않은 상태입니다.
+| RESOLVED | 문제 해결이 끝난 상태입니다.
+| DISMISSED | 별다른 조치가 필요 없다고 판단한 상태입니다.
 |===
 
-상태 전이는 알림 상세의 액션 버튼 또는 다음 API.
+상태는 알림 상세 화면의 액션 버튼으로 바꾸거나, 다음 API 를 호출해 전이시킬 수
+있습니다.
 
 [source,bash]
 ----
@@ -136,13 +150,14 @@ PUT /api/v1/alerts/{id}/status   { "status": "RESOLVED" }
 
 == 리니지 화면 연동
 
-데이터셋 상세의 *Lineage* 탭에서 엣지 클릭 → 해당 리니지에 적용된 Rule 확인.
-*Add Rule* 버튼으로 LINEAGE scope 가 미리 설정된 Rule 생성 다이얼로그 진입.
+데이터셋 상세의 *Lineage* 탭에서 엣지를 클릭하면 해당 리니지에 적용된 Rule 을
+확인할 수 있습니다. *Add Rule* 버튼을 누르면 LINEAGE scope 가 미리 설정된 상태로
+Rule 생성 다이얼로그가 열립니다.
 
 == 이력
 
-알림 이력과 Webhook 전달 결과는 *Alerts* 탭에 누적되며, 상태 / 심각도 /
-데이터셋 필터로 좁혀볼 수 있다.
+알림 이력과 Webhook 전달 결과는 *Alerts* 탭에 차곡차곡 쌓입니다. 상태 · 심각도 ·
+데이터셋 필터로 원하는 범위만 좁혀서 볼 수 있습니다.
 
 // TODO: screenshot - 알림 상세 + 영향 분석 표
 image::ops-alerts/detail.png[알림 상세, 800]

@@ -1,9 +1,11 @@
 # 버전 관리 정책 (Versioning)
 
-Argus Catalog 의 버전 관리 규칙·기준·절차를 정의합니다.
+버전 숫자 하나에는 "이번 변경이 기존 사용자에게 안전한가?"라는 약속이 담겨 있습니다. 이
+문서는 Argus Catalog 가 그 약속을 어떤 규칙·기준·절차로 지키는지 정리합니다.
 
 ## 버전 체계 — Semantic Versioning
 
+버전을 마음대로 매기지 않고, 널리 쓰이는 표준인
 [Semantic Versioning 2.0.0](https://semver.org/lang/ko/) 을 따릅니다.
 
 ```
@@ -18,7 +20,8 @@ MAJOR.MINOR.PATCH   (예: 1.4.2)
 
 ## 적용 대상 — 공개 표면(Public Surface)
 
-버전 증가는 **사용자가 의존하는 공개 표면**의 변화로 판단합니다. Argus Catalog 의 공개 표면:
+그렇다면 어디가 바뀌어야 버전을 올릴까요? 기준은 "사용자가 직접 의존하는 부분", 즉
+**공개 표면(public surface)** 입니다. Argus Catalog 의 공개 표면은 다음과 같습니다.
 
 - **REST API** (`/api/v1/...`) — 엔드포인트·요청/응답 스키마
 - **External API** (`external`) — URN 기반 메타데이터/Avro 스키마
@@ -42,7 +45,8 @@ MAJOR.MINOR.PATCH   (예: 1.4.2)
 
 ## 사전 릴리스 (Pre-release)
 
-안정 릴리스 전 검증이 필요하면 SemVer 접미사를 사용합니다.
+정식으로 내보내기 전에 "먼저 한번 써 보자" 단계가 필요할 때가 있습니다. 이럴 때는
+SemVer 접미사를 붙여 어느 정도 익은 버전인지 표시합니다.
 
 - `X.Y.Z-alpha.N` — 초기, 불안정. 내부/얼리 테스트용
 - `X.Y.Z-beta.N` — 기능 동결, 광범위 테스트
@@ -64,9 +68,10 @@ MAJOR.MINOR.PATCH   (예: 1.4.2)
 
 ## 단일 소스 — 루트 `VERSION`
 
-제품 버전의 **단일 소스(single source of truth)** 는 저장소 루트의 [`VERSION`](VERSION)
-파일 하나뿐입니다. 각 컴포넌트의 매니페스트(`pyproject.toml`, `__init__.py`,
-`package.json`)에 박힌 버전은 모두 이 값에서 **파생**됩니다.
+버전이 파일마다 따로 적혀 있으면 어느새 서로 어긋나기 마련입니다. 그래서 Argus 는 버전을
+딱 한 군데에서만 관리합니다. 제품 버전의 **단일 소스(single source of truth)** 는 저장소
+루트의 [`VERSION`](VERSION) 파일 하나뿐이고, 각 컴포넌트의 매니페스트(`pyproject.toml`,
+`__init__.py`, `package.json`)에 박힌 버전은 모두 이 값에서 **파생**됩니다.
 
 - 절대 매니페스트를 개별 수정하지 마세요. 항상 `VERSION` 을 바꾸고 동기화합니다.
 - 서버 시작 배너 / `/health` / OpenAPI 문서도 모두 이 값을 표시합니다.
@@ -90,7 +95,8 @@ CI 의 `version-sync` 잡이 `--check` 를 실행해, 매니페스트만 고치�
 
 ## 버전 올리는 절차 (Release)
 
-릴리스 시점에 메인테이너가 버전을 올립니다.
+실제로 버전을 올릴 때는 다음 순서를 그대로 따라가면 됩니다. 릴리스 시점에 메인테이너가
+이 과정을 수행합니다.
 
 ```bash
 # 1) 버전 결정(SemVer) 후 단일 소스 + 전 매니페스트 일괄 갱신

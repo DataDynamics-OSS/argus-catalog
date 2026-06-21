@@ -1,26 +1,27 @@
 = OCI Model Hub
 
-HuggingFace 스타일 모델 브라우저 + S3/MinIO 기반 OCI Manifest 모델 저장소.
-프레임워크에 무관하게 모델을 적재·검색·배포한다.
+OCI Model Hub 는 HuggingFace 와 비슷한 느낌의 모델 브라우저에, S3/MinIO 기반의
+OCI Manifest 모델 저장소를 더한 공간입니다. 사용하는 프레임워크와 상관없이 모델을
+올려 두고, 검색하고, 배포할 수 있습니다.
 
 // TODO: screenshot - OCI Hub 메인 (카드 그리드)
 image::models-oci-hub/hub.png[OCI Model Hub, 800]
 
 == 진입 경로
 
-좌측 사이드바 *Model Catalog → OCI Model Hub* (`/dashboard/oci-hub`).
-관리자는 *OCI Files* 메뉴로 S3 객체 단위 파일 브라우저에도 접근 가능.
+좌측 사이드바의 *Model Catalog → OCI Model Hub* (`/dashboard/oci-hub`) 로 들어갑니다.
+관리자라면 *OCI Files* 메뉴를 통해 S3 객체 단위의 파일 브라우저에도 접근할 수 있습니다.
 
 == 모델 브라우저
 
 // TODO: screenshot - 카드뷰 + 필터 (태스크 / 프레임워크 / 라이선스)
 image::models-oci-hub/browse.png[모델 브라우저, 800]
 
-* *카드 뷰* — 모델당 한 장. 다운로드 수 · 태그 · README 요약 노출.
-* *필터* — Task (`text-classification`, `image-classification` 등), 프레임워크, 라이선스.
-* *검색* — 이름 부분 일치.
+* *카드 뷰* — 모델당 한 장씩 보여 줍니다. 다운로드 수 · 태그 · README 요약이 함께 나타납니다.
+* *필터* — Task (`text-classification`, `image-classification` 등), 프레임워크, 라이선스로 걸러냅니다.
+* *검색* — 이름 부분 일치로 찾습니다.
 
-카드 클릭 시 모델 상세로 이동. README 본문, 파일 목록, OCI Manifest 를 확인할 수 있다.
+카드를 클릭하면 모델 상세로 이동하며, README 본문, 파일 목록, OCI Manifest 를 확인할 수 있습니다.
 
 == S3 저장 구조
 
@@ -38,7 +39,7 @@ model-artifacts/                    ← MinIO 또는 S3 버킷
 
 == OCI Manifest
 
-finalize 시 OCI Image Manifest 스펙에 맞춰 `manifest.json` 이 생성된다.
+finalize 시점에 OCI Image Manifest 스펙에 맞춰 `manifest.json` 이 생성됩니다.
 
 [source,json]
 ----
@@ -68,12 +69,12 @@ finalize 시 OCI Image Manifest 스펙에 맞춰 `manifest.json` 이 생성된�
 }
 ----
 
-모든 파일은 SHA256 digest 로 식별 (content-addressable). 무결성 검증과
-중복 제거에 사용된다.
+모든 파일은 SHA256 digest 로 식별됩니다(content-addressable). 이 digest 는 무결성
+검증과 중복 제거에 사용됩니다.
 
 == 업로드 / 다운로드
 
-대형 파일은 *Presigned URL* 방식으로 서버를 우회해 S3 와 직접 통신한다.
+용량이 큰 파일은 *Presigned URL* 방식을 써서 서버를 거치지 않고 S3 와 직접 주고받습니다.
 
 [cols="1,3"]
 |===
@@ -90,7 +91,7 @@ finalize 시 OCI Image Manifest 스펙에 맞춰 `manifest.json` 이 생성된�
 // TODO: screenshot - HF 임포트 다이얼로그
 image::models-oci-hub/hf-import.png[HuggingFace 임포트, 800]
 
-온라인 환경에서 HuggingFace Hub 모델을 한 번에 가져온다.
+온라인 환경이라면 HuggingFace Hub 의 모델을 명령 한 번으로 가져올 수 있습니다.
 
 [source,bash]
 ----
@@ -103,22 +104,22 @@ client = ModelClient("http://catalog:4600")
 client.import_huggingface("bert-base-uncased", "argus.ml.bert")
 ----
 
-서버는 다음을 수행한다.
+이때 서버는 내부적으로 다음 작업을 차례대로 수행합니다.
 
-. `huggingface_hub.snapshot_download()` 로 임시 다운로드.
-. S3 의 `{model}/v{N}/` 하위에 모든 파일 업로드.
-. `config.json` 에서 `model_type`, `architectures` 등 추출.
-. OCI manifest 생성 후 저장.
-. DB 메타데이터 기록.
+. `huggingface_hub.snapshot_download()` 로 임시 다운로드합니다.
+. S3 의 `{model}/v{N}/` 하위에 모든 파일을 업로드합니다.
+. `config.json` 에서 `model_type`, `architectures` 등을 추출합니다.
+. OCI manifest 를 생성해 저장합니다.
+. DB 에 메타데이터를 기록합니다.
 
 == Airgap 임포트
 
 // TODO: screenshot - airgap 임포트 절차 (다이어그램 또는 단계 카드)
 image::models-oci-hub/airgap-import.png[Airgap 임포트, 800]
 
-폐쇄망에서는 2 단계.
+인터넷이 막힌 폐쇄망에서는 다음 2 단계로 진행합니다.
 
-. *온라인 환경* — 모델 다운로드 후 USB / 파일 전송.
+. *온라인 환경* — 모델을 다운로드한 뒤 USB 나 파일로 전송합니다.
 +
 [source,bash]
 ----
@@ -126,7 +127,7 @@ argus-model import-hf bert-base-uncased argus.ml.bert --server http://online-cat
 argus-model pull argus.ml.bert 1 /usb/bert-export/
 ----
 
-. *Airgap 환경* — 서버가 접근 가능한 경로에 파일을 옮기고 import.
+. *Airgap 환경* — 서버가 접근할 수 있는 경로에 파일을 옮긴 다음 import 합니다.
 +
 [source,bash]
 ----
@@ -134,9 +135,9 @@ argus-model import-local /data/transferred/bert argus.ml.bert \
   --server http://airgap-catalog:4600
 ----
 
-서버는 로컬 디렉토리를 스캔해 S3 에 업로드하고, manifest 를 생성한다.
+그러면 서버가 로컬 디렉토리를 스캔해 S3 에 업로드하고, manifest 를 생성합니다.
 
 == 다운로드 추적
 
-`/api/v1/oci-models/{name}` 의 *download_count* 와 다운로드 로그가 자동 누적된다.
-모델 상세에서 시간대별 다운로드 추이를 확인할 수 있다.
+`/api/v1/oci-models/{name}` 의 *download_count* 와 다운로드 로그는 자동으로 누적됩니다.
+모델 상세 화면에서 시간대별 다운로드 추이를 확인할 수 있습니다.

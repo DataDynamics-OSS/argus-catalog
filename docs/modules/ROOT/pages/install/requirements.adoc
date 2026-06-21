@@ -1,5 +1,7 @@
 = 시스템 요구사항
 
+Argus Catalog 를 설치하기 전에, 먼저 어떤 환경이 필요한지 짚어 보겠습니다. 아래 표는 무난하게 동작하는 최소선이며, 데이터 규모나 동시 사용자 수에 따라 여유 있게 잡아 두시면 좋습니다.
+
 == 최소 사양
 
 [cols="1,3"]
@@ -23,10 +25,12 @@
 |===
 
 권장 사양 (50 만 데이터셋 / 100 사용자 동시 접속 기준)::
-* CPU 8 core, 메모리 32 GB, 디스크 500 GB SSD.
-* 로컬 임베딩에 GPU (CUDA 11.8+) 사용 시 추론 성능 약 5~10 배.
+* CPU 8 core, 메모리 32 GB, 디스크 500 GB SSD 를 권장합니다.
+* 로컬 임베딩에 GPU (CUDA 11.8+) 를 사용하면 추론 성능이 약 5~10 배 빨라집니다.
 
 == 의존 컴포넌트
+
+Argus Catalog 는 혼자 동작하지 않고 몇 가지 외부 컴포넌트와 함께 움직입니다. 아래 표에서 *필수* 로 표시된 것만 갖추면 일단 시작할 수 있고, 옵션 항목은 필요할 때 붙이면 됩니다.
 
 [cols="1,1,3"]
 |===
@@ -34,30 +38,32 @@
 
 | PostgreSQL 12+ (권장)
 | 필수 (택 1)
-| 메타데이터 저장. *pgvector 확장* 필요 (시맨틱 검색용).
+| 메타데이터를 저장합니다. 시맨틱 검색을 쓰려면 *pgvector 확장* 이 필요합니다.
 
 | MariaDB 10.5+
 | 옵션
-| PostgreSQL 대신 사용 가능. 단 시맨틱 검색은 미지원.
+| PostgreSQL 대신 사용할 수 있습니다. 다만 시맨틱 검색은 지원하지 않습니다.
 
 | MinIO 또는 AWS S3
 | 옵션
-| ML 모델 아티팩트 저장. 미설정 시 로컬 파일시스템 모드.
+| ML 모델 아티팩트를 저장합니다. 설정하지 않으면 로컬 파일시스템 모드로 동작합니다.
 
 | Keycloak 22+
 | 옵션
-| SSO / OIDC 인증. 미설정 시 Local JWT 모드.
+| SSO / OIDC 인증에 사용합니다. 설정하지 않으면 Local JWT 모드로 동작합니다.
 
 | Ollama
 | 옵션
-| 로컬 임베딩 / LLM. OpenAI · 로컬 sentence-transformers 와 양자 택일.
+| 로컬 임베딩 / LLM 용입니다. OpenAI · 로컬 sentence-transformers 와 양자 택일합니다.
 
 | GPU (CUDA)
 | 옵션
-| 로컬 임베딩 / LLM 가속.
+| 로컬 임베딩 / LLM 을 가속합니다.
 |===
 
 == 네트워크 포트
+
+스택을 띄우면 컴포넌트마다 아래 포트를 사용합니다. 방화벽 규칙이나 포트 충돌을 점검할 때 참고하시면 됩니다.
 
 [cols="1,1,3"]
 |===
@@ -74,14 +80,15 @@
 
 == 외부 통신
 
+설치 환경이 인터넷에 연결되어 있는지, 아니면 폐쇄망(에어갭)인지에 따라 외부 통신 방식이 달라집니다.
+
 * 인터넷 접근이 가능한 환경
-** HuggingFace Hub — 로컬 임베딩 모델 자동 다운로드, OCI Hub HuggingFace 임포트
-** OpenAI / Anthropic API — 임베딩 · LLM 사용 시
+** HuggingFace Hub — 로컬 임베딩 모델을 자동으로 내려받고, OCI Hub 로 HuggingFace 모델을 임포트할 때 사용합니다.
+** OpenAI / Anthropic API — 임베딩 · LLM 을 사용할 때 호출합니다.
 * *에어갭 환경*
-** 모델 파일을 사내에 배포 후 *로컬 경로* 로 지정 — xref:install/setup.adoc[설치]·xref:ops/settings.adoc[설정] 참조.
-** OCI Hub 의 Airgap Import 사용.
+** 모델 파일을 사내에 배포한 뒤 *로컬 경로* 로 지정합니다 — xref:install/setup.adoc[설치]·xref:ops/settings.adoc[설정] 을 참조하세요.
+** OCI Hub 의 Airgap Import 를 사용합니다.
 
 == 라이선스
 
-Apache License 2.0 — 자체 운영에 제한 없음. 제품 라이선스 키 발급 절차는 별도
-영업 계약에 따른다.
+Apache License 2.0 을 따르므로 자체 운영에는 제한이 없습니다. 제품 라이선스 키 발급 절차는 별도 영업 계약에 따릅니다.

@@ -1,9 +1,10 @@
 = 설치
 
-기본 스택은 *Docker / Linux 패키지* 두 방식 모두 지원한다. 본 페이지는 패키지
-방식을 기준으로 설명한다.
+기본 스택은 *Docker / Linux 패키지* 두 가지 방식을 모두 지원합니다. 이 페이지에서는 패키지 방식을 기준으로 차근차근 설명하겠습니다.
 
 == 설치 흐름 요약
+
+전체 그림을 먼저 그려 두면 따라오기가 한결 쉽습니다. 큰 흐름은 다음 네 단계입니다.
 
 . PostgreSQL · pgvector · (옵션) MinIO · Keycloak 준비
 . 서버 (`argus-catalog-server`) 설치 및 설정
@@ -11,6 +12,8 @@
 . 초기 설정 (Settings · 플랫폼 등록)
 
 == 1. 사전 준비
+
+본격적인 설치에 앞서 데이터베이스와 옵션 컴포넌트를 먼저 준비합니다.
 
 === PostgreSQL + pgvector
 
@@ -25,7 +28,7 @@ sudo dnf install postgresql-server
 sudo dnf install pgvector_16
 ----
 
-DB · 사용자 · 확장 생성.
+이어서 데이터베이스와 사용자, 확장을 만듭니다.
 
 [source,bash]
 ----
@@ -39,18 +42,18 @@ SQL
 
 [NOTE]
 ====
-`CREATE EXTENSION vector` 는 *슈퍼유저* 만 가능. `argus` 계정으로 만든 후
-별도 세션에서 슈퍼유저로 확장만 활성화해야 한다.
+`CREATE EXTENSION vector` 는 *슈퍼유저* 만 실행할 수 있습니다. `argus` 계정으로 만든 뒤,
+별도 세션에서 슈퍼유저로 확장만 활성화해야 합니다.
 ====
 
-스키마 DDL 을 적용한다. *서버는 더 이상 시작 시 테이블을 자동 생성하지 않으므로(런타임 `create_all` 제거), 이 단계는 필수다.* (collector/lineage 포함 92개 테이블 + 컬럼 주석)
+다음으로 스키마 DDL 을 적용합니다. *서버는 더 이상 시작 시 테이블을 자동 생성하지 않으므로(런타임 `create_all` 제거), 이 단계는 반드시 거쳐야 합니다.* (collector/lineage 포함 92개 테이블 + 컬럼 주석)
 
 [source,bash]
 ----
 psql -U argus -d argus_catalog -f packaging/config/argus-catalog-postgresql.sql
 ----
 
-이어서 데모 데이터가 필요하면 시드를 *순서대로* 적용한다(스키마 적용 후 실행).
+데모 데이터가 필요하다면 시드를 *순서대로* 적용합니다(스키마를 적용한 뒤 실행하세요).
 
 [source,bash]
 ----
@@ -80,9 +83,11 @@ docker run -p 8180:8080 \
   quay.io/keycloak/keycloak:26.0 start-dev
 ----
 
-미설치 시 서버는 자동으로 Local JWT 모드로 동작한다.
+Keycloak 을 설치하지 않으면 서버는 자동으로 Local JWT 모드로 동작합니다.
 
 == 2. 서버 설치
+
+사전 준비가 끝났다면 이제 카탈로그 서버를 설치합니다.
 
 [source,bash]
 ----
@@ -130,9 +135,11 @@ auth.keycloak.client_id=argus-client
 auth.keycloak.client_secret=argus-client-secret
 ----
 
-전체 키는 xref:ops/settings.adoc[설정] 페이지 참조.
+전체 키 목록은 xref:ops/settings.adoc[설정] 페이지를 참조하세요.
 
 === 서버 기동
+
+설정을 마쳤다면 서버를 기동합니다.
 
 [source,bash]
 ----
@@ -145,7 +152,7 @@ argus-catalog-server \
 make run
 ----
 
-기동 확인.
+제대로 떴는지 확인해 봅니다.
 
 [source,bash]
 ----
@@ -154,6 +161,8 @@ curl http://localhost:4600/health
 ----
 
 == 3. UI 설치
+
+서버가 준비되었으니 사용자가 실제로 마주할 웹 UI 를 설치합니다.
 
 [source,bash]
 ----
@@ -175,7 +184,7 @@ pnpm build && pnpm start
 
 == 4. 초기 설정
 
-UI 로그인 후 다음 순서로 진행한다.
+설치를 마쳤다면 마지막으로 UI 에 로그인해 초기 설정을 잡아 줍니다. 아래 순서대로 진행하세요.
 
 . *Settings → Auth* — Keycloak 자동 시드 (*Initialize*) 또는 Local JWT 확인.
 . *Settings → Embedding* — 임베딩 프로바이더 선택 → *Test* → *Save*.
@@ -183,32 +192,32 @@ UI 로그인 후 다음 순서로 진행한다.
 . *Settings → Object Storage* — S3 / MinIO (ML 모델 사용 시).
 . *Platforms* — 사내 데이터 소스 등록 → 연결 정보 → *Test Connection* → *Sync*.
 
-자세한 메뉴별 사용법은 xref:catalog/datasets.adoc[데이터 카탈로그] 와
-xref:models/registry.adoc[모델 레지스트리] 참조.
+메뉴별 사용법은 xref:catalog/datasets.adoc[데이터 카탈로그] 와
+xref:models/registry.adoc[모델 레지스트리] 에서 자세히 다룹니다.
 
 == Keycloak 자동 설정
 
-Settings → Auth 의 *Initialize* 버튼은 다음을 자동 생성한다.
+SSO 를 쓰기로 했다면 Keycloak 설정이 조금 번거로울 수 있는데, 다행히 대부분은 버튼 한 번으로 처리됩니다. Settings → Auth 의 *Initialize* 버튼은 다음을 자동으로 생성합니다.
 
 * Realm — `argus`
 * Client — `argus-client` (Confidential, Standard Flow · Direct Access Grants 활성)
 * Realm Role — `argus-admin`, `argus-superuser`, `argus-user`
 * 기본 역할 — `argus-user` 를 default 로 부여
 
-수동 셋업 단계는 다음과 같다.
+직접 손으로 설정하고 싶다면 다음 단계를 따르면 됩니다.
 
-. Admin 콘솔 (`http://<keycloak>:8180/admin`) 로그인.
-. *Create realm* → 이름 `argus`.
+. Admin 콘솔 (`http://<keycloak>:8180/admin`) 에 로그인합니다.
+. *Create realm* → 이름을 `argus` 로 지정합니다.
 . *Clients → Create client* — Client ID `argus-client`, Confidential, Standard Flow + Direct Access Grants + Service Accounts ON. Redirect URI: `http://<ui-host>:3000/*`, `http://<server-host>:4600/*`. Web Origins: `+` 포함.
-. Credentials 탭에서 Client Secret 을 `argus-client-secret` 으로 지정 (또는 임의 값 → 서버 설정에 반영).
-. *Realm Roles* — `argus-admin`, `argus-superuser`, `argus-user` 생성.
-. *Default roles* → `default-roles-argus` 에 `argus-user` 추가.
-. *Users → Create user* — 이메일·Email Verified 필수. Credentials 탭에서 비밀번호 설정 (`Temporary: OFF`).
-. *Role mapping* — 사용자에게 `argus-admin` / `argus-superuser` 부여 (필요 시).
+. Credentials 탭에서 Client Secret 을 `argus-client-secret` 으로 지정합니다 (또는 임의 값으로 두고 서버 설정에 반영).
+. *Realm Roles* — `argus-admin`, `argus-superuser`, `argus-user` 를 생성합니다.
+. *Default roles* → `default-roles-argus` 에 `argus-user` 를 추가합니다.
+. *Users → Create user* — 이메일·Email Verified 는 필수입니다. Credentials 탭에서 비밀번호를 설정합니다 (`Temporary: OFF`).
+. *Role mapping* — 필요하다면 사용자에게 `argus-admin` / `argus-superuser` 를 부여합니다.
 
 == systemd 서비스 (옵션)
 
-`/etc/systemd/system/argus-catalog-server.service`.
+서버를 부팅 시 자동으로 띄우고 싶다면 systemd 서비스로 등록하면 편리합니다. `/etc/systemd/system/argus-catalog-server.service` 파일을 다음과 같이 작성합니다.
 
 [source,ini]
 ----

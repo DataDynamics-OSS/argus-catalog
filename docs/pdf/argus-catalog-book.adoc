@@ -20,15 +20,37 @@ include::../modules/ROOT/pages/catalog/platforms.adoc[leveloffset=+1]
 
 include::../modules/ROOT/pages/catalog/schema.adoc[leveloffset=+1]
 
+include::../modules/ROOT/pages/catalog/lineage.adoc[leveloffset=+1]
+
 include::../modules/ROOT/pages/catalog/tags-glossary.adoc[leveloffset=+1]
 
 include::../modules/ROOT/pages/catalog/standards.adoc[leveloffset=+1]
 
 include::../modules/ROOT/pages/catalog/quality.adoc[leveloffset=+1]
 
-include::../modules/ROOT/pages/catalog/lineage.adoc[leveloffset=+1]
+= 메타데이터 거버넌스
 
-= ML 모델
+include::../modules/ROOT/pages/governance/api-catalog.adoc[leveloffset=+1]
+
+include::../modules/ROOT/pages/governance/ai-agent-catalog.adoc[leveloffset=+1]
+
+include::../modules/ROOT/pages/governance/change-management.adoc[leveloffset=+1]
+
+= 카탈로그 페더레이션
+
+include::../modules/ROOT/pages/federation/index.adoc[leveloffset=+1]
+
+include::../modules/ROOT/pages/federation/instances.adoc[leveloffset=+1]
+
+include::../modules/ROOT/pages/federation/harvest.adoc[leveloffset=+1]
+
+include::../modules/ROOT/pages/federation/browse-search.adoc[leveloffset=+1]
+
+include::../modules/ROOT/pages/federation/import.adoc[leveloffset=+1]
+
+include::../modules/ROOT/pages/federation/governance.adoc[leveloffset=+1]
+
+= ML 모델 레지스트리
 
 include::../modules/ROOT/pages/models/registry.adoc[leveloffset=+1]
 
@@ -36,17 +58,23 @@ include::../modules/ROOT/pages/models/stage-metrics.adoc[leveloffset=+1]
 
 include::../modules/ROOT/pages/models/oci-hub.adoc[leveloffset=+1]
 
-= AI 기능
+include::../modules/ROOT/pages/models/import.adoc[leveloffset=+1]
+
+= AI
 
 include::../modules/ROOT/pages/ai/metadata-generation.adoc[leveloffset=+1]
 
+include::../modules/ROOT/pages/ai/assistant.adoc[leveloffset=+1]
+
 include::../modules/ROOT/pages/ai/fine-tuning.adoc[leveloffset=+1]
 
-= 운영
+= 검색
 
 include::../modules/ROOT/pages/ops/search.adoc[leveloffset=+1]
 
 include::../modules/ROOT/pages/ops/embedding.adoc[leveloffset=+1]
+
+= 운영
 
 include::../modules/ROOT/pages/ops/alerts.adoc[leveloffset=+1]
 
@@ -56,13 +84,27 @@ include::../modules/ROOT/pages/ops/authentication.adoc[leveloffset=+1]
 
 include::../modules/ROOT/pages/ops/settings.adoc[leveloffset=+1]
 
-= 설치 / 운영
+= 설치 / 배포
 
 include::../modules/ROOT/pages/install/requirements.adoc[leveloffset=+1]
 
 include::../modules/ROOT/pages/install/setup.adoc[leveloffset=+1]
 
+include::../modules/ROOT/pages/install/docker.adoc[leveloffset=+1]
+
+include::../modules/ROOT/pages/install/production.adoc[leveloffset=+1]
+
 include::../modules/ROOT/pages/install/operations.adoc[leveloffset=+1]
+
+= 플러그인 (커스텀 화면)
+
+include::../modules/ROOT/pages/plugin/index.adoc[leveloffset=+1]
+
+include::../modules/ROOT/pages/plugin/frontend.adoc[leveloffset=+1]
+
+include::../modules/ROOT/pages/plugin/backend.adoc[leveloffset=+1]
+
+include::../modules/ROOT/pages/plugin/reference.adoc[leveloffset=+1]
 
 [appendix]
 = SDK

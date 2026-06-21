@@ -172,6 +172,12 @@ class Settings:
             _get("federation", "breaker_cooldown_seconds", 60)
         )
 
+        # 플러그인 — 고객사별 커스텀 화면/API 확장. importlib entry_points 그룹
+        # "argus.plugins" 에 등록된 패키지 중, 이 목록에 이름이 포함된 것만 로드한다.
+        # 빈 목록(기본)이면 발견된 플러그인을 모두 로드한다(= OSS 기본 동작과 동일하게
+        # 설치된 게 없으면 아무 것도 안 붙는다). 코어 동작에는 영향이 없다.
+        self.enabled_plugins: list[str] = _csv_list(_get("plugins", "enabled", []))
+
 
 def init_settings(
     yaml_path: str | None = None,

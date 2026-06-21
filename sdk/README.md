@@ -1,12 +1,14 @@
 # Argus Catalog SDK
 
-Argus Catalog Model Registry를 위한 Python SDK 및 CLI 도구입니다.
-**OCI 기반 모델 저장소** (S3/MinIO)의 모델 관리를 담당합니다.
+Argus Catalog Model Registry를 코드로 다루고 싶을 때 손에 잡는 도구가 바로 이 Python SDK와 CLI입니다.
+**OCI 기반 모델 저장소** (S3/MinIO)에 모델을 올리고 내리고 정리하는 일을 이 SDK가 맡습니다.
 
-> **MLflow와의 관계:** MLflow 모델 등록/추론은 MLflow 자체 클라이언트(`mlflow` 패키지)를 사용합니다.
-> 이 SDK는 OCI 모델 저장소 관리 (업로드, 다운로드, HuggingFace 임포트, Airgap 전송)에 사용됩니다.
+> **MLflow와의 관계:** 헷갈리기 쉬운 부분부터 짚고 가겠습니다. MLflow로 모델을 등록하거나 추론할 때는 MLflow 자체 클라이언트(`mlflow` 패키지)를 그대로 쓰면 됩니다.
+> 이 SDK는 그와는 역할이 다릅니다. OCI 모델 저장소를 관리하는 일 — 업로드, 다운로드, HuggingFace 임포트, Airgap 전송 — 을 담당합니다.
 
 ### SDK 적용 범위
+
+그럼 어떤 작업에 무엇을 써야 할까요? 아래 표가 그 경계를 한눈에 보여 줍니다. 같은 모델을 다루더라도 학습·추론 쪽은 MLflow 클라이언트가, 저장소 관리 쪽은 Argus SDK가 맡는다는 점을 기억해 두면 헷갈릴 일이 없습니다.
 
 | 기능 | 사용 도구 | API |
 |------|----------|-----|
@@ -24,17 +26,19 @@ Argus Catalog Model Registry를 위한 Python SDK 및 CLI 도구입니다.
 
 ## 설치
 
+먼저 SDK부터 설치해 봅시다. 기본 기능은 한 줄이면 충분합니다.
+
 ```bash
 pip install argus-catalog-sdk
 ```
 
-HuggingFace 임포트를 사용하려면:
+HuggingFace 임포트까지 쓰려면 관련 의존성을 함께 받아야 합니다.
 
 ```bash
 pip install argus-catalog-sdk[huggingface]
 ```
 
-개발 환경:
+SDK 자체를 고치거나 기여하려는 개발 환경이라면 편집 가능(editable) 모드로 설치합니다.
 
 ```bash
 cd sdk
@@ -45,6 +49,8 @@ pip install -e ".[dev]"
 
 ### 기본 사용
 
+모든 작업은 `ModelClient` 하나에서 출발합니다. 카탈로그 서버 주소만 알려 주면, 이 클라이언트가 나머지 호출을 대신 처리해 줍니다.
+
 ```python
 from argus_catalog_sdk import ModelClient
 
@@ -52,6 +58,8 @@ client = ModelClient("http://catalog-server:4600")
 ```
 
 ### 모델 목록 조회
+
+저장소에 어떤 모델이 있는지 둘러보는 일부터 시작해 봅시다. 전체를 한 번에 볼 수도, 키워드로 검색하거나 페이지 단위로 끊어 볼 수도 있습니다.
 
 ```python
 # 전체 목록
@@ -68,6 +76,8 @@ result = client.list_models(page=2, page_size=10)
 
 ### 모델 등록
 
+새 모델을 카탈로그에 올리려면 먼저 이름표를 만들어 주어야 합니다. 이 단계는 모델의 '자리'를 잡아 두는 과정이라고 보면 됩니다.
+
 ```python
 model = client.create_model(
     name="argus.ml.iris_classifier",
@@ -79,6 +89,8 @@ print(f"Created: {model['name']}")
 
 ### 모델 조회
 
+이름만 알면 특정 모델의 상세 정보를 곧장 꺼내 볼 수 있습니다.
+
 ```python
 model = client.get_model("argus.ml.iris_classifier")
 print(f"Name: {model['name']}")
@@ -88,7 +100,7 @@ print(f"Owner: {model['owner']}")
 
 ### 파일 업로드
 
-모델 파일을 S3(MinIO)에 업로드합니다.
+이제 실제 모델 파일을 S3(MinIO)에 올려 봅시다. 파일이 작으면 직접 업로드로 충분하지만, 용량이 큰 가중치 파일이라면 서버를 거치지 않고 MinIO로 곧장 전송하는 Presigned URL 방식이 훨씬 빠릅니다.
 
 ```python
 # 직접 업로드 (소형 파일)
@@ -99,6 +111,8 @@ client.upload_via_presigned("argus.ml.bert", version=1, filepath="/path/to/model
 ```
 
 ### 파일 다운로드 / Pull
+
+올렸으면 다시 받아 와야겠죠. 파일 하나만 골라 받을 수도 있고, 한 버전에 속한 파일을 통째로 로컬 디렉토리에 내려받는 Pull도 있습니다.
 
 ```python
 # 단일 파일 다운로드 URL
@@ -118,7 +132,7 @@ print(f"Downloaded {len(downloaded)} files")
 
 ### Push — 로컬 디렉토리를 모델로 등록
 
-로컬에 있는 모델 파일들을 새 버전으로 업로드합니다.
+Pull의 반대 방향입니다. 로컬 디렉토리에 모여 있는 모델 파일들을 통째로 새 버전으로 올려 줍니다.
 
 ```python
 result = client.push(
@@ -132,7 +146,7 @@ print(f"Pushed v{result['version']}: {result['file_count']} files")
 
 ### HuggingFace 임포트
 
-HuggingFace Hub에서 모델을 다운로드하여 S3에 저장합니다.
+직접 파일을 들고 있지 않아도 됩니다. 모델 ID만 알려 주면 HuggingFace Hub에서 모델을 받아 곧장 S3에 저장해 줍니다.
 
 ```python
 result = client.import_huggingface(
@@ -148,8 +162,7 @@ print(f"Storage: {result['storage_location']}")
 
 ### 로컬 Import (Airgap)
 
-서버가 접근 가능한 로컬 디렉토리에서 S3로 임포트합니다.
-USB 등으로 파일을 전송한 후 사용합니다.
+인터넷이 닿지 않는 폐쇄망이라면 HuggingFace에서 바로 받아 올 수 없습니다. 이럴 때는 USB 같은 매체로 파일을 옮겨 둔 뒤, 서버가 접근 가능한 로컬 디렉토리에서 S3로 임포트하면 됩니다.
 
 ```python
 result = client.import_local(
@@ -162,6 +175,8 @@ print(f"Imported v{result['version']}: {result['file_count']} files")
 
 ### 파일 목록 조회
 
+특정 모델 버전 안에 어떤 파일들이 들어 있는지 궁금하다면 다음처럼 확인할 수 있습니다.
+
 ```python
 files = client.list_files("argus.ml.iris", version=1)
 for f in files:
@@ -169,6 +184,8 @@ for f in files:
 ```
 
 ### OCI Manifest 조회
+
+모델이 OCI 형식으로 어떻게 묶여 있는지, 즉 어떤 레이어들로 구성됐는지 들여다보고 싶을 때 쓰는 조회입니다.
 
 ```python
 manifest = client.get_manifest("argus.ml.iris", version=1)
@@ -180,7 +197,7 @@ for layer in manifest["layers"]:
 
 ### Finalize
 
-업로드 완료 후 manifest를 생성하고 버전을 확정합니다.
+파일을 다 올렸다고 끝이 아닙니다. 마지막으로 manifest를 만들고 버전을 확정하는 마무리 단계를 거쳐야 비로소 그 버전이 완성됩니다.
 
 ```python
 result = client.finalize(
@@ -193,6 +210,8 @@ print(f"Status: {result['status']}, Files: {result['file_count']}")
 
 ### 모델 삭제
 
+삭제에는 두 단계가 있습니다. Soft delete는 목록에서 잠시 가려 두는 것이고, Hard delete는 DB와 S3·디스크에서 실제로 지워 되돌릴 수 없습니다. 신중하게 골라 쓰세요.
+
 ```python
 # Soft delete (목록에서 숨김)
 client.delete_model("argus.ml.old_model")
@@ -204,7 +223,11 @@ print(f"Deleted: {result['deleted']}")
 
 ## CLI (`argus-model`)
 
+Python 코드를 짤 필요 없이 터미널에서 같은 일을 하고 싶을 때는 `argus-model` 명령을 쓰면 됩니다. 앞서 본 SDK 기능 대부분이 명령어 한 줄로 그대로 대응됩니다.
+
 ### 모델 목록
+
+가장 먼저 써 보게 될 명령입니다. 저장소에 등록된 모델을 표로 보여 주며, 검색이나 페이지 옵션도 그대로 쓸 수 있습니다.
 
 ```bash
 argus-model list
@@ -292,7 +315,7 @@ argus-model delete argus.ml.old_model -y
 
 ## Airgap 워크플로우
 
-인터넷이 없는 폐쇄망에서 HuggingFace 모델을 사용하는 전체 흐름:
+지금까지 본 명령들을 어떻게 엮어 쓰는지, 실제 시나리오 하나로 정리해 보겠습니다. 인터넷이 닿는 곳에서 모델을 받아 폐쇄망으로 옮겨 쓰는 전체 흐름은 다음과 같습니다. 온라인 환경에서 임포트·Pull로 파일을 꺼내고, 매체로 옮긴 뒤, Airgap 환경에서 다시 import하는 순서입니다.
 
 ```bash
 # ──── 인터넷 환경 ────
@@ -320,6 +343,8 @@ argus-model files argus.ml.bert 1 --server http://airgap-catalog:4600
 
 ## 환경 변수
 
+설정과 관련해서는 아직 단출합니다. 지금은 서버 주소를 `--server` 플래그로 직접 넘기는 방식 하나뿐입니다.
+
 | 변수 | 설명 | 기본값 |
 |------|------|--------|
 | (없음) | 모든 설정은 `--server` 플래그로 지정 | `http://localhost:4600` |
@@ -327,6 +352,8 @@ argus-model files argus.ml.bert 1 --server http://airgap-catalog:4600
 향후 `ARGUS_CATALOG_SERVER` 환경 변수 지원 예정.
 
 ## 의존성
+
+끝으로, 이 SDK가 어떤 라이브러리 위에서 동작하는지 정리해 둡니다. HuggingFace 임포트를 쓰지 않는다면 마지막 항목은 선택 사항입니다.
 
 | 패키지 | 용도 |
 |--------|------|

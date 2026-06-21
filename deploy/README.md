@@ -1,15 +1,20 @@
 # Argus Catalog — 로컬 개발/데모/운영 배포
 
-Docker Compose 기반의 **로컬 개발·데모/운영 스택**입니다. 카탈로그 서버가 의존하는 인프라
-(MinIO·Temporal·Keycloak·OpenLDAP·Sakila)와 풀스택(backend·frontend)을 한 번에 띄울 수
-있습니다.
+Argus Catalog 를 처음 손에 잡았다면 여기서 시작하면 됩니다. Docker Compose 기반의 **로컬
+개발·데모/운영 스택**이라, 명령어 한 줄이면 됩니다. 카탈로그 서버가 혼자서는 돌지 못하고
+기대는 인프라(MinIO·Temporal·Keycloak·OpenLDAP·Sakila)와 풀스택(backend·frontend)을 한
+번에 띄울 수 있습니다.
 
 > ⚠️ **기본 계정·비밀번호는 로컬/데모용입니다.** docker-compose 와 `config/` 에 들어 있는
-> 기본 크리덴셜(`admin`·`minioadmin`·`argus` 등)은 개발 편의를 위한 값이라 운영에 그대로
-> 쓰면 안 됩니다. 운영 배포는 아래 [운영 배포](#운영-배포) 절차를 따르고 모든 시크릿을
-> 교체하세요 (루트 [README 운영 보안 설정](../README.md#운영-환경-보안-설정-️) 참고).
+> 기본 크리덴셜(`admin`·`minioadmin`·`argus` 등)은 손쉽게 띄워 보라고 박아 둔 개발용 값입니다.
+> 운영에 그대로 들고 가면 안 됩니다. 운영 배포는 아래 [운영 배포](#운영-배포) 절차를 따르고 모든
+> 시크릿을 교체하세요 (루트 [README 운영 보안 설정](../README.md#운영-환경-보안-설정-️) 참고).
 
 ## 구성 파일
+
+이 디렉터리에는 용도별로 나뉜 compose 파일이 여러 개 들어 있습니다. 전부 외울 필요는 없고, 데모로
+한 번에 띄울 땐 `docker-compose.yml` 만, 운영에서는 거기에 `prod` 오버라이드를 얹는다고 생각하면
+됩니다. 각 파일이 무엇을 맡는지 정리하면 다음과 같습니다.
 
 | 파일 | 용도 |
 |------|------|
@@ -23,6 +28,9 @@ Docker Compose 기반의 **로컬 개발·데모/운영 스택**입니다. 카�
 | `download-sakila.sh` | 샘플 데이터셋(Sakila) 다운로드 |
 
 ## 빠른 시작
+
+길게 설명하기 전에 일단 한 번 띄워 봅시다. UI까지 통째로 보고 싶으면 풀스택을, 백엔드를 직접
+고쳐 가며 개발할 거라면 인프라만 올리고 백엔드는 로컬에서 돌리는 쪽이 편합니다.
 
 ```bash
 # 풀스택 (UI + API + 인프라)
@@ -40,6 +48,9 @@ docker compose -f deploy/docker-compose.yml down -v    # 볼륨까지 삭제(데
 ```
 
 ## 엔드포인트 & 기본 계정 (로컬 전용)
+
+스택이 떠 있다면 이제 어디로 접속해야 할지 궁금할 차례입니다. 아래 주소와 계정은 모두 로컬에서
+바로 열어 볼 수 있도록 준비된 것이니, 브라우저에 그대로 붙여 넣어 보세요.
 
 | 서비스 | URL | 기본 계정 |
 |--------|-----|-----------|
@@ -62,7 +73,8 @@ Keycloak `argus` realm 의 데모 사용자(`config/keycloak/argus-realm.json`):
 
 ## 샘플 데이터 (Sakila)
 
-데이터 카탈로그의 데이터셋 샘플로 사용하는 데이터입니다.
+카탈로그를 막 띄우면 보여 줄 데이터가 없어 휑합니다. Sakila 는 그 빈 화면을 채워 줄, 카탈로그가
+다룰 데이터셋 샘플로 쓰는 공개 데이터입니다.
 
 ```bash
 deploy/download-sakila.sh    # deploy/sakila/*.sql 생성(.gitignore 대상)
@@ -75,13 +87,17 @@ deploy/download-sakila.sh    # deploy/sakila/*.sql 생성(.gitignore 대상)
 
 ### 1) 시크릿 준비
 
+가장 먼저 할 일은 운영에서 쓸 비밀값들을 따로 마련하는 것입니다. 템플릿을 복사해 내 `.env` 를
+만들고, 비밀번호류는 직접 짓지 말고 아래처럼 강한 무작위 값으로 생성하세요.
+
 ```bash
 cp deploy/.env.example deploy/.env       # .gitignore 대상 — 절대 커밋 금지
 # 강한 무작위 값 생성
 openssl rand -base64 36                   # ARGUS_SECRET_KEY / ARGUS_JWT_SECRET 등에 사용
 ```
 
-`deploy/.env` 에 채울 값:
+방금 만든 `deploy/.env` 에는 다음 값들을 채워 둡니다. 각 변수가 어디에 쓰이고 어떤 경로로 주입되는지
+함께 적어 두었습니다.
 
 | 변수 | 용도 | 주입 경로 |
 |------|------|-----------|
@@ -102,6 +118,9 @@ openssl rand -base64 36                   # ARGUS_SECRET_KEY / ARGUS_JWT_SECRET 
 
 ### 3) 기동
 
+시크릿과 config 가 맞춰졌다면 이제 운영 오버라이드를 얹어 띄울 차례입니다. 데모 때와 달리 `prod`
+파일과 `.env` 를 함께 지정한다는 점만 다릅니다.
+
 ```bash
 docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.prod.yml \
   --env-file deploy/.env up -d --build
@@ -113,8 +132,9 @@ docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.prod.yml \
 
 ### 4) 데이터 보존 & 백업
 
-운영 오버라이드는 상태 데이터를 **명시적 호스트 경로(bind mount)** 에 보관하므로,
-컨테이너를 삭제·재생성해도(`down`, 이미지 교체, 재빌드) 데이터가 보존됩니다.
+운영에서 가장 걱정되는 건 "컨테이너를 지우면 데이터도 날아가나?" 하는 점일 텐데, 그럴 일은
+없습니다. 운영 오버라이드는 상태 데이터를 **명시적 호스트 경로(bind mount)** 에 보관하므로,
+컨테이너를 삭제·재생성해도(`down`, 이미지 교체, 재빌드) 데이터가 그대로 남습니다.
 
 | 데이터 | 위치 |
 |--------|------|

@@ -1,24 +1,25 @@
 = 설정
 
-시스템 전역 런타임 설정. `argus-admin` 만 접근 가능.
+설정 화면에서는 시스템 전역에 적용되는 런타임 설정을 다룹니다. 권한이 큰 만큼
+`argus-admin` 역할을 가진 사용자만 접근할 수 있습니다.
 
 // TODO: screenshot - Settings 메인 (탭 영역)
 image::ops-settings/overview.png[설정, 800]
 
 == 진입 경로
 
-좌측 사이드바 *Administration → Settings* (`/dashboard/settings`).
+좌측 사이드바에서 *Administration → Settings* (`/dashboard/settings`) 로 들어갑니다.
 
-설정은 DB (`catalog_configuration`) 에 카테고리·키 단위로 저장되며 *변경 즉시
-서버에 재로드* 된다 (재시작 불필요).
+설정 값은 DB (`catalog_configuration`) 에 카테고리·키 단위로 저장되며, *변경하면 즉시
+서버에 재로드* 됩니다. 따로 재시작할 필요가 없습니다.
 
-탭은 다음 5 개.
+탭은 다음 5 개로 나뉩니다.
 
-* *Auth* — 인증 방식.
-* *CORS* — 허용 오리진.
-* *Object Storage* — S3 / MinIO.
-* *Embedding* — 시맨틱 검색 임베딩 프로바이더.
-* *LLM* — AI 메타데이터 자동 생성.
+* *Auth* — 인증 방식입니다.
+* *CORS* — 허용할 오리진입니다.
+* *Object Storage* — S3 / MinIO 설정입니다.
+* *Embedding* — 시맨틱 검색에 쓰는 임베딩 프로바이더입니다.
+* *LLM* — AI 메타데이터 자동 생성 설정입니다.
 
 == Auth
 
@@ -30,27 +31,29 @@ image::ops-settings/overview.png[설정, 800]
 | `auth_keycloak_server_url` | Keycloak 서버 URL (`http://localhost:8180`).
 | `auth_keycloak_realm` | Realm 이름 (`argus`).
 | `auth_keycloak_client_id` | Client ID (`argus-client`).
-| `auth_keycloak_client_secret` | Client Secret. 응답에서 마스킹.
+| `auth_keycloak_client_secret` | Client Secret 입니다. 응답에서는 마스킹됩니다.
 | `auth_keycloak_admin_role` | 관리자 역할 (`argus-admin`).
 | `auth_keycloak_superuser_role` | 슈퍼유저 역할.
 | `auth_keycloak_user_role` | 기본 사용자 역할.
 |===
 
-*Initialize* 버튼으로 Keycloak Realm · Client · Role 을 자동 시드할 수 있다.
+*Initialize* 버튼을 누르면 Keycloak 의 Realm · Client · Role 을 자동으로 시드할 수
+있습니다.
 
 == CORS
 
-콤마 구분 오리진. 동적 미들웨어로 즉시 반영.
+허용할 오리진을 콤마로 구분해 적습니다. 동적 미들웨어를 통해 즉시 반영됩니다.
 
 ----
 http://localhost:3000,http://my-internal-host:3000
 ----
 
-`*` 은 개발 환경에서만 권장.
+`*` 은 개발 환경에서만 사용하기를 권장합니다.
 
 == Object Storage
 
-ML 모델 아티팩트 저장소. 설정하지 않으면 로컬 파일시스템 모드.
+ML 모델 아티팩트를 보관하는 저장소입니다. 따로 설정하지 않으면 로컬 파일시스템
+모드로 동작합니다.
 
 [cols="1,3"]
 |===
@@ -63,11 +66,12 @@ ML 모델 아티팩트 저장소. 설정하지 않으면 로컬 파일시스템 
 | `presigned_url_expiry` | `3600` 초
 |===
 
-*Test Connection* 으로 버킷 접근을 검증. 버킷이 없으면 자동 생성된다.
+*Test Connection* 을 누르면 버킷에 접근할 수 있는지 검증합니다. 버킷이 없으면 자동으로
+만들어 줍니다.
 
 == Embedding
 
-시맨틱 검색용 임베딩 프로바이더 설정.
+시맨틱 검색에 사용할 임베딩 프로바이더를 설정합니다.
 
 [cols="1,3"]
 |===
@@ -81,14 +85,15 @@ ML 모델 아티팩트 저장소. 설정하지 않으면 로컬 파일시스템 
 | `embedding_dimension` | 벡터 차원.
 |===
 
-*Test* 버튼은 텍스트 한 줄을 실제로 임베딩해 응답 시간 / 차원 / 모델을 보여준다.
-저장 시 프로바이더가 즉시 재초기화된다.
+*Test* 버튼을 누르면 텍스트 한 줄을 실제로 임베딩해 보고 응답 시간 · 차원 · 모델을
+보여 줍니다. 설정을 저장하면 프로바이더가 즉시 다시 초기화됩니다.
 
-상세 운영 절차는 xref:ops/search.adoc[검색] 참조.
+자세한 운영 절차는 xref:ops/search.adoc[검색] 을 참고하세요.
 
 == LLM
 
-AI 메타데이터 자동 생성 (테이블 설명, 컬럼 설명, 태그 추천, PII 탐지).
+AI 가 메타데이터를 자동으로 만들어 주는 기능입니다 (테이블 설명, 컬럼 설명, 태그
+추천, PII 탐지).
 
 [cols="1,3"]
 |===
@@ -101,15 +106,15 @@ AI 메타데이터 자동 생성 (테이블 설명, 컬럼 설명, 태그 추천
 | `llm_api_url` | 커스텀 URL.
 | `llm_temperature` | 기본 0.3.
 | `llm_max_tokens` | 기본 1024.
-| `llm_auto_generate_on_sync` | 동기화 후 빈 설명 자동 생성.
+| `llm_auto_generate_on_sync` | 동기화 후 비어 있는 설명을 자동으로 생성합니다.
 | `llm_language` | 생성 언어 (`ko`, `en` ...).
 |===
 
-생성 이력은 `catalog_ai_generation_log` 테이블에 토큰 사용량과 함께 기록돼 감사
-추적이 가능하다.
+생성 이력은 `catalog_ai_generation_log` 테이블에 토큰 사용량과 함께 기록되므로,
+나중에 감사 추적을 할 수 있습니다.
 
 == 비밀번호 / 시크릿 마스킹
 
 설정 API 의 응답에서 시크릿 필드 (`*_secret`, `*_api_key`, `*_password`) 는
-`••••••••` 으로 마스킹된다. 빈 값으로 PUT 하면 기존 값을 유지한다 (덮어쓰지
-않음).
+`••••••••` 으로 마스킹됩니다. 빈 값으로 PUT 하면 기존 값을 그대로 유지하므로 (덮어쓰지
+않습니다), 시크릿을 다시 입력하지 않아도 됩니다.

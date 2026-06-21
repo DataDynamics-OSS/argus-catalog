@@ -1,10 +1,12 @@
 = Extension 개요
 
-쿼리 엔진·DBMS 측에 설치해 *메타데이터·쿼리 리니지* 를 자동 수집하는 확장
-컴포넌트. 각 컴포넌트는 카탈로그의 `platform_id` 와 연결돼 쿼리 이벤트 또는
-스키마 메타데이터를 *Metadata Sync 서비스* (port 4610) 에 비동기 전송한다.
+Extension 은 쿼리 엔진이나 DBMS 쪽에 설치해 *메타데이터와 쿼리 리니지* 를 자동으로
+수집해 주는 확장 컴포넌트입니다. 각 컴포넌트는 카탈로그의 `platform_id` 와 연결되어,
+수집한 쿼리 이벤트나 스키마 메타데이터를 *Metadata Sync 서비스* (port 4610) 로 비동기 전송합니다.
 
 == 한눈에 보기
+
+먼저 어떤 Extension 이 있고 무엇을 수집하는지 한눈에 정리하면 다음과 같습니다.
 
 [cols="2,1,2,2"]
 |===
@@ -48,24 +50,28 @@
 
 == 공통 설치 흐름
 
-. 카탈로그 UI 에서 *Platforms → Add Platform* 으로 대상 시스템 등록 → `platform_id` 확보.
-. Extension 빌드/배포 (각 페이지 참조).
-. Extension 설정의 `platformId` 또는 `platform.id` 에 1번에서 얻은 값 입력.
-. Metadata Sync 서비스 (`http://<host>:4610`) 가 수신 가능한지 확인.
-. 대상 시스템 재시작 후 쿼리 / 동기화 실행으로 수집 검증.
+어떤 Extension 을 쓰든 설치 절차는 대체로 비슷합니다. 다음 순서대로 진행하시면 됩니다.
+
+. 카탈로그 UI 에서 *Platforms → Add Platform* 으로 대상 시스템을 등록해 `platform_id` 를 확보합니다.
+. Extension 을 빌드/배포합니다 (자세한 내용은 각 페이지 참조).
+. Extension 설정의 `platformId` 또는 `platform.id` 에 1번에서 얻은 값을 입력합니다.
+. Metadata Sync 서비스 (`http://<host>:4610`) 가 수신 가능한 상태인지 확인합니다.
+. 대상 시스템을 재시작한 뒤 쿼리나 동기화를 실행해 수집이 되는지 검증합니다.
 
 == 인증
 
-* Metadata Sync 와 Extension 사이 통신은 기본적으로 HTTP — 사내망 전제.
-* 외부 노출 시 카탈로그의 *Service Account* 토큰을 헤더로 전달하도록 Reverse Proxy 또는
-  Sync API 앞단에 인증 게이트웨이 배치 권장.
+* Metadata Sync 와 Extension 사이 통신은 기본적으로 HTTP 이며, 사내망에서 쓰는 것을 전제로 합니다.
+* 외부에 노출해야 한다면 카탈로그의 *Service Account* 토큰을 헤더로 전달하도록 Reverse Proxy 나
+  Sync API 앞단에 인증 게이트웨이를 두시기를 권장합니다.
 
 == 전송 실패 처리
 
-대부분의 Extension 은 *내부 큐* (예: `LinkedBlockingQueue`, daemon thread) 에서 비동기
-전송. 큐가 가득 차면 이벤트가 *드롭* 된다. 영구 실패는 로컬 로그에 출력.
+대부분의 Extension 은 *내부 큐* (예: `LinkedBlockingQueue`, daemon thread) 를 통해 비동기로
+전송합니다. 큐가 가득 차면 이벤트가 *드롭* 되며, 영구적인 실패는 로컬 로그에 남습니다.
 
 == 패키지 식별자
+
+각 Extension 을 설정할 때 지정하는 Java 패키지나 Python 모듈 식별자는 다음과 같습니다.
 
 [cols="2,3"]
 |===

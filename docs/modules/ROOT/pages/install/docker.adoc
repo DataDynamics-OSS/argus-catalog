@@ -1,17 +1,16 @@
 = Docker Compose 배포
 
-Docker Compose 로 풀스택(backend · frontend · Temporal · 의존 서비스)을 한 번에
-기동한다. 로컬 개발/데모용 스택과 인프라 전용 스택을 제공한다.
+직접 하나씩 설치하기 번거롭다면 Docker Compose 가 가장 빠른 길입니다. 명령 한 줄로 풀스택(backend · frontend · Temporal · 의존 서비스)을 한 번에 띄울 수 있습니다. 로컬 개발/데모용 스택과 인프라 전용 스택을 함께 제공합니다.
 
 [WARNING]
 ====
-이 스택의 기본 계정·비밀번호(`admin`·`minioadmin`·`argus` 등)는 **로컬/데모용**이다.
-운영 배포는 xref:install/production.adoc[운영 배포] 를 따른다.
+이 스택의 기본 계정·비밀번호(`admin`·`minioadmin`·`argus` 등)는 **로컬/데모용**입니다.
+운영 배포는 xref:install/production.adoc[운영 배포] 를 따르세요.
 ====
 
 == 구성 파일
 
-저장소 `deploy/` 디렉터리에 있다.
+관련 파일은 모두 저장소 `deploy/` 디렉터리에 모여 있습니다.
 
 [cols="2,3",options="header"]
 |===
@@ -25,6 +24,8 @@ Docker Compose 로 풀스택(backend · frontend · Temporal · 의존 서비스
 
 == 빠른 시작
 
+준비가 끝났다면 아래 명령으로 바로 시작할 수 있습니다.
+
 [source,bash]
 ----
 # 풀스택 (UI + API + 인프라)
@@ -34,7 +35,7 @@ docker compose -f deploy/docker-compose.yml up -d --build
 docker compose -f deploy/docker-compose.infra.yml up -d
 ----
 
-종료:
+종료할 때는 다음과 같이 합니다.
 
 [source,bash]
 ----
@@ -43,6 +44,8 @@ docker compose -f deploy/docker-compose.yml down -v    # 볼륨까지 삭제(데
 ----
 
 == 엔드포인트 & 기본 계정 (로컬)
+
+스택이 뜨면 아래 주소로 각 서비스에 접속할 수 있습니다. 로컬 데모용 기본 계정도 함께 정리했습니다.
 
 [cols="2,2,2",options="header"]
 |===
@@ -57,9 +60,9 @@ docker compose -f deploy/docker-compose.yml down -v    # 볼륨까지 삭제(데
 
 [NOTE]
 ====
-풀스택 `docker-compose.yml` 은 로컬 인증 모드로 동작하며 첫 기동 시 `admin/admin`
-관리자 계정을 시드한다. Temporal 은 기본 활성(`temporal.enabled=true`)이며,
-xref:governance/change-management.adoc[변경 관리] 에 사용된다.
+풀스택 `docker-compose.yml` 은 로컬 인증 모드로 동작하며, 첫 기동 시 `admin/admin`
+관리자 계정을 시드합니다. Temporal 은 기본으로 활성(`temporal.enabled=true`)이며,
+xref:governance/change-management.adoc[변경 관리] 에 사용됩니다.
 ====
 
-자세한 구성·샘플 데이터는 `deploy/README.md` 를 참고한다.
+더 자세한 구성과 샘플 데이터는 `deploy/README.md` 를 참고하세요.

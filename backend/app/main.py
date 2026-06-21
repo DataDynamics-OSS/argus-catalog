@@ -262,6 +262,13 @@ app.include_router(federation_export_router, prefix="/api/v1")
 app.include_router(impala_profile_router, prefix="/api/v1")
 app.include_router(change_mgmt_router, prefix="/api/v1")
 
+# 플러그인 라우터 — 고객사별 커스텀 확장. entry_points "argus.plugins" 에 등록된
+# 패키지를 발견해 등록한다. 설치된 플러그인이 없으면 아무 것도 하지 않으므로 OSS
+# 기본 동작과 동일하다. (코어 라우터 등록 뒤에 둬서 경로 충돌 시 코어가 우선)
+from app.plugins import load_plugin_routers
+
+load_plugin_routers(app, enabled=settings.enabled_plugins)
+
 
 @app.get("/health")
 async def health():

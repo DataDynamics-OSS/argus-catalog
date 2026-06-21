@@ -1,12 +1,13 @@
 # tools
 
-저장소 관리용 스크립트 모음입니다.
+저장소를 관리하면서 반복적으로 손이 가는 작업들을 스크립트로 모아 둔 곳입니다.
 
 ## `sync-version.py` — 버전 단일 소스 동기화
 
-루트 [`VERSION`](../VERSION) 파일을 단일 소스(single source of truth)로 삼아, 모노레포
-전반의 매니페스트(`pyproject.toml` · `__init__.py` · `package.json`)에 동일한 버전을
-전파합니다. 버전 관리 규칙은 [VERSIONING.md](../VERSIONING.md) 를 참고하세요.
+모노레포에는 버전을 적어 둔 파일이 곳곳에 흩어져 있어, 손으로 맞추다 보면 어느 하나가 어긋나기 마련입니다.
+이 스크립트는 루트 [`VERSION`](../VERSION) 파일 하나를 단일 소스(single source of truth)로 삼아,
+모노레포 전반의 매니페스트(`pyproject.toml` · `__init__.py` · `package.json`)에 같은 버전을
+한 번에 전파해 그 고민을 없애 줍니다. 버전 관리 규칙은 [VERSIONING.md](../VERSIONING.md) 를 참고하세요.
 
 ```bash
 # VERSION → 모든 매니페스트로 동기화

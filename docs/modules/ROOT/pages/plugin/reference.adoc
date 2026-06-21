@@ -1,0 +1,142 @@
+= 확장 지점·계약 레퍼런스
+
+플러그인이 의존하는 코어 확장 지점(seam)과 계약을 한 곳에 정리한 레퍼런스입니다. 이
+표면은 *안정적으로 유지* 되며, 변경할 때는 호환성에 주의해야 합니다.
+
+== 코어 확장 지점
+
+플러그인이 닿는 코어 측 파일과 그 책임은 다음과 같습니다.
+
+[cols="1,2,3"]
+|===
+| 영역 | 파일 | 책임
+
+| 백엔드 로더
+| `backend/app/plugins.py`
+| `entry_points(group="argus.plugins")` 발견 → `plugin.router` 등록. 실패 격리.
+
+| 백엔드 기동
+| `backend/app/main.py`
+| 코어 라우터 등록 뒤 `load_plugin_routers(app, enabled=settings.enabled_plugins)`
+
+| 백엔드 설정
+| `backend/app/core/config.py`
+| `settings.enabled_plugins` ← `plugins.enabled`(쉼표 구분)
+
+| 프론트 호스트 라우트
+| `app/dashboard/x/[...slug]/page.tsx`
+| `pluginScreens[slug]` 조회 → 렌더, 없으면 `notFound()`
+
+| 프론트 메뉴 병합
+| `lib/menu.ts`
+| 베이스 `menu.json` + `pluginMenus` 병합
+
+| 프론트 아이콘
+| `lib/icon-map.ts`
+| 코어 아이콘 → `pluginIcons` → 기본(HelpCircle) 순 조회
+
+| 프론트 레지스트리
+| `plugins/registry.ts`
+| 활성 플러그인 배열 → `pluginMenus` / `pluginScreens` / `pluginIcons` 도출
+|===
+
+== 백엔드 계약
+
+=== entry point
+
+[source,toml]
+----
+[project.entry-points."argus.plugins"]
+<name> = "<module>:<attr>"      # attr 은 router 속성을 가진 객체
+----
+
+=== 플러그인 객체
+
+[cols="1,1,1,3"]
+|===
+| 속성 | 타입 | 필수 | 기본
+
+| `router` | `fastapi.APIRouter` | O | —
+| `prefix` | `str` | X | `/api/v1`
+|===
+
+=== `load_plugin_routers(app, enabled)`
+
+[cols="1,3"]
+|===
+| 인자 | 의미
+
+| `app` | FastAPI 앱
+| `enabled` | 허용 플러그인 이름 목록. `None`/빈 목록이면 발견된 전부 로드.
+|===
+
+반환: 등록에 성공한 플러그인 이름 목록(`list[str]`).
+
+=== 설정 (`config.yml`)
+
+[source,yaml]
+----
+plugins:
+  enabled: acme,beta     # 비우면 설치된 전부 로드
+----
+
+== 프론트엔드 계약
+
+=== `ArgusPlugin`
+
+[cols="1,2,1,3"]
+|===
+| 필드 | 타입 | 필수 | 의미
+
+| `id` | `string` | O | 플러그인 식별자
+| `menu` | `MenuGroup[]` | X | 사이드바에 병합할 메뉴(그룹 id 일치 시 아이템 덧붙임)
+| `screens` | `PluginScreen[]` | X | 제공 화면
+| `icons` | `Record<string, LucideIcon>` | X | 코어 icon-map 에 없는 아이콘
+|===
+
+=== `PluginScreen`
+
+[cols="1,2,3"]
+|===
+| 필드 | 타입 | 의미
+
+| `slug` | `string` | `/dashboard/x/<slug>` 로 매핑. 예: `acme/billing`
+| `component` | `ComponentType` | 렌더링할 화면 컴포넌트
+|===
+
+=== `MenuItem` (코어 타입 재사용)
+
+[cols="1,2,3"]
+|===
+| 필드 | 타입 | 의미
+
+| `id` | `string` | 아이템 식별자
+| `title` | `string` | 메뉴 표시 이름
+| `url` | `string` | `/dashboard/x/<slug>` (화면 slug 와 일치)
+| `icon` | `string` | icon-map 또는 플러그인 `icons` 의 키
+| `adminOnly` | `boolean?` | 관리자 전용 노출
+|===
+
+== URL ↔ slug 규칙
+
+[cols="1,1"]
+|===
+| 메뉴 `url` | 화면 `slug`
+
+| `/dashboard/x/acme/billing` | `acme/billing`
+| `/dashboard/x/<a>/<b>/<c>` | `<a>/<b>/<c>`
+|===
+
+== 호환성 메모
+
+* 확장 지점 시그니처(로더·`ArgusPlugin`·entry point 그룹명)는 안정 표면입니다. 이를 바꾸면
+  설치된 모든 플러그인에 영향을 주므로, *코어 버전 정책* 에 맞춰 신중히 다뤄야 합니다.
+* entry point 그룹명은 `argus.plugins` 로 고정되어 있습니다.
+* 코어 라우트/메뉴 키와 *충돌하지 않는* slug·prefix 를 고르세요(코어가 우선 등록됩니다).
+
+== 관련 문서
+
+* xref:plugin/index.adoc[플러그인 개요]
+* xref:plugin/frontend.adoc[프론트엔드 화면 플러그인]
+* xref:plugin/backend.adoc[백엔드 API 플러그인]
+* xref:appendix/extensions.adoc[Extension 개요](쿼리/메타데이터 수집 확장)

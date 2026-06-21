@@ -1,10 +1,14 @@
 = SDK 가이드
 
-`argus-catalog-sdk` — OCI 기반 모델 저장소 조작을 위한 Python SDK + `argus-model`
-CLI. MLflow 모델 등록·로딩은 MLflow 클라이언트 (`mlflow.sklearn.log_model()`,
-`mlflow.pyfunc.load_model()`) 를 그대로 사용한다.
+`argus-catalog-sdk` 는 OCI 기반 모델 저장소를 코드로 다루기 위한 Python SDK 와
+`argus-model` CLI 를 함께 제공합니다. 모델을 직접 등록하거나 내려받는 작업을
+파이썬 몇 줄, 혹은 터미널 명령 한 줄로 처리할 수 있습니다. MLflow 모델의 등록·로딩은
+별도 래퍼 없이 MLflow 클라이언트 (`mlflow.sklearn.log_model()`,
+`mlflow.pyfunc.load_model()`) 를 그대로 사용하시면 됩니다.
 
 == 설치
+
+먼저 SDK 를 설치합니다. HuggingFace 모델 임포트 기능까지 쓰려면 추가 의존성을 함께 설치하세요.
 
 [source,bash]
 ----
@@ -15,6 +19,9 @@ pip install "argus-catalog-sdk[huggingface]"
 ----
 
 == SDK 기본 사용
+
+`ModelClient` 에 카탈로그 서버 주소를 넘겨 클라이언트를 만든 다음, 모델을 조회하거나
+등록하면 됩니다. 가장 기본이 되는 목록 조회와 등록을 먼저 살펴보겠습니다.
 
 [source,python]
 ----
@@ -37,6 +44,9 @@ client.create_model(
 
 === 파일 업로드 / 다운로드
 
+모델 파일은 크기에 따라 두 가지 방식으로 올립니다. 작은 파일은 서버를 경유해 간단히 올리고,
+큰 파일은 Presigned URL 로 S3 에 직접 올려 서버 부하를 줄입니다.
+
 [source,python]
 ----
 # 소형 파일 — 서버 경유
@@ -55,6 +65,9 @@ client.push("/path/to/my-model", "argus.ml.custom",
 ----
 
 === HuggingFace · Airgap 임포트
+
+인터넷이 되는 환경에서는 HuggingFace 모델을 ID 만으로 곧바로 가져올 수 있고,
+폐쇄망(에어갭) 환경에서는 USB 나 SCP 로 옮겨 둔 로컬 디렉토리에서 임포트합니다.
 
 [source,python]
 ----
@@ -76,6 +89,9 @@ client.import_local(
 
 === Finalize · 삭제
 
+파일을 모두 올린 뒤에는 `finalize` 로 manifest 를 만들고 버전을 확정합니다.
+모델을 정리할 때는 목록에서만 숨기는 소프트 삭제와 저장소까지 지우는 하드 삭제 중 골라 쓰면 됩니다.
+
 [source,python]
 ----
 # 업로드 완료 후 manifest 생성 + 버전 확정
@@ -90,6 +106,9 @@ client.hard_delete_models(["argus.ml.old_model", "argus.ml.test"])
 ----
 
 == `argus-model` CLI
+
+코드를 작성하지 않고 터미널에서 바로 다루고 싶다면 `argus-model` CLI 가 편리합니다.
+SDK 가 제공하는 기능 대부분을 명령 한 줄로 쓸 수 있습니다.
 
 [source,bash]
 ----
@@ -113,9 +132,13 @@ argus-model manifest argus.ml.iris_classifier 1
 argus-model delete argus.ml.old_model --yes
 ----
 
-서버는 `--server http://<host>:4600` 플래그로 지정. 기본값은 `http://localhost:4600`.
+서버 주소는 `--server http://<host>:4600` 플래그로 지정합니다. 생략하면 기본값인
+`http://localhost:4600` 을 사용합니다.
 
 == Airgap 워크플로우
+
+폐쇄망에 모델을 들여올 때의 전형적인 흐름입니다. 인터넷 환경에서 모델을 받아 USB 나 SCP 로
+옮긴 다음, 에어갭 환경에서 로컬 임포트하는 순서로 진행합니다.
 
 [source,bash]
 ----
@@ -133,11 +156,11 @@ argus-model import-local /data/transferred/bert argus.ml.bert \
     --server http://airgap-catalog:4600
 ----
 
-자세한 OCI 매니페스트 구조는 xref:models/oci-hub.adoc[OCI Model Hub] 참조.
+자세한 OCI 매니페스트 구조는 xref:models/oci-hub.adoc[OCI Model Hub] 를 참조하세요.
 
 == 인증 토큰
 
-SSO 환경에서는 사용자 토큰을 헤더로 전달한다 (향후 SDK 에서 환경변수 지원 예정).
+SSO 환경에서는 사용자 토큰을 헤더로 전달합니다 (환경변수 지원은 향후 SDK 에 추가될 예정입니다).
 
 [source,python]
 ----

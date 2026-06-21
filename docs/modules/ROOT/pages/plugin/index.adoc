@@ -1,0 +1,113 @@
+= 플러그인 개요
+
+고객사 도입 시 *오픈소스 코어에는 없는 전용 화면/API* 가 필요한 경우가 있습니다.
+플러그인 구조는 *코어 소스를 수정하지 않고* 이런 고객사 전용 기능을 끼워 넣기
+위한 확장 메커니즘입니다. 본격적인 만들기에 앞서, 이 페이지에서 전체 그림을 먼저
+잡아 보겠습니다.
+
+[NOTE]
+====
+이 저장소는 오픈소스(`argus-catalog`)를 추적하는 내부 배포본입니다. 따라서 가장
+중요한 설계 원칙은 *"코어에는 범용 확장 지점(seam)만, 고객 코드는 완전 격리"* 입니다.
+이렇게 해야 upstream 머지가 깨지지 않고, 설치된 플러그인이 없을 때 동작이 코어와
+*완전히 동일* 합니다(= 원래 기능 무훼손).
+====
+
+== 무엇을 추가할 수 있나
+
+플러그인으로 추가할 수 있는 것은 크게 두 가지입니다.
+
+[cols="1,3"]
+|===
+| 종류 | 추가 방법
+
+| *프론트엔드 화면* | 사이드바 메뉴 + 화면(라우트). 코어 컴포넌트(UI 킷·헤더)를 그대로 재사용. → xref:plugin/frontend.adoc[프론트엔드 화면 플러그인]
+| *백엔드 API* | FastAPI 라우터를 `/api/v1/...` 로 자동 노출. → xref:plugin/backend.adoc[백엔드 API 플러그인]
+|===
+
+화면만 필요하면 프론트만 만들고, 데이터가 필요하면 백엔드 API 를 함께 만들어
+프론트에서 호출하면 됩니다.
+
+== 아키텍처 — 코어에 닿는 확장 지점은 5곳뿐
+
+플러그인은 코어가 노출하는 *고정된 확장 지점* 위에서만 동작합니다. 이 지점들은
+특정 고객 색깔이 없는 범용 코드라 그대로 유지됩니다.
+
+[cols="1,3,2"]
+|===
+| 영역 | 확장 지점(코어) | 역할
+
+| 백엔드
+| `backend/app/plugins.py`
+| entry point `argus.plugins` 발견·등록 로더
+
+| 백엔드
+| `backend/app/main.py`
+| 코어 라우터 등록 뒤 `load_plugin_routers(app, ...)` 호출
+
+| 백엔드
+| `backend/app/core/config.py`
+| `plugins.enabled` 설정(어떤 플러그인을 켤지)
+
+| 프론트
+| `frontend/apps/web/app/dashboard/x/[...slug]/page.tsx`
+| 모든 플러그인 화면을 받는 *단일 호스트 라우트*
+
+| 프론트
+| `frontend/apps/web/lib/menu.ts` · `lib/icon-map.ts`
+| `plugins/registry` 의 메뉴·아이콘을 베이스에 병합
+|===
+
+=== 동작 흐름
+
+[source,text]
+----
+[백엔드]
+설치된 플러그인 패키지(entry_points: argus.plugins)
+        │  서버 기동 시
+        ▼
+load_plugin_routers(app, enabled=settings.enabled_plugins)
+        │  plugin.router 를
+        ▼
+app.include_router(router, prefix="/api/v1")   →  /api/v1/<plugin>/...
+
+[프론트엔드]
+plugins/registry.ts (활성 플러그인 배열)
+        │
+        ├─ pluginMenus   → lib/menu.ts 가 사이드바에 병합
+        ├─ pluginIcons   → lib/icon-map.ts 가 아이콘 fallback
+        └─ pluginScreens → /dashboard/x/[...slug] 가 slug 로 컴포넌트 조회·렌더
+----
+
+== 격리 원칙
+
+고객 코드와 코어를 깔끔하게 떼어 놓는 것이 이 구조의 핵심입니다. 다음 원칙만
+지키면 됩니다.
+
+* 고객 코드는 코어 파일을 *절대 수정하지 않습니다*.
+** 프론트: `frontend/apps/web/plugins/<고객사>/` 폴더 + `plugins/registry.ts` 배열에 한 줄.
+** 백엔드: `extensions/argus-plugin-<고객사>/` 별도 pip 패키지.
+* 활성화는 *설정* 으로 제어합니다(`plugins.enabled`). 고객별 이미지에 필요한 플러그인만 설치/활성화합니다.
+* 플러그인이 하나도 없으면 메뉴·화면·API 가 전혀 추가되지 않아 코어와 동일하게 동작합니다.
+
+== 무훼손 보장
+
+플러그인이 코어 기능을 건드리지 않도록, 각 확장 지점은 다음과 같이 안전장치를
+갖추고 있습니다.
+
+[cols="1,3"]
+|===
+| 항목 | 보장 방식
+
+| 메뉴 | `pluginMenus` 가 비면 베이스 `menu.json` 을 그대로 반환
+| 라우트 | 호스트 라우트는 매칭 slug 가 없으면 `notFound()` — 기존 라우트에 영향 없음
+| 아이콘 | 코어 아이콘 → 플러그인 아이콘 → 기본 순서로만 조회(코어 우선)
+| API | 플러그인 라우터는 코어 라우터 *등록 뒤* 에 붙어 경로 충돌 시 코어가 우선
+| 실패 격리 | 한 플러그인 로드 실패가 서버 기동/다른 플러그인을 막지 않음
+|===
+
+== 다음 단계
+
+* xref:plugin/frontend.adoc[프론트엔드 화면 플러그인 만들기]
+* xref:plugin/backend.adoc[백엔드 API 플러그인 만들기]
+* xref:plugin/reference.adoc[확장 지점·계약 레퍼런스]

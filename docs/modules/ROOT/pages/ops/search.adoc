@@ -1,15 +1,18 @@
 = 검색
 
-키워드 + 시맨틱 *하이브리드* 검색. 데이터셋의 이름·설명·플랫폼·태그·소유자를
-벡터로 임베딩해 의미 기반 매칭까지 지원한다.
+검색은 키워드와 시맨틱을 함께 쓰는 *하이브리드* 방식으로 동작합니다. 데이터셋의
+이름·설명·플랫폼·태그·소유자를 벡터로 임베딩해 두기 때문에, 단어가 정확히 일치하지
+않아도 의미가 비슷한 데이터셋까지 찾아 줍니다.
 
 // TODO: screenshot - 검색 결과 페이지 (점수 · 매치 타입 표시)
 image::ops-search/results.png[검색 결과, 800]
 
 == 진입 경로
 
-* *전역 헤더 검색바* — 어느 화면에서나 즉시 검색.
-* *Search 페이지* (`/dashboard/search`) — 결과 페이지 단독 진입.
+검색은 두 곳에서 시작할 수 있습니다.
+
+* *전역 헤더 검색바* — 어느 화면에서나 곧바로 검색할 수 있습니다.
+* *Search 페이지* (`/dashboard/search`) — 결과 페이지로 바로 들어갑니다.
 
 == 검색 방식
 
@@ -22,11 +25,12 @@ image::ops-search/results.png[검색 결과, 800]
 | 하이브리드 | `customer purchase` | 키워드 + 시맨틱 점수의 가중 결합 (기본 30% / 70%)
 |===
 
-임베딩이 비활성 또는 미설정 상태면 자동으로 키워드 폴백된다.
+임베딩이 꺼져 있거나 아직 설정되지 않았다면, 자동으로 키워드 검색으로 폴백됩니다.
 
 == 임베딩 프로바이더
 
-시맨틱 검색은 텍스트를 벡터로 변환할 *임베딩 프로바이더* 가 필요하다. 3 종 중 택 1.
+시맨틱 검색을 하려면 텍스트를 벡터로 바꿔 줄 *임베딩 프로바이더* 가 필요합니다. 다음
+세 가지 중 하나를 고르면 됩니다.
 
 [cols="1,2,1,1,1"]
 |===
@@ -37,23 +41,24 @@ image::ops-search/results.png[검색 결과, 800]
 | Ollama (로컬 호스팅) | `nomic-embed-text` | 768 | O | O
 |===
 
-한국어가 중요하면 Local 의 `paraphrase-multilingual-MiniLM-L12-v2` 또는 Ollama 의
-`nomic-embed-text` 를 권장.
+한국어가 중요하다면 Local 의 `paraphrase-multilingual-MiniLM-L12-v2` 나 Ollama 의
+`nomic-embed-text` 를 권장합니다.
 
-설정 위치는 xref:ops/settings.adoc#_embedding[설정 → Embedding].
+설정 위치는 xref:ops/settings.adoc#_embedding[설정 → Embedding] 입니다.
 
 == 임베딩 저장 (pgvector)
 
-생성된 벡터는 PostgreSQL `catalog_dataset_embeddings` 테이블에 저장된다.
-pgvector 확장 + IVFFlat 인덱스 (코사인 유사도) 가 사용된다.
+생성된 벡터는 PostgreSQL `catalog_dataset_embeddings` 테이블에 저장됩니다. 이때
+pgvector 확장과 IVFFlat 인덱스 (코사인 유사도) 를 사용합니다.
 
 임베딩 소스 텍스트::
 ----
 {name} | {description} | {qualified_name} | {platform_name} | {platform_type} | {tags...} | {owners...}
 ----
 
-데이터셋 생성·수정 시 비동기로 자동 생성된다. 기존 데이터셋은 *Settings →
-Embedding* 의 *Backfill* 버튼 또는 다음 API 로 일괄 임베딩.
+데이터셋을 만들거나 수정하면 임베딩이 비동기로 자동 생성됩니다. 이미 있던 기존
+데이터셋은 *Settings → Embedding* 의 *Backfill* 버튼을 누르거나 다음 API 로 한꺼번에
+임베딩할 수 있습니다.
 
 [source,bash]
 ----
@@ -61,7 +66,7 @@ POST /api/v1/catalog/search/embeddings/backfill
 GET  /api/v1/catalog/search/embeddings/stats
 ----
 
-stats 응답으로 *임베딩 커버리지* 를 확인한다.
+stats 응답을 보면 *임베딩 커버리지* 가 어느 정도인지 확인할 수 있습니다.
 
 [source,json]
 ----
@@ -77,34 +82,35 @@ stats 응답으로 *임베딩 커버리지* 를 확인한다.
 
 == 결과 화면
 
-행마다 다음이 표시된다.
+검색 결과의 각 행에는 다음 정보가 표시됩니다.
 
 * *이름 · 플랫폼 · 환경 · 설명 (요약)*
-* *score* — 0~1 범위. 높을수록 매치.
-* *match_type* — `keyword` / `semantic` / `hybrid`.
+* *score* — 0~1 범위의 점수입니다. 높을수록 잘 맞는 결과입니다.
+* *match_type* — `keyword` / `semantic` / `hybrid` 중 하나입니다.
 * *태그 / 소유자 카운트*
 
-행 클릭 → xref:catalog/datasets.adoc[데이터셋 상세] 로 이동.
+행을 클릭하면 xref:catalog/datasets.adoc[데이터셋 상세] 로 이동합니다.
 
 == 임계값과 가중치
 
-URL 파라미터로 미세 조정 가능 (API · 일부 UI 토글).
+검색 동작은 URL 파라미터로 세밀하게 조정할 수 있습니다 (API 및 일부 UI 토글).
 
 [cols="1,1,3"]
 |===
 | 파라미터 | 기본값 | 설명
 
-| `threshold` | 0.3 | 시맨틱 최소 유사도. 결과가 너무 적으면 0.1 까지 낮춤.
-| `keyword_weight` | 0.3 | 하이브리드의 키워드 가중치.
-| `semantic_weight` | 0.7 | 하이브리드의 시맨틱 가중치.
-| `limit` | 20 | 최대 결과 수 (1~100).
+| `threshold` | 0.3 | 시맨틱 최소 유사도입니다. 결과가 너무 적으면 0.1 까지 낮출 수 있습니다.
+| `keyword_weight` | 0.3 | 하이브리드에서 키워드에 주는 가중치입니다.
+| `semantic_weight` | 0.7 | 하이브리드에서 시맨틱에 주는 가중치입니다.
+| `limit` | 20 | 최대 결과 수입니다 (1~100).
 |===
 
 == 프로바이더 전환
 
-프로바이더를 바꾸면 벡터 공간이 달라져 기존 임베딩과 호환되지 않는다.
+프로바이더를 바꾸면 벡터 공간 자체가 달라지므로 기존 임베딩과는 호환되지 않습니다.
+그래서 다음 순서로 전체를 다시 임베딩해야 합니다.
 
-. *Settings → Embedding* 에서 새 프로바이더 저장.
-. *Embeddings → Reset* 으로 기존 임베딩 삭제.
-. *Backfill* 로 전체 재임베딩.
-. 차원이 다르면 (예: 384 → 1536) DBA 가 `ALTER TABLE catalog_dataset_embeddings ALTER COLUMN embedding TYPE vector(1536)` 실행 후 backfill.
+. *Settings → Embedding* 에서 새 프로바이더를 저장합니다.
+. *Embeddings → Reset* 으로 기존 임베딩을 삭제합니다.
+. *Backfill* 로 전체를 다시 임베딩합니다.
+. 차원이 다르면 (예: 384 → 1536) DBA 가 `ALTER TABLE catalog_dataset_embeddings ALTER COLUMN embedding TYPE vector(1536)` 를 실행한 뒤 backfill 합니다.

@@ -1,11 +1,11 @@
 = 가져오기 (HARVEST)
 
 HARVEST 는 peer 메타데이터를 로컬 *미러* 로 가져와 허브 임베딩 모델로 재임베딩하고, 샘플 데이터까지
-로컬에 보관하는 단계다. `HARVEST`·`HYBRID` 모드 peer 에 적용된다.
+로컬에 보관하는 단계입니다. `HARVEST`·`HYBRID` 모드 peer 에 적용됩니다.
 
 == 단계
 
-가져오기는 다음 단계로 진행하며, 진행률 바는 단계별 가중치로 전체 %를 계산한다.
+가져오기는 다음 단계로 진행되며, 진행률 바는 단계별 가중치로 전체 %를 계산합니다.
 
 [cols="1,4",options="header"]
 |===
@@ -18,17 +18,17 @@ HARVEST 는 peer 메타데이터를 로컬 *미러* 로 가져와 허브 임베�
 
 == 증분 vs 전체 동기화
 
-* *증분(기본)* — 마지막 가져오기의 watermark(`max remote_updated_at`) 이후 변경분만 가져온다.
-  변경분만 보므로 prune 은 건너뛴다. 샘플은 미보유분만 받는다.
-* *전체(`full=true`)* — 전량을 받아 사라진 항목을 prune 하고, 샘플도 전량 갱신한다.
+* *증분(기본)* — 마지막 가져오기의 watermark(`max remote_updated_at`) 이후 변경분만 가져옵니다.
+  변경분만 보기 때문에 prune 은 건너뜁니다. 샘플은 아직 보유하지 않은 것만 받습니다.
+* *전체(`full=true`)* — 전량을 받아 사라진 항목을 prune 하고, 샘플도 전량 갱신합니다.
 
-수동 실행은 인스턴스 행의 *가져오기* 버튼, 또는 API `POST /federation/instances/{id}/harvest?full=`.
-스케줄러는 ACTIVE·미러 모드 peer 를 각자 `sync_interval_sec` 주기로 자동 실행한다
+수동으로 실행하려면 인스턴스 행의 *가져오기* 버튼을 누르거나 API `POST /federation/instances/{id}/harvest?full=` 를 호출합니다.
+스케줄러는 ACTIVE·미러 모드 peer 를 각자 `sync_interval_sec` 주기로 자동 실행합니다
 (`federation.harvest_enabled`).
 
 == 샘플 미러링
 
-`sample` capability 가 켜진 peer 라면 HARVEST 시 각 데이터셋의 샘플을 받아 로컬에 저장한다.
+`sample` capability 가 켜진 peer 라면 HARVEST 시 각 데이터셋의 샘플을 받아 로컬에 저장합니다.
 
 * 저장 경로 — `data_dir/federation/samples/{instance_id}/{federation_dataset_id}.json`
   (로컬 데이터셋 샘플 경로와 *분리된 네임스페이스*).
@@ -38,10 +38,10 @@ HARVEST 는 peer 메타데이터를 로컬 *미러* 로 가져와 허브 임베�
 
 == 진행률 표시
 
-가져오기 요청은 완료 시점에만 반환되므로, UI 는 RUNNING 실행 이력을 폴링해 단계·진척을 표시한다.
-완료/실패는 진행 바 자리에 인라인 결과로 표시되고 잠시 뒤 사라진다(팝업 미사용).
+가져오기 요청은 완료 시점에만 반환되므로, UI 는 RUNNING 실행 이력을 폴링해 단계·진척을 표시합니다.
+완료/실패는 진행 바 자리에 인라인 결과로 표시되었다가 잠시 뒤 사라집니다(팝업은 쓰지 않습니다).
 
 == 실행 이력 / 관측성
 
-`federation_sync_runs` 에 매 실행의 단계·관측/upsert/임베딩/정리 수가 기록된다. 인스턴스 행의
-*동기화 이력* 과 페더레이션 *관측성* 탭에서 확인한다(xref:federation/governance.adoc[운영] 참고).
+`federation_sync_runs` 에는 매 실행의 단계·관측/upsert/임베딩/정리 수가 기록됩니다. 인스턴스 행의
+*동기화 이력* 과 페더레이션 *관측성* 탭에서 확인할 수 있습니다(xref:federation/governance.adoc[운영] 참고).

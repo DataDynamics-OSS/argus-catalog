@@ -1,9 +1,12 @@
 = External API
 
-외부 시스템이 Argus Catalog 의 데이터셋 메타데이터·Avro 스키마를 안정적이고
-빠르게 조회하기 위한 전용 API. 내부 LRU + TTL 캐시로 *반복 요청 < 1 ms* 응답.
+External API 는 외부 시스템이 Argus Catalog 의 데이터셋 메타데이터와 Avro 스키마를
+안정적이고 빠르게 조회할 수 있도록 마련한 전용 API 입니다. 내부에 LRU + TTL 캐시를 두고 있어
+같은 요청이 반복되면 *1 ms 미만* 으로 응답합니다.
 
 == 진입 베이스
+
+모든 호출은 아래 주소를 기준으로 합니다.
 
 ----
 http://<server>:4600/api/v1/external/...
@@ -11,16 +14,16 @@ http://<server>:4600/api/v1/external/...
 
 == 인증
 
-서버의 *Auth* 설정에 따른다.
+인증 방식은 서버의 *Auth* 설정을 따릅니다.
 
 * Local JWT — `Authorization: Bearer <token>` (`/api/v1/auth/login` 으로 발급).
 * Keycloak — OIDC 발급 토큰 동일.
 
-외부 시스템용 *Service Account* 토큰을 별도 발급해 사용하는 것을 권장.
+외부 시스템에는 사용자 계정 대신 *Service Account* 토큰을 별도로 발급해 쓰시기를 권장합니다.
 
 == URN 기반 조회 (권장)
 
-외부 시스템은 보통 내부 dataset_id 를 알 수 없으므로 URN 으로 조회한다.
+외부 시스템은 보통 내부 dataset_id 를 알 수 없기 때문에, 사람이 읽을 수 있는 URN 으로 조회하는 편이 편합니다.
 
 URN 형식::
 ----
@@ -45,6 +48,8 @@ curl "http://<server>:4600/api/v1/external/metadata?urn=mysql-19d0bfe9.sakila.ac
 
 == ID 기반 조회 (내부 시스템)
 
+이미 내부 dataset_id 를 알고 있는 내부 시스템이라면 ID 로 곧장 조회하는 편이 빠릅니다.
+
 [cols="1,3"]
 |===
 | 호출 | 설명
@@ -54,6 +59,9 @@ curl "http://<server>:4600/api/v1/external/metadata?urn=mysql-19d0bfe9.sakila.ac
 |===
 
 == 메타데이터 응답
+
+메타데이터 조회 결과는 다음과 같은 JSON 으로 돌아옵니다. 데이터셋 기본 정보, 컬럼 스키마,
+태그·소유자, 그리고 캐시 적중 여부를 담은 `_cache` 까지 한 번에 담겨 있습니다.
 
 [source,json]
 ----
@@ -91,6 +99,9 @@ curl "http://<server>:4600/api/v1/external/metadata?urn=mysql-19d0bfe9.sakila.ac
 
 == Avro 스키마 응답
 
+Avro 스키마 조회는 그대로 직렬화·역직렬화에 쓸 수 있는 Avro record 형태로 응답합니다.
+각 필드에는 원본 타입 정보를 담은 `metadata` 가 함께 붙습니다.
+
 [source,json]
 ----
 {
@@ -112,6 +123,9 @@ curl "http://<server>:4600/api/v1/external/metadata?urn=mysql-19d0bfe9.sakila.ac
 
 === Avro 타입 매핑
 
+Catalog 의 컬럼 타입은 아래 규칙에 따라 Avro 타입으로 변환됩니다. Native 예시는 어떤 원본 타입이
+어느 Avro 타입으로 매핑되는지 가늠하는 데 참고하세요.
+
 [cols="1,1,2"]
 |===
 | Catalog 타입 | Native 예시 | Avro
@@ -129,11 +143,11 @@ curl "http://<server>:4600/api/v1/external/metadata?urn=mysql-19d0bfe9.sakila.ac
 | MAP | `json`, `jsonb` | `{"type":"map","values":"string"}`
 |===
 
-NULL 허용 컬럼은 Avro union 으로 변환된다 (`["null", type]`).
+NULL 을 허용하는 컬럼은 Avro union 으로 변환됩니다 (`["null", type]`).
 
 == 캐시 동작
 
-3 단계 캐시 키.
+캐시는 세 단계의 키로 나뉘어 동작합니다.
 
 * `urn_map:{urn}` — URN → dataset_id 매핑.
 * `metadata:{urn}` — 메타데이터 JSON.
@@ -148,6 +162,8 @@ NULL 허용 컬럼은 Avro union 으로 변환된다 (`["null", type]`).
 | 같은 URN 다른 타입 | ~15 ms | 매핑 캐시만 HIT.
 |===
 
+캐시는 데이터가 바뀔 때 다음과 같이 자동으로 무효화되므로, 오래된 값이 응답될 걱정은 하지 않으셔도 됩니다.
+
 자동 무효화::
 * 데이터셋 PUT / DELETE — `metadata`, `avro`, `urn_map` 모두 제거.
 * 스키마 PUT — `metadata`, `avro` 제거.
@@ -155,6 +171,8 @@ NULL 허용 컬럼은 Avro union 으로 변환된다 (`["null", type]`).
 * 플랫폼 sync — 해당 플랫폼의 모든 데이터셋 캐시 일괄 제거.
 
 == 캐시 설정·통계
+
+캐시 상태를 들여다보거나 동작을 조정하고 싶을 때 쓰는 호출입니다. 설정은 재시작 없이 런타임에 바꿀 수 있습니다.
 
 [cols="1,3"]
 |===
@@ -174,15 +192,17 @@ curl -X PUT http://<server>:4600/api/v1/external/cache/config \
   -d '{"max_size": 2000, "ttl_seconds": 600, "enabled": true}'
 ----
 
-UI 의 *Settings → Cache* 탭에서도 동일한 설정과 통계 카드가 제공된다.
+같은 설정과 통계 카드는 UI 의 *Settings → Cache* 탭에서도 확인할 수 있습니다.
 
 == 사용 시나리오
 
+이 API 가 실제로 어떻게 쓰이는지 대표적인 활용 예를 몇 가지 들어 보겠습니다.
+
 스트림 컨슈머::
-Kafka / Flink Job 에서 토픽 메시지의 Avro 스키마를 매번 받아 동적으로 디코딩.
+Kafka / Flink Job 에서 토픽 메시지의 Avro 스키마를 매번 받아 동적으로 디코딩합니다.
 
 ETL 워크플로우::
-스키마·태그·소유자가 바뀌면 알림과 동시에 ETL 도 자동 재구성 가능.
+스키마·태그·소유자가 바뀌면 알림과 동시에 ETL 파이프라인도 자동으로 재구성할 수 있습니다.
 
 데이터 카탈로그 미러::
-사내 다른 시스템에 정합성 있는 메타데이터를 비동기로 전파.
+사내 다른 시스템에 정합성 있는 메타데이터를 비동기로 전파합니다.
