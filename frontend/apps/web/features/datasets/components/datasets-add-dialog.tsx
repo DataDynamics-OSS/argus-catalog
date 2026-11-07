@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from "@workspace/ui/components/select"
 import { Textarea } from "@workspace/ui/components/textarea"
+import { errorMessage, notifySuccess } from "@/lib/notify"
 import { createDataset, fetchDatasources } from "../api"
 import type { Datasource } from "../data/schema"
 import { useDatasets } from "./datasets-provider"
@@ -68,7 +69,7 @@ export function DatasetsAddDialog() {
     setSaving(true)
     setError(null)
     try {
-      await createDataset({
+      const created = await createDataset({
         name: name.trim(),
         display_name: displayName.trim() || undefined,
         datasource_id: Number(datasourceId),
@@ -82,9 +83,10 @@ export function DatasetsAddDialog() {
       setSummary("")
       setDescription("")
       setOpen(null)
+      notifySuccess(`데이터셋 '${created?.name ?? name.trim()}' 을(를) 추가했습니다.`)
       await refreshDatasets()
     } catch (e) {
-      setError(e instanceof Error ? e.message : "데이터셋 생성에 실패했습니다.")
+      setError(errorMessage(e) ?? "데이터셋을 생성하지 못했습니다.")
     } finally {
       setSaving(false)
     }

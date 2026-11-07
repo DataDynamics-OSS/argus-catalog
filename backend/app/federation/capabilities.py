@@ -165,3 +165,47 @@ def _filter_schema_field(field: dict, allow: set[str]) -> dict:
 def is_exposed(key: str, exposed: list[str] | set[str]) -> bool:
     """단일 capability 키가 노출 집합에 포함되는지(별도 엔드포인트 게이팅용)."""
     return key in _KEY_SET and key in set(exposed)
+
+
+# ---------------------------------------------------------------------------
+# 목록/검색 export(HARVEST·LIVE 검색) 용 필터 — 상세와 동일한 노출 정책을 적용한다.
+# ---------------------------------------------------------------------------
+
+# export 목록·검색 항목의 최상위 필드 → 그 값을 노출하는 데 필요한 capability 키.
+# 여기 없는 필드(urn/name/datasource_*/created_at/updated_at)는 식별·동기화용이라 항상 유지.
+_EXPORT_ITEM_FIELD_CAPS: dict[str, str] = {
+    "description": "description",
+    "qualified_name": "qualified_name",
+    "origin": "origin",
+    # summary/display_name 은 상세에서 extended(확장 메타데이터)로 노출되는 항목
+    "summary": "extended",
+    "display_name": "extended",
+}
+
+
+def filter_export_item(item: dict, exposed: list[str] | set[str]) -> dict:
+    """export 목록/검색 항목 dict 에서 미노출 필드를 None 으로 비운다.
+
+    ``fields``(스키마 컬럼)가 있으면 ``schema`` 미노출 시 빈 목록으로, 노출 시 컬럼별
+    ``field_type``(schema.type)/``description``(schema.description)을 정책대로 비운다.
+    """
+    allow = set(exposed)
+    out = dict(item)
+    for field, cap in _EXPORT_ITEM_FIELD_CAPS.items():
+        if field in out and cap not in allow:
+            out[field] = None
+    if "fields" in out:
+        if "schema" not in allow:
+            out["fields"] = []
+        else:
+            out["fields"] = [
+                {
+                    **f,
+                    "field_type": f.get("field_type") if "schema.type" in allow else None,
+                    "description": (
+                        f.get("description") if "schema.description" in allow else None
+                    ),
+                }
+                for f in out["fields"]
+            ]
+    return out

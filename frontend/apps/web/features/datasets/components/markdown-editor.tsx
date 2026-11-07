@@ -14,6 +14,8 @@ import { Separator } from "@workspace/ui/components/separator"
 import TurndownService from "turndown"
 import { marked } from "marked"
 
+import { usePrompt } from "@/components/confirm-provider"
+
 // ---------------------------------------------------------------------------
 // Markdown ↔ HTML conversion
 // ---------------------------------------------------------------------------
@@ -83,6 +85,7 @@ export function MarkdownEditor({
   editable = true,
   placeholder = "Write description in Markdown...",
 }: MarkdownEditorProps) {
+  const askInput = usePrompt()
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -240,9 +243,9 @@ export function MarkdownEditor({
             <WrapText className="h-4 w-4" />
           </ToolbarButton>
           <ToolbarButton
-            onClick={() => {
-              const url = window.prompt("Enter URL:")
-              if (url) editor.chain().focus().setLink({ href: url }).run()
+            onClick={async () => {
+              const url = await askInput({ title: "링크 추가", label: "링크 URL", placeholder: "https://", required: true })
+              if (url?.trim()) editor.chain().focus().setLink({ href: url.trim() }).run()
             }}
             active={editor.isActive("link")}
             title="Add Link"

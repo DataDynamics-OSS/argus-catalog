@@ -21,13 +21,20 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
+import { AdminAuditButton } from "@/features/audit/admin-audit-sheet"
+import { useAuth } from "@/features/auth"
 import { useUsers } from "./users-provider"
 
 export function UsersPrimaryButtons() {
   const { setOpen } = useUsers()
+  // Keycloak 모드에서는 계정 생성이 Keycloak 몫(서버도 400)
+  const { authType } = useAuth()
+  const local = authType === "local"
 
   return (
-    <DropdownMenu>
+    <div className="flex items-center gap-2">
+      <AdminAuditButton category="users" />
+      <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button size="sm" className="h-8 bg-blue-600 text-white hover:bg-blue-700">
           작업
@@ -41,11 +48,16 @@ export function UsersPrimaryButtons() {
         <DropdownMenuItem onSelect={() => setOpen("deactivate")}>
           비활성화
         </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={() => setOpen("add")}>
-          추가
-        </DropdownMenuItem>
+        {local && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => setOpen("add")}>
+              추가
+            </DropdownMenuItem>
+          </>
+        )}
       </DropdownMenuContent>
-    </DropdownMenu>
+      </DropdownMenu>
+    </div>
   )
 }

@@ -10,8 +10,12 @@ export const modelSummarySchema = z.object({
   latest_version_status: z.string().nullable().optional(),
   sklearn_version: z.string().nullable().optional(),
   python_version: z.string().nullable().optional(),
+  flavor: z.string().nullable().optional(),
+  framework: z.string().nullable().optional(),
+  created_by: z.string().nullable().optional(),
   model_size_bytes: z.number().nullable().optional(),
   download_count: z.number().optional().default(0),
   updated_at: z.coerce.date(),
+  production_version: z.number().nullable().optional(),
 })
 export type ModelSummary = z.infer<typeof modelSummarySchema>

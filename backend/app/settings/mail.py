@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 class EmailConfig(BaseModel):
+    """SMTP 발송 설정(DB category='mail' 의 mail_* 키에서 구성)."""
     enabled: bool = False
     smtp_host: str = "smtp.gmail.com"
     smtp_port: int = 587
@@ -31,12 +32,13 @@ class EmailConfig(BaseModel):
     from_email: str = ""
     from_name: str = "Argus Catalog"
     smtp_user: str = ""    # 비우면 from_email 로 인증
-    smtp_password: str = ""
+    smtp_password: str = ""  # 비우면 인증 없이 발송(사내 릴레이 등 무인증 SMTP)
     subject_prefix: str = "[Argus Catalog]"
     default_recipients: str = ""  # 쉼표 구분
 
 
 def _bool(v: str | bool) -> bool:
+    """설정 문자열을 bool 로 — true/1/yes(대소문자 무시)만 True."""
     return str(v).lower() in ("true", "1", "yes")
 
 
@@ -71,6 +73,7 @@ def _strip_html(html: str) -> str:
 
 
 def _recipients(cfg: EmailConfig, to: list[str] | None) -> list[str]:
+    """수신자 목록 — ``to`` 가 비면 설정의 기본 수신자(쉼표 구분)를 쓰고, 빈 항목은 뺀다."""
     recipients = list(to or [])
     if not recipients and cfg.default_recipients:
         recipients = [r.strip() for r in cfg.default_recipients.split(",")]
@@ -95,10 +98,10 @@ async def send_mail(
         if raise_errors:
             raise RuntimeError("메일 발송이 비활성화되어 있습니다.")
         return False
-    if not cfg.from_email or not cfg.smtp_password:
+    if not cfg.from_email:
         logger.warning("메일 발신자가 설정되지 않음; 발송 건너뜀")
         if raise_errors:
-            raise RuntimeError("발신자 이메일/비밀번호가 설정되지 않았습니다.")
+            raise RuntimeError("발신자 이메일이 설정되지 않았습니다.")
         return False
 
     recipients = _recipients(cfg, to)
@@ -135,25 +138,37 @@ async def send_mail(
             raise RuntimeError("aiosmtplib 가 설치되어 있지 않습니다. `pip install aiosmtplib` 후 다시 시도하세요.")
         return False
 
+    logger.debug("SMTP 발송 시도: host=%s port=%d ssl=%s starttls=%s auth=%s recipients=%d attachments=%d",
+                 cfg.smtp_host, cfg.smtp_port, cfg.use_ssl, cfg.use_tls and not cfg.use_ssl,
+                 bool(cfg.smtp_password), len(recipients), len(attachments or []))
     try:
         await aiosmtplib.send(
             msg,
             hostname=cfg.smtp_host,
             port=cfg.smtp_port,
-            username=cfg.smtp_user or cfg.from_email,
-            password=cfg.smtp_password,
+            # 비밀번호가 없으면 AUTH 를 생략한다(무인증 릴레이). 있으면 사용자명(없으면 발신자)으로 인증
+            username=(cfg.smtp_user or cfg.from_email) if cfg.smtp_password else None,
+            password=cfg.smtp_password or None,
             start_tls=cfg.use_tls and not cfg.use_ssl,
             use_tls=cfg.use_ssl,
             timeout=cfg.timeout_seconds,
             tls_context=ssl.create_default_context() if cfg.use_ssl else None,
         )
-        logger.info("메일 발송됨: subject=%r to=%s", subject, recipients)
+        # 수신자 주소는 개인정보 — INFO 에는 수만, DEBUG 에는 마스킹한 주소만 남긴다
+        logger.info("메일 발송됨: subject=%r recipients=%d", subject, len(recipients))
+        logger.debug("메일 수신자: %s", [_mask_address(r) for r in recipients])
         return True
     except Exception as exc:
         logger.warning("메일 발송 실패: %s", exc, exc_info=True)
         if raise_errors:
             raise
         return False
+
+
+def _mask_address(addr: str) -> str:
+    """로그용 메일 주소 마스킹 — 로컬 파트 첫 글자만 남긴다(``a***@example.com``)."""
+    local, at, domain = str(addr).partition("@")
+    return f"{local[:1]}***{at}{domain}" if at else "***"
 
 
 async def send_mail_db(

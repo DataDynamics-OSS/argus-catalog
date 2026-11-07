@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react"
 
 import useDialogState from "@/hooks/use-dialog-state"
+import { notifyError } from "@/lib/notify"
 import { fetchDatasets, type PaginatedDatasets } from "../api"
 import { type DatasetSummary } from "../data/schema"
 
@@ -42,6 +43,8 @@ type DatasetsContextType = {
 
 const DatasetsContext = React.createContext<DatasetsContextType | null>(null)
 
+const DEFAULT_PAGE_SIZE = 20
+
 export function DatasetsProvider({
   children,
 }: {
@@ -52,7 +55,7 @@ export function DatasetsProvider({
   const [datasets, setDatasets] = useState<DatasetSummary[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(20)
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [isLoading, setIsLoading] = useState(true)
   // 뷰 모드 — localStorage 영속화. 초기값은 mount 시점에 읽음(SSR/CSR mismatch 방지).
   const [viewMode, setViewModeState] = useState<DatasetsViewMode>("table")
@@ -78,6 +81,9 @@ export function DatasetsProvider({
     systemId: "",
   })
 
+  // 마지막 요청 번호 — 요청이 겹치면(페이지 크기 변경·검색·페이지 이동 연속) 가장 마지막 요청의 응답만 반영.
+  const requestSeqRef = useRef(0)
+
   const loadDatasets = useCallback(
     async (params: {
       page: number
@@ -90,6 +96,7 @@ export function DatasetsProvider({
       orgId: string
       systemId: string
     }) => {
+      const seq = ++requestSeqRef.current
       try {
         setIsLoading(true)
         const data: PaginatedDatasets = await fetchDatasets({
@@ -103,21 +110,26 @@ export function DatasetsProvider({
           orgId: params.orgId ? Number(params.orgId) : undefined,
           systemId: params.systemId ? Number(params.systemId) : undefined,
         })
+        if (seq !== requestSeqRef.current) return
         setDatasets(data.items)
         setTotal(data.total)
       } catch (err) {
+        if (seq !== requestSeqRef.current) return
         console.error("Failed to fetch datasets:", err)
+        notifyError(err, "데이터셋 목록을 불러오지 못했습니다.")
       } finally {
-        setIsLoading(false)
+        if (seq === requestSeqRef.current) setIsLoading(false)
       }
     },
     []
   )
 
+  // 최초 1회 로드. pageSize 를 의존성에 두면 페이지 크기 변경 시 필터 없는 조회가 한 번 더 나가
+  // handleSetPageSize 의 (필터 유지) 조회 결과를 덮어쓸 수 있으므로, 이후 조회는 각 핸들러가 담당한다.
   useEffect(() => {
     loadDatasets({
       page: 1,
-      pageSize,
+      pageSize: DEFAULT_PAGE_SIZE,
       search: "",
       datasource: "",
       origin: "",
@@ -126,7 +138,7 @@ export function DatasetsProvider({
       orgId: "",
       systemId: "",
     })
-  }, [loadDatasets, pageSize])
+  }, [loadDatasets])
 
   const handleSetPage = useCallback(
     (newPage: number) => {

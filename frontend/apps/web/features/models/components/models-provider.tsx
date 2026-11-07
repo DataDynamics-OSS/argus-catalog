@@ -4,16 +4,18 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { type RowSelectionState } from "@tanstack/react-table"
 
 import useDialogState from "@/hooks/use-dialog-state"
+import { notifyError } from "@/lib/notify"
 import { fetchModels, type PaginatedModels } from "../api"
 import { type ModelSummary } from "../data/schema"
 
-type ModelsDialogType = "add" | "edit" | "delete"
+/** delete = 소프트 삭제(관리자는 영구 삭제 선택 가능), purge = 삭제된 모델의 영구 삭제 */
+type ModelsDialogType = "delete" | "purge"
 
-type SearchParams = {
+export type SearchParams = {
   search: string
   status: string
   python_version: string
-  sklearn_version: string
+  flavor: string
 }
 
 type ModelsContextType = {
@@ -40,14 +42,18 @@ type ModelsContextType = {
   setDeleteTargetNames: React.Dispatch<React.SetStateAction<string[]>>
   /** Clear selection after delete. */
   clearSelection: () => void
-  /** Currently selected model name for detail view (null = show grid). */
-  selectedModelName: string | null
-  setSelectedModelName: React.Dispatch<React.SetStateAction<string | null>>
+  /** 마지막으로 적용된 검색·필터 — 상세에서 돌아와 목록이 다시 마운트될 때 입력 UI 를 복원한다. */
+  appliedFilters: SearchParams
   /** 목록 스크롤 위치 — 상세 복귀 시 복원용(remount 가로질러 보존). */
   listScrollRef: React.MutableRefObject<number>
+  /** 삭제된 모델 보기(관리자) — 켜면 소프트 삭제된 모델만 조회 */
+  showDeleted: boolean
+  setShowDeleted: (v: boolean) => void
 }
 
 const ModelsContext = React.createContext<ModelsContextType | null>(null)
+
+const DEFAULT_PAGE_SIZE = 20
 
 export function ModelsProvider({
   children,
@@ -59,16 +65,21 @@ export function ModelsProvider({
   const [models, setModels] = useState<ModelSummary[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(20)
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [isLoading, setIsLoading] = useState(true)
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
   const [deleteTargetNames, setDeleteTargetNames] = useState<string[]>([])
-  const [selectedModelName, setSelectedModelName] = useState<string | null>(null)
 
   const listScrollRef = useRef(0)
+  const [showDeleted, setShowDeletedState] = useState(false)
+  const showDeletedRef = useRef(false)
 
   const appliedFiltersRef = useRef<SearchParams>({
-    search: "", status: "", python_version: "", sklearn_version: "",
+    search: "", status: "", python_version: "", flavor: "",
+  })
+  // 렌더에서 읽는 사본 (ref 는 핸들러 안에서만 읽는다)
+  const [appliedFilters, setAppliedFilters] = useState<SearchParams>({
+    search: "", status: "", python_version: "", flavor: "",
   })
 
   const selectedNames = useMemo(() => {
@@ -83,11 +94,16 @@ export function ModelsProvider({
     setDeleteTargetNames([])
   }, [])
 
+  // 마지막 요청 번호 — 요청이 겹치면(페이지 크기 변경·검색·페이지 이동 연속) 가장 마지막 요청의 응답만 반영.
+  const requestSeqRef = useRef(0)
+
   const loadModels = useCallback(
     async (params: {
       page: number; pageSize: number;
-      search: string; status: string; python_version: string; sklearn_version: string;
+      search: string; status: string; python_version: string; flavor: string;
     }) => {
+      const deleted = showDeletedRef.current
+      const seq = ++requestSeqRef.current
       try {
         setIsLoading(true)
         const data: PaginatedModels = await fetchModels({
@@ -96,22 +112,28 @@ export function ModelsProvider({
           search: params.search || undefined,
           status: params.status || undefined,
           python_version: params.python_version || undefined,
-          sklearn_version: params.sklearn_version || undefined,
+          flavor: params.flavor || undefined,
+          deleted: deleted || undefined,
         })
+        if (seq !== requestSeqRef.current) return
         setModels(data.items)
         setTotal(data.total)
       } catch (err) {
+        if (seq !== requestSeqRef.current) return
         console.error("Failed to fetch models:", err)
+        notifyError(err, "모델 목록을 불러오지 못했습니다.")
       } finally {
-        setIsLoading(false)
+        if (seq === requestSeqRef.current) setIsLoading(false)
       }
     },
     [],
   )
 
+  // 최초 1회 로드. pageSize 를 의존성에 두면 페이지 크기 변경 시 필터 없는 조회가 한 번 더 나가
+  // handleSetPageSize 의 (필터 유지) 조회 결과를 덮어쓸 수 있으므로, 이후 조회는 각 핸들러가 담당한다.
   useEffect(() => {
-    loadModels({ page: 1, pageSize, search: "", status: "", python_version: "", sklearn_version: "" })
-  }, [loadModels, pageSize])
+    loadModels({ page: 1, pageSize: DEFAULT_PAGE_SIZE, search: "", status: "", python_version: "", flavor: "" })
+  }, [loadModels])
 
   const handleSetPage = useCallback(
     (newPage: number) => {
@@ -135,8 +157,20 @@ export function ModelsProvider({
   const searchModels = useCallback(
     (params: SearchParams) => {
       appliedFiltersRef.current = params
+      setAppliedFilters(params)
       setPage(1)
       loadModels({ page: 1, pageSize, ...params })
+    },
+    [loadModels, pageSize],
+  )
+
+  const setShowDeleted = useCallback(
+    (v: boolean) => {
+      showDeletedRef.current = v
+      setShowDeletedState(v)
+      setRowSelection({})
+      setPage(1)
+      loadModels({ page: 1, pageSize, ...appliedFiltersRef.current })
     },
     [loadModels, pageSize],
   )
@@ -168,9 +202,10 @@ export function ModelsProvider({
         deleteTargetNames,
         setDeleteTargetNames,
         clearSelection,
-        selectedModelName,
-        setSelectedModelName,
         listScrollRef,
+        appliedFilters,
+        showDeleted,
+        setShowDeleted,
       }}
     >
       {children}

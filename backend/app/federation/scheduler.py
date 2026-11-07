@@ -22,6 +22,17 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
+def _as_utc(dt: datetime | None) -> datetime | None:
+    """DB 에서 읽은 시각을 UTC aware 로 정규화한다.
+
+    MariaDB DATETIME·SQLite 는 시간대 없는(naive) 값을 돌려주므로 UTC 로 간주해 tzinfo 를 붙인다
+    (aware now 와 naive 값을 빼면 TypeError 로 스케줄 tick 이 매번 실패한다).
+    """
+    if dt is not None and dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 async def _due_peers() -> list[int]:
     """가져오기 주기가 도래한 peer id 목록."""
     from app.core.database import async_session
@@ -37,7 +48,7 @@ async def _due_peers() -> list[int]:
             )
         )).scalars().all()
         for peer in peers:
-            last = (await session.execute(
+            last = _as_utc((await session.execute(
                 select(FederationSyncRun.started_at)
                 .where(
                     FederationSyncRun.instance_id == peer.id,
@@ -45,9 +56,10 @@ async def _due_peers() -> list[int]:
                 )
                 .order_by(FederationSyncRun.started_at.desc())
                 .limit(1)
-            )).scalar()
+            )).scalar())
             if last is None or (now - last).total_seconds() >= peer.sync_interval_sec:
                 due.append(peer.id)
+        logger.debug("HARVEST 주기 점검: candidates=%d due=%d", len(peers), len(due))
     return due
 
 
@@ -62,6 +74,8 @@ async def _harvest_one(instance_id: int) -> None:
             select(FederatedInstance).where(FederatedInstance.id == instance_id)
         )).scalars().first()
         if peer is None:
+            # 주기 점검과 실행 사이에 삭제된 peer
+            logger.debug("HARVEST 대상 peer 사라짐: id=%s", instance_id)
             return
         await harvest_instance(session, peer)
 

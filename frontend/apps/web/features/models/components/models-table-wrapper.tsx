@@ -2,19 +2,8 @@
 
 import { useModels } from "./models-provider"
 import { ModelsTable } from "./models-table"
-import { ModelsDetail } from "./models-detail"
 
 export function ModelsTableWrapper() {
-  const { models, isLoading, selectedModelName, setSelectedModelName } = useModels()
-
-  if (selectedModelName) {
-    return (
-      <ModelsDetail
-        modelName={selectedModelName}
-        onBack={() => setSelectedModelName(null)}
-      />
-    )
-  }
-
+  const { models, isLoading } = useModels()
   return <ModelsTable data={models} isLoading={isLoading} />
 }

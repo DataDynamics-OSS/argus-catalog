@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
 import dynamic from "next/dynamic"
-import { toast } from "sonner"
+import { errorMessage, notifyError, toast } from "@/lib/notify"
 import {
   AlertTriangle,
   ArrowLeft,
@@ -104,7 +104,7 @@ import { useAuth } from "@/features/auth"
 import { SampleDataTab } from "@/features/datasets/components/sample-data-tab"
 import { SchemaHistoryTab } from "@/features/datasets/components/schema-history-tab"
 import { DatasourceSpecificCard } from "@/features/datasets/components/datasource-specific-card"
-import { pathFromUrn } from "@/features/datasets/components/datasets-columns"
+import { generateAvroSchema, pathFromUrn } from "@/features/datasets/avro"
 import { CommentEditor } from "@/components/comments/comment-editor"
 import { RichTextViewer } from "@/components/comments/rich-text-viewer"
 import { CodeViewer } from "@/components/code-viewer"
@@ -119,6 +119,8 @@ import { PySparkTab } from "@/features/datasets/components/pyspark-tab"
 import { KestraFlowTab } from "@/features/datasets/components/kestra-flow-tab"
 import { AirflowDagTab } from "@/features/datasets/components/airflow-dag-tab"
 import { DatasetMetadataTab } from "@/features/datasets/components/dataset-metadata-tab"
+import { canManageDataset } from "@/features/datasets/permissions"
+import { AiSuggestionsButton } from "@/features/datasets/components/ai-suggestions-dialog"
 import { DatasetMetadataSummary } from "@/features/datasets/components/dataset-metadata-summary"
 import { fetchDatasetCategories } from "@/features/taxonomy/api"
 import {
@@ -131,6 +133,8 @@ import { ClipboardCheck, Flame, GitBranch,
 import { cn } from "@workspace/ui/lib/utils"
 import { CommentSection } from "@/components/comments"
 import { DatasetChangeRequests } from "@/features/change-mgmt/dataset-change-requests"
+import { MONACO_FONT_SIZE } from "@/lib/monaco"
+import { ddlTitle } from "@/features/datasets/ddl"
 
 
 // ---------------------------------------------------------------------------
@@ -177,110 +181,6 @@ function toEditable(f: SchemaField): EditableField {
 }
 
 // ---------------------------------------------------------------------------
-// Avro schema generator
-// ---------------------------------------------------------------------------
-function fieldTypeToAvro(fieldType: string): unknown {
-  const t = fieldType.toUpperCase()
-  switch (t) {
-    case "BOOLEAN":
-    case "BOOL":
-      return "boolean"
-    case "TINYINT":
-    case "SMALLINT":
-    case "INT":
-    case "INT8":
-    case "INT16":
-    case "INT32":
-    case "INTEGER":
-    case "MEDIUMINT":
-    case "SERIAL":
-      return "int"
-    case "BIGINT":
-    case "INT64":
-    case "BIGSERIAL":
-    case "LARGEINT":
-      return "long"
-    case "FLOAT":
-    case "FLOAT32":
-    case "REAL":
-      return "float"
-    case "DOUBLE":
-    case "DOUBLE PRECISION":
-    case "FLOAT64":
-      return "double"
-    case "DECIMAL":
-    case "NUMERIC":
-    case "NUMBER":
-    case "MONEY":
-    case "DECIMAL128":
-      return { type: "bytes", logicalType: "decimal", precision: 38, scale: 10 }
-    case "DATE":
-      return { type: "int", logicalType: "date" }
-    case "TIME":
-      return { type: "long", logicalType: "time-millis" }
-    case "TIMESTAMP":
-    case "TIMESTAMPTZ":
-    case "TIMESTAMP_NTZ":
-    case "TIMESTAMP_LTZ":
-    case "TIMESTAMP_TZ":
-    case "DATETIME":
-    case "UNIXTIME_MICROS":
-      return { type: "long", logicalType: "timestamp-millis" }
-    case "BINARY":
-    case "BYTEA":
-    case "VARBINARY":
-    case "BYTES":
-    case "BINDATA":
-    case "BLOB":
-      return "bytes"
-    case "UUID":
-      return { type: "string", logicalType: "uuid" }
-    case "JSON":
-    case "JSONB":
-    case "VARIANT":
-    case "SUPER":
-      return "string"
-    case "ARRAY":
-      return { type: "array", items: "string" }
-    case "MAP":
-      return { type: "map", values: "string" }
-    case "STRUCT":
-    case "ROW":
-    case "OBJECT":
-      return { type: "record", name: "nested", fields: [] }
-    default:
-      return "string"
-  }
-}
-
-function generateAvroSchema(datasetName: string, namespace: string, fields: SchemaField[]): string {
-  const avroFields = fields.map((f) => {
-    const avroType = fieldTypeToAvro(f.field_type)
-    const fieldDef: Record<string, unknown> = {
-      name: f.field_path.replace(/[^a-zA-Z0-9_]/g, "_"),
-      type: f.nullable === "true" ? ["null", avroType] : avroType,
-    }
-    if (f.nullable === "true") {
-      fieldDef.default = null
-    }
-    if (f.description) {
-      fieldDef.doc = f.description
-    }
-    return fieldDef
-  })
-
-  const schema = {
-    type: "record",
-    name: datasetName.replace(/[^a-zA-Z0-9_]/g, "_"),
-    namespace,
-    doc: `Avro schema for ${datasetName}`,
-    fields: avroFields,
-  }
-
-  return JSON.stringify(schema, null, 2)
-}
-
-// ---------------------------------------------------------------------------
 // Main page component
 // ---------------------------------------------------------------------------
 export default function DatasetDetailPage() {
@@ -291,7 +191,7 @@ export default function DatasetDetailPage() {
   const [dataset, setDataset] = useState<DatasetDetail | null>(null)
   // 소유권 게이팅 — admin 이거나 데이터셋 생성자(소유자)면 수정/삭제 가능.
   // 서버가 동일 규칙을 강제하므로 UI 는 발견성 용도.
-  const canManage = !!user?.is_admin || (!!dataset?.created_by && dataset.created_by === user?.username)
+  const canManage = canManageDataset(user, dataset?.created_by)
   const [categoryPaths, setCategoryPaths] = useState<string[]>([])  // 매핑된 분류 체계 경로
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -321,7 +221,8 @@ export default function DatasetDetailPage() {
   // 활성 탭 — 핵심 6개는 항상 노출, 나머지는 "더보기" 드롭다운에서 선택.
   // 드롭다운 항목을 선택하면 ``setActiveTab`` 으로 ``Tabs`` 의 value 가 갱신된다.
   const [activeTab, setActiveTab] = useState("overview")
-  const { isFeatureAllowed } = usePermissions()
+  const { isFeatureAllowed, canUseFeature } = usePermissions()
+  const canAiGenerate = canUseFeature("ai.generate")
 
   // Schema inline edit state
   const [schemaEditing, setSchemaEditing] = useState(false)
@@ -355,6 +256,7 @@ export default function DatasetDetailPage() {
       setLogicalEditing(false)
     } catch (err) {
       console.error("Failed to save dataset logical name", { datasetId, err })
+      notifyError(err, "논리명을 저장하지 못했습니다.")
     } finally {
       setLogicalSaving(false)
     }
@@ -368,6 +270,7 @@ export default function DatasetDetailPage() {
       setSummaryEditing(false)
     } catch (err) {
       console.error("Failed to save dataset summary", { datasetId, err })
+      notifyError(err, "요약을 저장하지 못했습니다.")
     } finally {
       setSummarySaving(false)
     }
@@ -390,7 +293,7 @@ export default function DatasetDetailPage() {
       router.push("/dashboard/datasets")
     } catch (e) {
       console.error("Failed to delete dataset", { datasetId, err: e })
-      toast.error(e instanceof Error ? e.message : "삭제에 실패했습니다.")
+      notifyError(e, "데이터셋을 삭제하지 못했습니다.")
     } finally {
       setDeleting(false)
     }
@@ -406,12 +309,15 @@ export default function DatasetDetailPage() {
     fetchAiStatus().then((st) => setAiEnabled(st.enabled)).catch(() => setAiEnabled(false))
   }, [])
   const [aiDescResult, setAiDescResult] = useState<DescriptionResult | null>(null)
-  const [aiSummaryResult, setAiSummaryResult] = useState<{ summary: string; confidence: number } | null>(null)
+  const [aiSummaryResult, setAiSummaryResult] = useState<{ summary: string; confidence: number; log_id?: number } | null>(null)
   const [aiColsResult, setAiColsResult] = useState<ColumnsResult | null>(null)
   const [aiTagsResult, setAiTagsResult] = useState<TagSuggestionResult | null>(null)
   const [aiPiiResult, setAiPiiResult] = useState<PIIResult | null>(null)
   const [aiDialogOpen, setAiDialogOpen] = useState(false)
   const [aiDialogType, setAiDialogType] = useState<"description" | "summary" | "columns" | "tags" | "pii" | null>(null)
+  // 승인 대기 AI 제안 목록 다시 읽기 신호 — 미리보기 생성(=대기 제안 생김)·적용 뒤에 올린다.
+  const [aiSuggestionsRefresh, setAiSuggestionsRefresh] = useState(0)
+  const bumpAiSuggestions = () => setAiSuggestionsRefresh((n) => n + 1)
 
   // showLoading=false 로 호출하면 갱신 중 깜빡임 없이 silently refresh — 태그 추가 등 부분 변경 후 사용.
   const load = useCallback(async (showLoading = true) => {
@@ -429,7 +335,7 @@ export default function DatasetDetailPage() {
       })
     } catch (e) {
       console.error("Failed to load dataset", { datasetId, err: e })
-      setError(e instanceof Error ? e.message : "Failed to load dataset")
+      setError(errorMessage(e) ?? "데이터셋을 불러오지 못했습니다.")
     } finally {
       if (showLoading) setIsLoading(false)
     }
@@ -439,9 +345,11 @@ export default function DatasetDetailPage() {
     load()
     fetchTags().then(setAllTags).catch((err) => {
       console.error("Failed to load tags catalog", err)
+      notifyError(err, "태그 목록을 불러오지 못했습니다.")
     })
     fetchGlossaryTerms().then(setAllGlossary).catch((err) => {
       console.error("Failed to load glossary terms catalog", err)
+      notifyError(err, "용어 목록을 불러오지 못했습니다.")
     })
   }, [load])
 
@@ -489,6 +397,7 @@ export default function DatasetDetailPage() {
         .then((r) => setOwnerSearchUsers(r.items))
         .catch((err) => {
           console.error("Failed to search users for owner picker", { query: trimmed, err })
+          notifyError(err, "사용자를 검색하지 못했습니다.")
           setOwnerSearchUsers([])
         })
         .finally(() => setOwnerSearching(false))
@@ -507,6 +416,7 @@ export default function DatasetDetailPage() {
       setDataset(updated)
     } catch (err) {
       console.error("Failed to update dataset status", { datasetId, newStatus, err })
+      notifyError(err, "데이터셋 상태를 변경하지 못했습니다.")
     } finally {
       setStatusUpdating(false)
     }
@@ -565,6 +475,7 @@ export default function DatasetDetailPage() {
       setDataset(updated)
     } catch (err) {
       console.error("Failed to update dataset origin", { datasetId, newOrigin, err })
+      notifyError(err, "데이터셋 환경을 변경하지 못했습니다.")
     } finally {
       setOriginUpdating(false)
     }
@@ -601,7 +512,7 @@ export default function DatasetDetailPage() {
         if (!result.summary) {
           toast.info("요약을 생성하지 못했습니다.")
         } else {
-          setAiSummaryResult({ summary: result.summary, confidence: result.confidence })
+          setAiSummaryResult({ summary: result.summary, confidence: result.confidence, log_id: result.log_id })
           setAiDialogType("summary")
           setAiDialogOpen(true)
         }
@@ -637,10 +548,12 @@ export default function DatasetDetailPage() {
       }
     } catch (e) {
       console.error("AI generation failed", { datasetId, type, err: e })
-      toast.error(e instanceof Error ? e.message : "AI 생성에 실패했습니다.")
+      notifyError(e, "AI 로 내용을 생성하지 못했습니다.")
     } finally {
       setAiGenerating(false)
       setAiGenType(null)
+      // 미리보기 결과는 적용 전까지 승인 대기 제안으로 남는다 — 건수 배지 갱신
+      bumpAiSuggestions()
     }
   }
 
@@ -652,25 +565,33 @@ export default function DatasetDetailPage() {
       setDataset({ ...dataset, description: aiDescResult.description })
       setAiDialogOpen(false)
       setAiDescResult(null)
+      bumpAiSuggestions()
       toast.success("설명을 적용했습니다.")
     } catch (e) {
       console.error("Failed to apply AI description", { datasetId, err: e })
-      toast.error(e instanceof Error ? e.message : "적용에 실패했습니다.")
+      notifyError(e, "설명을 적용하지 못했습니다.")
     }
   }
 
   const handleAiApplySummary = async () => {
     if (!aiSummaryResult || !dataset) return
     try {
-      // updateDataset 으로 직접 적용 — 한 번 더 LLM 을 부르지 않기 위해.
-      const updated = await updateDataset(datasetId, { summary: aiSummaryResult.summary })
-      setDataset(updated)
+      // 미리 본 결과(log_id)를 applySuggestion 으로 그대로 적용 — 승인 대기 제안에서도 빠진다.
+      // log_id 가 없으면(구 서버) updateDataset 으로 직접 적용. 어느 쪽이든 LLM 재호출 없음.
+      if (aiSummaryResult.log_id) {
+        await applySuggestion(aiSummaryResult.log_id)
+        setDataset({ ...dataset, summary: aiSummaryResult.summary.slice(0, 200) })
+      } else {
+        const updated = await updateDataset(datasetId, { summary: aiSummaryResult.summary })
+        setDataset(updated)
+      }
+      bumpAiSuggestions()
       setAiDialogOpen(false)
       setAiSummaryResult(null)
       toast.success("요약을 적용했습니다.")
     } catch (e) {
       console.error("Failed to apply AI summary", { datasetId, err: e })
-      toast.error(e instanceof Error ? e.message : "적용에 실패했습니다.")
+      notifyError(e, "요약을 적용하지 못했습니다.")
     }
   }
 
@@ -686,11 +607,12 @@ export default function DatasetDetailPage() {
       const res = await applySuggestions(logIds)
       setAiDialogOpen(false)
       setAiColsResult(null)
+      bumpAiSuggestions()
       toast.success(`컬럼 설명 ${res.count}개를 적용했습니다.`)
       load(false)
     } catch (e) {
       console.error("Failed to apply AI column descriptions", { datasetId, err: e })
-      toast.error(e instanceof Error ? e.message : "적용에 실패했습니다.")
+      notifyError(e, "컬럼 설명을 적용하지 못했습니다.")
     }
   }
 
@@ -700,13 +622,14 @@ export default function DatasetDetailPage() {
       // applySuggestion 으로 미리 본 후보(log_id)를 그대로 적용 — LLM 재호출 없음.
       await applySuggestion(aiTagsResult.log_id)
       setAiDialogOpen(false)
+      bumpAiSuggestions()
       const total = aiTagsResult.suggested_tags.length + aiTagsResult.new_tags.length
       setAiTagsResult(null)
       toast.success(`태그 ${total}개를 적용했습니다.`)
       load(false)
     } catch (e) {
       console.error("Failed to apply AI tags", { datasetId, err: e })
-      toast.error(e instanceof Error ? e.message : "적용에 실패했습니다.")
+      notifyError(e, "태그를 적용하지 못했습니다.")
     }
   }
 
@@ -716,13 +639,14 @@ export default function DatasetDetailPage() {
       // applySuggestion 으로 미리 본 후보(log_id)를 그대로 적용 — LLM 재호출 없음.
       await applySuggestion(aiPiiResult.log_id)
       setAiDialogOpen(false)
+      bumpAiSuggestions()
       const count = aiPiiResult.pii_columns.length
       setAiPiiResult(null)
       toast.success(`PII 컬럼 ${count}개를 적용했습니다.`)
       load(false)
     } catch (e) {
       console.error("Failed to apply AI PII", { datasetId, err: e })
-      toast.error(e instanceof Error ? e.message : "적용에 실패했습니다.")
+      notifyError(e, "PII 컬럼을 적용하지 못했습니다.")
     }
   }
 
@@ -768,6 +692,7 @@ export default function DatasetDetailPage() {
     } catch (err) {
       // 오류 시에는 편집 모드를 유지해 사용자가 입력을 잃지 않도록 한다.
       console.error("Failed to save schema", { datasetId, fields: payload.length, err })
+      notifyError(err, "스키마를 저장하지 못했습니다.")
     } finally {
       setSchemaSaving(false)
     }
@@ -787,6 +712,7 @@ export default function DatasetDetailPage() {
       await load(false)
     } catch (err) {
       console.error("Failed to add tag to dataset", { datasetId, tagId, err })
+      notifyError(err, "태그를 붙이지 못했습니다.")
     }
   }
 
@@ -796,6 +722,7 @@ export default function DatasetDetailPage() {
       await load(false)
     } catch (err) {
       console.error("Failed to remove tag from dataset", { datasetId, tagId, err })
+      notifyError(err, "태그를 떼지 못했습니다.")
     }
   }
 
@@ -809,6 +736,7 @@ export default function DatasetDetailPage() {
       await load(false)
     } catch (err) {
       console.error("Failed to add glossary term to dataset", { datasetId, termId, err })
+      notifyError(err, "용어를 연결하지 못했습니다.")
     }
   }
 
@@ -818,6 +746,7 @@ export default function DatasetDetailPage() {
       await load(false)
     } catch (err) {
       console.error("Failed to remove glossary term from dataset", { datasetId, termId, err })
+      notifyError(err, "용어 연결을 해제하지 못했습니다.")
     }
   }
 
@@ -841,6 +770,7 @@ export default function DatasetDetailPage() {
       await load(false)
     } catch (err) {
       console.error("Failed to add owner to dataset", { datasetId, username: user.username, err })
+      notifyError(err, "소유자를 추가하지 못했습니다.")
     }
   }
 
@@ -850,6 +780,7 @@ export default function DatasetDetailPage() {
       await load(false)
     } catch (err) {
       console.error("Failed to remove owner from dataset", { datasetId, ownerId, err })
+      notifyError(err, "소유자를 제거하지 못했습니다.")
     }
   }
 
@@ -910,9 +841,10 @@ export default function DatasetDetailPage() {
 
   return (
     <>
-      {/* logical name 이 있으면 헤더는 logical 그대로, 없으면 정규화 경로(name=database.schema.table)를 대문자로. */}
+      {/* logical name 이 있으면 헤더는 logical 그대로, 없으면 정규화 경로(name=database.schema.table)를 원래 대소문자로
+          (예전엔 대문자로 바꿔 `shop.orders` 가 `SHOP.ORDERS` 로 보였다 — 대소문자를 구분하는 원천의 실제 이름과 달라짐). */}
       <DashboardHeader
-        title={dataset.display_name || dataset.name.toUpperCase()}
+        title={dataset.display_name || dataset.name}
       />
       <div className="flex flex-1 flex-col gap-4 p-4">
         {/* Back link — 모델 상세와 동일한 패턴으로 데이터셋 목록 복귀 명시. */}
@@ -961,18 +893,19 @@ export default function DatasetDetailPage() {
                     </Button>
                   </div>
                 ) : (
+                  // 인라인 편집은 소유자·관리자만(서버와 동일 기준) — 그 외에는 읽기 전용 표시
                   <CardTitle
-                    className={`group/title flex items-center gap-2 text-xl cursor-pointer rounded-md px-2 py-0.5 -mx-2 hover:bg-muted transition-colors ${dataset.display_name ? "" : "uppercase"}`}
-                    title="클릭하여 논리명 편집"
-                    onClick={() => {
+                    className={`group/title flex items-center gap-2 text-xl rounded-md px-2 py-0.5 -mx-2 ${canManage ? "cursor-pointer hover:bg-muted transition-colors" : ""}`}
+                    title={canManage ? "클릭하여 논리명 편집" : undefined}
+                    onClick={canManage ? () => {
                       setLogicalDraft(dataset.display_name ?? "")
                       setLogicalEditing(true)
-                    }}
+                    } : undefined}
                   >
                     {dataset.display_name ? (
                       <span>
                         {dataset.display_name}
-                        <span className="ml-1.5 text-base font-normal uppercase text-muted-foreground" title="물리명 (physical name)">
+                        <span className="ml-1.5 text-base font-normal text-muted-foreground" title="물리명 (physical name)">
                           ({dataset.name})
                         </span>
                       </span>
@@ -984,7 +917,9 @@ export default function DatasetDetailPage() {
                         동기화됨
                       </span>
                     )}
-                    <Pencil className="h-3.5 w-3.5 shrink-0 opacity-0 transition-opacity group-hover/title:opacity-60" />
+                    {canManage && (
+                      <Pencil className="h-3.5 w-3.5 shrink-0 opacity-0 transition-opacity group-hover/title:opacity-60" />
+                    )}
                   </CardTitle>
                 )}
                 {/* 한 줄 요약 — 클릭하면 인라인 편집. 빈 값이면 placeholder 형태로 노출. */}
@@ -1020,16 +955,16 @@ export default function DatasetDetailPage() {
                   </div>
                 ) : dataset.summary ? (
                   <p
-                    className="text-sm cursor-pointer rounded-md px-2 py-0.5 -mx-2 hover:bg-muted transition-colors"
-                    title="클릭하여 편집"
-                    onClick={() => {
+                    className={`text-sm rounded-md px-2 py-0.5 -mx-2 ${canManage ? "cursor-pointer hover:bg-muted transition-colors" : ""}`}
+                    title={canManage ? "클릭하여 편집" : undefined}
+                    onClick={canManage ? () => {
                       setSummaryDraft(dataset.summary ?? "")
                       setSummaryEditing(true)
-                    }}
+                    } : undefined}
                   >
                     {dataset.summary}
                   </p>
-                ) : (
+                ) : canManage ? (
                   <p
                     className="text-sm italic text-muted-foreground cursor-pointer rounded-md px-2 py-0.5 -mx-2 hover:bg-muted transition-colors"
                     title="클릭하여 요약 작성"
@@ -1040,7 +975,7 @@ export default function DatasetDetailPage() {
                   >
                     한 줄 요약을 추가하세요
                   </p>
-                )}
+                ) : null}
                 <p className="text-sm text-muted-foreground font-mono">
                   {dataset.urn}
                 </p>
@@ -1054,6 +989,15 @@ export default function DatasetDetailPage() {
                     동기화됨
                   </span>
                 )}
+                {/* 승인 대기 AI 제안 — 대기 건이 있을 때만 버튼(건수 배지)이 보인다.
+                    승인·거절은 서버와 같이 데이터셋 생성자·관리자만(canManage). */}
+                {canManage && (
+                  <AiSuggestionsButton
+                    datasetId={datasetId}
+                    refreshKey={aiSuggestionsRefresh}
+                    onApplied={() => load(false)}
+                  />
+                )}
                 {canManage && (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
@@ -1061,8 +1005,9 @@ export default function DatasetDetailPage() {
                         <MoreHorizontal className="h-4 w-4" />
                       </Button>
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="w-56">
-                      {/* AI 자동 생성 — LLM 제공자 비활성 시 표시는 하되 클릭 불가 */}
+                    <DropdownMenuContent align="end" className="min-w-56">
+                      {/* AI 자동 생성 — LLM 제공자 비활성 시 표시는 하되 클릭 불가, ai.generate 권한이 없으면 숨김 */}
+                      {canAiGenerate && (<>
                       <DropdownMenuLabel className="text-xs text-muted-foreground">
                         AI 자동 생성{!aiEnabled && " (LLM 비활성 — 설정에서 활성화)"}
                       </DropdownMenuLabel>
@@ -1082,6 +1027,7 @@ export default function DatasetDetailPage() {
                         <Shield className="h-4 w-4 mr-2" /> PII 감지
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
+                      </>)}
                       {/* 상태 변경 */}
                       <DropdownMenuLabel className="text-xs text-muted-foreground">상태 변경</DropdownMenuLabel>
                       {allStatuses.filter((s) => s !== dataset.status).map((s) => {
@@ -1216,7 +1162,7 @@ export default function DatasetDetailPage() {
                       <ChevronDown className="h-3 w-3 opacity-60" />
                     </button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" className="w-44">
+                  <DropdownMenuContent align="start" className="min-w-44">
                     {overflowTabs.map((t) => (
                       <DropdownMenuItem
                         key={t.value}
@@ -1259,20 +1205,22 @@ export default function DatasetDetailPage() {
                       setDescEditing(false)
                     } catch (err) {
                       console.error("Failed to save dataset description", { datasetId, err })
+                      notifyError(err, "설명을 저장하지 못했습니다.")
                     } finally {
                       setDescSaving(false)
                     }
                   }}
                 />
               ) : dataset.description ? (
+                // 설명 인라인 편집도 소유자·관리자만 — 그 외에는 읽기 전용
                 <div
-                  className="cursor-pointer rounded-md px-2 py-1 -mx-2 hover:bg-muted transition-colors"
-                  onClick={startDescEdit}
-                  title="클릭하여 편집"
+                  className={canManage ? "cursor-pointer rounded-md px-2 py-1 -mx-2 hover:bg-muted transition-colors" : "px-2 py-1 -mx-2"}
+                  onClick={canManage ? startDescEdit : undefined}
+                  title={canManage ? "클릭하여 편집" : undefined}
                 >
                   <RichTextViewer html={dataset.description} />
                 </div>
-              ) : (
+              ) : canManage ? (
                 <p
                   className="text-sm cursor-pointer rounded-md px-2 py-1 -mx-2 hover:bg-muted transition-colors text-muted-foreground italic"
                   onClick={startDescEdit}
@@ -1280,6 +1228,8 @@ export default function DatasetDetailPage() {
                 >
                   클릭해서 설명을 추가할 수 있습니다.
                 </p>
+              ) : (
+                <p className="text-sm px-2 py-1 -mx-2 text-muted-foreground italic">설명이 없습니다.</p>
               )}
             </DatasetMetadataSummary>
           </TabsContent>
@@ -1289,6 +1239,7 @@ export default function DatasetDetailPage() {
             <DatasetMetadataTab
               dataset={dataset}
               onSaved={setDataset}
+              canEdit={canManage}
               extraGroup={{
                 name: "분류 · 소유",
                 rows: [
@@ -1303,16 +1254,18 @@ export default function DatasetDetailPage() {
                               <Badge key={o.id} variant="secondary" className="gap-1 text-xs">
                                 {o.owner_name}
                                 <span className="text-[10px] text-muted-foreground">· {o.owner_type.replaceAll("_", " ")}</span>
-                                <button className="ml-0.5 hover:opacity-70" onClick={() => handleRemoveOwner(o.id)} aria-label="소유자 제거">
-                                  <X className="h-3 w-3" />
-                                </button>
+                                {canManage && (
+                                  <button className="ml-0.5 hover:opacity-70" onClick={() => handleRemoveOwner(o.id)} aria-label="소유자 제거">
+                                    <X className="h-3 w-3" />
+                                  </button>
+                                )}
                               </Badge>
                             ))
                           ) : (
                             <span className="text-xs text-muted-foreground">없음</span>
                           )}
                         </div>
-                        <div className="flex items-center gap-1.5">
+                        {canManage && <div className="flex items-center gap-1.5">
                           <Select value={ownerType} onValueChange={setOwnerType}>
                             <SelectTrigger size="sm" className="h-7 w-[140px] text-xs"><SelectValue /></SelectTrigger>
                             <SelectContent>
@@ -1356,7 +1309,7 @@ export default function DatasetDetailPage() {
                               </Command>
                             </PopoverContent>
                           </Popover>
-                        </div>
+                        </div>}
                       </div>
                     ),
                   },
@@ -1370,16 +1323,18 @@ export default function DatasetDetailPage() {
                             dataset.tags.map((t) => (
                               <Badge key={t.id} style={{ backgroundColor: t.color, color: "#fff" }} className="gap-1 text-xs">
                                 {t.name}
-                                <button className="ml-0.5 hover:opacity-70" onClick={() => handleRemoveTag(t.id)} aria-label="태그 제거">
-                                  <X className="h-3 w-3" />
-                                </button>
+                                {canManage && (
+                                  <button className="ml-0.5 hover:opacity-70" onClick={() => handleRemoveTag(t.id)} aria-label="태그 제거">
+                                    <X className="h-3 w-3" />
+                                  </button>
+                                )}
                               </Badge>
                             ))
                           ) : (
                             <span className="text-xs text-muted-foreground">없음</span>
                           )}
                         </div>
-                        <Popover open={tagPopoverOpen} onOpenChange={setTagPopoverOpen}>
+                        {canManage && <Popover open={tagPopoverOpen} onOpenChange={setTagPopoverOpen}>
                           <PopoverTrigger asChild>
                             <Button size="sm" variant="outline" className="h-7 w-[45px] px-0" disabled={availableTags.length === 0}>추가</Button>
                           </PopoverTrigger>
@@ -1399,7 +1354,7 @@ export default function DatasetDetailPage() {
                               </CommandList>
                             </Command>
                           </PopoverContent>
-                        </Popover>
+                        </Popover>}
                       </div>
                     ),
                   },
@@ -1413,22 +1368,26 @@ export default function DatasetDetailPage() {
                             dataset.glossary_terms.map((g) => (
                               <Badge key={g.id} variant="secondary" className="gap-1 text-xs">
                                 {g.name}
-                                <button className="ml-0.5 hover:opacity-70" onClick={() => handleRemoveGlossary(g.id)} aria-label="용어 제거">
-                                  <X className="h-3 w-3" />
-                                </button>
+                                {canManage && (
+                                  <button className="ml-0.5 hover:opacity-70" onClick={() => handleRemoveGlossary(g.id)} aria-label="용어 제거">
+                                    <X className="h-3 w-3" />
+                                  </button>
+                                )}
                               </Badge>
                             ))
                           ) : (
                             <span className="text-xs text-muted-foreground">없음</span>
                           )}
                         </div>
-                        <GlossaryTermPicker
-                          open={glossaryPopoverOpen}
-                          onOpenChange={setGlossaryPopoverOpen}
-                          allGlossary={allGlossary}
-                          availableTerms={availableTermsOnly}
-                          onSelect={handleAddGlossary}
-                        />
+                        {canManage && (
+                          <GlossaryTermPicker
+                            open={glossaryPopoverOpen}
+                            onOpenChange={setGlossaryPopoverOpen}
+                            allGlossary={allGlossary}
+                            availableTerms={availableTermsOnly}
+                            onSelect={handleAddGlossary}
+                          />
+                        )}
                       </div>
                     ),
                   },
@@ -1445,7 +1404,7 @@ export default function DatasetDetailPage() {
                 <CardHeader className="py-3">
                   <CardTitle className="text-base flex items-center gap-2">
                     <Code2 className="h-4 w-4" />
-                    CREATE TABLE DDL
+                    {ddlTitle(dataset.ddl)}
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
@@ -1482,7 +1441,7 @@ export default function DatasetDetailPage() {
                       {schemaSaving ? "Updating..." : "Update"}
                     </Button>
                   </div>
-                ) : user?.is_admin ? (
+                ) : canManage ? (
                   <Button size="sm" variant="outline" onClick={startSchemaEdit}>
                     <Pencil className="mr-1 h-3.5 w-3.5" />
                     스키마 수정
@@ -1658,12 +1617,12 @@ export default function DatasetDetailPage() {
 
           {/* =============== Sample tab =============== */}
           <TabsContent value="sample" className="mt-4">
-            <SampleDataTab datasetId={datasetId} isSynced={dataset.is_synced === "true"} isAdmin={!!user?.is_admin} />
+            <SampleDataTab datasetId={datasetId} isSynced={dataset.is_synced === "true"} canEdit={canManage} />
           </TabsContent>
 
           {/* =============== Avro tab =============== */}
           <TabsContent value="avro" className="mt-4">
-            <AvroSchemaCard dataset={dataset} onUpdated={setDataset} />
+            <AvroSchemaCard dataset={dataset} onUpdated={setDataset} canEdit={canManage} />
           </TabsContent>
 
           {/* =============== PySpark tab — RDBMS → S3 이관 코드 (RDBMS 한정) =============== */}
@@ -1689,7 +1648,7 @@ export default function DatasetDetailPage() {
           {/* =============== Lineage tab =============== */}
           {/* =============== Terms tab =============== */}
           <TabsContent value="terms" className="mt-4">
-            <TermsTab datasetId={datasetId} />
+            <TermsTab datasetId={datasetId} canEdit={canManage} />
           </TabsContent>
 
           {/* =============== Quality tab =============== */}
@@ -2026,23 +1985,38 @@ function AvroFetchGuide({ urn, datasetId }: { urn: string; datasetId: number }) 
   const byUrn = `${origin}/api/v1/external/avro-schema?urn=${encUrn}`
   const byId = `${origin}/api/v1/external/datasets/${datasetId}/avro-schema`
 
+  // 모든 /api/v1 호출은 로그인 토큰이 필요하다 — 먼저 /api/v1/auth/login 으로 받은 access_token 을
+  // Authorization: Bearer 헤더에 싣는다. 외부 시스템용 계정을 따로 만들어 쓰는 것을 권장.
+  const loginUrl = `${origin}/api/v1/auth/login`
+  const tokenCurl = [
+    "# 0) 토큰 받기 — 외부 시스템용 계정으로 로그인 (Access 토큰 8시간 유효)",
+    `TOKEN=$(curl -s -X POST "${loginUrl}" \\`,
+    '  -H "Content-Type: application/json" \\',
+    "  -d '{\"username\":\"<사용자명>\",\"password\":\"<비밀번호>\"}' \\",
+    "  | python3 -c \"import sys,json; print(json.load(sys.stdin)['access_token'])\")",
+  ]
+
   const curlCode = [
+    ...tokenCurl,
+    "",
     "# URN 으로 조회 (외부 시스템에 권장 — 데이터셋 식별자가 안정적)",
-    `curl -s "${byUrn}" | jq .`,
+    `curl -s -H "Authorization: Bearer $TOKEN" "${byUrn}" | jq .`,
     "",
     "# 내부 dataset_id 로도 동일하게 조회 가능",
-    `curl -s "${byId}" | jq .`,
+    `curl -s -H "Authorization: Bearer $TOKEN" "${byId}" | jq .`,
     "",
     "# 캐시 우회가 필요할 때(편집 직후 등)",
-    `curl -s "${byUrn}&no_cache=true" | jq .`,
+    `curl -s -H "Authorization: Bearer $TOKEN" "${byUrn}&no_cache=true" | jq .`,
   ].join("\n")
 
   const wgetCode = [
+    "# 토큰은 curl 탭의 0) 과 같이 받아 TOKEN 변수에 둔다",
+    "",
     "# URN 으로 조회",
-    `wget -qO- "${byUrn}"`,
+    `wget -qO- --header="Authorization: Bearer $TOKEN" "${byUrn}"`,
     "",
     "# 파일로 저장",
-    `wget -O dataset.avsc "${byUrn}"`,
+    `wget -O dataset.avsc --header="Authorization: Bearer $TOKEN" "${byUrn}"`,
   ].join("\n")
 
   const pythonCode = [
@@ -2051,9 +2025,19 @@ function AvroFetchGuide({ urn, datasetId }: { urn: string; datasetId: number }) 
     `BASE = "${origin}"`,
     `URN  = "${urn}"`,
     "",
+    "# 0) 로그인해 토큰 받기 — 외부 시스템용 계정 권장",
+    "login = urllib.request.Request(",
+    '    f"{BASE}/api/v1/auth/login",',
+    '    data=json.dumps({"username": "<사용자명>", "password": "<비밀번호>"}).encode(),',
+    '    headers={"Content-Type": "application/json"},',
+    ")",
+    "with urllib.request.urlopen(login, timeout=10) as resp:",
+    '    token = json.load(resp)["access_token"]',
+    "",
     "# 1) URN 으로 Avro 스키마 가져오기",
     'url = f"{BASE}/api/v1/external/avro-schema?urn=" + urllib.parse.quote(URN)',
-    "with urllib.request.urlopen(url, timeout=10) as resp:",
+    'req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})',
+    "with urllib.request.urlopen(req, timeout=10) as resp:",
     "    avro = json.load(resp)",
     "print(json.dumps(avro, indent=2, ensure_ascii=False))",
     "",
@@ -2081,6 +2065,14 @@ function AvroFetchGuide({ urn, datasetId }: { urn: string; datasetId: number }) 
             라우트로 받아갈 수 있습니다. 캐시가 켜져 있어 첫 호출 이후엔 1ms 미만이 일반적입니다.
           </DialogDescription>
         </DialogHeader>
+        <p className="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+          모든 <code className="rounded bg-muted px-1">/api/v1</code> 호출에는 로그인 토큰이 필요합니다.
+          <code className="mx-1 rounded bg-muted px-1">POST /api/v1/auth/login</code>
+          (본문 <code className="rounded bg-muted px-1">{"{\"username\", \"password\"}"}</code>) 응답의
+          <code className="mx-1 rounded bg-muted px-1">access_token</code> 을
+          <code className="mx-1 rounded bg-muted px-1">Authorization: Bearer &lt;TOKEN&gt;</code> 헤더로 보내세요.
+          외부 시스템용 계정을 따로 만들어 쓰는 것을 권장합니다.
+        </p>
         <Tabs defaultValue="curl">
           <TabsList>
             <TabsTrigger value="curl">curl</TabsTrigger>
@@ -2088,13 +2080,13 @@ function AvroFetchGuide({ urn, datasetId }: { urn: string; datasetId: number }) 
             <TabsTrigger value="python">Python</TabsTrigger>
           </TabsList>
           <TabsContent value="curl" className="mt-2">
-            <CodeViewer code={curlCode} language="shell" height={240} copyLabel="curl" />
+            <CodeViewer code={curlCode} language="shell" height={320} copyLabel="curl" />
           </TabsContent>
           <TabsContent value="wget" className="mt-2">
-            <CodeViewer code={wgetCode} language="shell" height={160} copyLabel="wget" />
+            <CodeViewer code={wgetCode} language="shell" height={200} copyLabel="wget" />
           </TabsContent>
           <TabsContent value="python" className="mt-2">
-            <CodeViewer code={pythonCode} language="python" height={280} copyLabel="Python" />
+            <CodeViewer code={pythonCode} language="python" height={400} copyLabel="Python" />
           </TabsContent>
         </Tabs>
       </DialogContent>
@@ -2110,9 +2102,12 @@ const AvroMonacoEditor = dynamic(
 function AvroSchemaCard({
   dataset,
   onUpdated,
+  canEdit,
 }: {
   dataset: DatasetDetail
   onUpdated: (updated: DatasetDetail) => void
+  /** 편집·초기화 가능 여부 — 데이터셋 소유자 또는 관리자(속성 PUT 과 동일 기준). */
+  canEdit: boolean
 }) {
   // 1) 데이터셋 정의로부터 매번 새로 만드는 "원본" — 초기화 시 돌아갈 기준.
   // namespace 는 datasource_id 만, name 은 URN 의 path (``db.schema.table`` 등) 를 사용.
@@ -2121,8 +2116,9 @@ function AvroSchemaCard({
   const generated = useMemo(() => {
     if (dataset.schema_fields.length === 0) return ""
     const path = pathFromUrn(dataset.urn) || dataset.name
-    return generateAvroSchema(path, dataset.datasource.datasource_id, dataset.schema_fields)
-  }, [dataset.urn, dataset.name, dataset.datasource.datasource_id, dataset.schema_fields])
+    // doc = 데이터셋 설명 평문(없으면 "Avro schema for {path}") — 외부 Avro API 와 같은 규칙
+    return generateAvroSchema(path, dataset.datasource.datasource_id, dataset.schema_fields, dataset.description)
+  }, [dataset.urn, dataset.name, dataset.datasource.datasource_id, dataset.schema_fields, dataset.description])
 
   // 2) 사용자가 저장한 override 가 있으면 그것을 우선 표시.
   const override = useMemo(() => {
@@ -2178,7 +2174,7 @@ function AvroSchemaCard({
       setEditing(false)
       toast.success("Avro 스키마를 저장했습니다.")
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "저장에 실패했습니다.")
+      notifyError(e, "Avro 스키마를 저장하지 못했습니다.")
     } finally {
       setSaving(false)
     }
@@ -2187,11 +2183,15 @@ function AvroSchemaCard({
   const handleReset = useCallback(async () => {
     try {
       setResetting(true)
-      await writeProperties((props) => props.filter((p) => p.key !== AVRO_OVERRIDE_KEY))
+      // 서버는 payload 에 없는 ``argus.`` 내부 키를 보존하므로, 빈 값으로 보내 명시적으로 삭제한다.
+      await writeProperties((props) => [
+        ...props.filter((p) => p.key !== AVRO_OVERRIDE_KEY),
+        { key: AVRO_OVERRIDE_KEY, value: "" },
+      ])
       setEditing(false)
       toast.success("자동 생성 스키마로 초기화했습니다.")
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "초기화에 실패했습니다.")
+      notifyError(e, "Avro 스키마를 초기화하지 못했습니다.")
     } finally {
       setResetting(false)
     }
@@ -2247,7 +2247,7 @@ function AvroSchemaCard({
                 {saving ? "저장 중..." : "저장"}
               </Button>
             </>
-          ) : (
+          ) : canEdit ? (
             <>
               {override && (
                 <Button
@@ -2265,7 +2265,7 @@ function AvroSchemaCard({
                 편집
               </Button>
             </>
-          )}
+          ) : null}
         </div>
       </CardHeader>
       <CardContent className="p-0">
@@ -2274,12 +2274,12 @@ function AvroSchemaCard({
             <AvroMonacoEditor
               height={editorHeight}
               language="json"
-              theme="vs-dark"
+              theme="light"
               value={draft}
               onChange={(v) => setDraft(v ?? "")}
               options={{
                 fontFamily: "var(--font-d2coding), 'D2Coding', Consolas, monospace",
-                fontSize: 13,
+                fontSize: MONACO_FONT_SIZE,
                 minimap: { enabled: false },
                 scrollBeyondLastLine: false,
                 wordWrap: "on",

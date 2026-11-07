@@ -55,3 +55,15 @@ export function getFileCategory(
   if (["json", "xml", "yaml", "yml", "csv", "tsv", "parquet", "avro"].includes(ext)) return "data"
   return "generic"
 }
+
+/** 보기·내려받기 오류를 한국어 문구로 — fetch 의 네트워크 오류(TypeError "Failed to fetch")는 풀어서 쓴다. */
+export function fileLoadErrorMessage(err: unknown): string {
+  if (err instanceof TypeError) return "파일을 불러오지 못했습니다. 서버 또는 저장소에 연결할 수 없습니다."
+  return err instanceof Error && err.message ? err.message : "파일을 불러오지 못했습니다."
+}
+
+/** 응답이 실패면 HTTP 상태를 담은 한국어 오류를 던진다. */
+export function assertFileResponse(res: Response): Response {
+  if (!res.ok) throw new Error(`파일을 불러오지 못했습니다 (HTTP ${res.status})`)
+  return res
+}

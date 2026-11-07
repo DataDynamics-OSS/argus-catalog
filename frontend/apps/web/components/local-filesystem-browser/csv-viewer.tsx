@@ -14,6 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@workspace/ui/components/select"
+import { assertFileResponse, fileLoadErrorMessage } from "./utils"
 
 /** Encoding options: label is what the user sees, value is the TextDecoder label. */
 const ENCODINGS: { label: string; value: string }[] = [
@@ -126,7 +127,7 @@ export function CsvViewer({ url, defaultDelimiter }: CsvViewerProps) {
       setRows([])
       try {
         const res = await fetch(url)
-        if (!res.ok) throw new Error(`Failed to fetch file (${res.status})`)
+        assertFileResponse(res)
         const buf = await res.arrayBuffer()
         let decoded = new TextDecoder(enc).decode(buf)
 
@@ -164,7 +165,7 @@ export function CsvViewer({ url, defaultDelimiter }: CsvViewerProps) {
         }
         setRows(result.data)
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load file")
+        setError(fileLoadErrorMessage(err))
       } finally {
         setIsLoading(false)
       }

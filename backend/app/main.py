@@ -1,5 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
-"""카탈로그 서버 - FastAPI 애플리케이션 진입점."""
+"""카탈로그 서버 - FastAPI 애플리케이션 진입점.
+
+- ``app``: 미들웨어·예외 처리기·코어 라우터가 모두 붙은 FastAPI 인스턴스.
+- ``lifespan``: 기동 시 로깅·시크릿 점검·플러그인·DB 초기화·시드·설정 로딩·외부 연결(S3/Temporal)과
+  백그라운드 스케줄러(품질·페더레이션 HARVEST·MCP)를 띄우고, 종료 시 정리한다.
+- ``run``: ``argus-catalog-server`` 콘솔 스크립트 진입점(설정 파일 경로 인자 → uvicorn 실행).
+"""
 
 import argparse
 import asyncio
@@ -10,15 +16,19 @@ from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI, Request
+from fastapi.exception_handlers import http_exception_handler as _default_http_exception_handler
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DataError, IntegrityError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app import __version__
 from app.agents.router import router as agents_router
 from app.ai.router import router as ai_router
 from app.alert.router import router as alert_router
 from app.apis.router import router as apis_router
+from app.audit.router import router as audit_router
+from app.audit.service import ClientIpMiddleware
 from app.auth.router import router as auth_router  # SSO 인증용 추가
 from app.catalog.impala_profile_router import router as impala_profile_router
 from app.catalog.router import router as catalog_router
@@ -35,11 +45,15 @@ from app.core.database import (
 )
 from app.core.logging import setup_logging
 from app.core.password_gate import PasswordChangeGateMiddleware
+from app.core.auth_gate import ApiAuthGateMiddleware
+from app.core.secrets import check_required_secrets
 from app.core.security import SecurityHeadersMiddleware
 from app.external.router import router as external_router
 from app.federation.export_router import router as federation_export_router
 from app.federation.router import router as federation_router
 from app.filesystemmgr.router import router as filesystem_router
+from app.mcp_servers.router import deployments_router as mcp_deployments_router
+from app.mcp_servers.router import servers_router as mcp_servers_router
 from app.models.router import router as models_router
 from app.models.store_router import router as model_store_router
 from app.models.uc_compat import router as uc_compat_router
@@ -64,6 +78,7 @@ _  ___ |  /   _  /_/ // /_/ /_(__  )     / /___  / /_/ // /_ / /_/ /_  / / /_/ /
 
 
 def _print_banner() -> None:
+    """시작 배너와 버전·설정 파일 경로·데이터 디렉터리를 INFO 로 출력한다."""
     logger.info(BANNER)
     # 로고 아래 버전(단일 소스 app.__version__) — 아래 설정 라인들과 정렬된 라벨 형식.
     logger.info("버전              : %s", settings.app_version)
@@ -72,13 +87,46 @@ def _print_banner() -> None:
     logger.info("데이터 디렉터리   : %s", settings.data_dir)
 
 
+def _load_plugins_once(fastapi_app: FastAPI) -> None:
+    """플러그인 라우터를 앱당 한 번만 등록한다.
+
+    lifespan 은 테스트 등에서 같은 앱으로 여러 번 실행될 수 있으므로, 중복 등록을
+    막기 위해 app.state 에 표시를 남긴다. 설치된 플러그인이 없으면 아무 것도 하지
+    않으므로 OSS 기본 동작과 동일하다.
+    """
+    if getattr(fastapi_app.state, "plugins_loaded", False):
+        logger.debug("플러그인 라우터는 이미 등록됨 — 건너뜀")
+        return
+    from app.plugins import load_plugin_routers
+
+    load_plugin_routers(fastapi_app, enabled=settings.enabled_plugins)
+    fastapi_app.state.plugins_loaded = True
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """서버 생명주기 — ``yield`` 이전은 기동 시퀀스, 이후는 종료 정리.
+
+    S3·Temporal·OCI 가져오기 정리처럼 선택적인 외부 의존은 실패해도 WARNING 만 남기고 기동을 계속한다.
+    ``check_required_secrets`` 는 운영 시크릿 미설정 시 예외로 기동을 중단시킨다.
+    """
     global _start_time
     _start_time = time.monotonic()
     setup_logging()
     _print_banner()
     logger.info("카탈로그 서버 %s 기동 중", __version__)
+
+    # 운영 시크릿 점검 — ARGUS_REQUIRE_SECRETS=true 인데 미설정·개발용 기본값·짧은 값이면 기동 중단
+    check_required_secrets()
+
+    # 플러그인 라우터 — 고객사별 커스텀 확장. entry_points "argus.plugins" 에 등록된
+    # 패키지를 발견해 등록한다. 모듈 import 시점이 아니라 여기서 등록해야
+    # `--config-yaml/--config-properties` 로 넘긴 설정(plugins.enabled)이 반영된다.
+    # 코어 라우터는 import 시점에 이미 등록됐으므로 경로 충돌 시 코어가 우선한다.
+    # NOTE: 아래 `import app.xxx.models` 가 지역 이름 `app` 을 모듈로 덮어쓰므로
+    #       반드시 그 import 들보다 먼저 호출한다.
+    _load_plugins_once(app)
+
     await init_database()
 
     import app.agents.models  # noqa: F401
@@ -88,6 +136,7 @@ async def lifespan(app: FastAPI):
     import app.comments.models  # noqa: F401
     import app.embedding.models  # noqa: F401
     import app.federation.models  # noqa: F401
+    import app.mcp_servers.models  # noqa: F401
     import app.models.models  # noqa: F401
     import app.oci_hub.models  # noqa: F401
     import app.permissions.models  # noqa: F401
@@ -118,11 +167,18 @@ async def lifespan(app: FastAPI):
         await seed_roles(session)
         await seed_configuration(session)
         await load_os_settings(session)
+        # 서버 재시작으로 끊긴 OCI HuggingFace 가져오기(importing) 정리 — 실패 실행은 무시하고 기동은 계속
+        try:
+            from app.oci_hub.service import fail_stale_imports
+            await fail_stale_imports(session)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("중단된 OCI 가져오기 정리 실패: %s", e)
         await load_embedding_settings(session)
         await load_llm_settings(session)
         await load_auth_settings(session)
         await load_cors_settings(session)
         await seed_admin_user(session)
+    logger.info("기본 데이터 시드 및 DB 설정 로딩 완료")
 
     # S3 버킷 존재 보장
     try:
@@ -143,28 +199,47 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("Temporal 비활성화됨 (temporal.enabled=false) — 변경관리 submit 사용 불가")
 
-    # 권한 기본값 — 관리 메뉴(users/settings/permissions)는 admin 전용으로 출고
-    from app.core.database import async_session as _ps
-    from app.permissions.router import seed_default_permissions
-    async with _ps() as _s:
-        await seed_default_permissions(_s)
-
     # 품질 검증 주기 스케줄러 (argus.quality_schedule property 기반)
     from app.quality.scheduler import quality_scheduler_loop
     quality_task = asyncio.create_task(quality_scheduler_loop())
+    logger.info("품질 검증 스케줄러 시작")
+
+    # 페더레이션 export 토큰 미설정 경고 — 인증 없이 메타데이터가 노출된다(샘플은 기본 차단).
+    if not settings.federation_export_token:
+        logger.warning(
+            "페더레이션 export 토큰 미설정(ARGUS_FEDERATION_TOKEN) — /federation/export/* 메타데이터가 "
+            "인증 없이 노출됩니다%s",
+            "(샘플 포함: export_allow_anonymous_sample=true)"
+            if settings.federation_export_allow_anonymous_sample else "(샘플은 차단)",
+        )
 
     # 페더레이션 HARVEST 주기 스케줄러 (HARVEST/HYBRID peer 메타데이터 pull)
     harvest_task = None
     if settings.federation_harvest_enabled:
         from app.federation.scheduler import federation_harvest_loop
         harvest_task = asyncio.create_task(federation_harvest_loop())
+        logger.info("페더레이션 HARVEST 스케줄러 시작")
     else:
         logger.info("페더레이션 HARVEST 스케줄러 비활성화됨 (federation.harvest_enabled=false)")
 
+    # MCP 배포 주기 수집·헬스 체크·감사 보존 정리 (ARGUS_MCP_SCHEDULER=off 로 끔)
+    from app.mcp_servers import scheduler as mcp_scheduler
+    mcp_task = None
+    if mcp_scheduler.enabled():
+        mcp_task = asyncio.create_task(mcp_scheduler.mcp_scheduler_loop())
+        logger.info("MCP 스케줄러 시작")
+    else:
+        logger.info("MCP 스케줄러 비활성화됨 (ARGUS_MCP_SCHEDULER=off)")
+
+    logger.info("카탈로그 서버 기동 완료 (소요 %.2f초)", time.monotonic() - _start_time)
     yield
+    # --- 종료 정리: 스케줄러 취소 → 임베딩/LLM 제공자 해제 → DB 연결 종료 ---
+    logger.info("백그라운드 스케줄러 중지 중")
     quality_task.cancel()
     if harvest_task is not None:
         harvest_task.cancel()
+    if mcp_task is not None:
+        mcp_task.cancel()
     from app.ai.registry import shutdown_provider as shutdown_llm
     from app.embedding.registry import shutdown_provider as shutdown_embedding
     await shutdown_embedding()
@@ -182,6 +257,35 @@ app = FastAPI(
 app.add_middleware(SecurityHeadersMiddleware)
 # 강제 비밀번호 변경 게이트(로컬 모드) — 화이트리스트 외 API 를 차단
 app.add_middleware(PasswordChangeGateMiddleware)
+# 관리 감사 로그용 요청자 IP(contextvar)
+app.add_middleware(ClientIpMiddleware)
+# /api/v1/* 로그인 게이트 — 사용자 토큰 없는 요청은 401 (자체 토큰을 쓰는 경로만 예외)
+app.add_middleware(ApiAuthGateMiddleware)
+
+
+_UC_PREFIX = "/api/2.1/unity-catalog"
+_UC_ERROR_CODES = {
+    400: "INVALID_PARAMETER_VALUE", 401: "UNAUTHENTICATED", 403: "PERMISSION_DENIED",
+    404: "NOT_FOUND", 409: "ALREADY_EXISTS",
+}
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    """Unity Catalog 호환 API(``/api/2.1/unity-catalog``) 의 오류는 UC 형식
+    ``{"error_code", "message"}`` 로 돌려준다 — MLflow 클라이언트가 ``INTERNAL_ERROR`` 대신
+    ``UNAUTHENTICATED`` 등으로 사유를 표시한다. 그 외 경로는 FastAPI 기본 처리."""
+    if not request.url.path.startswith(_UC_PREFIX):
+        return await _default_http_exception_handler(request, exc)
+    logger.debug("UC 호환 API 오류 응답 변환: path=%s status=%d", request.url.path, exc.status_code)
+    message = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+    if exc.status_code == 401:
+        message += " MLflow 클라이언트는 MLFLOW_UC_OSS_TOKEN 환경변수에 Argus Catalog 액세스 토큰을 설정하세요."
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error_code": _UC_ERROR_CODES.get(exc.status_code, "INTERNAL_ERROR"), "message": message},
+        headers=getattr(exc, "headers", None),
+    )
 
 
 @app.exception_handler(IntegrityError)
@@ -193,12 +297,29 @@ async def integrity_error_handler(request: Request, exc: IntegrityError):
     500 이 아닌 '의존 관계로 처리할 수 없음(409)' 으로 안내한다(상세 사유는 로그로).
     """
     logger.warning("무결성 제약 위반 (%s %s): %s", request.method, request.url.path, exc)
-    return JSONResponse(
-        status_code=409,
-        content={
-            "detail": "다른 항목과 연결되어 있어 처리할 수 없습니다. 연결된 하위 항목을 먼저 정리하세요.",
-        },
-    )
+    return JSONResponse(status_code=409, content={"detail": _integrity_message(exc)})
+
+
+@app.exception_handler(DataError)
+async def data_error_handler(request: Request, exc: DataError):
+    """DB 값 오류(길이 초과·형식 불일치 등)를 500 대신 400 으로 변환하는 안전망.
+
+    입력 스키마의 길이 제한이 1차 방어이고, 빠진 곳에서 새어나온 오류만 여기서 잡는다.
+    """
+    logger.warning("DB 값 오류 (%s %s): %s", request.method, request.url.path, exc)
+    return JSONResponse(status_code=400, content={"detail": "입력 값이 허용 범위(길이·형식)를 벗어나 저장할 수 없습니다."})
+
+
+def _integrity_message(exc: IntegrityError) -> str:
+    """무결성 위반 종류(SQLSTATE)에 맞는 안내 문구. 중복과 의존 관계를 구분해 알린다."""
+    orig = exc.orig
+    code = getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None)
+    text = str(orig).lower()
+    if code == "23505" or "duplicate key" in text or "unique constraint" in text:
+        return "같은 이름(키)의 항목이 이미 있습니다. 다른 값을 사용하세요."
+    if code == "23502" or "not-null" in text or "not null" in text:
+        return "필수 값이 비어 있어 저장할 수 없습니다."
+    return "다른 항목과 연결되어 있어 처리할 수 없습니다. 연결된 하위 항목을 먼저 정리하세요."
 
 
 class DynamicCORSMiddleware:
@@ -213,8 +334,10 @@ class DynamicCORSMiddleware:
         self._origins_snapshot = None
 
     def _get_inner(self):
+        """현재 허용 origin 으로 만든 CORSMiddleware 를 돌려준다(설정이 바뀐 경우에만 재생성)."""
         current = tuple(settings.cors_origins)
         if current != self._origins_snapshot:
+            logger.info("CORS 허용 origin 적용: count=%d origins=%s", len(current), ", ".join(current))
             self._inner = CORSMiddleware(
                 app=self.app,
                 allow_origins=list(current),
@@ -232,42 +355,50 @@ class DynamicCORSMiddleware:
         await self._get_inner()(scope, receive, send)
 
 
+# Starlette 는 나중에 추가한 미들웨어가 가장 바깥을 감싼다 — CORS 가 인증 게이트보다 먼저 처리되어
+# 게이트가 돌려준 401/403 응답에도 CORS 헤더가 붙는다.
 app.add_middleware(DynamicCORSMiddleware)
 
+from fastapi import Depends as _Depends  # noqa: E402
+
+from app.permissions.router import require_menu  # noqa: E402
 from app.permissions.router import router as permissions_router
+
+
+def _menu_guard(menu_key: str) -> list:
+    """메뉴 권한 서버 강제 — 차단된 메뉴의 전용 API 를 403 (SERVER_ENFORCED_MENUS 와 일치)."""
+    return [_Depends(require_menu(menu_key))]
+
 
 app.include_router(permissions_router, prefix="/api/v1")
 app.include_router(catalog_router, prefix="/api/v1")
-app.include_router(agents_router, prefix="/api/v1")
-app.include_router(apis_router, prefix="/api/v1")
+app.include_router(agents_router, prefix="/api/v1", dependencies=_menu_guard("ai-agents"))
+app.include_router(apis_router, prefix="/api/v1", dependencies=_menu_guard("apis"))
+app.include_router(mcp_servers_router, prefix="/api/v1", dependencies=_menu_guard("mcp-servers"))
+app.include_router(mcp_deployments_router, prefix="/api/v1", dependencies=_menu_guard("mcp-servers"))
 app.include_router(topology_router, prefix="/api/v1")
 app.include_router(taxonomy_router, prefix="/api/v1")
 app.include_router(comments_router, prefix="/api/v1")
 app.include_router(filesystem_router, prefix="/api/v1")
-app.include_router(models_router, prefix="/api/v1")
+app.include_router(models_router, prefix="/api/v1", dependencies=_menu_guard("models"))
 app.include_router(model_store_router, prefix="/api/v1")
-app.include_router(oci_hub_router, prefix="/api/v1")
+app.include_router(oci_hub_router, prefix="/api/v1", dependencies=_menu_guard("oci-hub"))
 app.include_router(uc_compat_router)  # /api/2.0/mlflow/unity-catalog (추가 prefix 없음)
 app.include_router(search_router, prefix="/api/v1")
 app.include_router(quality_router, prefix="/api/v1")
 app.include_router(settings_router, prefix="/api/v1")
 app.include_router(standard_router, prefix="/api/v1")
 app.include_router(usermgr_router, prefix="/api/v1")
+app.include_router(audit_router, prefix="/api/v1")
 app.include_router(ai_router, prefix="/api/v1")
 app.include_router(alert_router, prefix="/api/v1")
 app.include_router(auth_router, prefix="/api/v1")  # SSO 인증용 추가
 app.include_router(external_router, prefix="/api/v1")
-app.include_router(federation_router, prefix="/api/v1")
+app.include_router(federation_router, prefix="/api/v1", dependencies=_menu_guard("federation"))
 app.include_router(federation_export_router, prefix="/api/v1")
 app.include_router(impala_profile_router, prefix="/api/v1")
 app.include_router(change_mgmt_router, prefix="/api/v1")
 
-# 플러그인 라우터 — 고객사별 커스텀 확장. entry_points "argus.plugins" 에 등록된
-# 패키지를 발견해 등록한다. 설치된 플러그인이 없으면 아무 것도 하지 않으므로 OSS
-# 기본 동작과 동일하다. (코어 라우터 등록 뒤에 둬서 경로 충돌 시 코어가 우선)
-from app.plugins import load_plugin_routers
-
-load_plugin_routers(app, enabled=settings.enabled_plugins)
 
 
 @app.get("/health")
@@ -283,6 +414,11 @@ async def health():
 
 
 def run() -> None:
+    """콘솔 스크립트 진입점.
+
+    ``--config-yaml``/``--config-properties`` 가 있으면 그 경로로 설정을 다시 읽고, 없으면 기본 위치의
+    설정 파일이 하나라도 있어야 한다(둘 다 없으면 도움말을 출력하고 종료 코드 1).
+    """
     parser = argparse.ArgumentParser(
         prog="argus-catalog-server",
         description="Catalog Server - Data catalog management server for Argus platform.",

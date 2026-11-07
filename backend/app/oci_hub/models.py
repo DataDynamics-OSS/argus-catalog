@@ -47,7 +47,7 @@ class OciModel(Base):
     source_id = Column(String(500))
     source_revision = Column(String(100))
 
-    # 저장소
+    # 저장소 — storage_prefix 는 "{name}/" (예전 데이터는 끝 "/" 없이 저장된 경우가 있다)
     bucket = Column(String(255))
     storage_prefix = Column(String(500))
 
@@ -55,7 +55,7 @@ class OciModel(Base):
     owner = Column(String(200))
     created_by = Column(String(200))  # 행 단위 소유권 — 생성자
 
-    # 비정규화 통계
+    # 비정규화 통계 — version_count 는 개수가 아니라 ready 버전 중 최대 버전 번호(service._refresh_model_stats)
     version_count = Column(Integer, nullable=False, default=0)
     total_size = Column(BigInteger, default=0)
     download_count = Column(Integer, nullable=False, default=0)
@@ -83,8 +83,10 @@ class OciModelVersion(Base):
     file_count = Column(Integer, default=0)
     total_size = Column(BigInteger, default=0)
 
+    # DB 컬럼명은 "metadata" (SQLAlchemy 예약 속성과 겹쳐 파이썬 속성명만 바꿈). 실패 사유는 "error" 키
     extra_metadata = Column("metadata", JSONB)
 
+    # importing(HF 백그라운드 가져오기 중) → ready | failed
     status = Column(String(20), nullable=False, default="ready")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -109,6 +111,7 @@ class OciModelLineage(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     model_id = Column(Integer, ForeignKey("catalog_oci_models.id", ondelete="CASCADE"), nullable=False)
 
+    # dataset / model / mlflow / external (schemas.LINEAGE_SOURCE_TYPES)
     source_type = Column(String(20), nullable=False)
     source_id = Column(String(255), nullable=False)
     source_name = Column(String(255))

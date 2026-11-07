@@ -22,13 +22,26 @@
 
 ## 현재 구현
 
+**모듈 구성** — `service.py` 는 아래 모듈을 재노출하는 파사드다(라우터·테스트는 `service.<이름>` 사용).
+함수를 monkeypatch 할 때는 정의 모듈에 해야 한다(예: 미러 검색의 `get_provider` → `search`).
+
+| 모듈 | 역할 |
+| --- | --- |
+| `registry.py` | peer CRUD·관측 요약·미러 탐색·URN 해석 |
+| `drilldown.py` | LIVE 상세·샘플·리니지 그래프, breaker 래퍼 |
+| `importer.py` | 로컬 승격(import) |
+| `export_service.py` | 노출 항목 정책, export 상세 보강·필터, HARVEST 목록·리니지 빌더 |
+| `search.py` | 통합 검색(로컬 + 미러 + LIVE fan-out) |
+| `harvester.py` / `scheduler.py` | HARVEST 실행·주기 스케줄러 |
+| `token_store.py` | peer 토큰 암호화 저장 |
+
 페더레이션은 한 번에 완성된 게 아니라, 가장 단순한 형태에서 출발해 단계(Phase)별로 살을 붙여
 왔습니다. 아래는 각 단계가 무엇을 더했는지를 순서대로 정리한 것입니다.
 
 ### Phase 0 — `LIVE` scatter-gather
 - peer 레지스트리 CRUD: `FederatedInstance` (`models.py`)
 - 동시 fan-out 통합 검색: 로컬 `hybrid_search` + LIVE peer 들을 `asyncio.gather`
-  로 병합, 도달 실패 peer 는 `instances_failed` 로 degrade (`service.py`)
+  로 병합, 도달 실패 peer 는 `instances_failed` 로 degrade (`search.py`)
 - peer 호출 클라이언트: httpx, 짧은 타임아웃 (`client.py`)
 - 이 인스턴스를 peer 로 노출하는 export API (`export_router.py`)
 
@@ -39,14 +52,19 @@
   `source_text` 변경분만 **허브 임베딩 모델로 재임베딩** → 사라진 항목 prune
 - **주기 스케줄러** (`scheduler.py`): ACTIVE·미러모드 peer 를 각자 `sync_interval_sec`
   주기로 가져온다. lifespan 에서 기동(`federation.harvest_enabled`).
-- **미러 검색** (`service.search_mirror`): 가져온 데이터를 **로컬 pgvector + 키워드**로 검색
+- **미러 검색** (`search.search_mirror`): 가져온 데이터를 **로컬 pgvector + 키워드**로 검색
   → `federated_search` 가 HARVEST/HYBRID peer 는 미러로, LIVE peer 는 fan-out 으로 라우팅.
   → peer 가 죽어도 검색 동작, cross-instance 시맨틱 일관성 확보.
 - **서비스 토큰 인증** (`auth.py`): `ARGUS_FEDERATION_TOKEN`(또는 config) 설정 시
-  export API 가 `Authorization: Bearer` 를 상수시간 비교로 검증.
+  export API 가 `Authorization: Bearer` 를 상수시간 비교로 검증. 토큰 미설정이면 기동 시
+  경고를 남기고, 실데이터인 `sample` 은 `export_allow_anonymous_sample=true` 일 때만 노출한다.
+- **peer 토큰 보관** (`token_store.py`): 허브가 peer 호출에 쓰는 서비스 토큰은
+  `ARGUS_SECRET_KEY` 파생 키로 Fernet 암호화해 저장(`enc:` 접두사). 접두사 없는 레거시 평문은
+  그대로 동작하며 해당 peer 를 다시 저장하면 암호화된다. `base_url` 은 http(s) 절대 URL 만 허용.
+- **비활성 peer**: `status != ACTIVE` 인 peer 로는 드릴다운·샘플·import·탐색 호출을 보내지 않는다.
 
 ### Phase 2 — LIVE drill-down + visibility 거버넌스
-- **drill-down 프록시** (`service.federated_dataset_detail/sample`): federated URN
+- **drill-down 프록시** (`drilldown.federated_dataset_detail/sample`): federated URN
   (`{instance_key}::{remote_urn}`)을 해석해 원 인스턴스에서 상세 메타데이터(스키마/
   태그/소유자/속성)와 샘플 데이터(parquet→JSON)를 실시간 조회. peer 오류는 404/502 로 변환.
 - **visibility 거버넌스** (`visibility.py`): 노출자 측 정책으로 export 의 목록·검색·
@@ -57,9 +75,18 @@
   (UI 출처 배지용 데이터는 백엔드에서 제공).
 
 ### Phase 3 — 운영 강화 (증분 동기화 + circuit breaker)
-- **증분 동기화** (`harvester.py`): watermark(`max remote_updated_at`) 이후 변경분만
-  가져오기(`export/datasets?updated_after=`). 변경분만 보므로 prune 은 건너뛰고, 삭제 반영은
-  전체 재동기화(`harvest?full=true` 또는 watermark 없는 첫 동기화)에서 수행한다.
+- **증분 동기화** (`harvester.py`): 마지막 **성공** 실행의 watermark(`federation_sync_runs.watermark`
+  — 그 실행에서 관측한 peer `updated_at` 최댓값)에서 `watermark_overlap_seconds` 만큼 앞당긴
+  시각 이후 변경분만 가져온다(`export/datasets?updated_after=`). 실패한 실행은 watermark 를
+  전진시키지 않아 부분 실패가 미수신 데이터셋을 영구 누락시키지 않는다. 변경분만 보므로
+  prune 은 건너뛴다.
+- **전체 동기화**: `harvest?full=true`, 성공 watermark 가 없을 때, 또는 마지막 성공한 전체
+  동기화 후 `full_sync_interval_seconds`(기본 1일)가 지나면 자동 승격되어 prune 한다 — peer 쪽
+  삭제·비노출(PII/민감도/allow-list) 전환이 이 주기 안에 허브 미러에서도 사라진다. 관측 수가
+  peer 가 보고한 전체 수보다 적으면(가져오는 중 peer 변경으로 offset 이 밀린 경우) prune 을 보류한다.
+- **동시 실행 방지**: 같은 peer 의 가져오기는 프로세스 내 잠금 + DB 의 RUNNING 행 검사로
+  직렬화한다. 진행 중이면 `SKIPPED`(수동 실행은 409). `stale_run_seconds` 보다 오래된
+  RUNNING 은 비정상 종료로 보고 FAILED 로 정리한다.
 - **circuit breaker** (`breaker.py`): LIVE peer 호출(검색 fan-out·드릴다운)을 peer 단위로
   감싸 연속 실패가 `breaker_threshold` 에 도달하면 `breaker_cooldown_seconds` 동안 회로를
   열어 즉시 실패(503)시킨다. 죽은 peer 가 연합 전체를 느리게 만드는 것을 막는다.
@@ -67,7 +94,7 @@
 ### Phase 4 — cross-instance 리니지 stitching
 - **리니지 미러** (`FederationLineage`): peer 리니지 엣지(URN→URN)를 가져와 instance
   단위 전량 교체로 보관(`export/lineage`). harvest 시 best-effort 로 함께 가져온다.
-- **URN 매칭 stitch** (`service.build_lineage_graph`): 엔드포인트 URN 은 데이터소스 전역
+- **URN 매칭 stitch** (`drilldown.build_lineage_graph`): 엔드포인트 URN 은 데이터소스 전역
   유일이라, 로컬 리니지와 여러 peer 가 보고한 미러 리니지를 같은 URN 키로 합쳐
   BFS(depth) 그래프를 만든다. 각 노드는 로컬/미러(어느 peer)/미해석으로 해석되고,
   각 엣지는 보고 출처(`reported_by`)를 갖는다 → 팀 경계를 넘는 데이터 흐름을 한눈에.
@@ -79,8 +106,10 @@
   받아 로컬 `data_dir/federation/samples/{instance_id}/{federation_dataset_id}.json`
   에 저장하고(`federation_datasets.has_sample`), 샘플 드릴다운은 **미러 우선**(오프라인)
   → 없으면 LIVE 폴백. 로컬 데이터셋 샘플 경로와 **분리된 네임스페이스**. 증분은 미보유분만,
-  전체 동기화는 전량 갱신. prune·인스턴스 삭제 시 샘플 파일도 정리.
-- **로컬 승격(import)** (`service.import_federated_dataset`): 미러 데이터셋을 peer
+  전체 동기화는 전량 갱신. prune·인스턴스 삭제 시 샘플 파일도 정리. 허브 설정 꺼짐·소비자
+  표시 선택 해제·peer 비노출이 확인되면 다음 가져오기에서 저장된 샘플을 모두 삭제하고,
+  표시 선택에서 샘플을 뺀 peer 의 샘플 요청은 403 으로 거부한다.
+- **로컬 승격(import)** (`importer.import_federated_dataset`): 미러 데이터셋을 peer
   드릴다운으로 전체 메타(스키마·태그·소유자·용어집·DDL·확장·샘플)를 받아 전용
   **"Federation Imports"** 데이터소스에 **1급 로컬 데이터셋**으로 복사(1회 스냅샷,
   이후 peer 와 분리). URN 은 `{ds}.{instance_key}.{원본경로}.dataset` 로 유일.
@@ -105,7 +134,7 @@
 | `POST` | `/api/v1/federation/instances` | peer 등록 | admin |
 | `PUT` | `/api/v1/federation/instances/{id}` | peer 수정 | admin |
 | `DELETE` | `/api/v1/federation/instances/{id}` | peer 삭제 | admin |
-| `GET` | `/api/v1/federation/instances/{id}/health` | 도달성 점검 | 로그인 |
+| `GET` | `/api/v1/federation/instances/{id}/health` | 도달성 점검 | admin |
 | `POST` | `/api/v1/federation/instances/{id}/harvest?full=` | 단일 peer 즉시 가져오기(기본 증분) | admin |
 | `POST` | `/api/v1/federation/harvest?full=` | 전체 미러 peer 즉시 가져오기(기본 증분) | admin |
 | `GET` | `/api/v1/federation/instances/{id}/sync-runs` | HARVEST 실행 이력 | 로그인 |
@@ -161,11 +190,15 @@ curl 'localhost:4600/api/v1/federation/datasets/detail?urn=team-payments::mysql.
 
 | 키 (config `federation.*` / env) | 기본값 | 설명 |
 |----------------------------------|--------|------|
-| `export_token` / `ARGUS_FEDERATION_TOKEN` | `""` | export API 서비스 토큰(빈 값=비강제) |
+| `export_token` / `ARGUS_FEDERATION_TOKEN` | `""` | export API 서비스 토큰(빈 값=비강제, 기동 시 경고) |
+| `export_allow_anonymous_sample` | `false` | 토큰 미설정 상태에서도 샘플(실데이터)을 노출할지 |
 | `harvest_enabled` | `true` | HARVEST 스케줄러 기동 여부 |
 | `harvest_tick_seconds` | `300` | 스케줄러 점검 주기(초) |
 | `harvest_samples` | `true` | HARVEST 시 미러 데이터셋 샘플 데이터도 가져와 저장 |
 | `sample_limit` | `100` | 미러 샘플 저장 시 받아올 최대 행 수 |
+| `full_sync_interval_seconds` | `86400` | 마지막 성공한 전체 동기화 후 이 간격이 지나면 증분을 전체 동기화(prune)로 승격. 0=비활성 |
+| `watermark_overlap_seconds` | `300` | 증분 기준 시각을 앞당기는 겹침 구간(peer 시계 오차·실행 중 수정 보정) |
+| `stale_run_seconds` | `7200` | 이보다 오래된 RUNNING 실행은 비정상 종료로 보고 FAILED 처리 |
 | `export_exclude_pii` | `false` | PII 포함 데이터셋 노출 제외 |
 | `export_exclude_sensitivity` | `""` | 노출 제외 민감도 등급(쉼표, 예: `RESTRICTED,CONFIDENTIAL`) |
 | `export_datasource_allowlist` | `""` | 노출 허용 데이터소스 이름(쉼표, 빈 값=전체) |

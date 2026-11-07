@@ -1,7 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
-import { createPortal } from "react-dom"
+import { useEffect, useRef } from "react"
 import {
   ArrowDown,
   ArrowUp,
@@ -26,6 +25,7 @@ import {
 } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
+import { toast } from "@/lib/notify"
 import { Checkbox } from "@workspace/ui/components/checkbox"
 import {
   ContextMenu,
@@ -124,22 +124,6 @@ function SortButton({
   )
 }
 
-function CopyToast({ message, onDone }: { message: string; onDone: () => void }) {
-  useEffect(() => {
-    const timer = setTimeout(onDone, 2000)
-    return () => clearTimeout(timer)
-  }, [onDone])
-
-  return createPortal(
-    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[9999] animate-in fade-in slide-in-from-bottom-2 duration-200">
-      <div className="bg-foreground text-background text-sm px-4 py-2 rounded-md shadow-lg">
-        {message}
-      </div>
-    </div>,
-    document.body,
-  )
-}
-
 function copyToClipboard(text: string): Promise<void> {
   if (navigator.clipboard?.writeText) {
     return navigator.clipboard.writeText(text)
@@ -170,8 +154,6 @@ export function BrowserTable({
   isLoading,
   sortDisableThreshold = 300,
 }: BrowserTableProps) {
-  const [toastMessage, setToastMessage] = useState<string | null>(null)
-  const hideToast = useCallback(() => setToastMessage(null), [])
 
   // 경로별 스크롤 위치 기억 — 폴더로 들어갔다 뒤로 오면 이전 위치 복원.
   const scrollContainerRef = useRef<HTMLDivElement>(null)
@@ -190,9 +172,9 @@ export function BrowserTable({
   async function handleCopyPath(entry: FilesystemEntry) {
     try {
       await copyToClipboard(entry.key)
-      setToastMessage("클립보드에 복사되었습니다. (HTTPS 가 아닌 환경에선 동작하지 않을 수 있습니다)")
+      toast.success("경로를 클립보드에 복사했습니다.")
     } catch {
-      setToastMessage("복사에 실패했습니다.")
+      toast.error("경로를 복사하지 못했습니다.", { description: "HTTPS 가 아닌 환경에서는 클립보드 복사가 막힐 수 있습니다." })
     }
   }
 
@@ -416,7 +398,6 @@ export function BrowserTable({
           })}
         </tbody>
       </table>
-      {toastMessage && <CopyToast message={toastMessage} onDone={hideToast} />}
     </div>
   )
 }

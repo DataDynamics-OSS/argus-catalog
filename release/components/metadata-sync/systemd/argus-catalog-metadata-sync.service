@@ -1,0 +1,19 @@
+[Unit]
+Description=Argus Catalog metadata sync (one-shot batch)
+Documentation=file:///opt/argus-catalog-metadata-sync/share/installer/README-INSTALL.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=argus
+Group=argus
+WorkingDirectory=/var/log/argus-catalog-metadata-sync
+Environment=ARGUS_CATALOG_METADATA_SYNC_CONFIG_DIR=/etc/argus-catalog-metadata-sync
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/etc/argus-catalog-metadata-sync/metadata-sync.env
+# 특정 데이터 소스만: systemctl edit 로 ExecStart= 를 비우고 '--datasource <이름>' 을 붙여 재정의
+ExecStart=/opt/argus-catalog-metadata-sync/venv/bin/metadata-sync
+TimeoutStartSec=6h
+NoNewPrivileges=yes
+PrivateTmp=yes

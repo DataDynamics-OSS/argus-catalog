@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { Loader2 } from "lucide-react"
+import { assertFileResponse, fileLoadErrorMessage } from "./utils"
 
 /** Map extension to MIME type for the <video> source element. */
 const videoMimeTypes: Record<string, string> = {
@@ -31,7 +32,7 @@ export function VideoViewer({ url, extension }: VideoViewerProps) {
 
     fetch(url)
       .then((res) => {
-        if (!res.ok) throw new Error(`Failed to fetch video (${res.status})`)
+        assertFileResponse(res)
         return res.blob()
       })
       .then((blob) => {
@@ -41,7 +42,7 @@ export function VideoViewer({ url, extension }: VideoViewerProps) {
         setIsLoading(false)
       })
       .catch((err) => {
-        setError(err instanceof Error ? err.message : "Failed to load video")
+        setError(fileLoadErrorMessage(err))
         setIsLoading(false)
       })
 

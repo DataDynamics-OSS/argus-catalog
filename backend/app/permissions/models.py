@@ -21,5 +21,5 @@ class Permission(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     kind = Column(String(10), nullable=False)        # MENU | FEATURE
     perm_key = Column(String(100), nullable=False)   # 메뉴/기능 key (프런트 레지스트리와 일치)
-    role_id = Column(String(50), nullable=False)     # argus-superuser | argus-user
+    role_id = Column(String(50), nullable=False)     # argus-superuser | argus-user | __none__(admin 전용 센티널)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

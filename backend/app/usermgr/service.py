@@ -9,19 +9,22 @@ SQLAlchemy 비동기 세션을 통해 이뤄진다.
 - 데이터 변경 함수는 ``session.commit()`` 후 ``session.refresh()`` 로 갱신된
   필드(``updated_at`` 등)를 다시 읽어와 응답에 반영한다.
 - ``_build_user_response()`` 가 ``role_id`` 외래키를 역할 이름 문자열로 변환해준다.
-- 비밀번호 해싱은 ``_hash_password()`` (SHA-256). 운영 환경에서는 더 강한
-  해시(bcrypt/argon2)로 교체할 여지가 있다.
+- 비밀번호 해싱은 ``app.core.passwords`` (PBKDF2-HMAC-SHA256 + 사용자별 salt). 예전 SHA-256
+  해시는 로그인 때 새 형식으로 다시 저장된다.
+- "마지막 관리자 보호"는 **활성** 관리자 수 기준이다(비활성 관리자는 로그인할 수 없으므로).
 
 로깅 정책: 생성·수정·삭제·역할 변경 등 변경 동작은 INFO, "마지막 관리자 보호"
 같은 도메인 규칙 위반은 호출 측(router)에서 WARNING 처리한다.
 """
 
-import hashlib
 import logging
+from datetime import datetime, timezone
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.passwords import hash_password_async, password_problem
+from app.core.sql import LIKE_ESCAPE, like_contains
 from app.usermgr.models import ArgusRole, ArgusUser
 from app.usermgr.schemas import (
     PaginatedUserResponse,
@@ -36,35 +39,86 @@ from app.usermgr.schemas import (
 
 logger = logging.getLogger(__name__)
 
+# 로컬 로그인 잠금 — 비밀번호를 연속 LOGIN_MAX_FAILURES 번 틀리면 LOGIN_LOCK_MINUTES 분 잠근다.
+# 관리자는 "잠금 해제"(PUT /usermgr/users/{id}/unlock) 또는 비밀번호 재설정으로 바로 풀 수 있다.
+LOGIN_MAX_FAILURES = 5
+LOGIN_LOCK_MINUTES = 15
+
+# 목록 정렬 키 → 정렬 컬럼(이름은 성+이름)
+SORT_COLUMNS = {
+    "username": (ArgusUser.username,),
+    "name": (ArgusUser.last_name, ArgusUser.first_name),
+    "email": (ArgusUser.email,),
+    "organization": (ArgusUser.organization,),
+    "department": (ArgusUser.department,),
+    "status": (ArgusUser.status,),
+    "role": (ArgusRole.role_id,),
+    "created_at": (ArgusUser.created_at,),
+    "last_login_at": (ArgusUser.last_login_at,),
+}
+
+
+def utcnow() -> datetime:
+    """현재 UTC 시각(timezone-aware)."""
+    return datetime.now(timezone.utc)
+
+
+def as_aware(dt: datetime | None) -> datetime | None:
+    """DB 가 시간대 없는 값을 돌려주는 경우(SQLite 등) UTC 로 간주."""
+    if dt is None:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def active_lock(user: ArgusUser) -> datetime | None:
+    """아직 유효한 잠금의 해제 시각(없거나 지났으면 None)."""
+    until = as_aware(user.locked_until)
+    return until if until and until > utcnow() else None
+
+
+def to_response(user: ArgusUser, role_code: str | None) -> UserResponse:
+    """ORM 사용자 + 역할 코드 → 응답 DTO. 역할을 모르면 "unknown", 만료된 잠금은 None."""
+    return UserResponse(
+        id=user.id,
+        username=user.username,
+        email=user.email,
+        first_name=user.first_name,
+        last_name=user.last_name,
+        organization=user.organization,
+        department=user.department,
+        phone_number=user.phone_number,  # 비관리자 마스킹은 라우터(_mask_private, 본인 제외)
+        status=UserStatus(user.status),
+        role=role_code or "unknown",
+        created_at=user.created_at,
+        updated_at=user.updated_at,
+        last_login_at=user.last_login_at,
+        locked_until=active_lock(user),
+    )
+
 
 async def _is_last_admin(session: AsyncSession, user_id: int) -> bool:
-    """주어진 user_id 가 시스템의 유일한 관리자(admin)인지 확인.
+    """주어진 사용자가 **마지막 활성 관리자**인지 — 삭제·강등·비활성화하면 활성 관리자가 0명이 되는지.
 
-    "마지막 관리자 보호" 규칙을 적용해 admin 0명 상태(시스템 락아웃)를 막는다.
+    비활성 관리자는 로그인할 수 없어 수에 넣지 않는다. 대상이 이미 비활성이면 활성 관리자 수가
+    줄지 않으므로 False. 관리자 행을 잠가(PostgreSQL ``FOR UPDATE``) 동시 요청 두 건이 각각
+    "다른 관리자가 남는다"고 판단해 둘 다 통과하는 경쟁을 막는다(SQLite 는 무시).
     """
     from app.usermgr.schemas import RoleName
     admin_role = await _get_role_by_role_id(session, RoleName.ADMIN.value)
     if not admin_role:
         return False
-    # 관리자 수 카운트
-    admin_count = (await session.execute(
-        select(func.count()).where(ArgusUser.role_id == admin_role.id)
-    )).scalar() or 0
-    if admin_count > 1:
-        return False
-    # 이 사용자가 관리자인지 확인
-    result = await session.execute(select(ArgusUser).where(ArgusUser.id == user_id))
-    user = result.scalars().first()
-    return user is not None and user.role_id == admin_role.id
+    admins = (await session.execute(
+        select(ArgusUser.id, ArgusUser.status)
+        .where(ArgusUser.role_id == admin_role.id)
+        .with_for_update()
+    )).all()
+    active_ids = {uid for uid, st in admins if st == UserStatus.ACTIVE.value}
+    return user_id in active_ids and len(active_ids) <= 1
 
 
-def _hash_password(password: str) -> str:
-    """SHA-256 비밀번호 해시.
-
-    평문 비밀번호를 UTF-8 로 인코딩한 뒤 16진 다이제스트를 반환한다.
-    사용자 생성·비밀번호 변경 시 사용.
-    """
-    return hashlib.sha256(password.encode()).hexdigest()
+async def password_hash_for(password: str) -> str:
+    """비밀번호 해시(스레드에서 계산)."""
+    return await hash_password_async(password)
 
 
 async def _get_role_by_role_id(session: AsyncSession, role_id: str) -> ArgusRole | None:
@@ -77,20 +131,7 @@ async def _build_user_response(session: AsyncSession, user: ArgusUser) -> UserRe
     """``ArgusUser`` ORM 객체에서 역할명을 resolve 해 ``UserResponse`` 로 변환."""
     result = await session.execute(select(ArgusRole).where(ArgusRole.id == user.role_id))
     role = result.scalars().first()
-    return UserResponse(
-        id=user.id,
-        username=user.username,
-        email=user.email,
-        first_name=user.first_name,
-        last_name=user.last_name,
-        organization=user.organization,
-        department=user.department,
-        phone_number=user.phone_number,
-        status=UserStatus(user.status),
-        role=role.role_id if role else "unknown",
-        created_at=user.created_at,
-        updated_at=user.updated_at,
-    )
+    return to_response(user, role.role_id if role else None)
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +148,7 @@ async def check_user_exists(
     Returns:
         제공된 필드별 boolean flag dict. 예: ``{"username_exists": True, "email_exists": False}``
     """
+    logger.debug("중복 확인: username=%s email_given=%s", username, bool(email))
     result: dict[str, bool] = {}
     if username:
         row = await session.execute(
@@ -133,6 +175,10 @@ async def add_user(session: AsyncSession, req: UserAddRequest) -> UserResponse:
     if not role:
         logger.warning("add_user: 알 수 없는 역할 '%s'", req.role.value)
         raise ValueError(f"Role '{req.role.value}' not found")
+    # 최초 로그인 때 바꾸게 하는 임시 비밀번호(LDAP 동기화의 생년월일 등)가 아니면 정책을 강제한다
+    if not req.must_change_password and (problem := password_problem(req.password)):
+        logger.warning("add_user: 비밀번호 정책 위반 username=%s", req.username)
+        raise ValueError(problem)
 
     user = ArgusUser(
         username=req.username,
@@ -142,7 +188,7 @@ async def add_user(session: AsyncSession, req: UserAddRequest) -> UserResponse:
         organization=req.organization,
         department=req.department,
         phone_number=req.phone_number,
-        password_hash=_hash_password(req.password),
+        password_hash=await password_hash_for(req.password),
         status=UserStatus.ACTIVE.value,
         must_change_password=req.must_change_password,
         role_id=role.id,
@@ -154,19 +200,53 @@ async def add_user(session: AsyncSession, req: UserAddRequest) -> UserResponse:
     return await _build_user_response(session, user)
 
 
-async def delete_user(session: AsyncSession, user_id: int) -> bool:
+class OwnedAssetsError(ValueError):
+    """소유 자산이 남아 있어 이관 대상 지정이 필요하다(라우터가 409 로 변환)."""
+
+    def __init__(self, assets: list[dict]):
+        self.assets = assets
+        super().__init__("소유한 자산이 있어 삭제할 수 없습니다. 자산을 넘겨받을 사용자를 지정하세요.")
+
+
+async def delete_user(session: AsyncSession, user_id: int, transfer_to: str | None = None) -> bool:
     """ID 로 사용자를 영구 삭제. 삭제했으면 ``True``, 사용자가 없으면 ``False`` 반환.
 
-    "마지막 관리자 보호" 규칙 위반 시 ``ValueError`` 를 발생시킨다(라우터가 400 으로 변환).
+    - "마지막 관리자 보호" 규칙 위반 시 ``ValueError`` (라우터가 400).
+    - 소유 자산(편집 권한이 아이디로 묶인 자산)이 있으면 ``transfer_to`` 사용자에게 같은 트랜잭션에서
+      옮긴 뒤 삭제한다. 지정이 없으면 ``OwnedAssetsError`` (409) — 같은 아이디로 새 계정을 만들었을 때
+      이전 자산의 권한을 이어받는 것을 막는다(``app.usermgr.ownership``).
     """
+    from app.usermgr import ownership
+
     if await _is_last_admin(session, user_id):
         logger.warning("delete_user 차단(마지막 관리자): user_id=%d", user_id)
-        raise ValueError("Cannot delete the only admin. At least one admin must remain.")
+        raise ValueError("마지막 활성 관리자는 삭제할 수 없습니다. 활성 관리자가 한 명 이상 있어야 합니다.")
 
     result = await session.execute(select(ArgusUser).where(ArgusUser.id == user_id))
     user = result.scalars().first()
     if not user:
+        logger.debug("delete_user 대상 없음: user_id=%d", user_id)
         return False
+
+    owned = [a for a in await ownership.count_owned(session, user.username) if a["count"]]
+    if owned:
+        if not transfer_to:
+            raise OwnedAssetsError(owned)
+        if transfer_to == user.username:
+            raise ValueError("삭제할 사용자에게는 자산을 넘길 수 없습니다.")
+        heir = (await session.execute(
+            select(ArgusUser.status).where(ArgusUser.username == transfer_to)
+        )).scalar()
+        if heir is None:
+            logger.warning("delete_user: 이관 대상 사용자 없음 transfer_to=%s", transfer_to)
+            raise ValueError(f"자산을 넘겨받을 사용자 '{transfer_to}' 를 찾을 수 없습니다.")
+        if heir != UserStatus.ACTIVE.value:
+            logger.warning("delete_user: 이관 대상 사용자 비활성 transfer_to=%s", transfer_to)
+            raise ValueError(f"자산을 넘겨받을 사용자 '{transfer_to}' 가 비활성 상태입니다.")
+        await ownership.transfer_owned(session, user.username, transfer_to)
+        logger.info("소유 자산 이관: %s → %s %s", user.username, transfer_to,
+                    {a["key"]: a["count"] for a in owned})
+
     await session.delete(user)
     await session.commit()
     logger.info("사용자 삭제: %s (id=%d)", user.username, user.id)
@@ -225,7 +305,7 @@ async def change_role(
     if admin_role and user.role_id == admin_role.id and req.role.value != RoleName.ADMIN.value:
         if await _is_last_admin(session, user_id):
             logger.warning("change_role 차단(마지막 관리자 강등): user_id=%d target=%s", user_id, req.role.value)
-            raise ValueError("Cannot change the role of the only admin. At least one admin must remain.")
+            raise ValueError("마지막 활성 관리자의 역할은 바꿀 수 없습니다. 활성 관리자가 한 명 이상 있어야 합니다.")
 
     role = await _get_role_by_role_id(session, req.role.value)
     if not role:
@@ -261,7 +341,7 @@ async def deactivate_user(session: AsyncSession, user_id: int) -> UserResponse |
     """
     if await _is_last_admin(session, user_id):
         logger.warning("deactivate_user 차단(마지막 관리자): user_id=%d", user_id)
-        raise ValueError("Cannot deactivate the only admin. At least one active admin must remain.")
+        raise ValueError("마지막 활성 관리자는 비활성화할 수 없습니다. 활성 관리자가 한 명 이상 있어야 합니다.")
 
     result = await session.execute(select(ArgusUser).where(ArgusUser.id == user_id))
     user = result.scalars().first()
@@ -276,11 +356,11 @@ async def deactivate_user(session: AsyncSession, user_id: int) -> UserResponse |
 
 
 async def set_password(
-    session: AsyncSession, user_id: int, new_password: str,
+    session: AsyncSession, user_id: int, new_password: str, *, must_change_password: bool = False,
 ) -> UserResponse | None:
     """관리자가 대상 사용자의 비밀번호를 직접 재설정한다(현재 비밀번호 불요).
 
-    평문 ``new_password`` 를 ``_hash_password`` 로 해시해 저장한다. 로컬 인증 모드 전용
+    평문 ``new_password`` 를 정책 검사 후 해시해 저장한다(정책 위반은 ``ValueError``). 로컬 인증 모드 전용
     (호출 측 라우터에서 모드를 검증). 사용자가 없으면 ``None``.
     """
     result = await session.execute(select(ArgusUser).where(ArgusUser.id == user_id))
@@ -288,10 +368,31 @@ async def set_password(
     if not user:
         return None
 
-    user.password_hash = _hash_password(new_password)
+    if problem := password_problem(new_password):
+        logger.warning("set_password: 비밀번호 정책 위반 user_id=%d", user_id)
+        raise ValueError(problem)
+    user.password_hash = await password_hash_for(new_password)
+    # 관리자가 정해 준 비밀번호는 임시 비밀번호 — 다음 로그인 때 본인이 바꾸게 한다
+    user.must_change_password = must_change_password
+    # 재설정은 잠금도 푼다(잠긴 사용자를 도와주는 흔한 경로)
+    user.failed_login_count = 0
+    user.locked_until = None
     await session.commit()
     await session.refresh(user)
     logger.info("관리자에 의한 비밀번호 재설정: %s (id=%d)", user.username, user.id)
+    return await _build_user_response(session, user)
+
+
+async def unlock_user(session: AsyncSession, user_id: int) -> UserResponse | None:
+    """로그인 실패 잠금 해제(실패 횟수 초기화). 사용자가 없으면 None."""
+    user = (await session.execute(select(ArgusUser).where(ArgusUser.id == user_id))).scalars().first()
+    if not user:
+        return None
+    user.failed_login_count = 0
+    user.locked_until = None
+    await session.commit()
+    await session.refresh(user)
+    logger.info("로그인 잠금 해제: %s (id=%d)", user.username, user.id)
     return await _build_user_response(session, user)
 
 
@@ -312,16 +413,26 @@ async def list_users(
     organization: str | None = None,
     page: int = 1,
     page_size: int = 10,
+    include_private: bool = True,
+    sort: str | None = None,
+    order: str = "desc",
 ) -> PaginatedUserResponse:
     """필터·페이지네이션을 적용한 사용자 목록 조회.
 
+    ``include_private=False`` 면 전화번호를 검색 대상에서 뺀다(비관리자 조회).
+    ``sort``(``SORT_COLUMNS`` 키)·``order``(asc/desc)로 전체 결과를 정렬한다(기본: 생성일 최신순).
+    빈 값(NULL)은 방향과 관계없이 뒤로, 동률은 id 순.
+
     동적 WHERE 절을 구성한다:
         1. ``argus_users`` ↔ ``argus_roles`` 조인으로 역할명 함께 조회
-        2. ``status`` / ``role`` / ``search`` 가 주어지면 각각 WHERE 추가
+        2. ``status`` / ``role``(role_id) / ``organization`` / ``search`` 가 주어지면 각각 WHERE 추가
         3. 페이지네이션 메타용 총 건수 별도 카운트
-        4. ``created_at`` 내림차순 정렬 후 OFFSET/LIMIT 적용
+        4. ``sort``/``order`` 로 정렬(기본 ``created_at`` 내림차순) 후 OFFSET/LIMIT 적용
 
     ``page_size=0`` 은 페이지네이션 없이 전체 반환.
+
+    Raises:
+        ValueError: ``sort`` 가 SORT_COLUMNS 키가 아닐 때(라우터에서 400).
     """
     # 사용자와 역할을 조인해 결과에 역할명을 포함시킨다
     base = (
@@ -345,26 +456,34 @@ async def list_users(
     # ``last_name+first_name`` 을 합쳐서도 비교 — 한국식 "홍길동" 처럼 통째로
     # 입력되는 경우를 받기 위해 (last_name="홍", first_name="길동").
     if search:
-        pattern = f"%{search}%"
+        pattern = like_contains(search)
         base = base.where(
             or_(
-                ArgusUser.username.ilike(pattern),
-                ArgusUser.first_name.ilike(pattern),
-                ArgusUser.last_name.ilike(pattern),
-                func.concat(ArgusUser.last_name, ArgusUser.first_name).ilike(pattern),
-                ArgusUser.email.ilike(pattern),
-                ArgusUser.phone_number.ilike(pattern),
-                ArgusUser.organization.ilike(pattern),
-                ArgusUser.department.ilike(pattern),
+                ArgusUser.username.ilike(pattern, escape=LIKE_ESCAPE),
+                ArgusUser.first_name.ilike(pattern, escape=LIKE_ESCAPE),
+                ArgusUser.last_name.ilike(pattern, escape=LIKE_ESCAPE),
+                func.concat(ArgusUser.last_name, ArgusUser.first_name).ilike(pattern, escape=LIKE_ESCAPE),
+                ArgusUser.email.ilike(pattern, escape=LIKE_ESCAPE),
+                # 전화번호는 관리자 조회에서만 검색 대상 — 아니면 검색으로 번호를 알아낼 수 있다
+                *([ArgusUser.phone_number.ilike(pattern, escape=LIKE_ESCAPE)] if include_private else []),
+                ArgusUser.organization.ilike(pattern, escape=LIKE_ESCAPE),
+                ArgusUser.department.ilike(pattern, escape=LIKE_ESCAPE),
             )
         )
 
     # 페이지네이션 전 총 건수 별도 카운트(응답 메타에 포함됨)
     count_query = select(func.count()).select_from(base.subquery())
     total = (await session.execute(count_query)).scalar() or 0
+    logger.debug("사용자 목록 조건: status=%s role=%s org=%s search=%s sort=%s/%s total=%d",
+                 status, role, organization, bool(search), sort, order, total)
 
-    # 최신순 정렬 후 OFFSET/LIMIT 적용. page_size=0 이면 전체 반환.
-    query = base.order_by(ArgusUser.created_at.desc())
+    # 정렬(기본 최신순) 후 OFFSET/LIMIT 적용. page_size=0 이면 전체 반환.
+    if sort and sort not in SORT_COLUMNS:
+        raise ValueError(f"정렬 기준은 {', '.join(SORT_COLUMNS)} 중 하나입니다.")
+    cols = SORT_COLUMNS[sort or "created_at"]
+    desc = (order or "desc").lower() != "asc"
+    order_by = [(c.desc() if desc else c.asc()).nulls_last() for c in cols]
+    query = base.order_by(*order_by, ArgusUser.id.desc() if desc else ArgusUser.id.asc())
     if page_size > 0:
         offset = (page - 1) * page_size
         query = query.offset(offset).limit(page_size)
@@ -372,23 +491,7 @@ async def list_users(
     rows = result.all()
 
     # (ArgusUser, role_code) 튜플을 UserResponse Pydantic 모델로 변환
-    items = [
-        UserResponse(
-            id=user.id,
-            username=user.username,
-            email=user.email,
-            first_name=user.first_name,
-            last_name=user.last_name,
-            organization=user.organization,
-            department=user.department,
-            phone_number=user.phone_number,
-            status=UserStatus(user.status),
-            role=role_code or "unknown",
-            created_at=user.created_at,
-            updated_at=user.updated_at,
-        )
-        for user, role_code in rows
-    ]
+    items = [to_response(user, role_code) for user, role_code in rows]
 
     return PaginatedUserResponse(
         items=items,
@@ -437,7 +540,8 @@ async def upsert_external_user(
         existing.organization = org
         existing.department = dept
         existing.role_id = role.id
-        existing.status = "active"
+        existing.last_login_at = utcnow()
+        # status 는 건드리지 않는다 — 로컬에서 비활성화한 계정이 다음 로그인 때 되살아나지 않도록
     else:
         session.add(ArgusUser(
             username=username,
@@ -450,6 +554,7 @@ async def upsert_external_user(
             password_hash="(external/keycloak)",  # 로컬 인증 미사용
             status="active",
             role_id=role.id,
+            last_login_at=utcnow(),
         ))
     await session.commit()
     logger.info("외부 사용자 JIT upsert 완료: %s (role=%s)", username, role_code)
@@ -511,10 +616,12 @@ async def seed_admin_user(session: AsyncSession) -> None:
 
     count = (await session.execute(select(func.count()).select_from(ArgusUser))).scalar() or 0
     if count > 0:
+        logger.debug("기본 관리자 시드 건너뜀: 기존 사용자 %d명", count)
         return
 
     admin_role = await _get_role_by_role_id(session, RoleName.ADMIN.value)
     if not admin_role:
+        logger.warning("기본 관리자 시드 건너뜀: 관리자 역할(%s) 없음", RoleName.ADMIN.value)
         return
 
     user = ArgusUser(
@@ -522,9 +629,11 @@ async def seed_admin_user(session: AsyncSession) -> None:
         email="admin@argus.local",
         first_name="Admin",
         last_name="User",
-        password_hash=_hash_password("admin"),
+        password_hash=await password_hash_for("admin"),
         status="active",
         role_id=admin_role.id,
+        # 공개된 기본 비밀번호 — 최초 로그인 때 변경을 강제한다(변경 전에는 다른 API 사용 불가)
+        must_change_password=True,
     )
     session.add(user)
     await session.commit()

@@ -2,8 +2,43 @@
 """페더레이션 API 용 Pydantic 스키마."""
 
 from datetime import datetime
+from urllib.parse import urlparse
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+def _validate_base_url(v: str | None) -> str | None:
+    """peer base URL 은 http(s) 절대 URL 만 허용(file://·상대 경로 등 차단)."""
+    if v is None:
+        return v
+    v = v.strip()
+    parsed = urlparse(v)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError("base_url 은 http:// 또는 https:// 로 시작하는 절대 URL 이어야 합니다")
+    if parsed.username or parsed.password:
+        raise ValueError("base_url 에 사용자 정보를 넣지 마세요(서비스 토큰을 사용하세요)")
+    return v.rstrip("/")
+
+
+# peer 운영 모드/상태의 허용 값 — 검색·스케줄러·드릴다운이 이 값들로만 분기한다.
+FEDERATION_MODES = ("LIVE", "HARVEST", "HYBRID")
+FEDERATION_STATUSES = ("ACTIVE", "PAUSED")
+
+
+def _choice_validator(allowed: tuple[str, ...], label: str):
+    """대소문자 무시로 허용 값만 받아 대문자로 정규화(알 수 없는 값은 422)."""
+    def _check(v: str | None) -> str | None:
+        if v is None:
+            return v
+        norm = v.strip().upper()
+        if norm not in allowed:
+            raise ValueError(f"{label} 은(는) {' / '.join(allowed)} 중 하나여야 합니다: {v!r}")
+        return norm
+    return _check
+
+
+_validate_mode = _choice_validator(FEDERATION_MODES, "mode")
+_validate_status = _choice_validator(FEDERATION_STATUSES, "status")
 
 
 # ---------------------------------------------------------------------------
@@ -11,6 +46,8 @@ from pydantic import BaseModel, ConfigDict, Field
 # ---------------------------------------------------------------------------
 
 class FederatedInstanceCreate(BaseModel):
+    """peer 등록 요청. status 는 받지 않으며 모델 기본값(ACTIVE)으로 생성된다."""
+
     instance_key: str = Field(..., min_length=1, max_length=64,
                               pattern=r"^[A-Za-z0-9_-]+$",
                               description="허브 내 peer 식별 키(URN namespace prefix). "
@@ -25,8 +62,17 @@ class FederatedInstanceCreate(BaseModel):
         None, description="화면에 표시할 capability 키(소비자 선택). None=전부 표시",
     )
 
+    _check_base_url = field_validator("base_url")(_validate_base_url)
+    _check_mode = field_validator("mode")(_validate_mode)
+
 
 class FederatedInstanceUpdate(BaseModel):
+    """peer 부분 수정 요청 — 명시한 필드만 반영한다(exclude_unset).
+
+    ``auth_token`` 을 null/빈 값으로 보내면 토큰을 제거하고, ``display_fields`` 를 null 로
+    보내면 '전부 표시' 로 초기화한다.
+    """
+
     name: str | None = Field(None, max_length=200)
     base_url: str | None = Field(None, max_length=500)
     auth_token: str | None = None
@@ -35,6 +81,10 @@ class FederatedInstanceUpdate(BaseModel):
     status: str | None = Field(None, description="ACTIVE / PAUSED")
     description: str | None = None
     display_fields: list[str] | None = None
+
+    _check_base_url = field_validator("base_url")(_validate_base_url)
+    _check_mode = field_validator("mode")(_validate_mode)
+    _check_status = field_validator("status")(_validate_status)
 
 
 class FederatedInstanceResponse(BaseModel):
@@ -147,7 +197,7 @@ class FederatedExportDatasetsResponse(BaseModel):
 class FederationSyncResult(BaseModel):
     """단일 peer HARVEST 실행 결과."""
     instance_key: str
-    status: str = Field(..., description="SUCCESS / FAILED")
+    status: str = Field(..., description="SUCCESS / FAILED / SKIPPED(이미 진행 중)")
     datasets_seen: int = 0
     datasets_upserted: int = 0
     datasets_embedded: int = 0
@@ -171,6 +221,9 @@ class FederationSyncRunResponse(BaseModel):
     phase: str = "FETCH"
     phase_done: int = 0
     phase_total: int = 0
+    # 전체 동기화(prune 포함) 여부 / 다음 증분 기준 시각(성공 실행만)
+    is_full: bool = False
+    watermark: datetime | None = None
     error: str | None = None
     started_at: datetime
     finished_at: datetime | None = None
@@ -189,6 +242,7 @@ class CapabilityItem(BaseModel):
 
 
 class CapabilityGroup(BaseModel):
+    """capability 그룹(표시 순서·라벨)."""
     group: str
     label: str
 
@@ -216,6 +270,9 @@ class ProbeCapabilitiesRequest(BaseModel):
     """등록 전 peer capabilities 사전 조회 요청."""
     base_url: str = Field(..., max_length=500)
     auth_token: str | None = None
+
+    # 등록/수정과 동일한 base_url 검증(http(s) 절대 URL·사용자 정보 금지) — 잘못된 URL 은 422
+    _check_base_url = field_validator("base_url")(_validate_base_url)
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,24 @@
 = 시스템 요구사항
 
-Argus Catalog 를 설치하기 전에, 먼저 어떤 환경이 필요한지 짚어 보겠습니다. 아래 표는 무난하게 동작하는 최소선이며, 데이터 규모나 동시 사용자 수에 따라 여유 있게 잡아 두시면 좋습니다.
+Argus Catalog 를 설치하기 전에 필요한 환경을 확인하는 페이지입니다. 아래 사양은 무난하게 동작하는 최소선이며, 데이터 규모나 동시 사용자 수에 따라 여유 있게 잡아 두면 좋습니다.
+
+== 시작하기 전에
+
+=== 어떤 설치 방법을 고를까요
+
+[cols="2,3,2",options="header"]
+|===
+| 목적 | 방법 | 페이지
+
+| 처음 써 보기 · 데모 · 로컬 개발 | Docker Compose 로 한 번에 띄웁니다. **가장 쉬운 방법**입니다. | xref:install/docker.adoc[Docker Compose 배포]
+| 서버에 구성 요소를 하나씩 직접 설치 | PostgreSQL · 서버 · UI 를 패키지로 설치합니다. | xref:install/setup.adoc[직접 설치]
+| 실제 운영 | 시크릿 · 데이터 보존 · TLS · 백업을 갖춰 배포합니다. | xref:install/production.adoc[운영 배포]
+|===
+
+=== 꼭 필요한 것만 추리면
+
+* **Docker Compose 로 설치할 때** — Docker 와 아래 *최소 사양*(CPU · 메모리 · 디스크)만 있으면 됩니다. Python · Node.js · pnpm · PostgreSQL 은 컨테이너 안에 들어 있습니다.
+* **직접 설치할 때** — 최소 사양 전체(Python · Node.js · pnpm 포함)와, 의존 컴포넌트 중 *필수* · *기본 사용* 항목(PostgreSQL + pgvector, Temporal)이 필요합니다.
 
 == 최소 사양
 
@@ -48,9 +66,13 @@ Argus Catalog 는 혼자 동작하지 않고 몇 가지 외부 컴포넌트와 �
 | 옵션
 | ML 모델 아티팩트를 저장합니다. 설정하지 않으면 로컬 파일시스템 모드로 동작합니다.
 
-| Keycloak 22+
+| Temporal
+| 기본 사용
+| 변경 관리 결재 워크플로를 실행합니다(`temporal.enabled` 기본값 `true`, 대상 `localhost:7233`). 변경 관리 워커(`python -m app.change_mgmt.worker`)도 함께 띄워야 합니다. `temporal.enabled=false` 로 끄면 변경 요청 제출만 막힙니다.
+
+| Keycloak (compose 이미지 26.0)
 | 옵션
-| SSO / OIDC 인증에 사용합니다. 설정하지 않으면 Local JWT 모드로 동작합니다.
+| SSO / OIDC 인증에 사용합니다. 인증 방식(`auth.type`)의 기본값은 `local` 이므로, Keycloak 으로 바꾸지 않으면 로컬 인증으로 동작합니다.
 
 | Ollama
 | 옵션
@@ -60,6 +82,13 @@ Argus Catalog 는 혼자 동작하지 않고 몇 가지 외부 컴포넌트와 �
 | 옵션
 | 로컬 임베딩 / LLM 을 가속합니다.
 |===
+
+이 컴포넌트들이 서로 어떻게 맞물리는지 그림으로 보면 한눈에 들어옵니다. 실선은 필수, 점선은 옵션 연결입니다.
+
+.필수 구성과 선택 구성
+image::diagrams/install-requirements-01.png[필수 구성과 선택 구성,role="diagram"]
+
+UI 는 서버를 거쳐서만 데이터에 접근하고, 서버는 메타데이터 저장을 위해 데이터베이스에 반드시 연결합니다. Temporal 은 기본으로 켜져 있어 변경 관리에 쓰이며, 나머지는 필요할 때 붙이는 옵션입니다.
 
 == 네트워크 포트
 
@@ -74,8 +103,11 @@ Argus Catalog 는 혼자 동작하지 않고 몇 가지 외부 컴포넌트와 �
 | 5432 | PostgreSQL | 메타데이터 DB (PostgreSQL)
 | 3306 | MariaDB | 메타데이터 DB (MariaDB)
 | 9000 / 9001 | MinIO | API / 콘솔
+| 7233 | Temporal | gRPC (서버 · 변경 관리 워커가 접속)
+| 8233 | Temporal UI | 워크플로 조회 웹 UI (Docker Compose 기준)
 | 8180 | Keycloak | OIDC IdP
 | 11434 | Ollama | 임베딩 · LLM
+| 8930 | argus-catalog-ai-service | AI 어시스턴트 서버 (옵션, 카탈로그 서버에서 접근)
 |===
 
 == 외부 통신
@@ -86,9 +118,9 @@ Argus Catalog 는 혼자 동작하지 않고 몇 가지 외부 컴포넌트와 �
 ** HuggingFace Hub — 로컬 임베딩 모델을 자동으로 내려받고, OCI Hub 로 HuggingFace 모델을 임포트할 때 사용합니다.
 ** OpenAI / Anthropic API — 임베딩 · LLM 을 사용할 때 호출합니다.
 * *에어갭 환경*
-** 모델 파일을 사내에 배포한 뒤 *로컬 경로* 로 지정합니다 — xref:install/setup.adoc[설치]·xref:ops/settings.adoc[설정] 을 참조하세요.
+** 모델 파일을 사내에 배포한 뒤 *로컬 경로* 로 지정합니다 — xref:install/setup.adoc[직접 설치]·xref:ops/settings.adoc[설정] 을 참조하세요.
 ** OCI Hub 의 Airgap Import 를 사용합니다.
 
 == 라이선스
 
-Apache License 2.0 을 따르므로 자체 운영에는 제한이 없습니다. 제품 라이선스 키 발급 절차는 별도 영업 계약에 따릅니다.
+Apache License 2.0 을 따르므로 자체 운영에는 제한이 없습니다.

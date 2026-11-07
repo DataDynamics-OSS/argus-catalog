@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
-"""외부 API 용 TTL 만료 기능을 갖춘 스레드 안전 LRU 캐시.
+"""외부 API 용 TTL 만료 기능을 갖춘 비동기(코루틴) 안전 LRU 캐시.
 
 특징:
 - 최대 크기 설정 가능(가득 차면 LRU 방식으로 제거)
 - 엔트리별 TTL 만료(monotonic 클럭 사용)
 - asyncio.Lock 으로 비동기 안전
-- 다목적 캐싱을 위한 문자열 키(예: "metadata:42", "avro:42")
+- 다목적 캐싱을 위한 문자열 키(예: "metadata:{urn}", "avro:{urn}", "urn_map:{urn}")
 - 모니터링용 hit/miss 통계
 """
 
@@ -30,9 +30,13 @@ class CacheEntry:
 class MetadataCache:
     """TTL 을 지원하는 비동기 안전 LRU 캐시.
 
-    여러 데이터 타입을 지원하기 위해 키는 문자열을 사용한다:
-    - "metadata:{dataset_id}": dataset 메타데이터
-    - "avro:{dataset_id}": Avro 스키마
+    여러 데이터 타입을 지원하기 위해 키는 문자열을 사용한다(``app.external.service`` 기준):
+    - "metadata:{urn}": dataset 메타데이터
+    - "avro:{urn}": Avro 스키마
+    - "urn_map:{urn}": URN → dataset_id 매핑
+
+    asyncio.Lock 은 같은 이벤트 루프 안의 코루틴 간 동시성만 보호한다(스레드 간 공유 불가).
+    ``get`` 은 저장된 dict 를 복사하지 않고 그대로 돌려주므로 호출 측 변경이 캐시 항목에 반영된다.
     """
 
     def __init__(self, max_size: int = 1000, ttl_seconds: int = 300) -> None:
@@ -66,9 +70,11 @@ class MetadataCache:
                 logger.debug("캐시 만료: key=%s (%.1fs)", key, elapsed)
                 return None
 
+            # LRU 갱신: 최근 사용 항목을 맨 뒤로 옮긴다(제거는 맨 앞부터)
             self._cache.move_to_end(key)
             entry.hit_count += 1
             self._hits += 1
+            logger.debug("캐시 적중: key=%s hit_count=%d", key, entry.hit_count)
             return entry.data
 
     async def put(self, key: str, data: dict) -> None:
@@ -133,12 +139,20 @@ class MetadataCache:
         max_size: int | None = None,
         ttl_seconds: int | None = None,
     ) -> dict:
-        """캐시 설정을 갱신. 새 max_size 가 더 작으면 초과 항목을 제거한다."""
+        """캐시 설정을 갱신. 새 max_size 가 더 작으면 초과 항목을 제거한다.
+
+        TTL 변경은 기존 항목에도 즉시 적용된다(만료 판정이 조회 시점의 ``_ttl_seconds`` 기준).
+        반환: 반영된 ``max_size`` / ``ttl_seconds`` / 현재 항목 수.
+        """
         async with self._lock:
             if max_size is not None:
                 self._max_size = max_size
+                evicted = 0
                 while len(self._cache) > self._max_size:
                     self._cache.popitem(last=False)
+                    evicted += 1
+                if evicted:
+                    logger.debug("캐시 축소로 LRU 항목 제거: count=%d max_size=%d", evicted, self._max_size)
 
             if ttl_seconds is not None:
                 self._ttl_seconds = ttl_seconds
@@ -176,6 +190,7 @@ def get_cache() -> MetadataCache:
 
 
 def reset_cache() -> None:
-    """싱글턴을 초기화(재설정용)."""
+    """싱글턴을 초기화(재설정용). 다음 ``get_cache`` 호출 때 현재 설정값으로 새로 만든다."""
     global _cache
+    logger.debug("MetadataCache 싱글턴 초기화")
     _cache = None

@@ -1,6 +1,6 @@
 "use client"
 
-import { Fragment, useCallback, useEffect, useState } from "react"
+import { Fragment, useCallback, useEffect, useRef, useState } from "react"
 import {
   Activity,
   CheckCircle2,
@@ -10,12 +10,14 @@ import {
   Loader2,
   Pencil,
   Plus,
+  RefreshCw,
   Trash2,
   XCircle,
 } from "lucide-react"
 
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
+import { Checkbox } from "@workspace/ui/components/checkbox"
 import {
   Dialog,
   DialogContent,
@@ -66,6 +68,9 @@ import {
   type InstanceHealth,
 } from "./api"
 import { CapabilityChecklist } from "./capability-checklist"
+import { HarvestProgress, runSummary, type HarvestProg } from "./harvest-progress"
+import { SyncRunsDialog } from "./sync-runs-dialog"
+import { errorMessage } from "@/lib/notify"
 
 const MODES: FederationMode[] = ["HYBRID", "HARVEST", "LIVE"]
 
@@ -99,6 +104,9 @@ type FormState = {
   name: string
   base_url: string
   auth_token: string
+  // 수정 시: 저장된 토큰 보유 여부 / 토큰 제거 요청
+  has_token: boolean
+  clear_token: boolean
   mode: FederationMode
   sync_interval_sec: number
   status: "ACTIVE" | "PAUSED"
@@ -110,6 +118,8 @@ const EMPTY_FORM: FormState = {
   name: "",
   base_url: "",
   auth_token: "",
+  has_token: false,
+  clear_token: false,
   mode: "HYBRID",
   sync_interval_sec: 900,
   status: "ACTIVE",
@@ -130,7 +140,9 @@ export function FederationInstancesPanel() {
   const [instances, setInstances] = useState<FederatedInstance[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState<number | null>(null)
+  // 상태점검·가져오기 진행 중인 인스턴스 — 서로 독립(한쪽 종료가 다른 쪽 버튼을 풀지 않도록)
+  const [checking, setChecking] = useState<Set<number>>(() => new Set())
+  const [harvesting, setHarvesting] = useState<Set<number>>(() => new Set())
   const [health, setHealth] = useState<Record<number, InstanceHealth>>({})
 
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -138,24 +150,44 @@ export function FederationInstancesPanel() {
   const [form, setForm] = useState<FormState>(EMPTY_FORM)
   // 식별 키 중복 등 키 입력란 단위 에러(상단 배너와 분리해 입력란 아래 표시)
   const [keyError, setKeyError] = useState<string | null>(null)
+  // 다이얼로그 내부 에러(검증·저장 실패) — 패널 배너는 다이얼로그에 가려지므로 분리
+  const [formError, setFormError] = useState<string | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+  // 수정 시 원래 base_url — 변경되면 caps 를 저장된 URL 이 아닌 새 URL 로 probe
+  const [origBaseUrl, setOrigBaseUrl] = useState("")
   // 삭제 확인 다이얼로그 대상(팝업 confirm 대체). null=닫힘.
   const [deleteTarget, setDeleteTarget] = useState<FederatedInstance | null>(null)
   const [deleting, setDeleting] = useState(false)
+  // 전체 재동기화(full=true, prune 포함) 확인 다이얼로그 대상. null=닫힘.
+  const [resyncTarget, setResyncTarget] = useState<FederatedInstance | null>(null)
 
   // 소비자 표시 선택 — peer 가 advertise 한 항목(caps) 중에서 고른다.
   const [caps, setCaps] = useState<CapabilitiesResponse | null>(null)
-  const [displayFields, setDisplayFields] = useState<string[]>([])
+  // null = 선택 없음(제공 항목 전부 표시), [] = 명시적으로 아무것도 표시 안 함
+  const [displayFields, setDisplayFields] = useState<string[] | null>(null)
   const [capsLoading, setCapsLoading] = useState(false)
   const [capsError, setCapsError] = useState<string | null>(null)
 
   const [runsOpen, setRunsOpen] = useState(false)
   const [runs, setRuns] = useState<FederationSyncRun[]>([])
   const [runsInstance, setRunsInstance] = useState<string>("")
+  const [runsLoading, setRunsLoading] = useState(false)
+  const [runsError, setRunsError] = useState<string | null>(null)
+  // 이력 요청 세대 — 다른 인스턴스 이력을 연달아 열 때 늦게 온 응답이 덮어쓰지 않도록
+  const runsReq = useRef(0)
 
   // 가져오기 진행률 — 인스턴스별 단계/진척. 존재하면 해당 행에 진행 바 표시.
   const [harvestProgress, setHarvestProgress] = useState<
     Record<number, HarvestProg>
   >({})
+  // 인스턴스별 진행률 폴링 타이머 — 언마운트(탭 이동) 시 모두 정리한다.
+  const pollTimers = useRef<Record<number, ReturnType<typeof setInterval>>>({})
+  useEffect(() => {
+    const timers = pollTimers.current
+    return () => {
+      Object.values(timers).forEach(clearInterval)
+    }
+  }, [])
 
   const reload = useCallback(async () => {
     setLoading(true)
@@ -163,7 +195,7 @@ export function FederationInstancesPanel() {
       setInstances(await listInstances())
       setError(null)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(errorMessage(e) ?? String(e))
     } finally {
       setLoading(false)
     }
@@ -183,7 +215,9 @@ export function FederationInstancesPanel() {
     setEditId(null)
     setForm(EMPTY_FORM)
     setKeyError(null)
-    setDisplayFields([])
+    setFormError(null)
+    setOrigBaseUrl("")
+    setDisplayFields(null)
     resetCaps()
     setDialogOpen(true)
   }
@@ -191,44 +225,76 @@ export function FederationInstancesPanel() {
   const openEdit = (inst: FederatedInstance) => {
     setEditId(inst.id)
     setKeyError(null)
+    setFormError(null)
+    setOrigBaseUrl(inst.base_url)
     setForm({
       instance_key: inst.instance_key,
       name: inst.name,
       base_url: inst.base_url,
       auth_token: "",
+      has_token: inst.has_auth_token,
+      clear_token: false,
       mode: inst.mode,
       sync_interval_sec: inst.sync_interval_sec,
       status: inst.status,
       description: inst.description ?? "",
     })
-    setDisplayFields(inst.display_fields ?? [])
+    setDisplayFields(inst.display_fields ?? null)
     resetCaps()
     setDialogOpen(true)
   }
 
-  // peer 가 advertise 하는 노출 항목을 가져온다(등록 전=probe, 수정=instance).
+  // peer 가 advertise 하는 노출 항목을 가져온다.
+  // 등록 전·URL/토큰 변경 시 = 입력값으로 probe, 그 외 수정 = 저장된 설정으로 조회.
   const loadCaps = async () => {
+    const url = form.base_url.trim()
+    const urlChanged = editId !== null && url !== origBaseUrl
+    const tokenChanged = !!form.auth_token || form.clear_token
+    // URL 만 바뀌고 저장된 토큰을 유지하는 경우 — 저장 토큰은 프론트로 오지 않아
+    // 새 URL 로 인증된 probe 를 할 수 없다.
+    if (urlChanged && !tokenChanged && form.has_token) {
+      setCapsError(
+        "Base URL 을 바꾼 경우 토큰을 다시 입력하거나, 먼저 저장한 뒤 불러오세요.",
+      )
+      return
+    }
     setCapsLoading(true)
     setCapsError(null)
     try {
       const c =
-        editId === null
-          ? await probeCapabilities(form.base_url, form.auth_token)
+        editId === null || urlChanged || tokenChanged
+          ? await probeCapabilities(url, form.auth_token)
           : await instanceCapabilities(editId)
       setCaps(c)
-      // 기존 선택이 있으면 advertise 범위로 교집합, 없으면 전체 노출을 기본 선택
-      setDisplayFields((prev) => {
-        const base = prev.length ? prev : c.exposed
-        return base.filter((k) => c.exposed.includes(k))
-      })
+      // 기존 선택이 있으면 advertise 범위로 교집합, 없으면(null) 전체 노출을 기본 선택
+      setDisplayFields((prev) =>
+        (prev ?? c.exposed).filter((k) => c.exposed.includes(k)),
+      )
     } catch (e) {
-      setCapsError(e instanceof Error ? e.message : String(e))
+      setCapsError(errorMessage(e) ?? String(e))
     } finally {
       setCapsLoading(false)
     }
   }
 
   const submit = async () => {
+    if (submitting) return
+    setFormError(null)
+    const name = form.name.trim()
+    const baseUrl = form.base_url.trim().replace(/\/+$/, "")
+    if (!name) {
+      setFormError("이름을 입력하세요.")
+      return
+    }
+    if (!/^https?:\/\/[^\s/]+/i.test(baseUrl)) {
+      setFormError("Base URL 은 http:// 또는 https:// 로 시작해야 합니다.")
+      return
+    }
+    const interval = form.sync_interval_sec
+    if (!Number.isInteger(interval) || interval < 30) {
+      setFormError("동기화 주기는 30초 이상의 정수여야 합니다.")
+      return
+    }
     // 등록(신규)일 때만 식별 키 중복을 사전 검사 — 이미 로드된 목록과 비교해
     // API 호출 전에 즉시 입력란 단위 에러로 막는다. 수정은 키를 바꾸지 않는다.
     const key = form.instance_key.trim()
@@ -245,42 +311,50 @@ export function FederationInstancesPanel() {
       }
     }
     setKeyError(null)
+    setSubmitting(true)
     try {
       if (editId === null) {
         await createInstance({
           instance_key: key,
-          name: form.name,
-          base_url: form.base_url,
+          name,
+          base_url: baseUrl,
           auth_token: form.auth_token || null,
           mode: form.mode,
           sync_interval_sec: form.sync_interval_sec,
           description: form.description || null,
           // caps 를 불러왔으면 선택값 저장, 아니면 null(전부 표시)
-          display_fields: caps ? displayFields : null,
+          display_fields: caps ? (displayFields ?? caps.exposed) : null,
         })
       } else {
         await updateInstance(editId, {
-          name: form.name,
-          base_url: form.base_url,
+          name,
+          base_url: baseUrl,
           mode: form.mode,
           sync_interval_sec: form.sync_interval_sec,
           status: form.status,
           description: form.description || null,
-          ...(form.auth_token ? { auth_token: form.auth_token } : {}),
+          // 새 토큰 입력 시 교체, '토큰 제거' 선택 시 null 로 삭제, 둘 다 아니면 유지
+          ...(form.auth_token
+            ? { auth_token: form.auth_token }
+            : form.clear_token
+              ? { auth_token: null }
+              : {}),
           // caps 를 불러온 경우에만 표시 선택을 갱신(아니면 기존 유지)
-          ...(caps ? { display_fields: displayFields } : {}),
+          ...(caps ? { display_fields: displayFields ?? caps.exposed } : {}),
         })
       }
       setDialogOpen(false)
       await reload()
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
+      const msg = errorMessage(e) ?? String(e)
       // 동시 등록 경합 등으로 백엔드가 키 중복(409)을 돌려주면 입력란 단위로 표시
       if (editId === null && msg.includes("식별 키")) {
         setKeyError(msg)
       } else {
-        setError(msg)
+        setFormError(msg)
       }
+    } finally {
+      setSubmitting(false)
     }
   }
 
@@ -295,64 +369,21 @@ export function FederationInstancesPanel() {
       setDeleteTarget(null)
       await reload()
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(errorMessage(e) ?? String(e))
     } finally {
       setDeleting(false)
     }
   }
 
   const doHealth = async (inst: FederatedInstance) => {
-    setBusy(inst.id)
+    setChecking((s) => withId(s, inst.id))
     try {
       const h = await checkHealth(inst.id)
       setHealth((prev) => ({ ...prev, [inst.id]: h }))
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(errorMessage(e) ?? String(e))
     } finally {
-      setBusy(null)
-    }
-  }
-
-  const doHarvest = async (inst: FederatedInstance, full: boolean) => {
-    setBusy(inst.id)
-    setHarvestProgress((p) => ({
-      ...p,
-      [inst.id]: { phase: "FETCH", done: 0, total: 0, seen: 0 },
-    }))
-    // 가져오기 요청은 완료 시점에만 반환되므로, 진행 중 RUNNING 실행 이력을 폴링해 진행률 표시.
-    const timer = setInterval(async () => {
-      try {
-        const recent = await listSyncRuns(inst.id, 1)
-        const r = recent[0]
-        if (r && r.status === "RUNNING") {
-          setHarvestProgress((p) => ({
-            ...p,
-            [inst.id]: {
-              phase: r.phase,
-              done: r.phase_done,
-              total: r.phase_total,
-              seen: r.datasets_seen,
-            },
-          }))
-        }
-      } catch {
-        /* 폴링 실패는 무시 */
-      }
-    }, 800)
-    try {
-      const r = await harvestInstance(inst.id, full)
-      finishHarvest(
-        inst.id,
-        r.status === "SUCCESS",
-        r.status === "SUCCESS"
-          ? `관측 ${r.datasets_seen.toLocaleString()} · 갱신 ${r.datasets_upserted.toLocaleString()} · 임베딩 ${r.datasets_embedded.toLocaleString()} · 정리 ${r.datasets_pruned.toLocaleString()}`
-          : (r.error ?? "알 수 없는 오류")
-      )
-    } catch (e) {
-      finishHarvest(inst.id, false, e instanceof Error ? e.message : String(e))
-    } finally {
-      clearInterval(timer)
-      setBusy(null)
+      setChecking((s) => withoutId(s, inst.id))
     }
   }
 
@@ -377,14 +408,118 @@ export function FederationInstancesPanel() {
     }, 8000)
   }
 
+  const stopPolling = (id: number) => {
+    clearInterval(pollTimers.current[id])
+    delete pollTimers.current[id]
+  }
+
+  // RUNNING 실행 이력을 폴링해 진행률을 갱신한다. ``finishOnDone`` 이면(이 화면이 시작하지 않은
+  // 실행을 지켜보는 경우) RUNNING 이 끝났을 때 그 실행 결과로 완료 처리한다.
+  const startPolling = (id: number, finishOnDone: boolean) => {
+    if (pollTimers.current[id]) return
+    pollTimers.current[id] = setInterval(async () => {
+      try {
+        const r = (await listSyncRuns(id, 1))[0]
+        if (r && r.status === "RUNNING") {
+          setHarvestProgress((p) => ({
+            ...p,
+            [id]: {
+              phase: r.phase,
+              done: r.phase_done,
+              total: r.phase_total,
+              seen: r.datasets_seen,
+            },
+          }))
+        } else if (finishOnDone) {
+          stopPolling(id)
+          setHarvesting((s) => withoutId(s, id))
+          if (r) {
+            finishHarvest(
+              id,
+              r.status === "SUCCESS",
+              r.status === "SUCCESS" ? runSummary(r) : (r.error ?? r.status)
+            )
+          }
+        }
+      } catch {
+        /* 폴링 실패는 무시 */
+      }
+    }, 800)
+  }
+
+  // 화면 진입(탭 복귀 포함) 시 스케줄러·다른 관리자·이전 화면이 시작한 진행 중 가져오기를 복원한다.
+  // 진행 바와 버튼 비활성이 사라져 같은 peer 를 중복 실행하는 것을 막는다.
+  useEffect(() => {
+    let cancelled = false
+    for (const inst of instances) {
+      if (inst.mode === "LIVE" || pollTimers.current[inst.id]) continue
+      listSyncRuns(inst.id, 1)
+        .then((runs) => {
+          const r = runs[0]
+          if (cancelled || !r || r.status !== "RUNNING") return
+          setHarvesting((s) => withId(s, inst.id))
+          setHarvestProgress((p) => ({
+            ...p,
+            [inst.id]: {
+              phase: r.phase,
+              done: r.phase_done,
+              total: r.phase_total,
+              seen: r.datasets_seen,
+            },
+          }))
+          startPolling(inst.id, true)
+        })
+        .catch(() => {
+          /* 복원 실패는 무시(수동 실행 시 서버가 409 로 막는다) */
+        })
+    }
+    return () => {
+      cancelled = true
+    }
+    // startPolling 은 ref·setState 만 쓰므로 instances 변경 시에만 재검사한다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instances])
+
+  const doHarvest = async (inst: FederatedInstance, full: boolean) => {
+    if (harvesting.has(inst.id)) return
+    setHarvesting((s) => withId(s, inst.id))
+    setHarvestProgress((p) => ({
+      ...p,
+      [inst.id]: { phase: "FETCH", done: 0, total: 0, seen: 0 },
+    }))
+    // 가져오기 요청은 완료 시점에만 반환되므로, 진행 중 RUNNING 실행 이력을 폴링해 진행률 표시.
+    startPolling(inst.id, false)
+    try {
+      const r = await harvestInstance(inst.id, full)
+      finishHarvest(
+        inst.id,
+        r.status === "SUCCESS",
+        r.status === "SUCCESS" ? runSummary(r) : (r.error ?? "알 수 없는 오류")
+      )
+    } catch (e) {
+      // 409 — 스케줄러 등 다른 실행이 진행 중. 서버 메시지를 그대로 표시한다.
+      finishHarvest(inst.id, false, errorMessage(e) ?? String(e))
+    } finally {
+      stopPolling(inst.id)
+      setHarvesting((s) => withoutId(s, inst.id))
+    }
+  }
+
   const openRuns = async (inst: FederatedInstance) => {
+    const req = ++runsReq.current
     setRunsInstance(inst.name)
     setRuns([])
+    setRunsError(null)
+    setRunsLoading(true)
     setRunsOpen(true)
     try {
-      setRuns(await listSyncRuns(inst.id))
+      const data = await listSyncRuns(inst.id)
+      if (req === runsReq.current) setRuns(data)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      if (req === runsReq.current)
+        setRunsError(errorMessage(e) ?? String(e))
+    } finally {
+      if (req === runsReq.current) setRunsLoading(false)
     }
   }
 
@@ -466,7 +601,7 @@ export function FederationInstancesPanel() {
                       {inst.sync_interval_sec}s
                     </TableCell>
                     <TableCell>
-                      {busy === inst.id ? (
+                      {checking.has(inst.id) ? (
                         <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                       ) : h ? (
                         h.reachable ? (
@@ -505,13 +640,22 @@ export function FederationInstancesPanel() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-1">
-                        {inst.mode !== "LIVE" && (
+                        {inst.mode !== "LIVE" && inst.status === "ACTIVE" && (
                           <IconAction
                             label="가져오기 (증분)"
                             onClick={() => doHarvest(inst, false)}
-                            disabled={busy === inst.id}
+                            disabled={harvesting.has(inst.id)}
                           >
                             <DownloadCloud className="h-3.5 w-3.5" />
+                          </IconAction>
+                        )}
+                        {inst.mode !== "LIVE" && inst.status === "ACTIVE" && (
+                          <IconAction
+                            label="전체 재동기화"
+                            onClick={() => setResyncTarget(inst)}
+                            disabled={harvesting.has(inst.id)}
+                          >
+                            <RefreshCw className="h-3.5 w-3.5" />
                           </IconAction>
                         )}
                         <IconAction
@@ -590,7 +734,10 @@ export function FederationInstancesPanel() {
               <Input
                 value={form.name}
                 placeholder="Payments Catalog"
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                onChange={(e) => {
+                  setFormError(null)
+                  setForm({ ...form, name: e.target.value })
+                }}
               />
             </div>
             <div className="grid gap-1.5">
@@ -598,7 +745,10 @@ export function FederationInstancesPanel() {
               <Input
                 value={form.base_url}
                 placeholder="https://catalog.payments.internal"
-                onChange={(e) => setForm({ ...form, base_url: e.target.value })}
+                onChange={(e) => {
+                  setFormError(null)
+                  setForm({ ...form, base_url: e.target.value })
+                }}
               />
             </div>
             <div className="grid grid-cols-2 gap-3">
@@ -645,14 +795,24 @@ export function FederationInstancesPanel() {
                 <Label>동기화 주기(초)</Label>
                 <Input
                   type="number"
-                  value={form.sync_interval_sec}
-                  onChange={(e) =>
+                  min={30}
+                  step={1}
+                  value={
+                    Number.isNaN(form.sync_interval_sec)
+                      ? ""
+                      : form.sync_interval_sec
+                  }
+                  onChange={(e) => {
+                    setFormError(null)
                     setForm({
                       ...form,
-                      sync_interval_sec: Number(e.target.value),
+                      // 빈 입력은 0 이 아닌 NaN 으로 두어 저장 시 검증에 걸리게 한다
+                      sync_interval_sec:
+                        e.target.value === "" ? NaN : Number(e.target.value),
                     })
-                  }
+                  }}
                 />
+                <p className="text-xs text-muted-foreground">최소 30초</p>
               </div>
             </div>
             <div className="grid gap-1.5">
@@ -662,11 +822,27 @@ export function FederationInstancesPanel() {
               <Input
                 type="password"
                 value={form.auth_token}
-                placeholder="peer export 토큰 (선택)"
+                placeholder={
+                  editId !== null && form.has_token && !form.clear_token
+                    ? "저장된 토큰 유지 (암호화 보관)"
+                    : "peer export 토큰 (선택)"
+                }
+                disabled={form.clear_token}
                 onChange={(e) =>
                   setForm({ ...form, auth_token: e.target.value })
                 }
               />
+              {editId !== null && form.has_token && (
+                <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Checkbox
+                    checked={form.clear_token}
+                    onCheckedChange={(v) =>
+                      setForm({ ...form, clear_token: v === true, auth_token: "" })
+                    }
+                  />
+                  저장된 토큰 제거
+                </label>
+              )}
             </div>
             {editId !== null && (
               <div className="grid gap-1.5">
@@ -730,25 +906,39 @@ export function FederationInstancesPanel() {
                   <CapabilityChecklist
                     items={caps.items}
                     groups={caps.groups}
-                    value={displayFields}
+                    value={displayFields ?? caps.exposed}
                     onChange={setDisplayFields}
                     available={caps.exposed}
                   />
                   <span className="text-xs text-muted-foreground">
-                    {displayFields.length}개 표시 / {caps.exposed.length}개 제공
+                    {(displayFields ?? caps.exposed).length}개 표시 /{" "}
+                    {caps.exposed.length}개 제공
                   </span>
                 </>
               )}
             </div>
           </div>
+          {formError && (
+            <div className="flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              <XCircle className="h-4 w-4 shrink-0" /> {formError}
+            </div>
+          )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialogOpen(false)}>
               취소
             </Button>
             <Button
               onClick={submit}
-              disabled={!form.instance_key || !form.name || !form.base_url}
+              disabled={
+                submitting ||
+                !form.instance_key.trim() ||
+                !form.name.trim() ||
+                !form.base_url.trim()
+              }
             >
+              {submitting && (
+                <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+              )}
               {editId === null ? "등록" : "저장"}
             </Button>
           </DialogFooter>
@@ -756,64 +946,14 @@ export function FederationInstancesPanel() {
       </Dialog>
 
       {/* 동기화 이력 */}
-      <Dialog open={runsOpen} onOpenChange={setRunsOpen}>
-        <DialogContent className="max-h-[80vh] max-w-2xl overflow-auto">
-          <DialogHeader>
-            <DialogTitle>동기화 이력: {runsInstance}</DialogTitle>
-          </DialogHeader>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>상태</TableHead>
-                <TableHead>관측/갱신/임베딩/정리</TableHead>
-                <TableHead>시작</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {runs.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={3}
-                    className="py-6 text-center text-muted-foreground"
-                  >
-                    이력이 없습니다.
-                  </TableCell>
-                </TableRow>
-              ) : (
-                runs.map((r) => (
-                  <TableRow key={r.id}>
-                    <TableCell>
-                      <Badge
-                        variant={
-                          r.status === "SUCCESS"
-                            ? "default"
-                            : r.status === "FAILED"
-                              ? "secondary"
-                              : "outline"
-                        }
-                      >
-                        {r.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-sm">
-                      {r.datasets_seen} / {r.datasets_upserted} /{" "}
-                      {r.datasets_embedded} / {r.datasets_pruned}
-                      {r.error && (
-                        <div className="text-xs text-destructive">
-                          {r.error}
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {new Date(r.started_at).toLocaleString()}
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </DialogContent>
-      </Dialog>
+      <SyncRunsDialog
+        open={runsOpen}
+        onOpenChange={setRunsOpen}
+        instanceName={runsInstance}
+        runs={runs}
+        loading={runsLoading}
+        error={runsError}
+      />
 
       {/* 인스턴스 삭제 확인 — 팝업 confirm 대체 */}
       <ConfirmDialog
@@ -835,6 +975,27 @@ export function FederationInstancesPanel() {
         confirmText="삭제"
         isLoading={deleting}
         handleConfirm={confirmDelete}
+      />
+
+      {/* 전체 재동기화 확인 — 증분과 달리 전체를 다시 받고 사라진 항목을 정리(prune)한다 */}
+      <ConfirmDialog
+        open={resyncTarget !== null}
+        onOpenChange={(o) => !o && setResyncTarget(null)}
+        title="전체 재동기화"
+        desc={
+          <>
+            <span className="font-medium">{resyncTarget?.name}</span> 의 데이터셋
+            전체를 다시 가져올까요? 증분 가져오기와 달리 peer 에서 삭제되었거나
+            노출이 중단된 미러 데이터셋은 이 카탈로그에서도 정리됩니다. 데이터셋
+            수에 따라 시간이 오래 걸릴 수 있습니다.
+          </>
+        }
+        confirmText="전체 재동기화"
+        handleConfirm={() => {
+          const target = resyncTarget
+          setResyncTarget(null)
+          if (target) void doHarvest(target, true)
+        }}
       />
     </div>
   )
@@ -874,107 +1035,14 @@ function IconAction({
 }
 
 /** 가져오기 진행률 — 인스턴스별 단계/진척 스냅샷. */
-type HarvestProg = {
-  phase: string // FETCH/EMBED/FINALIZE
-  done: number // 현재 단계 진척 분자
-  total: number // 현재 단계 진척 분모
-  seen: number // 전체 관측 데이터셋 수(라벨용)
-  // 완료/실패 결과(설정되면 진행 대신 결과 표시 — 팝업 대체)
-  result?: { ok: boolean; text: string }
+function withId(s: Set<number>, id: number): Set<number> {
+  const next = new Set(s)
+  next.add(id)
+  return next
 }
 
-// 단계 순서와 가중치(합=1.0) — 전체 % 를 작업량에 비례해 가중 계산한다.
-// SAMPLE 은 선택적(미사용 시 EMBED→FINALIZE 로 건너뜀 → 바가 앞으로 점프).
-const PHASE_ORDER = ["FETCH", "EMBED", "SAMPLE", "FINALIZE"] as const
-const PHASE_WEIGHT: Record<string, number> = {
-  FETCH: 0.4,
-  EMBED: 0.35,
-  SAMPLE: 0.2,
-  FINALIZE: 0.05,
-}
-const PHASE_LABEL: Record<string, string> = {
-  FETCH: "가져오기",
-  EMBED: "재임베딩",
-  SAMPLE: "샘플",
-  FINALIZE: "정리",
-}
-
-/** 현재 단계까지 누적 가중치 + 현재 단계 진척분을 합산한 전체 진행 %. */
-function overallPct(prog: HarvestProg): number {
-  const idx = PHASE_ORDER.indexOf(prog.phase as (typeof PHASE_ORDER)[number])
-  if (idx < 0) return 0
-  let base = 0
-  for (let i = 0; i < idx; i += 1) {
-    const ph = PHASE_ORDER[i]
-    if (ph) base += (PHASE_WEIGHT[ph] ?? 0) * 100
-  }
-  const weight = PHASE_WEIGHT[prog.phase] ?? 0
-  const frac = prog.total > 0 ? Math.min(1, prog.done / prog.total) : 0
-  return Math.min(100, Math.round(base + weight * 100 * frac))
-}
-
-/**
- * 가져오기 진행 바 — FETCH→EMBED→FINALIZE 단계 가중 %.
- * 첫 페이지 전(total 미정)에는 비결정형 애니메이션, 이후 정확한 숫자 % 표시.
- */
-function HarvestProgress({ prog }: { prog: HarvestProg }) {
-  // 완료/실패 결과 — 팝업 대신 진행 바 자리에 인라인 표시.
-  if (prog.result) {
-    const { ok, text } = prog.result
-    return (
-      <div
-        className={`flex items-center gap-2 rounded-md border px-3 py-2 text-sm ${
-          ok
-            ? "border-primary/30 bg-primary/5 text-foreground"
-            : "border-destructive/40 bg-destructive/10 text-destructive"
-        }`}
-      >
-        {ok ? (
-          <CheckCircle2 className="h-4 w-4 shrink-0 text-primary" />
-        ) : (
-          <XCircle className="h-4 w-4 shrink-0" />
-        )}
-        <span className="font-medium">
-          {ok ? "가져오기 완료" : "가져오기 실패"}
-        </span>
-        <span className="min-w-0 truncate text-muted-foreground" title={text}>
-          {text}
-        </span>
-      </div>
-    )
-  }
-  // 단계 분모를 아직 모르는 준비 구간(첫 페이지 전)만 비결정형으로.
-  const indeterminate = prog.phase === "FETCH" && prog.total === 0
-  const pct = overallPct(prog)
-  const label = PHASE_LABEL[prog.phase] ?? prog.phase
-  return (
-    <div className="flex items-center gap-3">
-      <DownloadCloud className="h-4 w-4 shrink-0 animate-pulse text-muted-foreground" />
-      <div className="min-w-0 flex-1 space-y-1">
-        <div className="flex items-center gap-2">
-          <div className="h-2 flex-1 overflow-hidden rounded bg-muted">
-            <div
-              className={`h-full rounded bg-primary transition-all ${
-                indeterminate ? "w-2/5 animate-pulse" : ""
-              }`}
-              style={indeterminate ? undefined : { width: `${pct}%` }}
-            />
-          </div>
-          {!indeterminate && (
-            <span className="w-10 shrink-0 text-right text-sm font-semibold tabular-nums">
-              {pct}%
-            </span>
-          )}
-        </div>
-        <span className="block text-[11px] text-muted-foreground">
-          {indeterminate
-            ? "가져오는 중..."
-            : `${label} ${prog.done.toLocaleString()} / ${prog.total.toLocaleString()}` +
-              (prog.phase !== "FETCH"
-                ? ` · 관측 ${prog.seen.toLocaleString()}`
-                : "")}
-        </span>
-      </div>
-    </div>
-  )
+function withoutId(s: Set<number>, id: number): Set<number> {
+  const next = new Set(s)
+  next.delete(id)
+  return next
 }

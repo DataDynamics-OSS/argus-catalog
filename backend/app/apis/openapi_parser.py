@@ -9,37 +9,43 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 import yaml
+
+logger = logging.getLogger(__name__)
 
 HTTP_METHODS = ("get", "put", "post", "delete", "options", "head", "patch", "trace")
 
 
 class SpecParseError(ValueError):
-    pass
+    """스펙을 읽을 수 없거나 지원하지 않는 형식 — 라우터에서 HTTP 400 으로 변환된다."""
 
 
 def load_spec(text: str) -> dict[str, Any]:
-    """JSON 또는 YAML 문자열을 dict 로 로드."""
+    """JSON 또는 YAML 문자열을 dict 로 로드.
+
+    빈 문자열·YAML 파싱 실패·최상위가 객체가 아닌 JSON/YAML(``123``, ``null`` 등)은 ``SpecParseError``.
+    """
     text = (text or "").strip()
     if not text:
         raise SpecParseError("스펙 내용이 비어 있습니다.")
     # JSON 우선, 실패 시 YAML
     try:
-        return json.loads(text)
+        data = json.loads(text)
     except Exception:
-        pass
-    try:
-        data = yaml.safe_load(text)
-    except Exception as e:
-        raise SpecParseError(f"스펙을 JSON/YAML 로 파싱할 수 없습니다: {e}")
+        try:
+            data = yaml.safe_load(text)
+        except Exception as e:
+            raise SpecParseError(f"스펙을 JSON/YAML 로 파싱할 수 없습니다: {e}")
     if not isinstance(data, dict):
         raise SpecParseError("스펙 최상위가 객체가 아닙니다.")
     return data
 
 
 def detect_format(spec: dict[str, Any]) -> str:
+    """최상위 키로 스펙 형식을 판별: openapi3 / openapi(3 이외 버전 표기) / openapi2 / asyncapi / unknown."""
     if "openapi" in spec:
         v = str(spec.get("openapi", ""))
         return "openapi3" if v.startswith("3") else "openapi"
@@ -123,21 +129,35 @@ def _endpoints(spec: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
-def parse(text: str, source_url: str | None = None) -> dict[str, Any]:
+def parse(text: str, source_url: str | None = None, *, for_import: bool = False) -> dict[str, Any]:
     """스펙 텍스트를 파싱해 카탈로그 저장용 구조를 반환.
 
+    for_import=True: 가져오기(미리보기·등록·새 버전) — 엔드포인트를 추출할 수 없는 형식(AsyncAPI)은 거부.
+    저장된 스펙을 다시 해석(버전 비교 등)할 때는 False 로 두어 기존 데이터를 그대로 읽는다.
+
     반환: { format, version, title, description, base_url, raw(json),
-            servers[], security_schemes[], endpoints[], parsed(summary) }
+            servers[], security_schemes[], endpoints[], tag_defs[], parsed(summary) }
+    ``source_url`` 은 현재 파싱에 쓰이지 않는다(호출 측 호환용 인자).
     """
     spec = load_spec(text)
     fmt = detect_format(spec)
+    logger.debug("스펙 형식 판별: format=%s for_import=%s", fmt, for_import)
     if fmt == "unknown":
         raise SpecParseError("지원하지 않는 스펙입니다(openapi/swagger 필드 없음).")
+    if fmt == "asyncapi" and for_import:
+        # AsyncAPI 는 채널/메시지 구조라 엔드포인트를 추출하지 않는다 — 가져오면 엔드포인트 0건으로
+        # 조용히 등록되므로 거부하고, 수동 등록의 계약 문서로 안내한다.
+        raise SpecParseError(
+            "AsyncAPI 스펙은 가져오기(엔드포인트 자동 추출)를 지원하지 않습니다. "
+            "수동 등록에서 프로토콜(Webhook 등)을 선택하고 AsyncAPI 문서를 계약 문서(원문/URL)로 등록하세요."
+        )
 
     info = spec.get("info") or {}
     servers = _servers(spec, fmt)
     schemes = _security_schemes(spec, fmt)
     endpoints = _endpoints(spec)
+    logger.debug("스펙 파싱 완료: format=%s endpoints=%d servers=%d security_schemes=%d",
+                 fmt, len(endpoints), len(servers), len(schemes))
 
     return {
         "format": fmt,

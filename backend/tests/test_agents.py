@@ -20,6 +20,7 @@ import app.agents.models as am
 import app.catalog.models  # noqa: F401  (FK 대상 catalog_datasources 등록)
 import app.embedding.models  # noqa: F401  (delete_agent 가 임베딩 행을 정리)
 import app.models.models  # noqa: F401  (FK 대상 catalog_registered_models 등록)
+import app.usermgr.models  # noqa: F401  (책임자 상태 계산의 사용자 목록)
 from app.agents import schemas as s
 from app.agents import service
 
@@ -35,6 +36,9 @@ _TABLES = [
     "catalog_ai_agent_evals",
     "catalog_ai_agent_invocation_log",
     "catalog_ai_agent_hook_events",
+    "catalog_ai_agent_discoveries",
+    "argus_roles",
+    "argus_users",
 ]
 
 

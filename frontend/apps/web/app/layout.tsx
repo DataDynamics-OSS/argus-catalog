@@ -4,7 +4,8 @@ import "@workspace/ui/globals.css"
 // 한 번만 import 하면 editor·viewer 양쪽 전역 적용.
 import "@/components/comments/highlight-styles.css"
 import localFont from "next/font/local"
-import { Toaster } from "sonner"
+import { NotifyToaster } from "@/components/notify-toaster"
+import { ConfirmProvider } from "@/components/confirm-provider"
 import { ThemeProvider } from "@/components/theme-provider"
 import { AuthProviderWrapper } from "@/components/auth-provider-wrapper" // Added for SSO AUTH
 
@@ -55,10 +56,12 @@ export default function RootLayout({
       <body className="min-h-screen bg-background text-foreground text-sm font-sans antialiased">
         <ThemeProvider>
           {/* Added for SSO AUTH - wraps entire app with authentication context */}
-          <AuthProviderWrapper>
-            {children}
-          </AuthProviderWrapper>
-          <Toaster richColors position="top-center" />
+          <ConfirmProvider>
+            <AuthProviderWrapper>
+              {children}
+            </AuthProviderWrapper>
+          </ConfirmProvider>
+          <NotifyToaster />
         </ThemeProvider>
       </body>
     </html>

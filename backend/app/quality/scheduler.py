@@ -21,6 +21,18 @@ from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
 
+
+def _as_utc(dt: datetime | None) -> datetime | None:
+    """DB 에서 읽은 시각을 UTC aware 로 정규화한다.
+
+    MariaDB DATETIME·SQLite 는 시간대 없는(naive) 값을 돌려주므로 UTC 로 간주해 tzinfo 를 붙인다
+    (aware now 와 naive 값을 빼면 TypeError 로 스케줄 tick 이 매번 실패한다).
+    """
+    if dt is not None and dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 QUALITY_SCHEDULE_PROPERTY = "argus.quality_schedule"
 TICK_SECONDS = 600  # 10분
 
@@ -48,15 +60,20 @@ async def _due_dataset_ids() -> list[int]:
         for dataset_id, value in rows:
             interval = INTERVALS.get((value or "").strip())
             if not interval:
+                # API 로는 hourly/daily/weekly 만 저장되지만 직접 수정된 값은 무시한다.
+                logger.warning(
+                    "알 수 없는 품질 검증 주기 무시: dataset_id=%s value=%r", dataset_id, value
+                )
                 continue
-            last = (await session.execute(
+            last = _as_utc((await session.execute(
                 select(QualityScore.scored_at)
                 .where(QualityScore.dataset_id == dataset_id)
                 .order_by(QualityScore.scored_at.desc())
                 .limit(1)
-            )).scalar()
+            )).scalar())
             if last is None or (now - last) >= interval:
                 due.append(dataset_id)
+        logger.debug("품질 주기 점검: scheduled=%d due=%d", len(rows), len(due))
     return due
 
 
@@ -65,6 +82,7 @@ async def _run_one(dataset_id: int) -> None:
     from app.core.database import async_session
     from app.quality.service import run_quality_check
 
+    logger.debug("예약 품질 검증 시작: dataset_id=%d", dataset_id)
     async with async_session() as session:
         try:
             resp = await run_quality_check(session, dataset_id)

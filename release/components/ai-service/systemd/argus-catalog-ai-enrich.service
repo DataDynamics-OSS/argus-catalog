@@ -1,0 +1,23 @@
+[Unit]
+Description=Argus Catalog AI Service — metadata enrichment worker
+Documentation=file:///opt/argus-catalog-ai-service/share/installer/README-INSTALL.md
+After=network-online.target
+Wants=network-online.target
+# 대상 데이터 소스가 지정돼야 시작한다 (ai-service.env 의 ARGUS_AI_DATASOURCE_ID)
+
+[Service]
+Type=simple
+User=argus
+Group=argus
+EnvironmentFile=/etc/argus-catalog-ai-service/ai-service.env
+Environment=PYTHONUNBUFFERED=1
+ExecStartPre=/bin/sh -c 'test -n "$ARGUS_AI_DATASOURCE_ID" || { echo "ai-service.env 에 ARGUS_AI_DATASOURCE_ID 를 지정하세요" >&2; exit 1; }'
+ExecStart=/opt/argus-catalog-ai-service/venv/bin/argus-catalog-ai enrich worker --datasource-id ${ARGUS_AI_DATASOURCE_ID}
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=30
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

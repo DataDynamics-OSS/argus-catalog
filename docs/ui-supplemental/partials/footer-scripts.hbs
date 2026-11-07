@@ -15,3 +15,19 @@
     });
   })();
 </script>
+<script>
+  // 복잡한 도표도 원본 해상도로 읽을 수 있도록 기본 이미지 링크를 제공한다.
+  (function () {
+    document.querySelectorAll('.imageblock.diagram img').forEach(function (img) {
+      if (img.closest('a')) return;
+      var link = document.createElement('a');
+      link.href = img.src;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.title = '그림을 원본 크기로 보기 (새 탭)';
+      link.setAttribute('aria-label', img.alt + ' — 원본 크기로 보기 (새 탭)');
+      img.parentNode.insertBefore(link, img);
+      link.appendChild(img);
+    });
+  })();
+</script>

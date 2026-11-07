@@ -12,6 +12,11 @@
 규칙 등록 예 (검증 유형 CUSTOM_PYTHON, 기대값):
     {"module": "rental_checks", "fn": "rental_duration_outlier",
      "params": {"max_outlier_pct": 1.0}}
+
+평가는 품질 배치(python-quality.py / dataset-quality.py)에서만 한다 — 배치가 ``--checks-dir``
+(기본: 스크립트 위치/custom_checks)에서 ``<module>.py`` 를 로드해 ``fn`` 을 호출한다.
+서버 "검증 실행"은 이 코드를 실행하지 않고 직전 배치 결과를 이어받으며, 결과가 없으면
+미평가(점수 제외)로 표시한다. 모듈/함수가 없거나 예외가 나면 그 규칙만 실패로 기록된다.
 """
 
 from __future__ import annotations

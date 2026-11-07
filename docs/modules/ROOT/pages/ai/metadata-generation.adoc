@@ -1,36 +1,83 @@
 = AI 메타데이터 자동 생성
+:toc: macro
+:toclevels: 2
 
 데이터셋마다 설명을 일일이 손으로 채우는 일은 번거롭습니다. 이 기능은 LLM 으로
-데이터셋의 *테이블 설명 · 컬럼 설명 · 태그 · PII* 를 자동으로 생성해 줍니다.
-Ollama (로컬), OpenAI, Anthropic (Claude) 프로바이더를 지원합니다.
+데이터셋의 *요약 · 테이블 설명 · 컬럼 설명 · 태그 · PII* 를 자동으로 생성해 줍니다.
+결과는 미리 보고 확인한 뒤 반영합니다.
 
-// TODO: screenshot - 데이터셋 상세의 AI Generate 드롭다운
-image::ai-metadata-generation/ai-generate-menu.png[AI Generate 드롭다운, 800]
+이 페이지는 카탈로그 서버에 내장된 생성 기능을 다룹니다. 서버 밖에서 대량 · 주기적으로 생성하려면
+xref:ai/ai-service.adoc[AI 서비스] 의 enrich 를 사용하세요. 결과는 같은 AI 제안으로 들어옵니다.
+API · 응답 형식 · 내부 동작은 xref:ai/metadata-generation-advanced.adoc[AI 메타데이터 자동 생성 — 고급] 에 따로 모았습니다.
 
-== 동작 개요
+toc::[]
 
-전체 흐름은 단순합니다. UI 에서 트리거하면 AI 서비스가 데이터셋 정보로 컨텍스트를
-조립해 LLM 프로바이더에 보내고, 돌아온 결과를 파싱해 다시 UI 에 돌려줍니다.
+== 시작하기 전에
 
-----
-┌────────────┐    ┌──────────────┐    ┌────────────────────┐
-│  UI        │───▶│ AI Service   │───▶│ LLM Provider       │
-│  (트리거)  │◀───│ (컨텍스트    │◀───│ Ollama / OpenAI /  │
-│            │    │  조립·파싱)  │    │ Claude             │
-└────────────┘    └──────┬───────┘    └────────────────────┘
-                         │
-            ┌────────────┼────────────┐
-            ▼            ▼            ▼
-       Dataset/Schema  Parquet     ai_generation_log
-                       샘플 데이터  (감사 이력)
-----
+=== 이런 일을 할 수 있습니다
 
-== LLM 프로바이더
+* **요약 생성** — 데이터셋의 한 줄 요약을 만듭니다.
+* **설명 생성** — 테이블의 목적 · 내용을 설명하는 글을 만듭니다.
+* **컬럼 설명 생성** — 모든 컬럼의 용도를 한 번에 채웁니다.
+* **태그 추천** — 기존 태그를 활용하고 새 태그도 제안합니다.
+* **PII 감지** — 개인정보가 담긴 컬럼을 찾아 근거와 함께 알려 줍니다.
+* **일괄 생성 · 자동 생성** — 설명이 빈 데이터셋을 한꺼번에, 또는 동기화가 끝날 때마다 채웁니다.
 
-어떤 LLM 으로 생성할지는 환경에 맞게 고르면 됩니다. 외부로 데이터를 보낼 수 없는
-환경이라면 로컬 Ollama 를, 더 높은 품질이 필요하다면 클라우드 API 를 선택합니다.
+=== 먼저 알아 둘 용어
 
-[cols="1,2,3,3"]
+[cols="1,4",options="header"]
+|===
+| 용어 | 뜻
+
+| LLM 프로바이더
+| 생성을 맡는 언어 모델 서비스입니다. Ollama (로컬), OpenAI, Anthropic (Claude) 를 지원합니다.
+
+| 미리보기
+| 생성 결과를 반영하기 전에 확인하는 창입니다. *적용* 을 눌러야 실제로 반영됩니다.
+
+| AI 제안
+| 바로 반영하지 않고 남겨 둔 생성 결과입니다. 나중에 적용하거나 거절할 수 있습니다.
+|===
+
+=== 메뉴 위치
+
+[cols="1,3",options="header"]
+|===
+| 메뉴 | 용도
+
+| 설정 → LLM / AI | 기능 켜기, LLM 연결, AI 일괄 생성
+| 데이터셋 상세 → 우측 상단 `⋯` (작업) → AI 자동 생성 | 데이터셋 하나에 대해 생성
+| 데이터셋 상세 → 우측 상단 *AI 제안* (대기 건수 배지) | 적용하지 않은 제안 검토 · 승인 · 거절 (대기 제안이 있을 때만 보임)
+|===
+
+image::ai-metadata-generation/ai-generate-menu.png[데이터셋 상세의 작업 메뉴 — AI 자동 생성, 800]
+
+=== 누가 무엇을 할 수 있나요
+
+[cols="3,2",options="header"]
+|===
+| 작업 | 할 수 있는 사람
+
+| LLM 설정, AI 일괄 생성 | 관리자
+| 데이터셋 하나에 대해 생성 · 적용 | 기능 권한 *AI 메타데이터 생성*(`ai.generate`)이 있고, 그 데이터셋의 편집 권한(생성자 또는 관리자)이 있는 사람
+| AI 제안 승인 · 거절 | 그 데이터셋의 편집 권한(생성자 또는 관리자)이 있는 사람. 기능 권한 `ai.generate` 는 필요 없습니다.
+|===
+
+== LLM 연결하기 (관리자)
+
+기능을 쓰기 전에 어떤 LLM 을 어떻게 연결할지 설정합니다.
+xref:ops/settings.adoc#_llm[설정 → LLM / AI] 에서 다음 순서로 진행합니다.
+
+. *AI 메타데이터 생성 활성화* 토글을 켭니다.
+. 제공자 · 모델 · API Key · API URL · 생성 언어를 지정합니다.
+. *연결 테스트* 로 연결을 확인한 뒤 *저장* 합니다.
+
+image::ai-metadata-generation/ai-setting.png[설정 → LLM / AI, 800]
+
+어떤 LLM 을 고를지는 환경에 따라 정합니다. 외부로 데이터를 보낼 수 없는 환경이라면 로컬 Ollama 를,
+더 높은 품질이 필요하다면 클라우드 API 를 선택합니다.
+
+[cols="1,2,3,3",options="header"]
 |===
 | 프로바이더 | 기본 모델 | API URL | 특성
 
@@ -39,19 +86,9 @@ image::ai-metadata-generation/ai-generate-menu.png[AI Generate 드롭다운, 800
 | `anthropic` | `claude-sonnet-4-...` | `https://api.anthropic.com` | 클라우드 API. 고품질. API 키 필요.
 |===
 
-=== Ollama 권장 모델
-
-[cols="2,1,1,3"]
-|===
-| 모델 | 크기 | 한국어 | 권장 용도
-
-| `qwen2.5:7b` | 4.4 GB | 우수 | *한국어 메타데이터 기본 권장*
-| `qwen2.5:14b` | 8.7 GB | 우수 | 한국어 고품질 (RAM 16 GB+)
-| `llama3.1:8b` | 4.7 GB | 보통 | 범용 영문
-| `gemma2:9b` | 5.4 GB | 보통 | 다국어
-| `EEVE-Korean-10.8B` | 6.5 GB | 최우수 | 한국어 특화
-|===
-
+[TIP]
+.고급 사용자 — Ollama 설치와 권장 모델
+====
 Ollama 를 설치하고 모델을 내려받는 과정은 다음과 같습니다.
 
 [source,bash]
@@ -62,285 +99,107 @@ ollama list
 curl http://localhost:11434/api/tags
 ----
 
-== 설정
-
-기능을 쓰기 전에 먼저 어떤 LLM 을 어떻게 연결할지 설정해야 합니다. UI 에서는
-*Settings → LLM / AI* 탭에서 다음 순서로 진행합니다.
-
-. *Enable AI Metadata Generation* 토글을 ON 으로 켭니다.
-. Provider · Model · API URL · Generation Language 를 지정합니다.
-. *Test Connection* 으로 연결을 검증한 뒤 *Save* 합니다.
-
-같은 설정을 API 로도 동일하게 적용할 수 있습니다.
-
-[source,bash]
-----
-curl -X PUT http://<server>:4600/api/v1/settings/llm \
-  -H "Content-Type: application/json" \
-  -d '{
-    "enabled": true,
-    "provider": "ollama",
-    "model": "qwen2.5:7b",
-    "api_key": "",
-    "api_url": "http://localhost:11434",
-    "temperature": 0.3,
-    "max_tokens": 1024,
-    "auto_generate_on_sync": false,
-    "language": "ko"
-  }'
-----
-
-image::ai-metadata-generation/ai-setting.png[AI Generate 설정, 800]
-
-설정 항목은 다음과 같습니다.
-
-[cols="1,1,3"]
+[cols="2,1,1,3",options="header"]
 |===
-| 키 | 기본값 | 설명
+| 모델 | 크기 | 한국어 | 권장 용도
 
-| `enabled` | false | 기능 활성화
-| `provider` | openai | openai / ollama / anthropic
-| `model` | gpt-4o-mini | 모델 식별자
-| `api_key` | (빈값) | API 키 (Ollama 불필요)
-| `api_url` | (빈값) | 엔드포인트 오버라이드
-| `temperature` | 0.3 | 0.0~1.0, 낮을수록 사실적
-| `max_tokens` | 1024 | 응답 토큰 한도
-| `auto_generate_on_sync` | false | sync 후 빈 설명 자동 채움
-| `language` | ko | 생성 언어 (`ko`, `en`, `ja`, `zh`)
+| `qwen2.5:7b` | 4.4 GB | 우수 | *한국어 메타데이터 기본 권장*
+| `qwen2.5:14b` | 8.7 GB | 우수 | 한국어 고품질 (RAM 16 GB+)
+| `llama3.1:8b` | 4.7 GB | 보통 | 범용 영문
+| `gemma2:9b` | 5.4 GB | 보통 | 다국어
+| `EEVE-Korean-10.8B` | 6.5 GB | 최우수 | 한국어 특화
 |===
 
-== 4가지 생성 유형
+설정 항목 전체와 API 로 설정하는 방법은 xref:ai/metadata-generation-advanced.adoc#_설정_api[고급 — 설정 API] 를 보세요.
+도메인 용어까지 정확히 담고 싶다면 xref:ai/fine-tuning.adoc[Fine-tuning 가이드] 를 참고하세요.
+====
 
-생성할 수 있는 메타데이터는 네 가지입니다. 각각 별도 엔드포인트로 호출하며,
-용도에 따라 필요한 것만 골라 쓸 수 있습니다.
+== 데이터셋 하나에 대해 생성하기
 
-[cols="1,2,3"]
-|===
-| 기능 | 엔드포인트 | 설명
+. 데이터셋 상세 화면 우측 상단의 `⋯` (작업) 버튼을 누릅니다. 데이터셋 소유자 또는 관리자에게만 보입니다.
+. 메뉴의 *AI 자동 생성* 아래에서 원하는 기능을 고릅니다 — *요약 생성* / *설명 생성* / *컬럼 설명 생성* / *태그 추천* / *PII 감지*.
+. 생성하는 동안 진행 창이 뜨고, 끝나면 결과 미리보기 창(*AI 생성 요약* · *AI 생성 설명* · *AI 생성 컬럼 설명* · *AI 추천 태그* ·
+  *AI PII 감지 결과*)이 열립니다.
+. 결과를 확인한 뒤 *적용* 을 누르면 반영되고, *닫기* 를 누르면 반영하지 않습니다. 컬럼 설명은 *전체 적용 (N)*,
+  태그 · PII 는 *적용 (N)* 처럼 반영할 개수가 버튼에 표시됩니다.
 
-| 테이블 설명 | `POST /api/v1/ai/datasets/{id}/describe` | 테이블 목적·내용 텍스트
-| 컬럼 설명 | `POST .../describe-columns` | 모든 컬럼 용도 일괄 생성
-| 태그 추천 | `POST .../suggest-tags` | 기존 태그 활용 + 새 태그 제안
-| PII 탐지 | `POST .../detect-pii` | 개인정보 컬럼 탐지
-|===
+image::ai-metadata-generation/preview-dialog.png[AI 생성 컬럼 설명 미리보기, 900]
 
-`POST /api/v1/ai/datasets/{id}/generate-all` 을 호출하면 위 4 개를 한 번에 수행합니다.
+LLM 이 꺼져 있으면 메뉴는 보이지만 누를 수 없고, 기능 권한 *AI 메타데이터 생성* (`ai.generate`) 이 없으면 메뉴가 숨겨집니다.
 
-== 프롬프트 컨텍스트
+[TIP]
+.고급 사용자 — 생성 품질을 좌우하는 정보
+====
+서버는 테이블 · 컬럼 정보, DDL, 샘플 데이터(최대 5행), 표준 단어, 상 · 하류 데이터셋, 이전 생성 예시를
+모아 프롬프트에 함께 보냅니다. 표준 사전에 단어를 잘 정리해 두면 약어 해석이 좋아집니다.
+자세한 내용은 xref:ai/metadata-generation-advanced.adoc#_프롬프트_컨텍스트[고급 — 프롬프트 컨텍스트] 를 보세요.
+====
 
-생성 품질은 LLM 에 어떤 정보를 함께 전달하느냐에 달려 있습니다. 어시스턴트는 다음
-정보를 모아 프롬프트에 담아 보냅니다.
+== 여러 데이터셋을 한 번에 생성하기 (관리자)
 
-[cols="1,2"]
-|===
-| 정보 | 출처
+데이터셋이 많다면 일괄 생성을 씁니다.
 
-| 테이블명, DB명 | `catalog_datasets`
-| 컬럼명, 타입, 제약조건 | `catalog_dataset_schemas`
-| DDL | `platform_properties.ddl`
-| 샘플 데이터 (최대 5행) | `samples/{platform}/{dataset}/sample.parquet`
-| 행 수 추정치 | `platform_properties.estimated_rows`
-| 플랫폼 타입 | `catalog_platforms.type`
-|===
+. *설정 → LLM / AI* 화면 아래의 *AI 일괄 생성* 카드로 갑니다.
+. *설명 생성* 또는 *전체 생성 (설명 + 컬럼 + 태그 + PII)* 을 누릅니다.
 
-샘플 데이터는 메타데이터 동기화 시 자동으로 수집된 Parquet 파일을 그대로 재사용합니다.
+설명이 비어 있는 데이터셋만 처리되며, 결과는 미리보기 없이 즉시 적용됩니다. 요약은 일괄 생성 대상이 아닙니다.
+특정 데이터 소스만 처리하는 등 세부 조건은 xref:ai/metadata-generation-advanced.adoc#_일괄_생성_api[고급 — 일괄 생성 API] 로 지정합니다.
 
-== 사용 방법
+== 동기화 후 자동으로 채우기
 
-실제로 생성하는 방법은 여러 가지입니다. 데이터셋 하나만 빠르게 처리할 때는 UI 가
-편하고, 자동화하거나 대량으로 처리할 때는 API 와 일괄 생성을 활용합니다.
-
-=== UI에서 개별 생성
-
-. 데이터셋 상세 화면 우측 상단의 *AI Generate* 드롭다운을 엽니다.
-. 원하는 기능을 선택합니다 — Generate Description / Generate Column Descriptions / Suggest Tags / Detect PII.
-. Description / Columns 는 *미리보기 다이얼로그* 에서 결과를 확인한 뒤 *Apply* 또는 *Dismiss* 합니다.
-. Tags / PII 는 *즉시 적용*되며 토스트 메시지로 알려 줍니다.
-
-// TODO: screenshot - 미리보기 다이얼로그 (Description / Columns)
-// image::ai-metadata-generation/preview-dialog.png[AI 미리보기, 800]
-
-=== API로 개별 생성
-
-[source,bash]
-----
-# 미리보기 (apply=false)
-curl -X POST http://<server>:4600/api/v1/ai/datasets/1/describe \
-  -H "Content-Type: application/json" \
-  -d '{"apply": false}'
-
-# 즉시 적용 (apply=true)
-curl -X POST http://<server>:4600/api/v1/ai/datasets/1/describe \
-  -H "Content-Type: application/json" \
-  -d '{"apply": true}'
-
-# 전체 생성
-curl -X POST http://<server>:4600/api/v1/ai/datasets/1/generate-all \
-  -H "Content-Type: application/json" \
-  -d '{"apply": true}'
-----
-
-=== 일괄 생성 (Bulk)
-
-데이터셋이 많다면 하나씩 처리하기 어렵습니다. 일괄 생성을 쓰면 여러 데이터셋을
-한 번에 채울 수 있습니다. UI 의 *Settings → LLM / AI → Bulk AI Generation* 또는
-다음 API 로 호출합니다.
-
-[source,bash]
-----
-# 설명 없는 데이터셋에만 description 자동 생성
-curl -X POST http://<server>:4600/api/v1/ai/bulk-generate \
-  -H "Content-Type: application/json" \
-  -d '{
-    "generation_types": ["description"],
-    "apply": true,
-    "empty_only": true
-  }'
-
-# 특정 플랫폼만 전체 생성
-curl -X POST http://<server>:4600/api/v1/ai/bulk-generate \
-  -H "Content-Type: application/json" \
-  -d '{
-    "generation_types": ["description", "columns", "tags", "pii"],
-    "apply": true,
-    "empty_only": true,
-    "platform_id": 1
-  }'
-----
-
-=== 동기화 후 자동 생성
-
-`auto_generate_on_sync: true` 로 설정하면, 메타데이터 동기화가 끝난 뒤 비어 있는
+`설정 → LLM / AI` 에서 *동기화 시 자동 생성*(`auto_generate_on_sync`)을 켜고 저장하면, 메타데이터 동기화가 끝난 뒤 비어 있는
 설명을 백그라운드에서 자동으로 채워 줍니다. 자세한 내용은
 xref:catalog/platforms.adoc#_메타데이터_동기화[플랫폼 → 메타데이터 동기화] 를 참조하세요.
 
-== 응답 스키마
+[[_제안_검토]]
+== 제안을 나중에 검토하기
 
-각 생성 유형이 어떤 형태의 결과를 돌려주는지 살펴보겠습니다.
+미리보기 창에서 *닫기* 로 넘긴 결과와 xref:ai/ai-service.adoc[AI 서비스] enrich 가 반입한 결과는 *AI 제안* 으로
+남아 승인을 기다립니다. 데이터셋 상세에서 하나씩 보고 승인하거나 거절합니다.
 
-테이블 설명::
-[source,json]
-----
-{
-  "dataset_id": 1,
-  "description": "영화 텍스트 정보(제목, 설명)를 전문 검색용으로 저장하는 테이블",
-  "confidence": 0.87,
-  "applied": false,
-  "log_id": 42
-}
-----
-
-컬럼 설명::
-[source,json]
-----
-{
-  "dataset_id": 1,
-  "columns": [
-    {"field_path": "film_id", "description": "영화 고유 식별자 (PK)", "confidence": 0.95, "had_existing": false},
-    {"field_path": "title", "description": "영화 제목", "confidence": 0.92, "had_existing": false}
-  ],
-  "total_generated": 2,
-  "applied": false
-}
-----
-
-태그 추천::
-[source,json]
-----
-{
-  "dataset_id": 1,
-  "suggested_tags": ["영화", "미디어"],
-  "new_tags": [{"name": "콘텐츠", "description": "콘텐츠 관련 데이터"}],
-  "applied_tags": ["영화"],
-  "created_tags": ["콘텐츠"]
-}
-----
-
-PII 탐지::
-[source,json]
-----
-{
-  "dataset_id": 1,
-  "pii_columns": [
-    {"name": "email", "pii_type": "EMAIL", "confidence": 0.95,
-     "reason": "Column name and sample values match email pattern"},
-    {"name": "phone_number", "pii_type": "PHONE", "confidence": 0.88,
-     "reason": "Column contains phone number format"}
-  ]
-}
-----
-
-PII 유형 — `EMAIL`, `PHONE`, `SSN`, `NAME`, `ADDRESS`, `CREDIT_CARD`, `IP_ADDRESS`,
-`DATE_OF_BIRTH`, `NATIONAL_ID`, `OTHER`. 탐지 결과는
-`catalog_dataset_schemas.pii_type` 컬럼에 저장됩니다.
-
-== 제안 관리
-
-바로 적용하지 않고 검토부터 하고 싶을 때가 있습니다. 미리보기 모드(`apply=false`)로
-생성한 결과는 `catalog_ai_generation_log` 에 보존되므로, 나중에 하나씩 적용하거나
-거부할 수 있습니다.
-
-[source,bash]
-----
-# 미적용 제안 목록
-curl http://<server>:4600/api/v1/ai/datasets/1/suggestions
-
-# 적용 / 거부
-curl -X POST http://<server>:4600/api/v1/ai/suggestions/42/apply
-curl -X POST http://<server>:4600/api/v1/ai/suggestions/42/reject
-----
-
-== 통계 / 감사
-
-지금까지 얼마나 생성했고 적용률은 어떤지 한눈에 보고 싶다면 통계 API 를 호출합니다.
-
-[source,bash]
-----
-curl http://<server>:4600/api/v1/ai/stats
-----
-
-응답 예시는 다음과 같습니다.
-
-[source,json]
-----
-{
-  "total_generations": 156,
-  "applied_count": 120,
-  "pending_count": 36,
-  "total_prompt_tokens": 89420,
-  "total_completion_tokens": 34210,
-  "description_coverage": {
-    "total_datasets": 200,
-    "described_datasets": 120,
-    "coverage_pct": 60.0
-  },
-  "provider": "ollama",
-  "model": "qwen2.5:7b"
-}
-----
-
-모든 호출은 *입력 / 출력 / 토큰 / 적용 여부* 와 함께 `catalog_ai_generation_log`
-테이블에 기록됩니다. 나중에 감사 추적이 필요할 때 그대로 활용할 수 있습니다.
-
-== API 엔드포인트 전체
-
-앞에서 다룬 엔드포인트를 한곳에 모았습니다.
-
-[cols="1,3"]
+. 데이터셋 상세 화면 제목 오른쪽, 상태 배지 옆의 *AI 제안* 버튼을 누릅니다. 버튼의 숫자가 대기 중인 제안 수입니다.
+  대기 제안이 없거나 그 데이터셋의 편집 권한(생성자 또는 관리자)이 없으면 버튼이 보이지 않습니다.
+. *AI 제안* 창의 표에서 각 제안을 확인합니다.
++
+[cols="1,3",options="header"]
 |===
-| Method | Path
+| 열 | 내용
 
-| POST | `/api/v1/ai/datasets/{id}/describe`
-| POST | `/api/v1/ai/datasets/{id}/describe-columns`
-| POST | `/api/v1/ai/datasets/{id}/suggest-tags`
-| POST | `/api/v1/ai/datasets/{id}/detect-pii`
-| POST | `/api/v1/ai/datasets/{id}/generate-all`
-| POST | `/api/v1/ai/bulk-generate`
-| GET | `/api/v1/ai/datasets/{id}/suggestions`
-| POST | `/api/v1/ai/suggestions/{id}/apply`
-| POST | `/api/v1/ai/suggestions/{id}/reject`
-| GET | `/api/v1/ai/stats`
-| GET | `/api/v1/settings/llm`
-| PUT | `/api/v1/settings/llm`
-| POST | `/api/v1/settings/llm/test`
+| 유형 · 대상 | *요약* · *설명* · *컬럼 설명* · *태그* · *PII* 와 적용 대상(데이터셋 또는 컬럼 이름)
+| 제안값 | AI 가 만든 값. 태그는 이름 목록(새로 만들 태그에는 "(새 태그)"), PII 는 `컬럼: 유형` 목록
+| 현재 값 | 승인하면 바뀔 지금 값. 비어 있으면 "(없음)"
+| 출처 · 시각 | *AI 서비스(enrich)* 또는 *카탈로그 AI 생성*(화면 미리보기), 모델 이름과 생성 시각
 |===
+. 행 오른쪽의 *승인* 을 누르면 바로 반영되고, *거절* 을 누르면 제안이 지워집니다.
+  여러 건을 한 번에 반영하려면 왼쪽 확인란으로 고른 뒤(머리글 확인란은 전체 선택) *선택 승인 (N)* 을 누릅니다.
+. 승인하면 데이터셋 화면이 새로 고쳐지고, 처리한 제안은 목록에서 빠집니다. 남은 제안이 없으면 창과 버튼이 사라집니다.
+
+같은 대상에 제안이 여러 건이면 "같은 대상 제안 여러 건" 표시가 붙습니다. 하나만 승인하고 나머지는 거절하세요
+(여러 건을 승인하면 나중에 승인한 값이 남습니다). PII 를 승인하면 해당 컬럼의 PII 유형이 바뀌고,
+태그를 승인하면 없는 태그는 새로 만들어 붙입니다.
+
+[TIP]
+.고급 사용자 — 스크립트로 처리하기
+====
+화면과 같은 동작을 REST API(`GET /api/v1/ai/datasets/{id}/suggestions`, `POST /api/v1/ai/suggestions/{id}/apply` · `/reject`,
+`POST /api/v1/ai/suggestions/apply-batch`)로도 할 수 있습니다. 자세한 내용은
+xref:ai/metadata-generation-advanced.adoc#_제안_관리[고급 — 제안 관리] 를 보세요.
+====
+
+== 자주 묻는 질문
+
+*Q. AI 자동 생성 메뉴가 회색으로 눌리지 않습니다.* +
+A. LLM 이 꺼져 있습니다. 관리자에게 `설정 → LLM / AI` 의 *AI 메타데이터 생성 활성화* 를 요청하세요.
+
+*Q. 작업 메뉴(`⋯`)나 AI 자동 생성 메뉴가 아예 보이지 않습니다.* +
+A. `⋯` 버튼은 데이터셋 소유자 또는 관리자에게만 보이고, AI 자동 생성 메뉴는 기능 권한 *AI 메타데이터 생성*(`ai.generate`)이 있어야 보입니다.
+
+*Q. AI 서비스로 생성했는데 AI 제안 버튼이 보이지 않습니다.* +
+A. 버튼은 대기 중인 제안이 있고, 그 데이터셋의 생성자 또는 관리자일 때만 보입니다. enrich 가 `ARGUS_AI_MODE=apply` 로 돌았다면
+설명은 제안 없이 바로 적용됩니다.
+
+*Q. 생성 결과가 우리 회사 용어를 잘 모릅니다.* +
+A. 데이터 표준 사전에 단어(약어)를 등록하면 프롬프트에 함께 들어가 품질이 좋아집니다. 더 나아가려면 xref:ai/fine-tuning.adoc[Fine-tuning 가이드] 를 참고하세요.
+
+*Q. 데이터가 외부로 나가면 안 됩니다.* +
+A. 로컬 Ollama 프로바이더를 쓰세요. API 키가 필요 없고 에어갭 환경에서도 동작합니다.

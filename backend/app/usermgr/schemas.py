@@ -64,17 +64,19 @@ class RoleResponse(BaseModel):
 class UserAddRequest(BaseModel):
     """신규 사용자 생성 요청.
 
-    ``phone_number`` 를 제외한 모든 필드는 필수다. ``username`` 과 ``email`` 은
-    기존 사용자와 중복돼선 안 되며, 이는 서비스 계층(체크 후 인서트)과 DB 의
-    UNIQUE 제약으로 이중 방어한다.
+    ``username``·``email``·``first_name``·``last_name``·``password`` 는 필수, 나머지는 선택이다.
+    ``username`` 과 ``email`` 은 기존 사용자와 중복돼선 안 되며, DB 의 UNIQUE 제약 위반을
+    라우터가 409 로 변환한다(UI 는 ``/check-user`` 로 미리 확인).
 
     필드:
         - ``username`` (1–100자): 고유 로그인 식별자
         - ``email``: 유효한 이메일 (Pydantic ``EmailStr`` 검증)
         - ``first_name`` / ``last_name`` (각 1–100자)
         - ``phone_number`` (≤30자, 선택): 연락처
-        - ``password`` (4–128자): 평문. 저장 전 해시 처리.
-        - ``role``: 부여할 역할 (미지정 시 ``User``)
+        - ``organization`` / ``department`` (≤100자, 선택): 소속·부서
+        - ``password`` (4–128자): 평문. 저장 전 해시 처리. ``must_change_password`` 가 False 면
+          서비스가 비밀번호 정책(8자 이상·소문자·숫자)을 추가로 검사한다.
+        - ``role``: 부여할 역할 (미지정 시 ``argus-user``)
     """
 
     username: str = Field(..., min_length=1, max_length=100)
@@ -100,6 +102,7 @@ class UserModifyRequest(BaseModel):
     필드:
         - ``first_name`` / ``last_name`` (각 1–100자)
         - ``email``
+        - ``organization`` / ``department`` (≤100자)
         - ``phone_number`` (≤30자)
     """
 
@@ -130,6 +133,8 @@ class UserSetPasswordRequest(BaseModel):
     """
 
     password: str = Field(..., min_length=8, max_length=128)
+    # 임시 비밀번호로 정해 다음 로그인 때 본인이 바꾸게 할지(기본 켬). 본인 계정이면 무시(항상 끔).
+    must_change_password: bool = Field(True, description="다음 로그인 시 비밀번호 변경 강제")
 
 
 # ---------------------------------------------------------------------------
@@ -165,6 +170,9 @@ class UserResponse(BaseModel):
     role: str
     created_at: datetime
     updated_at: datetime
+    last_login_at: datetime | None = None
+    # 로그인 실패 누적으로 잠긴 경우 잠금이 풀리는 시각(지났으면 None)
+    locked_until: datetime | None = None
 
 
 class PaginatedUserResponse(BaseModel):

@@ -40,6 +40,7 @@ export function PasswordInput({
         disabled={disabled}
         className="absolute end-1 top-1/2 h-6 w-6 -translate-y-1/2 rounded-md text-muted-foreground"
         onClick={() => setShowPassword((prev) => !prev)}
+        aria-label={showPassword ? "비밀번호 숨기기" : "비밀번호 보기"}
       >
         {showPassword ? <Eye size={18} /> : <EyeOff size={18} />}
       </Button>

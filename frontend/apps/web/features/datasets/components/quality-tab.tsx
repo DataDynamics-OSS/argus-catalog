@@ -26,7 +26,12 @@ import {
 } from "@workspace/ui/components/dialog"
 import { Separator } from "@workspace/ui/components/separator"
 import { AlertTriangle, CheckCircle, ChevronDown, ChevronRight, HelpCircle, Pencil, Play, Plus, Shield, Sparkles, Trash2, XCircle } from "lucide-react"
-import { authFetch } from "@/features/auth/auth-fetch"
+import { notifyError, notifySuccess, toast } from "@/lib/notify"
+import { useConfirm } from "@/components/confirm-provider"
+import { authFetch, throwOnError } from "@/features/auth/auth-fetch"
+import { usePermissions } from "@/features/permissions/use-permissions"
+import { MONACO_FONT_SIZE } from "@/lib/monaco"
+import { isBinaryColumnType, ruleListMeta } from "@/features/datasets/quality-rules"
 
 const BASE = "/api/v1/quality"
 
@@ -65,7 +70,7 @@ const CHECK_TYPE_META: Record<string, { label: string; desc: string; expectedHin
   },
   FRESHNESS: {
     label: "최신성",
-    desc: "마지막 프로파일 이후 경과 시간이 기대값(시간) 이내여야 통과합니다. 컬럼·임계값은 사용하지 않습니다.",
+    desc: "적재·수정 시각 컬럼을 지정하면 그 컬럼의 최신값(프로파일 최대값) 이후 경과 시간이 기대값(시간) 이내여야 통과합니다. 컬럼을 지정하지 않으면 마지막 프로파일 이후 경과 시간으로 평가합니다. 임계값은 사용하지 않습니다.",
     expectedHint: "예: 24 (시간)",
     usesThreshold: false,
   },
@@ -100,11 +105,14 @@ type QualityRule = {
   expected_value: string | null; threshold: number; severity: string; is_active: string
 }
 
+// passed=null → 미평가(서버가 평가할 수 없는 유형인데 이전 배치 결과도 없음, 점수 제외 — id·checked_at 도 null)
+// carried_forward=true → 이번 실행에서 새로 평가하지 않고 직전(배치) 결과를 이어받음
 type QualityResult = {
-  id: number; rule_id: number; rule_name: string | null; check_type: string | null
-  column_name: string | null; passed: string; actual_value: string | null
-  detail: string | null; severity: string | null; checked_at: string
+  id: number | null; rule_id: number; rule_name: string | null; check_type: string | null
+  column_name: string | null; passed: string | null; actual_value: string | null
+  detail: string | null; severity: string | null; checked_at: string | null
   failed_samples: Record<string, string | null>[] | null
+  carried_forward?: boolean
 }
 
 type QualityScore = { score: number; total_rules: number; passed_rules: number; failed_rules: number; scored_at?: string }
@@ -131,6 +139,12 @@ type Props = { datasetId: number
 }
 
 export function QualityTab({ datasetId, columns = [] }: Props) {
+  const askConfirm = useConfirm()
+  // 기능 권한(권한 관리 › 기능 권한) — 서버도 같은 키로 403 을 돌려준다
+  const { isFeatureAllowed } = usePermissions()
+  const canManageRules = isFeatureAllowed("quality.rules-manage")
+  const canRun = isFeatureAllowed("quality.run")
+  const canSchedule = isFeatureAllowed("quality.schedule")
   const [rules, setRules] = useState<QualityRule[]>([])
   const [results, setResults] = useState<QualityResult[]>([])
   const [score, setScore] = useState<QualityScore | null>(null)
@@ -182,8 +196,12 @@ export function QualityTab({ datasetId, columns = [] }: Props) {
         const data = await profileResp.json()
         setProfile(data.columns || [])
       }
+      // 규칙·결과는 필수 응답 — 실패하면 빈 화면으로 조용히 두지 않고 알린다
+      const failed = [rulesResp, resultsResp].find((r) => !r.ok)
+      if (failed) await throwOnError(failed, "품질 정보를 불러오지 못했습니다.")
     } catch (err) {
       console.error("Failed to load quality data", { datasetId, err })
+      notifyError(err, "품질 정보를 불러오지 못했습니다.")
     } finally { setLoading(false) }
   }, [datasetId])
 
@@ -194,9 +212,11 @@ export function QualityTab({ datasetId, columns = [] }: Props) {
     setRunning(true)
     try {
       const resp = await authFetch(`${BASE}/datasets/${datasetId}/check`, { method: "POST" })
-      if (resp.ok) await fetchData()
+      if (!resp.ok) await throwOnError(resp, "품질 검증을 실행하지 못했습니다.")
+      await fetchData()
     } catch (err) {
       console.error("Failed to run quality check", { datasetId, err })
+      notifyError(err, "품질 검증을 실행하지 못했습니다.")
     } finally { setRunning(false) }
   }
 
@@ -205,9 +225,14 @@ export function QualityTab({ datasetId, columns = [] }: Props) {
     setProfiling(true)
     try {
       const resp = await authFetch(`${BASE}/datasets/${datasetId}/profile`, { method: "POST" })
-      if (resp.ok) await fetchData()
+      if (!resp.ok) await throwOnError(resp, "프로파일링을 실행하지 못했습니다.")
+      const data: { fallback?: boolean; fallback_reason?: string | null } = await resp.json()
+      // 원천 접속 실패로 스키마 기반(행 수 0, 통계 없음)으로 대체된 경우 — 조용히 넘기지 않고 알린다
+      if (data.fallback) toast.warning(data.fallback_reason || "원천 DB 조회에 실패해 스키마 기반 프로파일로 대체했습니다.")
+      await fetchData()
     } catch (err) {
       console.error("Failed to run profiling", { datasetId, err })
+      notifyError(err, "프로파일링을 실행하지 못했습니다.")
     } finally { setProfiling(false) }
   }
 
@@ -222,22 +247,25 @@ export function QualityTab({ datasetId, columns = [] }: Props) {
       severity,
     }
     try {
-      if (editingRuleId != null) {
-        await authFetch(`${BASE}/rules/${editingRuleId}`, {
+      const resp = editingRuleId != null
+        ? await authFetch(`${BASE}/rules/${editingRuleId}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         })
-      } else {
-        await authFetch(`${BASE}/rules`, {
+        : await authFetch(`${BASE}/rules`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ dataset_id: datasetId, ...payload }),
         })
-      }
+      if (!resp.ok) await throwOnError(resp, "규칙을 저장하지 못했습니다.")
     } catch (err) {
+      // 실패 시 다이얼로그·입력값을 유지해 수정 후 다시 저장할 수 있게 한다
       console.error("Failed to save quality rule", { datasetId, ruleName, err })
+      notifyError(err, "규칙을 저장하지 못했습니다.")
+      return
     }
+    notifySuccess(editingRuleId != null ? `규칙 '${ruleName}' 을(를) 수정했습니다.` : `규칙 '${ruleName}' 을(를) 추가했습니다.`)
     setAddOpen(false)
     setEditingRuleId(null)
     setRuleName(""); setColumnName(""); setExpectedValue(""); setThreshold("100")
@@ -262,21 +290,22 @@ export function QualityTab({ datasetId, columns = [] }: Props) {
     setRecsOpen(true)
     try {
       const resp = await authFetch(`${BASE}/datasets/${datasetId}/rules/recommendations`)
-      if (resp.ok) {
-        const data: RuleRecommendation[] = await resp.json()
-        setRecs(data)
-        setSelectedRecs(new Set(data.map((_, i) => i)))  // 기본 전체 선택
-      }
+      if (!resp.ok) await throwOnError(resp, "추천 규칙을 불러오지 못했습니다.")
+      const data: RuleRecommendation[] = await resp.json()
+      setRecs(data)
+      setSelectedRecs(new Set(data.map((_, i) => i)))  // 기본 전체 선택
     } catch (err) {
       console.error("Failed to fetch rule recommendations", { datasetId, err })
+      notifyError(err, "추천 규칙을 불러오지 못했습니다.")
     } finally { setRecsLoading(false) }
   }
 
   const createSelectedRecs = async () => {
     const chosen = recs.filter((_, i) => selectedRecs.has(i))
+    let created = 0
     try {
       for (const r of chosen) {
-        await authFetch(`${BASE}/rules`, {
+        const resp = await authFetch(`${BASE}/rules`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -285,9 +314,16 @@ export function QualityTab({ datasetId, columns = [] }: Props) {
             threshold: r.threshold, severity: r.severity,
           }),
         })
+        if (!resp.ok) await throwOnError(resp, `추천 규칙(${r.rule_name})을 생성하지 못했습니다.`)
+        created += 1
       }
+      if (created > 0) notifySuccess(`추천 규칙 ${created}건을 추가했습니다.`)
     } catch (err) {
       console.error("Failed to create recommended rules", { datasetId, err })
+      // 일부만 만들어졌으면 몇 건이 추가됐는지도 알린다
+      notifyError(err, created > 0
+        ? `추천 규칙 ${created}건을 추가한 뒤 나머지를 생성하지 못했습니다.`
+        : "추천 규칙을 생성하지 못했습니다.")
     }
     setRecsOpen(false)
     fetchData()
@@ -296,23 +332,38 @@ export function QualityTab({ datasetId, columns = [] }: Props) {
   // 검증 주기 설정 — 백그라운드 스케줄러(10분 간격 확인)가 자동 실행
   const saveSchedule = async (value: string) => {
     const next = value === "none" ? null : value
-    setSchedule(next)
+    const prev = schedule
+    setSchedule(next)  // 낙관적 갱신 — 실패하면 이전 값으로 되돌린다
     try {
-      await authFetch(`${BASE}/datasets/${datasetId}/schedule`, {
+      const resp = await authFetch(`${BASE}/datasets/${datasetId}/schedule`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ schedule: next }),
       })
+      if (!resp.ok) await throwOnError(resp, "검증 주기를 저장하지 못했습니다.")
     } catch (err) {
       console.error("Failed to save quality schedule", { datasetId, err })
+      setSchedule(prev)
+      notifyError(err, "검증 주기를 저장하지 못했습니다.")
     }
   }
 
-  const deleteRule = async (ruleId: number) => {
+  const deleteRule = async (rule: QualityRule) => {
+    if (
+      !(await askConfirm({
+        title: "규칙 삭제",
+        description: `'${rule.rule_name}' 규칙을 삭제할까요? 이 규칙의 검증 결과 이력도 함께 삭제됩니다.`,
+        confirmText: "삭제",
+        destructive: true,
+      }))
+    ) return
     try {
-      await authFetch(`${BASE}/rules/${ruleId}`, { method: "DELETE" })
+      const resp = await authFetch(`${BASE}/rules/${rule.id}`, { method: "DELETE" })
+      if (!resp.ok) await throwOnError(resp, "규칙을 삭제하지 못했습니다.")
+      notifySuccess(`규칙 '${rule.rule_name}' 을(를) 삭제했습니다.`)
     } catch (err) {
-      console.error("Failed to delete quality rule", { ruleId, err })
+      console.error("Failed to delete quality rule", { ruleId: rule.id, err })
+      notifyError(err, "규칙을 삭제하지 못했습니다.")
     }
     fetchData()
   }
@@ -373,7 +424,7 @@ export function QualityTab({ datasetId, columns = [] }: Props) {
               {score?.scored_at && <span>마지막 검증 {timeAgo(score.scored_at)}</span>}
               <div className="flex items-center gap-1">
                 <span>주기</span>
-                <Select value={schedule ?? "none"} onValueChange={saveSchedule}>
+                <Select value={schedule ?? "none"} onValueChange={saveSchedule} disabled={!canSchedule}>
                   <SelectTrigger className="h-7 w-24 text-xs"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="none">없음</SelectItem>
@@ -385,19 +436,27 @@ export function QualityTab({ datasetId, columns = [] }: Props) {
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" onClick={runProfile} disabled={profiling}>
-                {profiling ? "프로파일링..." : "프로파일"}
-              </Button>
-              <Button variant="outline" size="sm" onClick={runCheck} disabled={running}>
-                <Play className="h-3.5 w-3.5 mr-1" />
-                {running ? "실행 중..." : "검증 실행"}
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => setAddOpen(true)}>
-                <Plus className="h-3.5 w-3.5 mr-1" />규칙 추가
-              </Button>
-              <Button variant="outline" size="sm" onClick={openRecommendations}>
-                <Sparkles className="h-3.5 w-3.5 mr-1" />규칙 추천
-              </Button>
+              {canRun && (
+                <>
+                  <Button variant="outline" size="sm" onClick={runProfile} disabled={profiling}>
+                    {profiling ? "프로파일링..." : "프로파일"}
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={runCheck} disabled={running}>
+                    <Play className="h-3.5 w-3.5 mr-1" />
+                    {running ? "실행 중..." : "검증 실행"}
+                  </Button>
+                </>
+              )}
+              {canManageRules && (
+                <>
+                  <Button variant="outline" size="sm" onClick={() => setAddOpen(true)}>
+                    <Plus className="h-3.5 w-3.5 mr-1" />규칙 추가
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={openRecommendations}>
+                    <Sparkles className="h-3.5 w-3.5 mr-1" />규칙 추천
+                  </Button>
+                </>
+              )}
             </div>
           </div>
         </CardContent>
@@ -421,12 +480,14 @@ export function QualityTab({ datasetId, columns = [] }: Props) {
               </TableHeader>
               <TableBody>
                 {results.map(r => (
-                  <Fragment key={r.id}>
+                  <Fragment key={r.rule_id}>
                     <TableRow>
                       <TableCell>
-                        {r.passed === "true"
-                          ? <CheckCircle className="h-4 w-4 text-green-500" />
-                          : <XCircle className="h-4 w-4 text-red-500" />}
+                        {r.passed === null
+                          ? <span title="미평가 — 점수에서 제외"><HelpCircle className="h-4 w-4 text-muted-foreground" /></span>
+                          : r.passed === "true"
+                            ? <CheckCircle className="h-4 w-4 text-green-500" />
+                            : <XCircle className="h-4 w-4 text-red-500" />}
                       </TableCell>
                       <TableCell className="font-medium text-sm">{r.rule_name}</TableCell>
                       <TableCell><Badge variant="outline" className="text-sm">{r.check_type}</Badge></TableCell>
@@ -437,17 +498,17 @@ export function QualityTab({ datasetId, columns = [] }: Props) {
                         {r.failed_samples && r.failed_samples.length > 0 && (
                           <button
                             type="button"
-                            onClick={() => setExpandedResultId(expandedResultId === r.id ? null : r.id)}
+                            onClick={() => setExpandedResultId(expandedResultId === r.rule_id ? null : r.rule_id)}
                             className="ml-2 inline-flex items-center gap-0.5 text-xs text-primary hover:underline"
                           >
-                            {expandedResultId === r.id ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                            {expandedResultId === r.rule_id ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
                             위반 샘플 {r.failed_samples.length}행
                           </button>
                         )}
                       </TableCell>
                       <TableCell><SeverityBadge severity={r.severity || "INFO"} /></TableCell>
                     </TableRow>
-                    {expandedResultId === r.id && r.failed_samples && (
+                    {expandedResultId === r.rule_id && r.failed_samples && (
                       <TableRow>
                         <TableCell colSpan={7} className="bg-muted/30 p-3">
                           <div className="overflow-x-auto">
@@ -491,25 +552,35 @@ export function QualityTab({ datasetId, columns = [] }: Props) {
               <span className="text-sm font-medium">품질 규칙 ({rules.length})</span>
             </div>
             <div className="space-y-2">
-              {rules.map(rule => (
-                <div key={rule.id} className="flex items-center justify-between text-sm border rounded px-3 py-2">
-                  <div className="flex items-center gap-3">
+              {rules.map(rule => {
+                const meta = ruleListMeta(rule)
+                return (
+                <div key={rule.id} className={`flex items-center justify-between text-sm border rounded px-3 py-2 ${meta.inactive ? "bg-muted/40" : ""}`}>
+                  <div className={`flex items-center gap-3 ${meta.inactive ? "opacity-60" : ""}`}>
                     <Badge variant="outline">{rule.check_type}</Badge>
                     <span className="font-medium">{rule.rule_name}</span>
                     {rule.column_name && <span className="text-muted-foreground font-mono">{rule.column_name}</span>}
-                    <span className="text-muted-foreground">임계값: {rule.threshold}%</span>
+                    {meta.threshold != null && <span className="text-muted-foreground">임계값: {meta.threshold}%</span>}
+                    {meta.inactive && (
+                      <Badge variant="secondary" title="비활성 규칙 — 검증·결과·점수에서 제외됩니다">비활성</Badge>
+                    )}
                   </div>
                   <div className="flex items-center gap-2">
                     <SeverityBadge severity={rule.severity} />
-                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEditRule(rule)} aria-label="규칙 편집">
-                      <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
-                    </Button>
-                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => deleteRule(rule.id)} aria-label="규칙 삭제">
-                      <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
-                    </Button>
+                    {canManageRules && (
+                      <>
+                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEditRule(rule)} aria-label="규칙 편집">
+                          <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
+                        </Button>
+                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => deleteRule(rule)} aria-label="규칙 삭제">
+                          <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
+                        </Button>
+                      </>
+                    )}
                   </div>
                 </div>
-              ))}
+                )
+              })}
             </div>
           </CardContent>
         </Card>
@@ -544,14 +615,15 @@ export function QualityTab({ datasetId, columns = [] }: Props) {
                       {cp.null_percent}%
                     </TableCell>
                     <TableCell className="text-sm">{cp.unique_percent}%</TableCell>
-                    {isBinaryType(cp.column_type) ? (
+                    {isBinaryColumnType(cp.column_type) ? (
                       <TableCell colSpan={4} className="text-sm text-muted-foreground italic">
                         바이너리 — 통계 생략
                       </TableCell>
                     ) : (
                       <>
-                        <TableCell className="text-sm font-mono">{cp.min_value ?? "—"}</TableCell>
-                        <TableCell className="text-sm font-mono">{cp.max_value ?? "—"}</TableCell>
+                        {/* 긴 문자열 최소/최대(예: 영화 설명)가 표를 넓혀 페이지 전체가 가로로 넘치지 않도록 말줄임 — 전체 값은 title */}
+                        <TableCell className="max-w-56 truncate text-sm font-mono" title={cp.min_value ?? undefined}>{cp.min_value ?? "—"}</TableCell>
+                        <TableCell className="max-w-56 truncate text-sm font-mono" title={cp.max_value ?? undefined}>{cp.max_value ?? "—"}</TableCell>
                         <TableCell className="text-sm font-mono">{cp.mean_value?.toFixed(2) ?? "—"}</TableCell>
                         <TableCell className="text-sm">
                           {cp.top_values && cp.top_values.length > 0 ? (
@@ -584,10 +656,14 @@ export function QualityTab({ datasetId, columns = [] }: Props) {
             <Shield className="h-10 w-10 text-muted-foreground/40" />
             <p className="text-sm text-muted-foreground">정의된 품질 규칙이 없습니다. 규칙을 추가하고 검증을 실행하세요.</p>
             <div className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={runProfile} disabled={profiling}>데이터 프로파일</Button>
-              <Button variant="outline" size="sm" onClick={() => setAddOpen(true)}>
-                <Plus className="h-3.5 w-3.5 mr-1" />규칙 추가
-              </Button>
+              {canRun && (
+                <Button variant="outline" size="sm" onClick={runProfile} disabled={profiling}>데이터 프로파일</Button>
+              )}
+              {canManageRules && (
+                <Button variant="outline" size="sm" onClick={() => setAddOpen(true)}>
+                  <Plus className="h-3.5 w-3.5 mr-1" />규칙 추가
+                </Button>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -644,7 +720,7 @@ export function QualityTab({ datasetId, columns = [] }: Props) {
                   <li><b>NOT_NULL</b> — 컬럼에 NULL 이 없어야 함 / <b>UNIQUE</b> — 모든 값이 고유해야 함</li>
                   <li><b>MIN_VALUE / MAX_VALUE</b> — 컬럼 값이 지정 범위 안이어야 함</li>
                   <li><b>ROW_COUNT</b> — 전체 행 수가 기댓값 조건을 만족해야 함</li>
-                  <li><b>FRESHNESS</b> — 최신 데이터가 지정 기간 안에 적재되었어야 함</li>
+                  <li><b>FRESHNESS</b> — 최신 데이터가 지정 기간 안에 적재되었어야 함 (적재·수정 시각 컬럼 지정 시 그 최대값 기준, 미지정 시 마지막 프로파일 시각 기준)</li>
                   <li><b>ACCEPTED_VALUES / REGEX</b> — 허용 값 목록·패턴 검사.
                     프로파일 통계만으로는 평가가 제한되어 원본 DB 접속이 가능할 때 정확합니다.</li>
                   <li><b>CUSTOM_SQL</b> — 직접 작성한 SELECT 쿼리로 평가 (조인·집계 등 교차 검증).
@@ -683,8 +759,8 @@ def rental_duration_outlier(df, params):
                     <code className="font-mono text-xs bg-muted px-1 py-0.5 rounded ml-1">python quality/python-quality.py --datasource-id ... --username admin ...</code></li>
                   <li>모듈·함수 이름은 영문 식별자만 허용되며, 플러그인 코드는 git 리뷰를 거친
                     신뢰 코드만 배포하세요 (배치가 그대로 실행합니다)</li>
-                  <li>서버의 "검증 실행" 버튼은 커스텀 규칙을 실행하지 않고 "평가 제외"로 표시합니다 —
-                    점수에는 영향이 없습니다</li>
+                  <li>서버의 "검증 실행" 버튼은 커스텀 규칙을 실행하지 않습니다 — 최근 배치 결과를 그대로
+                    점수에 반영하고, 배치 결과가 없으면 "미평가"로 표시해 점수에서 제외합니다</li>
                   <li>자세한 규약은 <code className="font-mono text-xs bg-muted px-1 py-0.5 rounded">quality/README.md</code> 참고</li>
                 </ul>
               </div>
@@ -808,7 +884,7 @@ def rental_duration_outlier(df, params):
                     options={{
                       minimap: { enabled: false },
                       lineNumbers: "on",
-                      fontSize: 13,
+                      fontSize: MONACO_FONT_SIZE,
                       fontFamily: "D2Coding, Menlo, Consolas, monospace",
                       scrollBeyondLastLine: false,
                       wordWrap: "on",
@@ -909,16 +985,6 @@ function ScoreTrend({ history }: { history: ScoreHistoryItem[] }) {
   )
 }
 
-
-/** 바이너리 계열 타입 — min/max/평균 통계가 의미 없는 컬럼 (BLOB·이미지·지오메트리 등).
- *  pandas 의 dtype 'OBJECT' 도 배치가 바이너리 감지 시 BINARY 로 기록하지만,
- *  과거 수집분('OBJECT')과 스키마 타입(BLOB 등)도 함께 가린다. */
-function isBinaryType(t: string | null | undefined): boolean {
-  if (!t) return false
-  const upper = t.toUpperCase()
-  return ["BLOB", "BINARY", "VARBINARY", "BYTEA", "BYTES", "IMAGE", "GEOMETRY", "OBJECT", "RAW"]
-    .some(k => upper.includes(k))
-}
 
 /** 상대 시각 표기 — 알림 페이지와 동일 포맷. */
 function timeAgo(dateStr: string): string {

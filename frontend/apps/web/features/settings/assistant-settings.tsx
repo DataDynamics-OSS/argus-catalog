@@ -15,6 +15,7 @@ import { Switch } from "@workspace/ui/components/switch"
 import {
   fetchAssistantConfig, testAssistant, updateAssistantConfig,
 } from "./api"
+import { errorMessage, notifyError, notifySuccess } from "@/lib/notify"
 
 // 어시스턴트가 제공하는 기능 — 설명 카드에 노출.
 const CAPABILITIES: { icon: React.ElementType; title: string; desc: string }[] = [
@@ -51,12 +52,11 @@ export function AssistantSettings() {
 
   const handleSave = async () => {
     setSaving(true)
-    setMessage(null)
     try {
       await updateAssistantConfig({ enabled, agent_url: agentUrl })
-      setMessage({ type: "success", text: "AI 어시스턴트 설정을 저장했습니다." })
+      notifySuccess("AI 어시스턴트 설정을 저장했습니다.")
     } catch (e) {
-      setMessage({ type: "error", text: e instanceof Error ? e.message : "저장에 실패했습니다." })
+      notifyError(e, "AI 어시스턴트 설정을 저장하지 못했습니다.")
     } finally {
       setSaving(false)
     }
@@ -69,7 +69,7 @@ export function AssistantSettings() {
       const result = await testAssistant({ enabled, agent_url: agentUrl })
       setMessage({ type: result.success ? "success" : "error", text: result.message })
     } catch (e) {
-      setMessage({ type: "error", text: e instanceof Error ? e.message : "연결 테스트에 실패했습니다." })
+      setMessage({ type: "error", text: errorMessage(e) ?? "연결을 테스트하지 못했습니다." })
     } finally {
       setTesting(false)
     }
@@ -121,8 +121,8 @@ export function AssistantSettings() {
             ))}
           </div>
           <p className="text-xs text-muted-foreground border-t pt-3">
-            tool-use 답변은 별도의 <strong>에이전트 서버(agent/ serve 모드)</strong>가 필요합니다.
-            아래에서 활성화하고 에이전트 URL 을 지정하세요. 비활성화하면 도구 없이
+            tool-use 답변은 별도의 <strong>AI 서비스(argus-catalog-ai-service 의 assistant)</strong>가 필요합니다.
+            아래에서 활성화하고 AI 서비스 URL 을 지정하세요. 비활성화하면 도구 없이
             동작하는 <strong>내장 단순 대화</strong>로 폴백합니다.
           </p>
         </CardContent>
@@ -132,19 +132,19 @@ export function AssistantSettings() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
-            <MessageCircle className="h-4 w-4" /> 에이전트 연결
+            <MessageCircle className="h-4 w-4" /> AI 서비스 연결
           </CardTitle>
           <CardDescription>
-            AI 어시스턴트 에이전트(agent/ serve)의 주소를 지정합니다.
+            AI 어시스턴트 서비스(argus-catalog-ai assistant)의 주소를 지정합니다.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {/* Enable toggle */}
           <div className="flex items-center justify-between">
             <div>
-              <Label>에이전트 기반 어시스턴트 활성화</Label>
+              <Label>AI 서비스 기반 어시스턴트 활성화</Label>
               <p className="text-xs text-muted-foreground mt-0.5">
-                켜면 채팅이 아래 에이전트로 프록시되어 도구 기반 답변을 제공합니다.
+                켜면 채팅이 아래 AI 서비스로 프록시되어 도구 기반 답변을 제공합니다.
               </p>
             </div>
             <Switch checked={enabled} onCheckedChange={setEnabled} />
@@ -152,15 +152,15 @@ export function AssistantSettings() {
 
           {/* Agent URL */}
           <div className="space-y-1.5">
-            <Label>에이전트 URL</Label>
+            <Label>AI 서비스 URL</Label>
             <Input
               value={agentUrl}
               onChange={(e) => setAgentUrl(e.target.value)}
               placeholder="http://localhost:8930"
             />
             <p className="text-xs text-muted-foreground">
-              agent serve 모드 서버 주소. 예) <code>http://localhost:8930</code> —
-              에이전트 기동: <code>argus-agent serve --port 8930</code>
+              assistant 서버 주소. 예) <code>http://localhost:8930</code> —
+              기동: <code>argus-catalog-ai assistant --port 8930</code>
             </p>
           </div>
 

@@ -17,7 +17,9 @@ import { Popover, PopoverContent, PopoverTrigger } from "@workspace/ui/component
 import { Badge } from "@workspace/ui/components/badge"
 import { Separator } from "@workspace/ui/components/separator"
 import { Check, ChevronsUpDown } from "lucide-react"
-import { authFetch } from "@/features/auth/auth-fetch"
+import { authFetch, throwOnError } from "@/features/auth/auth-fetch"
+import { MCP_TRIGGERS, SCOPE_LABEL, SEVERITY_LABEL, TRIGGER_LABEL, labelOf } from "@/features/alerts/labels"
+import { errorMessage } from "@/lib/notify"
 
 const BASE = "/api/v1"
 
@@ -26,6 +28,7 @@ type EditRule = {
   rule_name: string
   scope_type: string
   scope_id: number | null
+  scope_name?: string | null
   trigger_type: string
   trigger_config: string
   severity_override: string | null
@@ -47,6 +50,23 @@ type Props = {
 type Tag = { id: number; name: string; color: string }
 type DatasetSummary = { id: number; name: string; datasource_type: string; datasource_name: string }
 type Datasource = { id: number; datasource_id: string; name: string; type: string }
+/** 저장된 trigger_config 를 안전하게 읽는다(깨진 값이면 빈 설정). */
+function parseConfig(raw: string | null | undefined): Record<string, unknown> {
+  if (!raw) return {}
+  try {
+    const v = JSON.parse(raw)
+    return v && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : {}
+  } catch {
+    return {}
+  }
+}
+
+function strList(v: unknown): string[] | null {
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : null
+}
+
+const isHttpUrl = (u: string) => /^https?:\/\/[^\s/]+/i.test(u.trim())
+
 type LineageSummary = {
   id: number
   source_dataset_name: string | null
@@ -66,6 +86,11 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
   const [triggerType, setTriggerType] = useState("ANY")
   const [changeTypes, setChangeTypes] = useState<string[]>(["DROP", "MODIFY"])
   const [watchColumns, setWatchColumns] = useState("")
+  // MCP_POLICY_DRIFT / MCP_SECURITY_WARNING 조건
+  const [mcpMinSeverity, setMcpMinSeverity] = useState("medium")
+  const [mcpEnvs, setMcpEnvs] = useState<string[]>([])
+  // QUALITY_FAILED 조건
+  const [qualityMinSeverity, setQualityMinSeverity] = useState("INFO")
   const [severityOverride, setSeverityOverride] = useState("auto")
 
   // Step 2
@@ -96,11 +121,17 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
       setScopeType(editRule.scope_type)
       setScopeId(editRule.scope_id)
       setTriggerType(editRule.trigger_type)
-      const config = editRule.trigger_config ? JSON.parse(editRule.trigger_config) : {}
-      setChangeTypes(config.change_types || ["DROP", "MODIFY"])
-      setWatchColumns((config.columns || []).join(", "))
+      const config = parseConfig(editRule.trigger_config)
+      const isMcp = MCP_TRIGGERS.has(editRule.trigger_type)
+      setChangeTypes(strList(config.change_types) ?? ["DROP", "MODIFY", "ADD"])
+      setWatchColumns((strList(config.columns) ?? []).join(", "))
+      setMcpMinSeverity(isMcp && typeof config.min_severity === "string" ? config.min_severity : "medium")
+      setMcpEnvs(strList(config.environments) ?? [])
+      setQualityMinSeverity(!isMcp && typeof config.min_severity === "string" ? config.min_severity : "INFO")
       setSeverityOverride(editRule.severity_override || "auto")
-      setChannels(editRule.channels ? editRule.channels.split(",") : ["IN_APP"])
+      // 지원하지 않는 채널(과거 EMAIL 등)은 빼고 불러온다
+      const chans = (editRule.channels || "").split(",").map(c => c.trim()).filter(c => c === "IN_APP" || c === "WEBHOOK")
+      setChannels(chans.length ? chans : ["IN_APP"])
       setWebhookUrl(editRule.webhook_url || "")
       setSubscribers(editRule.subscribers || "")
       setNotifyOwners(editRule.notify_owners === "true")
@@ -112,6 +143,9 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
       setTriggerType(presetScope?.type === "LINEAGE" ? "MAPPING_BROKEN" : "ANY")
       setChangeTypes(["DROP", "MODIFY"])
       setWatchColumns("")
+      setMcpMinSeverity("medium")
+      setMcpEnvs([])
+      setQualityMinSeverity("INFO")
       setSeverityOverride("auto")
       setChannels(["IN_APP"])
       setWebhookUrl("")
@@ -124,8 +158,11 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
   // Load lookup data
   useEffect(() => {
     if (!open) return
-    authFetch(`${BASE}/catalog/tags`).then(r => r.json()).then(setTags).catch(() => {})
-    authFetch(`${BASE}/catalog/datasources`).then(r => r.json()).then(setDatasources).catch(() => {})
+    const load = <T,>(url: string, set: (v: T) => void) =>
+      authFetch(url).then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status))))).then(set)
+        .catch(() => setError("감시 대상 목록을 불러오지 못했습니다. 다시 열어 주세요."))
+    load<Tag[]>(`${BASE}/catalog/tags`, setTags)
+    load<Datasource[]>(`${BASE}/catalog/datasources`, setDatasources)
   }, [open])
 
   // Load scope-specific data
@@ -158,30 +195,59 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
     )
   }
 
-  // 적용 범위(scope) 표시 이름
+  // 적용 범위(scope) 표시 이름 — 목록에 없으면(검색 결과 밖) 수정 대상 규칙의 scope_name 으로
   const scopeDisplayName = useCallback(() => {
-    if (scopeType === "ALL") return "전체 데이터셋"
+    if (scopeType === "ALL") return "전체"
+    const editName = editRule && editRule.scope_type === scopeType && editRule.scope_id === scopeId
+      ? editRule.scope_name : null
     if (scopeType === "TAG" && scopeId) {
       const tag = tags.find(t => t.id === scopeId)
-      return tag ? `태그: ${tag.name}` : `태그 ID: ${scopeId}`
+      return tag ? `태그: ${tag.name}` : editName ? `태그: ${editName}` : `태그 ID: ${scopeId}`
     }
     if (scopeType === "DATASET" && scopeId) {
       const ds = datasets.find(d => d.id === scopeId)
-      return ds ? `${ds.datasource_type}.${ds.name}` : `데이터셋 ID: ${scopeId}`
+      return ds ? `${ds.datasource_type}.${ds.name}` : editName ?? `데이터셋 ID: ${scopeId}`
     }
     if (scopeType === "LINEAGE" && scopeId) {
       const l = lineages.find(l => l.id === scopeId)
-      return l ? `${l.source_datasource_type}.${l.source_dataset_name} → ${l.target_datasource_type}.${l.target_dataset_name}` : `Lineage ID: ${scopeId}`
+      return l ? `${l.source_datasource_type}.${l.source_dataset_name} → ${l.target_datasource_type}.${l.target_dataset_name}` : editName ?? `리니지 ID: ${scopeId}`
     }
     if (scopeType === "DATASOURCE" && scopeId) {
       const p = datasources.find(p => p.id === scopeId)
-      return p ? `데이터 소스: ${p.name}` : `데이터 소스 ID: ${scopeId}`
+      return p ? `데이터 소스: ${p.name}` : editName ? `데이터 소스: ${editName}` : `데이터 소스 ID: ${scopeId}`
     }
     return "선택..."
-  }, [scopeType, scopeId, tags, datasets, lineages, datasources])
+  }, [scopeType, scopeId, tags, datasets, lineages, datasources, editRule])
+
+  const isMcpTrigger = MCP_TRIGGERS.has(triggerType)
+  const usesChangeTypes = triggerType === "SCHEMA_CHANGE" || triggerType === "COLUMN_WATCH"
+  const watchList = watchColumns.split(",").map(c => c.trim()).filter(Boolean)
+
+  // 단계별 검증 — 버튼 옆에 이유를 보여준다
+  const step1Problem = !ruleName.trim() ? "규칙 이름을 입력하세요."
+    : scopeType !== "ALL" && !scopeId ? "감시 대상을 선택하세요."
+    : isMcpTrigger && scopeType !== "ALL" && scopeType !== "DATASOURCE" ? "MCP 트리거는 범위를 '전체' 또는 '데이터 소스'로만 지정할 수 있습니다."
+    : usesChangeTypes && changeTypes.length === 0 ? "변경 유형을 하나 이상 선택하세요."
+    : triggerType === "COLUMN_WATCH" && watchList.length === 0 ? "감시할 컬럼을 하나 이상 입력하세요."
+    : null
+  const step2Problem = channels.length === 0 ? "알림 채널을 하나 이상 선택하세요."
+    : channels.includes("WEBHOOK") && !isHttpUrl(webhookUrl) ? "Webhook URL 을 http(s):// 주소로 입력하세요."
+    : null
+
+  const changeTrigger = (t: string) => {
+    setTriggerType(t)
+    // MCP 트리거로 바꾸면 의미 없는 범위(데이터셋·태그·리니지)는 전체로 되돌린다
+    if (MCP_TRIGGERS.has(t) && scopeType !== "ALL" && scopeType !== "DATASOURCE") {
+      setScopeType("ALL")
+      setScopeId(null)
+    }
+  }
 
   const handleSave = async () => {
-    if (!ruleName.trim()) return
+    if (step1Problem || step2Problem) {
+      setError(step1Problem ?? step2Problem)
+      return
+    }
     setSaving(true)
     setError(null)
 
@@ -189,12 +255,17 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
     if (triggerType === "SCHEMA_CHANGE") {
       triggerConfig.change_types = changeTypes
     } else if (triggerType === "COLUMN_WATCH") {
-      triggerConfig.columns = watchColumns.split(",").map(c => c.trim()).filter(Boolean)
+      triggerConfig.columns = watchList
       triggerConfig.change_types = changeTypes
+    } else if (triggerType === "QUALITY_FAILED") {
+      triggerConfig.min_severity = qualityMinSeverity
+    } else if (isMcpTrigger) {
+      triggerConfig.min_severity = mcpMinSeverity
+      if (mcpEnvs.length) triggerConfig.environments = mcpEnvs
     }
 
     const body = {
-      rule_name: ruleName,
+      rule_name: ruleName.trim(),
       description: description || null,
       scope_type: scopeType,
       scope_id: scopeType === "ALL" ? null : scopeId,
@@ -203,7 +274,7 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
       severity_override: severityOverride === "auto" ? null : severityOverride,
       channels: channels.join(","),
       notify_owners: notifyOwners ? "true" : "false",
-      webhook_url: channels.includes("WEBHOOK") ? webhookUrl || null : null,
+      webhook_url: channels.includes("WEBHOOK") ? webhookUrl.trim() || null : null,
       subscribers: subscribers || null,
     }
 
@@ -215,14 +286,11 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       })
-      if (!resp.ok) {
-        const data = await resp.json().catch(() => ({}))
-        throw new Error(data.detail || `HTTP ${resp.status}`)
-      }
+      if (!resp.ok) await throwOnError(resp, "알림 규칙을 저장하지 못했습니다.")
       onCreated()
       onOpenChange(false)
     } catch (e) {
-      setError(e instanceof Error ? e.message : "저장에 실패했습니다.")
+      setError(errorMessage(e) ?? "알림 규칙을 저장하지 못했습니다.")
     } finally {
       setSaving(false)
     }
@@ -270,13 +338,11 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
                   variant={scopeType === t ? "default" : "outline"}
                   size="sm"
                   className="text-sm h-8"
+                  disabled={isMcpTrigger && t !== "ALL" && t !== "DATASOURCE"}
+                  title={isMcpTrigger && t !== "ALL" && t !== "DATASOURCE" ? "MCP 트리거는 전체·데이터 소스 범위만 지원합니다" : undefined}
                   onClick={() => { setScopeType(t); setScopeId(null) }}
                 >
-                  {t === "DATASET" && "데이터셋"}
-                  {t === "TAG" && "태그"}
-                  {t === "LINEAGE" && "리니지"}
-                  {t === "DATASOURCE" && "데이터 소스"}
-                  {t === "ALL" && "전체"}
+                  {SCOPE_LABEL[t]}
                 </Button>
               ))}
             </div>
@@ -351,18 +417,69 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
             <Separator />
             <Label className="text-sm font-medium">트리거 (Trigger 조건)</Label>
 
-            <Select value={triggerType} onValueChange={setTriggerType}>
+            <Select value={triggerType} onValueChange={changeTrigger}>
               <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="ANY">모든 변경 (Any Change)</SelectItem>
+                <SelectItem value="ANY">모든 스키마 변경</SelectItem>
                 <SelectItem value="SCHEMA_CHANGE">스키마 변경 (변경 유형 선택)</SelectItem>
                 <SelectItem value="COLUMN_WATCH">컬럼 감시 (특정 컬럼)</SelectItem>
                 <SelectItem value="MAPPING_BROKEN">매핑 깨짐 (매핑 컬럼 변경)</SelectItem>
                 <SelectItem value="QUALITY_FAILED">품질 검증 실패</SelectItem>
+                <SelectItem value="MCP_POLICY_DRIFT">MCP 배포 정책 위반·드리프트</SelectItem>
+                <SelectItem value="MCP_SECURITY_WARNING">MCP 배포 보안 경고</SelectItem>
               </SelectContent>
             </Select>
 
-            {(triggerType === "SCHEMA_CHANGE" || triggerType === "COLUMN_WATCH") && (
+            {isMcpTrigger && (
+              <div className="space-y-2 rounded-md border p-3">
+                <p className="text-xs text-muted-foreground">
+                  MCP 배포의 finding 이 새로 열리거나 재오픈될 때 발행됩니다. 범위는 “전체” 또는 “데이터 소스”(배포에 연결된 데이터 소스)만 적용됩니다.
+                  배포 소유자는 “소유자 알림”이 켜져 있으면 함께 받습니다.
+                </p>
+                <div className="flex flex-wrap items-center gap-4">
+                  <div className="flex items-center gap-2">
+                    <Label className="text-sm text-muted-foreground">최소 심각도</Label>
+                    <Select value={mcpMinSeverity} onValueChange={setMcpMinSeverity}>
+                      <SelectTrigger className="h-8 w-[110px]"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="low">낮음</SelectItem>
+                        <SelectItem value="medium">중간</SelectItem>
+                        <SelectItem value="high">높음</SelectItem>
+                        <SelectItem value="critical">치명</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <Label className="text-sm text-muted-foreground">환경 (비우면 전체)</Label>
+                    {["DEV", "STG", "PROD"].map(env => (
+                      <label key={env} className="flex items-center gap-1.5 text-sm">
+                        <Checkbox
+                          checked={mcpEnvs.includes(env)}
+                          onCheckedChange={() => setMcpEnvs(prev => prev.includes(env) ? prev.filter(e => e !== env) : [...prev, env])}
+                        />
+                        {env}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {triggerType === "QUALITY_FAILED" && (
+              <div className="flex items-center gap-2">
+                <Label className="text-sm text-muted-foreground">최소 실패 심각도</Label>
+                <Select value={qualityMinSeverity} onValueChange={setQualityMinSeverity}>
+                  <SelectTrigger className="h-8 w-[140px]"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="INFO">정보 이상(전체)</SelectItem>
+                    <SelectItem value="WARNING">경고 이상</SelectItem>
+                    <SelectItem value="BREAKING">심각만</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {usesChangeTypes && (
               <div className="flex items-center gap-4">
                 <Label className="text-sm text-muted-foreground">변경 유형:</Label>
                 {["DROP", "MODIFY", "ADD"].map(ct => (
@@ -371,7 +488,7 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
                       checked={changeTypes.includes(ct)}
                       onCheckedChange={() => toggleChangeType(ct)}
                     />
-                    {ct === "DROP" ? "삭제" : ct === "MODIFY" ? "수정" : "추가"}
+                    {ct === "DROP" ? "삭제" : ct === "MODIFY" ? "변경" : "추가"}
                   </label>
                 ))}
               </div>
@@ -402,8 +519,9 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
               </Select>
             </div>
 
-            <div className="flex justify-end">
-              <Button onClick={() => setStep(2)} disabled={!ruleName.trim() || (scopeType !== "ALL" && !scopeId)}>
+            <div className="flex items-center justify-end gap-3">
+              {step1Problem && <span className="text-sm text-muted-foreground">{step1Problem}</span>}
+              <Button onClick={() => { setError(null); setStep(2) }} disabled={!!step1Problem}>
                 다음
               </Button>
             </div>
@@ -417,21 +535,23 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
             <div className="rounded-lg border px-4 py-3 bg-muted/30 text-sm">
               <p className="font-medium">{ruleName}</p>
               <p className="text-sm text-muted-foreground mt-1">
-                대상: {scopeType} {scopeId ? `(${scopeDisplayName()})` : ""} | 트리거: {triggerType}
+                대상: {scopeDisplayName()} | 트리거: {labelOf(TRIGGER_LABEL, triggerType)}
+                {severityOverride !== "auto" && ` | 심각도: ${labelOf(SEVERITY_LABEL, severityOverride)}(강제)`}
               </p>
             </div>
 
-            <Label className="text-sm font-medium">알림 채널 (Channels)</Label>
+            <Label className="text-sm font-medium">알림 채널</Label>
             <div className="flex items-center gap-4">
-              {["IN_APP", "WEBHOOK", "EMAIL"].map(ch => (
+              {["IN_APP", "WEBHOOK"].map(ch => (
                 <label key={ch} className="flex items-center gap-1.5 text-sm">
                   <Checkbox
                     checked={channels.includes(ch)}
                     onCheckedChange={() => toggleChannel(ch)}
                   />
-                  {ch === "IN_APP" ? "앱 내" : ch === "WEBHOOK" ? "Webhook" : "이메일"}
+                  {ch === "IN_APP" ? "앱 내" : "Webhook"}
                 </label>
               ))}
+              <span className="text-sm text-muted-foreground">이메일은 아직 지원하지 않습니다</span>
             </div>
 
             {channels.includes("WEBHOOK") && (
@@ -443,15 +563,18 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
                   placeholder="https://hooks.slack.com/services/..."
                   className="h-9 text-sm"
                 />
+                <p className="text-sm text-muted-foreground">
+                  알림마다 JSON 을 POST 합니다(Slack 호환 <code>text</code> 필드 포함). 전송 결과는 기록됩니다.
+                </p>
               </div>
             )}
 
             <div className="space-y-1.5">
-              <Label className="text-sm">구독자 (콤마 구분)</Label>
+              <Label className="text-sm">구독자 (사용자 이름, 콤마 구분)</Label>
               <Textarea
                 value={subscribers}
                 onChange={e => setSubscribers(e.target.value)}
-                placeholder="security-team@company.com, dpo@company.com"
+                placeholder="alice, security-team"
                 rows={2}
                 className="text-sm"
               />
@@ -462,7 +585,7 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
                 checked={notifyOwners}
                 onCheckedChange={(v) => setNotifyOwners(!!v)}
               />
-              데이터셋 소유자에게도 알림
+              {isMcpTrigger ? "MCP 배포 소유자에게도 알림" : "데이터셋 소유자에게도 알림"}
             </label>
 
             <div className="space-y-1.5">
@@ -477,9 +600,10 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
             </div>
 
             <Separator />
-            <div className="flex justify-between">
+            <div className="flex items-center justify-between gap-3">
               <Button variant="outline" onClick={() => setStep(1)}>이전</Button>
-              <Button onClick={handleSave} disabled={saving}>
+              {step2Problem && <span className="ml-auto text-sm text-muted-foreground">{step2Problem}</span>}
+              <Button onClick={handleSave} disabled={saving || !!step2Problem}>
                 {saving ? "저장 중..." : isEdit ? "규칙 수정" : "규칙 저장"}
               </Button>
             </div>

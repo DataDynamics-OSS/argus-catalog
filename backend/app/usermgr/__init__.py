@@ -11,8 +11,9 @@ router/schemas/service 패턴을 따른다:
 
 핵심 기능:
 - 페이지네이션 목록 조회를 포함한 사용자 CRUD(생성·조회·수정·삭제).
-- 역할 기반 접근 제어(Admin, User 역할).
+- 역할 기반 접근 제어(Admin, Superuser, User 역할 — argus-admin / argus-superuser / argus-user).
 - 계정 상태 관리(활성화/비활성화).
 - 사용자명·이메일 중복 검증.
-- SHA-256 을 이용한 비밀번호 해싱.
+- PBKDF2-HMAC-SHA256(사용자별 salt) 비밀번호 해싱(``app.core.passwords``, 예전 SHA-256 해시도 검증).
+- 사용자 삭제 전 소유 자산 이관(ownership.py).
 """

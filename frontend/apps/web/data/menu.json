@@ -59,6 +59,12 @@
           "icon": "Bot"
         },
         {
+          "id": "mcp-servers",
+          "title": "MCP Server",
+          "url": "/dashboard/mcp-servers",
+          "icon": "Plug"
+        },
+        {
           "id": "models",
           "title": "MLflow 모델",
           "url": "/dashboard/models",

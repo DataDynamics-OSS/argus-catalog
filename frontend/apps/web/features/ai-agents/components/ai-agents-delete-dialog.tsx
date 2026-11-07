@@ -15,6 +15,7 @@ import { Button } from "@workspace/ui/components/button"
 
 import { deleteAIAgent } from "../api"
 import { useAIAgents } from "./ai-agents-provider"
+import { errorMessage } from "@/lib/notify"
 
 export function AIAgentsDeleteDialog() {
   const {
@@ -39,7 +40,7 @@ export function AIAgentsDeleteDialog() {
       setSelectedAgentName(null)
       await refreshAgents()
     } catch (e) {
-      setError(e instanceof Error ? e.message : "삭제에 실패했습니다.")
+      setError(errorMessage(e) ?? "AI 에이전트를 삭제하지 못했습니다.")
     } finally {
       setDeleting(false)
     }

@@ -27,7 +27,7 @@ import {
   AlertDialogTitle,
 } from "@workspace/ui/components/alert-dialog"
 import { Button } from "@workspace/ui/components/button"
-import { toast } from "sonner"
+import { errorMessage, toast } from "@/lib/notify"
 import { activateUser, deactivateUser } from "../api"
 import { type User } from "../data/schema"
 import { useUsers } from "./users-provider"
@@ -60,15 +60,23 @@ export function UsersStatusDialog({
    * refreshes the user list and closes the dialog.
    */
   const handleConfirm = async () => {
-    try {
-      const fn = isActivate ? activateUser : deactivateUser
-      await Promise.all(selectedUsers.map((u) => fn(u.id)))
-      await refreshUsers()
+    // 한 명씩 차례로 — 마지막 활성 관리자·본인 보호는 서버가 판단하며, 일부가 막혀도
+    // 나머지 결과를 화면에 반영하도록 끝까지 진행한 뒤 실패 사유를 모아 알린다.
+    const fn = isActivate ? activateUser : deactivateUser
+    const action = isActivate ? "활성화" : "비활성화"
+    const failures: string[] = []
+    for (const u of selectedUsers) {
+      try {
+        await fn(u.id)
+      } catch (err) {
+        failures.push(`${u.username}: ${errorMessage(err) ?? `${action}하지 못했습니다.`}`)
+      }
+    }
+    await refreshUsers()
+    if (failures.length) {
+      toast.error(failures.join("\n"))
+    } else {
       onOpenChange(false)
-    } catch (err) {
-      const action = isActivate ? "활성화" : "비활성화"
-      const msg = err instanceof Error ? err.message : `사용자 ${action}에 실패했습니다.`
-      toast.error(msg)
     }
   }
 

@@ -21,7 +21,7 @@ import "@xyflow/react/dist/style.css"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@workspace/ui/components/card"
 import { Button } from "@workspace/ui/components/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@workspace/ui/components/dialog"
-import { toast } from "sonner"
+import { toast } from "@/lib/notify"
 import type { DatasetDetail } from "@/features/datasets/data/schema"
 import { CodeViewer } from "@/components/code-viewer"
 

@@ -18,7 +18,7 @@ from app.comments.schemas import (
     CommentUpdate,
     PaginatedComments,
 )
-from app.core.auth import CurrentUser
+from app.core.auth import CurrentUser, assert_owner_or_admin
 from app.core.database import get_session
 
 logger = logging.getLogger(__name__)
@@ -35,33 +35,46 @@ async def list_comments(
     session: AsyncSession = Depends(get_session),
 ):
     """엔티티의 댓글을 페이지네이션으로 조회(최상위만, 답글은 중첩)."""
-    logger.info("GET /comments: entity=%s/%s, page=%d", entity_type, entity_id, page)
+    logger.debug("GET /comments: entity=%s/%s, page=%d", entity_type, entity_id, page)
     return await service.list_comments(session, entity_type, entity_id, page, page_size)
 
 
 @router.post("", response_model=CommentResponse)
-async def create_comment(_guard: CurrentUser,
+async def create_comment(current: CurrentUser,
     req: CommentCreate,
     session: AsyncSession = Depends(get_session),
 ):
-    """새 댓글 또는 답글을 생성한다."""
+    """새 댓글 또는 답글을 생성한다. 작성자는 인증 사용자(본문의 author_* 는 무시 — 사칭 방지).
+
+    부모 댓글이 없거나 삭제된 경우 서비스의 ValueError 를 400 으로 바꾼다.
+    """
     logger.info("POST /comments: entity=%s/%s, author=%s, parent=%s",
-                req.entity_type, req.entity_id, req.author_name, req.parent_id)
+                req.entity_type, req.entity_id, current.username, req.parent_id)
     try:
-        return await service.create_comment(session, req)
+        return await service.create_comment(session, req, author=current)
     except ValueError as e:
         logger.warning("댓글 생성 실패: %s", e)
         raise HTTPException(status_code=400, detail=str(e))
 
 
+async def _require_comment_author(current, session: AsyncSession, comment_id: int) -> None:
+    """댓글 수정·삭제 — 작성자 본인 또는 관리자만. 댓글이 없거나 삭제됐으면 404."""
+    author = await service.get_comment_author(session, comment_id)
+    if author is None:
+        logger.warning("대상 댓글 없음: %d", comment_id)
+        raise HTTPException(status_code=404, detail="댓글을 찾을 수 없습니다.")
+    assert_owner_or_admin(current, author, "댓글")
+
+
 @router.put("/{comment_id}", response_model=CommentResponse)
-async def update_comment(_guard: CurrentUser,
+async def update_comment(current: CurrentUser,
     comment_id: int,
     req: CommentUpdate,
     session: AsyncSession = Depends(get_session),
 ):
-    """댓글의 본문 또는 분류를 수정한다."""
+    """댓글의 본문 또는 분류를 수정한다 — 작성자 또는 관리자."""
     logger.info("PUT /comments/%d", comment_id)
+    await _require_comment_author(current, session, comment_id)
     result = await service.update_comment(session, comment_id, req)
     if not result:
         logger.warning("수정 대상 댓글 없음: %d", comment_id)
@@ -70,12 +83,13 @@ async def update_comment(_guard: CurrentUser,
 
 
 @router.delete("/{comment_id}")
-async def delete_comment(_guard: CurrentUser,
+async def delete_comment(current: CurrentUser,
     comment_id: int,
     session: AsyncSession = Depends(get_session),
 ):
-    """댓글을 소프트 삭제한다."""
+    """댓글을 소프트 삭제한다 — 작성자 또는 관리자."""
     logger.info("DELETE /comments/%d", comment_id)
+    await _require_comment_author(current, session, comment_id)
     if not await service.delete_comment(session, comment_id):
         logger.warning("삭제 대상 댓글 없음: %d", comment_id)
         raise HTTPException(status_code=404, detail="댓글을 찾을 수 없습니다.")
@@ -89,6 +103,7 @@ async def get_comment_count(
     entity_id: str = Query(...),
     session: AsyncSession = Depends(get_session),
 ):
-    """엔티티의 댓글 수를 조회(최상위만)."""
+    """엔티티의 댓글 수를 조회(최상위만, 삭제 제외)."""
     count = await service.get_comment_count(session, entity_type, entity_id)
+    logger.debug("댓글 수 조회: entity=%s/%s count=%d", entity_type, entity_id, count)
     return {"count": count}

@@ -27,7 +27,8 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@workspace/ui/components/popover"
 import { Separator } from "@workspace/ui/components/separator"
 import { ArrowDown, ArrowUp, ArrowRight, Plus, Trash2, Check, ChevronsUpDown } from "lucide-react"
-import { authFetch } from "@/features/auth/auth-fetch"
+import { authFetch, throwOnError } from "@/features/auth/auth-fetch"
+import { errorMessage, notifyError, toast } from "@/lib/notify"
 
 const BASE = "/api/v1/catalog"
 
@@ -131,12 +132,26 @@ export function LineageAddDialog({
   // 다이얼로그 오픈 시 데이터 소스·파이프라인 목록을 미리 로드 (step 1 에서 선택지로 노출).
   useEffect(() => {
     if (!open) return
-    authFetch(`${BASE}/datasources`).then(r => r.json()).then(setDatasources).catch((err) => {
-      console.error("Failed to load datasources", err)
-    })
-    authFetch(`${BASE}/pipelines`).then(r => r.json()).then(setPipelines).catch((err) => {
-      console.error("Failed to load pipelines", err)
-    })
+    authFetch(`${BASE}/datasources`)
+      .then(async (r) => {
+        if (!r.ok) await throwOnError(r, "데이터 소스 목록을 불러오지 못했습니다.")
+        return r.json()
+      })
+      .then(setDatasources)
+      .catch((err) => {
+        console.error("Failed to load datasources", err)
+        notifyError(err, "데이터 소스 목록을 불러오지 못했습니다.")
+      })
+    authFetch(`${BASE}/pipelines`)
+      .then(async (r) => {
+        if (!r.ok) await throwOnError(r, "파이프라인 목록을 불러오지 못했습니다.")
+        return r.json()
+      })
+      .then(setPipelines)
+      .catch((err) => {
+        console.error("Failed to load pipelines", err)
+        notifyError(err, "파이프라인 목록을 불러오지 못했습니다.")
+      })
   }, [open])
 
   // step 2 진입 후 데이터 소스/검색어가 변할 때 데이터셋 후보 재조회.
@@ -151,7 +166,10 @@ export function LineageAddDialog({
     params.set("page_size", "50")
 
     authFetch(`${BASE}/datasets?${params}`)
-      .then(r => r.json())
+      .then(async (r) => {
+        if (!r.ok) await throwOnError(r, "데이터셋을 검색하지 못했습니다.")
+        return r.json()
+      })
       .then(data => {
         const items = (data.items || []).filter(
           (d: DatasetSummary) => d.id !== datasetId
@@ -160,6 +178,8 @@ export function LineageAddDialog({
       })
       .catch((err) => {
         console.error("Failed to search datasets", { searchQuery, selectedDatasourceId, err })
+        // 입력마다 다시 조회되지만 notifyError 가 같은 문구를 하나로 합친다
+        notifyError(err, "데이터셋을 검색하지 못했습니다.")
       })
   }, [open, step, searchQuery, selectedDatasourceId, datasetId])
 
@@ -176,12 +196,15 @@ export function LineageAddDialog({
         authFetch(`${BASE}/datasets/${sourceId}`),
         authFetch(`${BASE}/datasets/${targetId}`),
       ])
+      if (!srcResp.ok) await throwOnError(srcResp, "스키마 필드를 불러오지 못했습니다.")
+      if (!tgtResp.ok) await throwOnError(tgtResp, "스키마 필드를 불러오지 못했습니다.")
       const srcData = await srcResp.json()
       const tgtData = await tgtResp.json()
       setSourceFields(srcData.schema_fields || [])
       setTargetFields(tgtData.schema_fields || [])
     } catch (err) {
       console.error("Failed to load schema fields for lineage mapping", { sourceId, targetId, err })
+      notifyError(err, "스키마 필드를 불러오지 못했습니다.")
       setSourceFields([])
       setTargetFields([])
     }
@@ -244,16 +267,15 @@ export function LineageAddDialog({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       })
-      if (!resp.ok) {
-        const data = await resp.json().catch(() => ({}))
-        throw new Error(data.detail || `HTTP ${resp.status}`)
-      }
+      if (!resp.ok) await throwOnError(resp, "리니지를 추가하지 못했습니다.")
       console.info("Lineage created", { sourceId, targetId, relationType, mappings: validMappings.length })
+      toast.success("리니지를 추가했습니다.")
       onCreated()
       onOpenChange(false)
     } catch (e) {
       console.error("Failed to create lineage", { sourceId, targetId, err: e })
-      setError(e instanceof Error ? e.message : "저장에 실패했습니다")
+      setError(errorMessage(e) ?? "리니지를 추가하지 못했습니다.")
+      notifyError(e, "리니지를 추가하지 못했습니다.")
     } finally {
       setSaving(false)
     }

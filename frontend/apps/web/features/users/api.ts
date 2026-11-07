@@ -15,6 +15,7 @@
 
 import { type User } from "./data/schema"
 import { authFetch, throwOnError } from "@/features/auth/auth-fetch" // Added for SSO AUTH
+import type { TokenResponse } from "@/features/auth/api"
 
 /** Base URL prefix for all user management API calls. */
 const BASE = "/api/v1/usermgr"
@@ -37,6 +38,10 @@ type UserListParams = {
   page?: number
   /** Number of items per page. Defaults to 10. */
   pageSize?: number
+  /** 서버 정렬 열 (username, name, email, organization, department, status, role, created_at, last_login_at). */
+  sort?: string
+  /** 정렬 방향. */
+  order?: "asc" | "desc"
 }
 
 /**
@@ -68,6 +73,8 @@ function mapUser(u: Record<string, unknown>): User {
     role: u.role,
     createdAt: new Date(u.created_at as string),
     updatedAt: new Date(u.updated_at as string),
+    lastLoginAt: u.last_login_at ? new Date(u.last_login_at as string) : null,
+    lockedUntil: u.locked_until ? new Date(u.locked_until as string) : null,
   } as User
 }
 
@@ -90,10 +97,14 @@ export async function fetchUsers(params?: UserListParams): Promise<PaginatedUser
   if (params?.organization) query.set("organization", params.organization)
   query.set("page", String(params?.page ?? 1))
   query.set("page_size", String(params?.pageSize ?? 10))
+  if (params?.sort) {
+    query.set("sort", params.sort)
+    query.set("order", params.order ?? "asc")
+  }
 
   const url = `${BASE}/users?${query.toString()}`
   const res = await authFetch(url)
-  if (!res.ok) throw new Error(`사용자 조회 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`사용자 목록을 불러오지 못했습니다. (HTTP ${res.status})`)
   const data = await res.json()
   return {
     items: (data.items as Record<string, unknown>[]).map(mapUser),
@@ -106,7 +117,7 @@ export async function fetchUsers(params?: UserListParams): Promise<PaginatedUser
 /** 소속(조직) 고유 목록 — 소속 드롭다운 필터 옵션용. */
 export async function fetchOrganizations(): Promise<string[]> {
   const res = await authFetch(`${BASE}/users/organizations`)
-  if (!res.ok) throw new Error(`소속 목록 조회 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`소속 목록을 불러오지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 
@@ -129,7 +140,7 @@ export async function checkUserExists(params: {
   if (params.username) query.set("username", params.username)
   if (params.email) query.set("email", params.email)
   const res = await authFetch(`${BASE}/check-user?${query.toString()}`)
-  if (!res.ok) throw new Error(`사용자 확인 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`사용자 중복 여부를 확인하지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 
@@ -169,7 +180,7 @@ export async function createUser(payload: CreateUserPayload): Promise<User> {
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
-    throw new Error(err.detail || `사용자 생성 실패: ${res.status}`)
+    throw new Error(err.detail || `사용자를 생성하지 못했습니다. (HTTP ${res.status})`)
   }
   return res.json()
 }
@@ -183,12 +194,28 @@ export async function createUser(payload: CreateUserPayload): Promise<User> {
  * @param userId - The ID of the user to delete.
  * @throws Error if the HTTP response is not OK (e.g. user not found).
  */
-export async function deleteUser(userId: string): Promise<void> {
-  const res = await authFetch(`${BASE}/users/${userId}`, { method: "DELETE" })
+export async function deleteUser(userId: string, transferTo?: string): Promise<void> {
+  const qs = transferTo ? `?transfer_to=${encodeURIComponent(transferTo)}` : ""
+  const res = await authFetch(`${BASE}/users/${userId}${qs}`, { method: "DELETE" })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
-    throw new Error(err.detail || `사용자 삭제 실패: ${res.status}`)
+    const detail = err.detail
+    // 409 owned_assets 는 {code, message, assets} 객체
+    throw new Error((typeof detail === "string" ? detail : detail?.message) || `사용자를 삭제하지 못했습니다. (HTTP ${res.status})`)
   }
+}
+
+export type OwnedAssets = {
+  username: string
+  total: number
+  items: { key: string; label: string; count: number }[]
+}
+
+/** 사용자가 소유한(편집 권한이 아이디로 묶인) 자산의 종류별 건수 — 삭제 전 이관 안내용. */
+export async function fetchOwnedAssets(userId: string): Promise<OwnedAssets> {
+  const res = await authFetch(`${BASE}/users/${userId}/owned-assets`)
+  if (!res.ok) throw new Error(`소유 자산을 불러오지 못했습니다. (HTTP ${res.status})`)
+  return res.json()
 }
 
 /**
@@ -201,7 +228,13 @@ export async function deleteUser(userId: string): Promise<void> {
  */
 export async function activateUser(userId: string): Promise<void> {
   const res = await authFetch(`${BASE}/users/${userId}/activate`, { method: "PUT" })
-  if (!res.ok) throw new Error(`사용자 활성화 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`사용자를 활성화하지 못했습니다. (HTTP ${res.status})`)
+}
+
+/** 로그인 실패 반복으로 잠긴 계정의 잠금을 해제한다 (관리자, 로컬 인증). */
+export async function unlockUser(userId: string): Promise<void> {
+  const res = await authFetch(`${BASE}/users/${userId}/unlock`, { method: "PUT" })
+  if (!res.ok) await throwOnError(res, "계정 잠금을 해제하지 못했습니다.")
 }
 
 /**
@@ -217,7 +250,7 @@ export async function deactivateUser(userId: string): Promise<void> {
   const res = await authFetch(`${BASE}/users/${userId}/deactivate`, { method: "PUT" })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
-    throw new Error(err.detail || `사용자 비활성화 실패: ${res.status}`)
+    throw new Error(err.detail || `사용자를 비활성화하지 못했습니다. (HTTP ${res.status})`)
   }
 }
 
@@ -241,7 +274,7 @@ export async function modifyUser(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   })
-  if (!res.ok) await throwOnError(res, "사용자 수정 실패")
+  if (!res.ok) await throwOnError(res, "사용자 정보를 수정하지 못했습니다.")
   return res.json()
 }
 
@@ -253,7 +286,7 @@ export async function changeUserRole(userId: string, role: string): Promise<User
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
-    throw new Error(err.detail || `역할 변경 실패: ${res.status}`)
+    throw new Error(err.detail || `역할을 변경하지 못했습니다. (HTTP ${res.status})`)
   }
   return res.json()
 }
@@ -278,7 +311,7 @@ export async function setUserPassword(
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
-    throw new Error(err.detail || `비밀번호 변경 실패: ${res.status}`)
+    throw new Error(err.detail || `비밀번호를 변경하지 못했습니다. (HTTP ${res.status})`)
   }
 }
 
@@ -287,11 +320,15 @@ export async function setUserPassword(
  *
  * Calls the auth endpoint which verifies the current password before
  * updating — local auth mode only.
+ *
+ * 서버는 비밀번호가 바뀌면 이전 access·refresh 토큰을 즉시 거부하고 새 토큰 쌍을 돌려준다.
+ * 호출한 쪽은 반환된 토큰으로 세션을 교체해야(useAuth().applyTokens) 이어지는 요청이 401 로
+ * 로그아웃되지 않는다.
  */
 export async function changeMyPassword(
   currentPassword: string,
   newPassword: string,
-): Promise<void> {
+): Promise<TokenResponse> {
   const res = await authFetch(`/api/v1/auth/change-password`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -299,6 +336,7 @@ export async function changeMyPassword(
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
-    throw new Error(err.detail || `비밀번호 변경 실패: ${res.status}`)
+    throw new Error(err.detail || `비밀번호를 변경하지 못했습니다. (HTTP ${res.status})`)
   }
+  return res.json()
 }

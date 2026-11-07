@@ -12,14 +12,19 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 def _op_key(ep: dict[str, Any]) -> str:
+    """엔드포인트 매칭 키 ``"METHOD path"`` (메서드는 대문자)."""
     return f"{str(ep.get('method', '')).upper()} {ep.get('path', '')}"
 
 
 def _params_map(op: dict[str, Any]) -> dict[tuple, dict]:
+    """파라미터 목록 → ``{(name, in): 파라미터}`` — 같은 이름이라도 위치(in)가 다르면 다른 파라미터."""
     out: dict[tuple, dict] = {}
     for p in op.get("parameters") or []:
         if isinstance(p, dict):
@@ -28,6 +33,7 @@ def _params_map(op: dict[str, Any]) -> dict[tuple, dict]:
 
 
 def _diff_op(old: dict[str, Any], new: dict[str, Any]) -> list[dict[str, Any]]:
+    """같은 (METHOD, path) 엔드포인트의 파라미터·요청 바디·응답 코드 변경 항목 ``{detail, breaking}`` 목록."""
     items: list[dict[str, Any]] = []
     oldp, newp = _params_map(old), _params_map(new)
 
@@ -50,6 +56,8 @@ def _diff_op(old: dict[str, Any], new: dict[str, Any]) -> list[dict[str, Any]]:
     nb = new.get("request_body") if isinstance(new.get("request_body"), dict) else None
     obr = bool(ob.get("required")) if ob else False
     nbr = bool(nb.get("required")) if nb else False
+    # 바디 추가는 새 바디가 필수일 때만, 제거는 기존 바디가 필수였을 때만 Breaking 으로 본다
+    # (응답 코드 추가·제거는 MVP 에서 모두 비파괴로 취급)
     if not ob and nb:
         items.append({"detail": "요청 바디 추가", "breaking": nbr})
     elif ob and not nb:
@@ -67,6 +75,11 @@ def _diff_op(old: dict[str, Any], new: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def diff_endpoints(old_eps: list[dict], new_eps: list[dict]) -> dict[str, Any]:
+    """두 엔드포인트 목록(파서 출력)을 비교한다.
+
+    반환: ``added``/``removed`` (키 목록), ``changed`` (``{key, items, breaking}``), ``breaking``(bool),
+    ``breaking_count`` (= 제거된 엔드포인트 수 + Breaking 변경 항목 수) 와 각 건수.
+    """
     oldmap = {_op_key(e): e for e in old_eps}
     newmap = {_op_key(e): e for e in new_eps}
 
@@ -79,6 +92,8 @@ def diff_endpoints(old_eps: list[dict], new_eps: list[dict]) -> dict[str, Any]:
             changed.append({"key": k, "items": items, "breaking": any(i["breaking"] for i in items)})
 
     breaking_count = len(removed) + sum(1 for c in changed for i in c["items"] if i["breaking"])
+    logger.debug("스펙 비교 결과: added=%d removed=%d changed=%d breaking_count=%d",
+                 len(added), len(removed), len(changed), breaking_count)
     return {
         "added": added,
         "removed": removed,           # breaking

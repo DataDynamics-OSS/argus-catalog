@@ -31,6 +31,8 @@ type DatasetsGridProps = {
   /** 지정 시 행 끝에 "제거" 액션 컬럼을 추가한다(예: 분류 매핑 해제). */
   onRemove?: (id: number) => void
   removeLabel?: string
+  /** 지정 시 true 인 행에만 "제거" 를 보인다(예: 하위 분류 매핑은 상위 분류에서 해제 불가). */
+  canRemove?: (row: DatasetSummary) => boolean
   /** 체크박스 다중 선택 모드. selectedIds + onToggleSelect 가 함께 주어지면 선택 컬럼을 앞에 붙인다. */
   selectedIds?: Set<number>
   onToggleSelect?: (id: number) => void
@@ -46,6 +48,7 @@ export function DatasetsGrid({
   emptyText = "데이터셋이 없습니다.",
   onRemove,
   removeLabel = "제거",
+  canRemove,
   selectedIds,
   onToggleSelect,
   onToggleSelectAll,
@@ -81,16 +84,17 @@ export function DatasetsGrid({
 
   const removeCol: ColumnDef<DatasetSummary> = {
     id: "remove",
-    cell: ({ row }) => (
-      <Button
-        size="sm"
-        variant="ghost"
-        className="h-6 text-destructive"
-        onClick={() => onRemove?.(row.original.id)}
-      >
-        {removeLabel}
-      </Button>
-    ),
+    cell: ({ row }) =>
+      !canRemove || canRemove(row.original) ? (
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-6 text-destructive"
+          onClick={() => onRemove?.(row.original.id)}
+        >
+          {removeLabel}
+        </Button>
+      ) : null,
     meta: { className: "w-[60px] text-center" },
   }
 
@@ -139,7 +143,7 @@ export function DatasetsGrid({
       )}
 
       {effectiveView === "card" ? (
-        <DatasetsCardView rows={data} onRemove={onRemove} removeLabel={removeLabel} />
+        <DatasetsCardView rows={data} onRemove={onRemove} removeLabel={removeLabel} canRemove={canRemove} />
       ) : (
     <div className="overflow-hidden rounded-md border">
       <Table>

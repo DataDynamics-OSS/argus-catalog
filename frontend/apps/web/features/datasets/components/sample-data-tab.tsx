@@ -6,7 +6,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import Papa from "papaparse"
 import { Loader2, RefreshCw, Save, Trash2, Upload } from "lucide-react"
-import { toast } from "sonner"
+import { errorMessage, notifyError, toast } from "@/lib/notify"
+import { throwOnError } from "@/features/auth/auth-fetch"
 
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
@@ -89,10 +90,11 @@ type SampleDataTabProps = {
   /** When true (synced dataset), the Delete button is hidden to prevent
    *  accidental removal of sync-managed sample data. */
   isSynced?: boolean
-  isAdmin?: boolean
+  /** 업로드·저장(Parquet 변환)·삭제 가능 여부 — 데이터셋 소유자 또는 관리자(서버와 동일 기준). */
+  canEdit?: boolean
 }
 
-export function SampleDataTab({ datasetId, isSynced = false, isAdmin = false }: SampleDataTabProps) {
+export function SampleDataTab({ datasetId, isSynced = false, canEdit = false }: SampleDataTabProps) {
   // Format: "parquet" when served from synced parquet, "csv" for uploaded CSV
   const [sampleFormat, setSampleFormat] = useState<"parquet" | "csv" | null>(null)
 
@@ -192,7 +194,7 @@ export function SampleDataTab({ datasetId, isSynced = false, isAdmin = false }: 
         setError(null)
       } catch (err) {
         console.error("Failed to parse CSV", { encoding: enc, delimiter: delim, err })
-        setError("Unable to display sample data. The file may be corrupted or use an unsupported format.")
+        setError("샘플 데이터를 표시하지 못했습니다. 파일이 손상되었거나 지원하지 않는 형식일 수 있습니다.")
         setRows([])
       }
     },
@@ -223,7 +225,7 @@ export function SampleDataTab({ datasetId, isSynced = false, isAdmin = false }: 
         rawBufferRef.current = null
         return
       }
-      if (!res.ok) throw new Error(`Failed to fetch sample (${res.status})`)
+      if (!res.ok) await throwOnError(res, "샘플 데이터를 불러오지 못했습니다.")
 
       const contentType = res.headers.get("content-type") || ""
 
@@ -247,7 +249,9 @@ export function SampleDataTab({ datasetId, isSynced = false, isAdmin = false }: 
       parseCsv(buf, encoding, effectiveDelimiter, effectiveEscapeChar, effectiveQuoteChar, lineDelimiter)
     } catch (err) {
       console.error("Failed to fetch sample data", { datasetId, err })
-      setError(err instanceof Error ? err.message : "샘플 데이터를 불러오지 못했습니다")
+      setError(errorMessage(err) ?? "샘플 데이터를 불러오지 못했습니다.")
+      // hasSample=false 이면 업로드 안내만 보이고 error 문구는 렌더되지 않으므로 알림으로도 알린다.
+      notifyError(err, "샘플 데이터를 불러오지 못했습니다.")
       setHasSample(false)
     } finally {
       setIsLoading(false)
@@ -345,7 +349,7 @@ export function SampleDataTab({ datasetId, isSynced = false, isAdmin = false }: 
       await loadSample()
     } catch (err) {
       console.error("Failed to save sample/convert parquet", { datasetId, err })
-      toast.error("샘플 데이터의 Parquet 변환에 실패했습니다.")
+      notifyError(err, "샘플 데이터를 Parquet 형식으로 변환하지 못했습니다.")
     } finally {
       setSaving(false)
     }
@@ -373,7 +377,7 @@ export function SampleDataTab({ datasetId, isSynced = false, isAdmin = false }: 
     e.target.value = ""
 
     if (file.size > MAX_FILE_SIZE) {
-      setUploadError(`File size (${(file.size / 1024).toFixed(1)} KB) exceeds the 100 KB limit.`)
+      setUploadError(`파일 크기(${(file.size / 1024).toFixed(1)} KB)가 최대 100 KB 를 넘습니다.`)
       return
     }
 
@@ -385,7 +389,8 @@ export function SampleDataTab({ datasetId, isSynced = false, isAdmin = false }: 
       await loadSample()
     } catch (err) {
       console.error("Failed to upload sample data", { datasetId, err })
-      setUploadError(err instanceof Error ? err.message : "업로드에 실패했습니다")
+      setUploadError(errorMessage(err) ?? "샘플 데이터를 업로드하지 못했습니다.")
+      notifyError(err, "샘플 데이터를 업로드하지 못했습니다.")
     } finally {
       setUploading(false)
     }
@@ -407,6 +412,7 @@ export function SampleDataTab({ datasetId, isSynced = false, isAdmin = false }: 
       setError(null)
     } catch (err) {
       console.error("Failed to delete sample data", { datasetId, err })
+      notifyError(err, "샘플 데이터를 삭제하지 못했습니다.")
     }
   }
 
@@ -594,21 +600,23 @@ export function SampleDataTab({ datasetId, isSynced = false, isAdmin = false }: 
           새로 고침
         </Button>
 
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={handleSave}
-          disabled={saving}
-          className="h-8"
-        >
-          {saving ? (
-            <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-          ) : (
-            <Save className="h-3.5 w-3.5 mr-1.5" />
-          )}
-          저장
-        </Button>
+        {canEdit && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleSave}
+            disabled={saving}
+            className="h-8"
+          >
+            {saving ? (
+              <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+            ) : (
+              <Save className="h-3.5 w-3.5 mr-1.5" />
+            )}
+            저장
+          </Button>
+        )}
 
         {!isLoading && rows.length > 0 && (
           <span className="text-sm text-muted-foreground ml-auto font-[family-name:var(--font-d2coding)]">
@@ -650,8 +658,8 @@ export function SampleDataTab({ datasetId, isSynced = false, isAdmin = false }: 
   // ---------------------------------------------------------------------------
   return (
     <Card>
-      {/* Hide Delete button for synced datasets and non-admin users */}
-      {hasSample && !isSynced && isAdmin && (
+      {/* Hide Delete button for synced datasets and users who cannot edit (owner/admin only) */}
+      {hasSample && !isSynced && canEdit && (
         <div className="flex justify-end px-4 pt-3">
           <Button size="sm" variant="outline" onClick={handleDelete} className="text-destructive">
             <Trash2 className="mr-1 h-3.5 w-3.5" />
@@ -674,7 +682,7 @@ export function SampleDataTab({ datasetId, isSynced = false, isAdmin = false }: 
         {hasSample && sampleFormat === "csv" && renderCsvView()}
 
         {/* Empty state: no sample file */}
-        {hasSample === false && isAdmin && (
+        {hasSample === false && canEdit && (
           <div className="flex flex-col items-center justify-center gap-4 p-8">
             {uploadError && (
               <p className="text-sm text-destructive">{uploadError}</p>
@@ -693,7 +701,7 @@ export function SampleDataTab({ datasetId, isSynced = false, isAdmin = false }: 
             </div>
           </div>
         )}
-        {hasSample === false && !isAdmin && (
+        {hasSample === false && !canEdit && (
           <div className="flex items-center justify-center p-8 text-sm text-muted-foreground">
             샘플 데이터가 없습니다.
           </div>

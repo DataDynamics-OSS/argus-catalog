@@ -10,7 +10,8 @@ import { FederationDatasetDetailView } from "@/features/federation/dataset-detai
 function DetailFromQuery() {
   const params = useSearchParams()
   const urn = params.get("urn") ?? ""
-  return <FederationDatasetDetailView urn={urn} />
+  // key=urn — 다른 데이터셋으로 이동하면 리니지·샘플·가져오기 상태까지 초기화
+  return <FederationDatasetDetailView key={urn} urn={urn} />
 }
 
 export default function FederationDatasetDetailPage() {

@@ -3,6 +3,14 @@
 플러그인이 의존하는 코어 확장 지점(seam)과 계약을 한 곳에 정리한 레퍼런스입니다. 이
 표면은 *안정적으로 유지* 되며, 변경할 때는 호환성에 주의해야 합니다.
 
+표로 들어가기 전에, 주요 확장 지점이 백엔드와 프론트로 나뉘어 어떻게 묶이는지
+한눈에 살펴보겠습니다.
+
+.백엔드·프론트 확장 지점
+image::diagrams/plugin-reference-01.png[백엔드·프론트 확장 지점,role="diagram"]
+
+각 확장 지점의 파일과 책임은 다음과 같습니다.
+
 == 코어 확장 지점
 
 플러그인이 닿는 코어 측 파일과 그 책임은 다음과 같습니다.
@@ -17,7 +25,7 @@
 
 | 백엔드 기동
 | `backend/app/main.py`
-| 코어 라우터 등록 뒤 `load_plugin_routers(app, enabled=settings.enabled_plugins)`
+| 기동 단계(lifespan)에서 `load_plugin_routers(app, enabled=settings.enabled_plugins)` — 코어 라우터 등록 뒤, `--config-yaml` 등으로 넘긴 설정 반영 후
 
 | 백엔드 설정
 | `backend/app/core/config.py`
@@ -25,7 +33,7 @@
 
 | 프론트 호스트 라우트
 | `app/dashboard/x/[...slug]/page.tsx`
-| `pluginScreens[slug]` 조회 → 렌더, 없으면 `notFound()`
+| `pluginScreens[slug]` 조회 → 렌더, 없으면 `notFound()`. 메뉴 `adminOnly`·권한 매트릭스로 접근을 막으면 *접근 권한 없음* 표시
 
 | 프론트 메뉴 병합
 | `lib/menu.ts`
@@ -38,6 +46,10 @@
 | 프론트 레지스트리
 | `plugins/registry.ts`
 | 활성 플러그인 배열 → `pluginMenus` / `pluginScreens` / `pluginIcons` 도출
+
+| 프론트 권한 레지스트리
+| `lib/permission-registry.ts`
+| `pluginMenus` 아이템마다 메뉴 권한 행 `plugin.<id>` 추가, `urlToMenuKey` 가 플러그인 URL 을 해당 키로 매핑
 |===
 
 == 백엔드 계약
@@ -57,7 +69,7 @@
 | 속성 | 타입 | 필수 | 기본
 
 | `router` | `fastapi.APIRouter` | O | —
-| `prefix` | `str` | X | `/api/v1`
+| `prefix` | `str` | X | `/api/v1` (`None`·빈 문자열도 기본값으로 대체)
 |===
 
 === `load_plugin_routers(app, enabled)`
@@ -67,7 +79,7 @@
 | 인자 | 의미
 
 | `app` | FastAPI 앱
-| `enabled` | 허용 플러그인 이름 목록. `None`/빈 목록이면 발견된 전부 로드.
+| `enabled` | 허용 플러그인 이름 목록(명시 허용). `None`/빈 목록이면 아무 것도 로드하지 않음. `"*"` 를 포함하면 발견된 전부 로드.
 |===
 
 반환: 등록에 성공한 플러그인 이름 목록(`list[str]`).
@@ -77,7 +89,7 @@
 [source,yaml]
 ----
 plugins:
-  enabled: acme,beta     # 비우면 설치된 전부 로드
+  enabled: acme,beta     # 비우면 아무 것도 로드하지 않음, "*" 는 전부(개발용)
 ----
 
 == 프론트엔드 계약
@@ -110,7 +122,7 @@ plugins:
 |===
 | 필드 | 타입 | 의미
 
-| `id` | `string` | 아이템 식별자
+| `id` | `string` | 아이템 식별자. 권한 메뉴 키는 `plugin.<id>` 가 된다
 | `title` | `string` | 메뉴 표시 이름
 | `url` | `string` | `/dashboard/x/<slug>` (화면 slug 와 일치)
 | `icon` | `string` | icon-map 또는 플러그인 `icons` 의 키
@@ -139,4 +151,6 @@ plugins:
 * xref:plugin/index.adoc[플러그인 개요]
 * xref:plugin/frontend.adoc[프론트엔드 화면 플러그인]
 * xref:plugin/backend.adoc[백엔드 API 플러그인]
-* xref:appendix/extensions.adoc[Extension 개요](쿼리/메타데이터 수집 확장)
+* xref:plugin/configuration.adoc[플러그인 설정·배포]
+* xref:plugin/usage.adoc[플러그인 사용·운영]
+* xref:extensions/index.adoc[Extension 개요](쿼리/메타데이터 수집 확장)

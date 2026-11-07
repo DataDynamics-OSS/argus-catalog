@@ -11,6 +11,7 @@ import { useRouter } from "next/navigation"
 import { FilePlus2, RefreshCw } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
+import { usePermissions } from "@/features/permissions/use-permissions"
 import { Badge } from "@workspace/ui/components/badge"
 import {
   type ChangeRequest,
@@ -20,7 +21,9 @@ import {
   CHANGE_TYPE_LABEL,
   PRIORITY_LABEL,
   StatusBadge,
+  useUserNames,
 } from "@/features/change-mgmt/labels"
+import { errorMessage } from "@/lib/notify"
 
 function fmtDate(s?: string | null): string {
   if (!s) return "—"
@@ -31,7 +34,11 @@ function fmtDate(s?: string | null): string {
 }
 
 export function DatasetChangeRequests({ datasetId }: { datasetId: number }) {
+  // 기능 권한 changes.create — 서버도 같은 키로 403
+  const canCreate = usePermissions().isFeatureAllowed("changes.create")
   const router = useRouter()
+  // 요청자를 다른 변경 관리 화면처럼 '이름 (username)' 으로 (예전에는 username 만)
+  const { approverLabel } = useUserNames()
   const [items, setItems] = useState<ChangeRequest[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -42,7 +49,7 @@ export function DatasetChangeRequests({ datasetId }: { datasetId: number }) {
     try {
       setItems(await listChangeRequests({ dataset_id: datasetId }))
     } catch (e) {
-      setError(e instanceof Error ? e.message : "변경 요청 목록 조회 실패")
+      setError(errorMessage(e) ?? "변경 요청 목록을 불러오지 못했습니다.")
     } finally {
       setLoading(false)
     }
@@ -60,12 +67,14 @@ export function DatasetChangeRequests({ datasetId }: { datasetId: number }) {
           <Button variant="outline" size="sm" onClick={() => void reload()} disabled={loading}>
             <RefreshCw className={`mr-1 h-4 w-4 ${loading ? "animate-spin" : ""}`} /> 새로고침
           </Button>
-          <Button
-            size="sm"
-            onClick={() => router.push(`/dashboard/changes/new?dataset_id=${datasetId}`)}
-          >
-            <FilePlus2 className="mr-1 h-4 w-4" /> 새 변경 요청
-          </Button>
+          {canCreate && (
+            <Button
+              size="sm"
+              onClick={() => router.push(`/dashboard/changes/new?dataset_id=${datasetId}`)}
+            >
+              <FilePlus2 className="mr-1 h-4 w-4" /> 새 변경 요청
+            </Button>
+          )}
         </div>
       </div>
 
@@ -98,7 +107,7 @@ export function DatasetChangeRequests({ datasetId }: { datasetId: number }) {
                 <Badge variant="outline">{PRIORITY_LABEL[cr.priority]}</Badge>
               </div>
               <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                <span>요청자: {cr.requested_by}</span>
+                <span>요청자: {approverLabel(cr.requested_by)}</span>
                 <span>생성: {fmtDate(cr.created_at)}</span>
                 {cr.scheduled_at && <span>적용 예정: {fmtDate(cr.scheduled_at)}</span>}
               </div>

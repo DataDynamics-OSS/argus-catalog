@@ -25,6 +25,7 @@ import {
 } from "@workspace/ui/components/table"
 
 import { fetchStats, type FederationStats } from "./api"
+import { errorMessage } from "@/lib/notify"
 
 function StatCard({
   icon,
@@ -76,7 +77,7 @@ export function FederationObservabilityPanel() {
       setStats(await fetchStats())
       setError(null)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(errorMessage(e) ?? String(e))
     } finally {
       setLoading(false)
     }
@@ -198,8 +199,8 @@ export function FederationObservabilityPanel() {
                           )}
                         </div>
                         {inst.last_error && (
-                          <div className="mt-0.5 flex items-center gap-1 text-xs text-destructive">
-                            <AlertTriangle className="h-3 w-3" />{" "}
+                          <div className="mt-0.5 flex items-start gap-1 text-xs break-all whitespace-normal text-destructive">
+                            <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />{" "}
                             {inst.last_error}
                           </div>
                         )}

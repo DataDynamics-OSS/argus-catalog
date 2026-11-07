@@ -2,10 +2,15 @@
 """데이터 카탈로그용 SQLAlchemy ORM 모델.
 
 DataHub 를 본떠 모델링한 핵심 엔티티 유형:
+- Organization → System → Datasource: 데이터셋이 속하는 조직·시스템·데이터 소스 계층
 - Dataset: 테이블, 뷰, 토픽, 파일
 - Tag: 분류용 라벨
 - GlossaryTerm: 비즈니스 용어집 용어
 - Owner: 데이터셋 소유권 추적
+- DatasetLineage / ColumnRelationship: 데이터셋 간 리니지와 사용 기반 컬럼 관계
+- Taxonomy / Category: 데이터셋 분류 체계
+
+"true"/"false" 플래그 다수는 Boolean 이 아니라 ``String(5)`` 문자열로 저장한다.
 """
 
 from sqlalchemy import (
@@ -48,9 +53,9 @@ class Organization(Base):
 
 
 class System(Base):
-    """시스템 — 조직이 특정 이름으로 운영하는 데이터 데이터 소스 묶음(앱/서비스 배포).
+    """시스템 — 조직이 특정 이름으로 운영하는 데이터 소스 묶음(앱/서비스 배포).
 
-    예: '고객데이터데이터 소스' 시스템 안에 trino-prod / mysql-oltp / impala-mart 데이터 소스.
+    예: '고객데이터 플랫폼' 시스템 안에 trino-prod / mysql-oltp / impala-mart 데이터 소스.
     """
 
     __tablename__ = "catalog_systems"
@@ -74,17 +79,23 @@ class System(Base):
 
 
 class Datasource(Base):
-    """데이터 데이터 소스 레지스트리 (예: Hive, MySQL, Kafka, S3)."""
+    """데이터 소스 레지스트리 (예: Hive, MySQL, Kafka, S3).
+
+    ``id`` 는 내부 PK, ``datasource_id`` 는 외부에 노출되는 문자열 식별자, ``type`` 은
+    유형 키(datasource_metadata.DATASOURCE_METADATA 의 키와 대응)다.
+    """
 
     __tablename__ = "catalog_datasources"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    datasource_id = Column(String(100), nullable=False, unique=True)
+    # DDL(VARCHAR(36)) 과 길이를 맞춘다 — "{type}-{ts_hex}{rand_hex}" 형식(schemas.DatasourceCreate 참고).
+    datasource_id = Column(String(36), nullable=False, unique=True)
     name = Column(String(200), nullable=False)
     type = Column(String(100), nullable=False)
     logo_url = Column(String(500))
-    # 환경 구분 (DEV/STAGING/PROD). 데이터 소스 생성 시 한 번 정해지면 이후 변경 불가 —
-    # metadata-sync 어댑터가 이 값을 dataset.origin 으로 그대로 적용한다.
+    # 환경 구분 (DEV/STAGING/PROD). 수정 API 로 변경(승격) 가능하며, 변경 시 소속 데이터셋의
+    # origin 도 함께 갱신된다(URN 에는 포함되지 않아 식별자는 불변). metadata-sync 어댑터가
+    # 이 값을 dataset.origin 으로 그대로 적용한다.
     origin = Column(String(20), nullable=False, default="DEV")
     # 소속 시스템 (NULL = 미분류). 시스템 삭제 시 SET NULL 로 미분류로 떨어진다.
     system_id = Column(
@@ -94,7 +105,10 @@ class Datasource(Base):
 
 
 class DatasourceConfiguration(Base):
-    """데이터 소스 인스턴스의 접속 및 설정 정보."""
+    """데이터 소스 인스턴스의 접속 및 설정 정보(데이터 소스당 1행).
+
+    ``config_json`` 의 비밀값은 ``enc:`` 암호문으로 저장된다(datasource_secrets 참조).
+    """
 
     __tablename__ = "catalog_datasource_configurations"
 
@@ -107,7 +121,7 @@ class DatasourceConfiguration(Base):
 
 
 class Dataset(Base):
-    """데이터셋 엔티티 — 데이터 데이터 소스의 테이블, 뷰, 토픽 또는 파일."""
+    """데이터셋 엔티티 — 데이터 소스의 테이블, 뷰, 토픽 또는 파일."""
 
     __tablename__ = "catalog_datasets"
 
@@ -131,8 +145,8 @@ class Dataset(Base):
     # 값이 있으면 UI 의 dataset 상세에 "DDL" tab 이 노출된다.
     ddl = Column(Text)
     created_by = Column(String(200))  # 행 단위 소유권 — 생성자
-    is_synced = Column(String(5), default="false")
-    status = Column(String(20), nullable=False, default="active")
+    is_synced = Column(String(5), default="false")  # 동기화로 수집된 데이터셋이면 "true"
+    status = Column(String(20), nullable=False, default="active")  # active / removed(원본에서 사라짐) 등
 
     # --- 확장 메타데이터 (design/dataset-extended-metadata-design.md) ---
     # A. 생명주기·운영
@@ -239,7 +253,8 @@ class SchemaSnapshot(Base):
     """스키마 변경 이력 스냅샷.
 
     동기화가 변경을 감지할 때마다 전체 스키마 스냅샷을 기록한다.
-    실제 변경(ADD/MODIFY/DROP)이 감지된 경우에만 저장한다.
+    실제 변경(ADD/MODIFY/DROP)이 감지됐거나 데이터셋의 첫 스냅샷(기준점)일 때만 저장하며,
+    데이터셋당 최신 20개만 유지한다.
     """
 
     __tablename__ = "catalog_schema_snapshots"
@@ -250,7 +265,7 @@ class SchemaSnapshot(Base):
     synced_at = Column(DateTime(timezone=True), server_default=func.now())
     schema_json = Column(Text, nullable=False)       # 전체 스키마를 JSON 배열로 저장
     field_count = Column(Integer, default=0)
-    change_summary = Column(String(500))              # 예: "Added 2, Modified 1, Dropped 1"
+    change_summary = Column(String(500))              # 예: "추가 2개, 변경 1개, 삭제 1개" / "최초 동기화"
     changes_json = Column(Text)                       # 개별 변경 내역을 JSON 배열로 저장
 
 
@@ -281,9 +296,13 @@ class GlossaryTerm(Base):
     """비즈니스 용어집 용어."""
 
     __tablename__ = "catalog_glossary_terms"
+    __table_args__ = (
+        # 이름은 유형별로 유일 — 분류 '고객' 과 용어 '고객' 은 공존할 수 있다
+        UniqueConstraint("term_type", "name", name="uq_glossary_terms_type_name"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    name = Column(String(200), nullable=False, unique=True)
+    name = Column(String(200), nullable=False)
     description = Column(Text)
     parent_id = Column(Integer, ForeignKey("catalog_glossary_terms.id"))
     term_type = Column(String(20), nullable=False, default="TERM")  # CATEGORY 또는 TERM
@@ -317,7 +336,7 @@ class Owner(Base):
 
 
 # ---------------------------------------------------------------------------
-# 데이터 소스 메타데이터 모델
+# 파이프라인·리니지·컬럼 관계 모델
 # ---------------------------------------------------------------------------
 
 class DataPipeline(Base):
@@ -353,6 +372,7 @@ class DatasetLineage(Base):
     - QUERY_AGGREGATED: 쿼리 로그 분석으로 자동 수집 (같은 데이터 소스 내)
     - PIPELINE: 파이프라인 등록을 통해 명시적 연결 (이기종 간)
     - MANUAL: 사용자가 UI에서 직접 등록 (이기종 간)
+    - FK: metadata-sync 가 발견한 FK 제약(부모 테이블 → 자식 테이블)
 
     예시:
       PostgreSQL.hr_db.employees → Impala.analytics.emp_fact
@@ -376,8 +396,8 @@ class DatasetLineage(Base):
     target_dataset_id = Column(                                           # 대상 데이터셋 (데이터를 받는 쪽)
         Integer, ForeignKey("catalog_datasets.id", ondelete="CASCADE"), nullable=False
     )
-    relation_type = Column(String(32), nullable=False, default="READ_WRITE")  # 관계 유형: ETL, FILE_EXPORT, CDC, REPLICATION, DERIVED, READ_WRITE
-    lineage_source = Column(String(32), nullable=False, default="QUERY_AGGREGATED")  # 리니지 출처: QUERY_AGGREGATED, PIPELINE, MANUAL
+    relation_type = Column(String(32), nullable=False, default="READ_WRITE")  # 관계 유형: ETL, FILE_EXPORT, CDC, REPLICATION, DERIVED, READ_WRITE, REFERENCE
+    lineage_source = Column(String(32), nullable=False, default="QUERY_AGGREGATED")  # 리니지 출처: QUERY_AGGREGATED, PIPELINE, MANUAL, FK
     pipeline_id = Column(                                                 # 파이프라인 참조 (PIPELINE 출처일 때)
         Integer, ForeignKey("argus_data_pipeline.id", ondelete="SET NULL")
     )
@@ -457,6 +477,10 @@ class DatasetColumnMapping(Base):
     transform_type = Column(String(64), nullable=False, default="DIRECT")  # 변환 유형: DIRECT, CAST, EXPRESSION, DERIVED
     transform_expr = Column(String(500))                                 # 변환 수식 (CAST/EXPRESSION일 때, 예: "CAST(emp_id AS BIGINT)")
 
+
+# ---------------------------------------------------------------------------
+# 데이터 소스 메타데이터 모델 (datasource_metadata.DATASOURCE_METADATA 로 시드)
+# ---------------------------------------------------------------------------
 
 class DatasourceDataType(Base):
     """데이터 소스별 지원 데이터 타입."""

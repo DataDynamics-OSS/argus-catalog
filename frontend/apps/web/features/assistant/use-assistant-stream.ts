@@ -56,7 +56,7 @@ export function useAssistantStream() {
           signal: ac.signal,
         })
         if (!resp.ok || !resp.body) {
-          const err = await resp.text().catch(() => "스트림 시작 실패")
+          const err = await resp.text().catch(() => "응답 스트림을 시작하지 못했습니다.")
           setTurns((t) => replaceLast(t, { kind: "error", text: err.slice(0, 400) }))
           return
         }

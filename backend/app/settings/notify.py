@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 class SlackConfig(BaseModel):
+    """Slack incoming webhook 설정."""
     webhook_url: str = ""          # Slack 수신 webhook URL
     channel: str = ""              # 선택 (#channel) — webhook 기본 채널 override
     username: str = ""             # 선택 — 표시 이름 override
@@ -26,6 +27,7 @@ class SlackConfig(BaseModel):
 
 
 class MattermostConfig(BaseModel):
+    """Mattermost incoming webhook 설정."""
     webhook_url: str = ""          # Mattermost 수신 webhook URL
     channel: str = ""              # 선택 (채널명)
     username: str = ""             # 선택
@@ -33,6 +35,7 @@ class MattermostConfig(BaseModel):
 
 
 class NotifyConfig(BaseModel):
+    """알림 설정 — provider 에 따라 slack / mattermost 중 하나만 사용한다."""
     enabled: bool = False
     provider: str = "slack"        # "slack" | "mattermost"
     timeout_seconds: int = 10
@@ -41,6 +44,7 @@ class NotifyConfig(BaseModel):
 
 
 def _bool(v: str | bool) -> bool:
+    """설정 문자열을 bool 로 — true/1/yes(대소문자 무시)만 True."""
     return str(v).lower() in ("true", "1", "yes")
 
 
@@ -67,6 +71,7 @@ async def load_notify_config(session: AsyncSession) -> NotifyConfig:
 
 
 def _active(cfg: NotifyConfig) -> SlackConfig | MattermostConfig:
+    """활성 provider 의 설정 — "mattermost" 가 아니면 모두 Slack 으로 본다."""
     return cfg.mattermost if cfg.provider == "mattermost" else cfg.slack
 
 
@@ -105,6 +110,8 @@ async def send_notify(
     if sub.icon_emoji:
         payload["icon_emoji"] = sub.icon_emoji
 
+    # webhook URL 에는 토큰이 들어 있으므로 로그에 남기지 않는다
+    logger.debug("알림 발송 시도: provider=%s channel=%s text_len=%d", cfg.provider, ch or "-", len(text))
     try:
         import httpx
 

@@ -5,6 +5,9 @@
 # python-quality.py (pandas 버전) 기준. dataset-quality.py (PySpark 버전)는
 # pandas 대신 Spark 환경(spark-submit + 타입별 JDBC 드라이버 jar)이 필요하며
 # 파이썬 추가 의존성은 없다 (표준 라이브러리 + pyspark 런타임 제공).
+# 공통 모듈 quality_common.py 는 표준 라이브러리만 사용하며, spark-submit 시
+# --py-files quality/quality_common.py 로 함께 배포한다.
+# 단위 테스트(quality/tests)는 pytest 만 있으면 된다.
 #
 # 드라이버는 지연 임포트라 전부 설치하지 않아도 동작하지만,
 # 모든 데이터 소스 타입을 지원하도록 기본 포함한다.
@@ -17,6 +20,8 @@ pandas>=2.0
 
 # mysql / mariadb / starrocks (MySQL 와이어 프로토콜)
 pymysql>=1.1
+# MySQL 8 기본 인증(caching_sha2_password)을 SSL 없이 처음 처리할 때 PyMySQL 이 요구한다
+cryptography>=42
 
 # postgresql / greenplum
 psycopg2-binary>=2.9
@@ -24,7 +29,7 @@ psycopg2-binary>=2.9
 # redshift
 redshift_connector>=2.1
 
-# mssql / sqlserver
+# mssql / sqlserver (SSL encryption 인자는 최신 pymssql 필요 — 미지원 시 freetds.conf)
 pymssql>=2.3
 
 # oracle / tibero (Oracle 호환)

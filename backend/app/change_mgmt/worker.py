@@ -31,12 +31,16 @@ from app.change_mgmt.activities import (
     wait_acks_summary,
 )
 from app.change_mgmt.workflow import ChangeApprovalWorkflow
+from app.core.secrets import check_required_secrets
 
 logger = logging.getLogger(__name__)
 
 
 async def main() -> None:
+    """워커 프로세스 진입점 — Temporal 에 연결해 워크플로우·액티비티를 등록하고 폴링한다."""
     logging.basicConfig(level=logging.INFO)
+    # 운영 시크릿 점검(서버와 동일) — 워커도 자격증명·토큰을 다룬다
+    check_required_secrets()
     client = await temporal_client.connect()
 
     worker = Worker(

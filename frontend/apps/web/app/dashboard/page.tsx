@@ -7,9 +7,12 @@ import {
 import Link from "next/link"
 
 import { Badge } from "@workspace/ui/components/badge"
+import { Button } from "@workspace/ui/components/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@workspace/ui/components/card"
 import { DashboardHeader } from "@/components/dashboard-header"
+import { authFetch } from "@/features/auth/auth-fetch"
 import { Highchart } from "@/components/charts/highchart"
+import { fillDaily, fillHourly } from "@/features/dashboard/trend"
 
 type CatalogStats = {
   total_datasets: number
@@ -51,6 +54,19 @@ function shortDate(dateStr: string): string {
   return `${parts[1]}/${parts[2]}`
 }
 
+// 24시간 추이 버킷은 UTC ISO 시각으로 온다 — 브라우저 로컬 시각으로 표시
+const pad2 = (n: number) => String(n).padStart(2, "0")
+function localHour(iso: string): string {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? iso : `${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+}
+function localDateHour(iso: string): string {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime())
+    ? iso
+    : `${pad2(d.getMonth() + 1)}/${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+}
+
 const DATASOURCE_COLORS = [
   "#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6",
   "#ec4899", "#06b6d4", "#f97316", "#14b8a6", "#6366f1",
@@ -76,20 +92,40 @@ const COMMON_CHART_OPTS = {
 export default function DashboardPage() {
   const [stats, setStats] = useState<CatalogStats | null>(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   const fetchStats = useCallback(async () => {
     try {
       setLoading(true)
-      const res = await fetch("/api/v1/catalog/stats")
+      setError(null)
+      // 7일·30일 추이를 브라우저 시간대 날짜로 묶도록 IANA 시간대를 함께 보낸다
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
+      const res = await authFetch(`/api/v1/catalog/stats${tz ? `?tz=${encodeURIComponent(tz)}` : ""}`)
       if (res.ok) setStats(await res.json())
+      else setError(`통계를 불러오지 못했습니다 (HTTP ${res.status})`)
     } catch {
-      // ignore
+      setError("통계를 불러오지 못했습니다 (네트워크 오류)")
     } finally {
       setLoading(false)
     }
   }, [])
 
   useEffect(() => { fetchStats() }, [fetchStats])
+
+  // 조회 실패 시 스켈레톤을 계속 보여주지 않고 오류 문구 + 다시 시도
+  if (!loading && (error || !stats)) {
+    return (
+      <>
+        <DashboardHeader title="데이터 카탈로그" />
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 p-4">
+          <p className="text-sm text-destructive">{error ?? "통계를 불러오지 못했습니다"}</p>
+          <Button variant="outline" size="sm" onClick={() => fetchStats()}>
+            <RefreshCw className="h-3.5 w-3.5" /> 다시 시도
+          </Button>
+        </div>
+      </>
+    )
+  }
 
   if (loading || !stats) {
     return (
@@ -128,9 +164,14 @@ export default function DashboardPage() {
     name: shortName(d.name), fullName: d.name, count: d.count,
   }))
 
-  const ds1dData = stats.daily_datasets_1d.map((d) => ({ date: d.date, fullDate: d.date, count: d.count }))
-  const ds7dData = stats.daily_datasets_7d.map((d) => ({ date: shortDate(d.date), fullDate: d.date, count: d.count }))
-  const ds30dData = stats.daily_datasets_30d.map((d) => ({ date: shortDate(d.date), fullDate: d.date, count: d.count }))
+  // API 는 데이터가 있는 버킷만 준다 — 빈 시간·날짜를 0 으로 채워 시간축을 연속으로 그린다(데이터가 전혀 없으면 안내 문구)
+  const now = new Date()
+  const ds1dData = (stats.daily_datasets_1d.length ? fillHourly(stats.daily_datasets_1d, now) : [])
+    .map((d) => ({ date: localHour(d.date), fullDate: localDateHour(d.date), count: d.count }))
+  const ds7dData = (stats.daily_datasets_7d.length ? fillDaily(stats.daily_datasets_7d, 7, now) : [])
+    .map((d) => ({ date: shortDate(d.date), fullDate: d.date, count: d.count }))
+  const ds30dData = (stats.daily_datasets_30d.length ? fillDaily(stats.daily_datasets_30d, 30, now) : [])
+    .map((d) => ({ date: shortDate(d.date), fullDate: d.date, count: d.count }))
 
   return (
     <>
@@ -337,7 +378,12 @@ export default function DashboardPage() {
                     chart: { ...COMMON_CHART_OPTS.chart, type: "column" },
                     xAxis: { categories: ds1dData.map((d) => d.date), labels: { style: { fontSize: "10px" } } },
                     yAxis: { title: { text: undefined }, allowDecimals: false, labels: { style: { fontSize: "11px" } } },
-                    tooltip: { pointFormat: "신규 데이터셋: <b>{point.y}</b>" },
+                    tooltip: {
+                      formatter() {
+                        const full = ds1dData[this.index!]?.fullDate ?? this.x
+                        return `<b>${full}</b><br/>신규 데이터셋: ${this.y}`
+                      },
+                    },
                     series: [{ type: "column", data: ds1dData.map((d) => d.count), color: "#10b981" }],
                   }}
                 />

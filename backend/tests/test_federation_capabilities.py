@@ -27,6 +27,32 @@ from app.federation import schemas as s
 from app.settings.models import CatalogConfiguration
 
 
+def _test_filter_export_item() -> None:
+    item = {
+        "urn": "u", "name": "n", "datasource_name": "ds", "description": "d",
+        "summary": "s", "display_name": "dn", "qualified_name": "q", "origin": "PROD",
+        "fields": [{"field_path": "c1", "field_type": "int", "description": "cd"}],
+    }
+    full = cap.filter_export_item(item, cap.all_keys())
+    assert full == item                                           # 전부 노출 → 그대로
+
+    none = cap.filter_export_item(item, [])
+    assert none["urn"] == "u" and none["name"] == "n" and none["datasource_name"] == "ds"
+    for k in ("description", "summary", "display_name", "qualified_name", "origin"):
+        assert none[k] is None, k
+    assert none["fields"] == []                                   # schema 미노출
+
+    schema_only = cap.filter_export_item(item, ["schema", "schema.type"])
+    assert schema_only["fields"] == [
+        {"field_path": "c1", "field_type": "int", "description": None}
+    ]
+    assert item["description"] == "d"                             # 원본 불변
+
+    # 검색 hit 처럼 fields 가 없는 항목도 처리
+    hit = cap.filter_export_item({"urn": "u", "description": "d"}, ["origin"])
+    assert hit == {"urn": "u", "description": None}
+
+
 def _test_registry_and_filter() -> None:
     keys = cap.all_keys()
     assert "schema" in keys and "schema.pii" in keys and "sample" in keys
@@ -157,10 +183,12 @@ async def _run_db() -> None:
 def test_federation_capabilities() -> None:
     """pytest 진입점."""
     _test_registry_and_filter()
+    _test_filter_export_item()
     asyncio.run(_run_db())
 
 
 if __name__ == "__main__":
     _test_registry_and_filter()
+    _test_filter_export_item()
     asyncio.run(_run_db())
     print("test_federation_capabilities OK")

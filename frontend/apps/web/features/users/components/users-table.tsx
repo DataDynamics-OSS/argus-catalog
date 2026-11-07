@@ -10,8 +10,8 @@
  * - **Server-side filtering**: Filters (status, role, search text) are collected
  *   from the toolbar and sent to the backend when the Search button is clicked.
  *   The `manualFiltering` flag prevents client-side filtering.
- * - **Client-side sorting**: Column sorting is handled locally on the current
- *   page's data using TanStack Table's built-in sort models.
+ * - **Server-side sorting**: 열 머리글 정렬은 현재 페이지가 아니라 전체 결과 기준으로 서버가
+ *   정렬한다 (`manualSorting`). 정렬을 바꾸면 1페이지부터 다시 조회한다.
  * - **Row selection**: Checkbox-based multi-select with "select all" support.
  *   Selected rows are synced to the UsersProvider context for bulk actions.
  * - **Toolbar**: Search input, faceted filters (Status, Role), and action buttons.
@@ -30,7 +30,6 @@ import {
   getCoreRowModel,
   getFacetedRowModel,
   getFacetedUniqueValues,
-  getSortedRowModel,
   useReactTable,
 } from "@tanstack/react-table"
 
@@ -71,12 +70,14 @@ export function UsersTable({ data, isLoading }: UsersTableProps) {
     setPage,
     setPageSize,
     searchUsers,
+    sort,
+    setSort,
   } = useUsers()
 
   // Local table state managed by TanStack Table.
   const [rowSelection, setRowSelection] = useState({})
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
-  const [sorting, setSorting] = useState<SortingState>([])
+  const sorting: SortingState = useMemo(() => (sort ? [sort] : []), [sort])
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
   // 소속 드롭다운 필터 옵션 (distinct 소속 목록)
   const [organizations, setOrganizations] = useState<string[]>([])
@@ -113,6 +114,8 @@ export function UsersTable({ data, isLoading }: UsersTableProps) {
     enableRowSelection: true,
     manualPagination: true,
     manualFiltering: true,
+    manualSorting: true,
+    enableMultiSort: false,
     onPaginationChange: (updater) => {
       const next = typeof updater === "function"
         ? updater({ pageIndex: page - 1, pageSize })
@@ -125,10 +128,12 @@ export function UsersTable({ data, isLoading }: UsersTableProps) {
     },
     onColumnFiltersChange: setColumnFilters,
     onRowSelectionChange: setRowSelection,
-    onSortingChange: setSorting,
+    onSortingChange: (updater) => {
+      const next = typeof updater === "function" ? updater(sorting) : updater
+      setSort(next[0] ?? null)
+    },
     onColumnVisibilityChange: setColumnVisibility,
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
     getFacetedRowModel: getFacetedRowModel(),
     getFacetedUniqueValues: getFacetedUniqueValues(),
   })

@@ -4,6 +4,14 @@ External API 는 외부 시스템이 Argus Catalog 의 데이터셋 메타데이
 안정적이고 빠르게 조회할 수 있도록 마련한 전용 API 입니다. 내부에 LRU + TTL 캐시를 두고 있어
 같은 요청이 반복되면 *1 ms 미만* 으로 응답합니다.
 
+호출 한 건이 어떤 단계를 거쳐 응답으로 돌아오는지 먼저 그림으로 살펴보겠습니다.
+
+.External API 조회와 캐시
+image::diagrams/appendix-api-01.png[External API 조회와 캐시,role="diagram"]
+
+토큰으로 인증을 통과한 요청은 먼저 캐시를 확인하고, 적중하면 곧바로, 그렇지 않으면 DB 를 조회해
+응답합니다. 아래에서 진입 베이스와 인증부터 차례로 살펴보겠습니다.
+
 == 진입 베이스
 
 모든 호출은 아래 주소를 기준으로 합니다.
@@ -19,7 +27,22 @@ http://<server>:4600/api/v1/external/...
 * Local JWT — `Authorization: Bearer <token>` (`/api/v1/auth/login` 으로 발급).
 * Keycloak — OIDC 발급 토큰 동일.
 
-외부 시스템에는 사용자 계정 대신 *Service Account* 토큰을 별도로 발급해 쓰시기를 권장합니다.
+`/api/v1/*` 의 모든 API 는 사용자 토큰이 있어야 하며, 없으면 `401` 을 돌려줍니다. 예외는 로그인 전에 쓰는
+`/auth/login` · `/auth/refresh` · `/auth/logout` · `/auth/type` 과, 자체 토큰으로 검증하는 페더레이션 export
+(peer 의 export 토큰) · MCP 배포 정책 번들 · 감사 이벤트 수집(배포 서비스 토큰) · 다운로드 링크(`?token=`)입니다.
+
+Argus Catalog 에는 외부 시스템 전용 토큰(Service Account · API 키)을 발급하는 기능이 없습니다. 외부 시스템용 사용자 계정을
+따로 만들고, 그 계정으로 로그인해 받은 토큰을 씁니다(로컬 인증의 Access 토큰은 8시간 유효하며 `/auth/refresh` 로 갱신).
+
+[source,bash]
+----
+TOKEN=$(curl -s -X POST http://<server>:4600/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"<사용자명>","password":"<비밀번호>"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+----
+
+아래 예시는 모두 이렇게 받은 `$TOKEN` 을 씁니다.
 
 == URN 기반 조회 (권장)
 
@@ -43,7 +66,8 @@ URN 형식::
 
 [source,bash]
 ----
-curl "http://<server>:4600/api/v1/external/metadata?urn=mysql-19d0bfe9.sakila.actor.PROD.dataset"
+curl "http://<server>:4600/api/v1/external/metadata?urn=mysql-19d0bfe9.sakila.actor.PROD.dataset" \
+  -H "Authorization: Bearer $TOKEN"
 ----
 
 == ID 기반 조회 (내부 시스템)
@@ -180,19 +204,20 @@ NULL 을 허용하는 컬럼은 Avro union 으로 변환됩니다 (`["null", typ
 
 | `GET /cache/stats` | size, hits, misses, hit_rate.
 | `GET /cache/config` | max_size, ttl_seconds, enabled.
-| `PUT /cache/config` | 런타임 변경 (재시작 불필요).
-| `DELETE /datasets/{id}/cache` | 데이터셋 단위 무효화.
-| `DELETE /cache` | 전체 캐시 초기화.
+| `PUT /cache/config` | 런타임 변경 (재시작 불필요, 관리자).
+| `DELETE /datasets/{id}/cache` | 데이터셋 단위 무효화 (관리자).
+| `DELETE /cache` | 전체 캐시 초기화 (관리자).
 |===
 
 [source,bash]
 ----
 curl -X PUT http://<server>:4600/api/v1/external/cache/config \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"max_size": 2000, "ttl_seconds": 600, "enabled": true}'
 ----
 
-같은 설정과 통계 카드는 UI 의 *Settings → Cache* 탭에서도 확인할 수 있습니다.
+같은 설정과 통계 카드는 UI 의 xref:ops/settings.adoc#_cache[설정 → 캐시] 에서도 확인할 수 있습니다.
 
 == 사용 시나리오
 

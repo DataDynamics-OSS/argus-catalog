@@ -37,19 +37,24 @@ from app.models.models import ModelDownloadLog, ModelVersion, RegisteredModel
 from app.oci_hub.models import OciModel, OciModelDownloadLog, OciModelVersion
 
 
-# 시간 분포: 최근 24시간 35%, 7일 이내 추가 25%, 나머지 40% 는 N일 전체에 균등
+# 시간 분포: 최근 24시간 35%, 24시간~7일 25%, 나머지 40% 는 7일~N일 구간에 균등
 def _random_timestamp(days_back: int, now: datetime) -> datetime:
+    """위 분포로 ``now`` 이전의 무작위 시각을 만든다.
+
+    각 구간의 상한은 ``days_back`` 일로 자른다 — ``days_back`` 이 7 미만이어도 randint 범위가
+    뒤집혀 ValueError 가 나지 않고, 모든 시각이 최근 ``days_back`` 일(최소 1일) 안에 든다.
+    """
+    max_min = max(1, days_back) * 24 * 60
     r = random.random()
     if r < 0.35:
-        # 최근 24시간 내
-        offset = timedelta(minutes=random.randint(0, 24 * 60))
+        lo, hi = 0, 24 * 60  # 최근 24시간 내
     elif r < 0.60:
-        # 최근 24시간 ~ 7일
-        offset = timedelta(minutes=random.randint(24 * 60, 7 * 24 * 60))
+        lo, hi = 24 * 60, 7 * 24 * 60  # 최근 24시간 ~ 7일
     else:
-        # 최근 7일 ~ N일
-        offset = timedelta(minutes=random.randint(7 * 24 * 60, days_back * 24 * 60))
-    return now - offset
+        lo, hi = 7 * 24 * 60, max_min  # 최근 7일 ~ N일
+    hi = min(hi, max_min)
+    lo = min(lo, hi)
+    return now - timedelta(minutes=random.randint(lo, hi))
 
 
 async def _seed_mlflow_downloads(
@@ -88,20 +93,24 @@ async def _seed_mlflow_downloads(
 async def _seed_oci_downloads(
     session: AsyncSession, count: int, days_back: int, dry_run: bool,
 ) -> int:
-    models = (await session.execute(select(OciModel.id, OciModel.name))).all()
-    if not models:
-        print("[OCI] 등록된 OciModel 이 없습니다. download log 시드 건너뜀.")
+    # 실제로 존재하는 (OCI 모델, 버전) 쌍에서 무작위 선택
+    versions = (await session.execute(
+        select(OciModel.name, OciModelVersion.version)
+        .join(OciModelVersion, OciModelVersion.model_id == OciModel.id)
+    )).all()
+    if not versions:
+        print("[OCI] 등록된 OciModelVersion 이 없습니다. download log 시드 건너뜀.")
         return 0
 
     now = datetime.now(timezone.utc)
     types = ["sdk", "cli", "rest"]
     inserted = 0
     for _ in range(count):
-        _, model_name = random.choice(models)
+        model_name, version = random.choice(versions)
         ts = _random_timestamp(days_back, now)
         entry = OciModelDownloadLog(
             model_name=model_name,
-            version=random.randint(1, 3),
+            version=version,
             download_type=random.choice(types),
             client_ip=f"10.0.{random.randint(0, 5)}.{random.randint(1, 254)}",
             user_agent="seed-test/1.0",
@@ -116,7 +125,7 @@ async def _seed_oci_downloads(
 async def _touch_mlflow_publish(
     session: AsyncSession, max_count: int, days_back: int, dry_run: bool,
 ) -> int:
-    # READY 상태이며 finished_at 가 있는 row 중 N개를 골라 최근 시각으로 갱신
+    # READY 상태 버전 중 최대 N개를 골라 finished_at 을 최근 시각으로 갱신(finished_at 유무는 보지 않음)
     candidates = (await session.execute(
         select(ModelVersion).where(ModelVersion.status == "READY").limit(max_count)
     )).scalars().all()
@@ -138,6 +147,7 @@ async def _touch_mlflow_publish(
 async def _touch_oci_publish(
     session: AsyncSession, max_count: int, days_back: int, dry_run: bool,
 ) -> int:
+    # OCI 버전 최대 N개의 created_at 을 최근 시각으로 갱신(게시 차트용)
     candidates = (await session.execute(
         select(OciModelVersion).limit(max_count)
     )).scalars().all()
@@ -189,9 +199,12 @@ async def main(args: argparse.Namespace) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--days", type=int, default=30, help="과거 N일 범위(기본 30)")
+    parser.add_argument("--days", type=int, default=30, help="과거 N일 범위(기본 30, 1 이상)")
     parser.add_argument("--download-events", type=int, default=250, help="추가할 download log 행 수")
     parser.add_argument("--publish-touch", type=int, default=25, help="finished_at/created_at 업데이트할 최대 버전 수")
     parser.add_argument("--seed", type=int, default=42, help="random.seed (재현 가능)")
     parser.add_argument("--dry-run", action="store_true", help="DB 변경 없이 결과만 출력")
-    asyncio.run(main(parser.parse_args()))
+    parsed = parser.parse_args()
+    if parsed.days < 1:
+        parser.error("--days 는 1 이상이어야 합니다")
+    asyncio.run(main(parsed))

@@ -30,12 +30,23 @@ from app.core.database import async_session as async_session_factory
 logger = logging.getLogger(__name__)
 
 
+def _log_missing_cr(activity_name: str, cr_id: int) -> None:
+    """CR 이 없을 때 — 데이터셋·데이터 소스 삭제로 연쇄 삭제된 경우(IT CHG-T26).
+
+    예전에는 ValueError 로 재시도(5회) 끝에 워크플로우가 실패했다. 삭제 시 취소 Signal 을 보내지만
+    (``service.cancel_workflows_best_effort``) Temporal 이 내려가 있었거나 Signal 전에 실행된
+    액티비티도 있으니, 액티비티는 없는 CR 을 오류 없이 건너뛴다.
+    """
+    logger.warning("%s: CR 이 없음(삭제됨) — 건너뜀 cr_id=%s", activity_name, cr_id)
+
+
 # ---------------------------------------------------------------------------
 # 액티비티 입출력 DTO (dataclass — Temporal 직렬화 친화)
 # ---------------------------------------------------------------------------
 
 @dataclass
 class ImpactReport:
+    """analyze_impact 결과 — CR.impact_report 에 JSON 으로 저장되고 워크플로우가 결재선 결정에 쓴다."""
     change_type: str
     changed_columns: list[str]              # 변경되는 컬럼 (upsert + drop)
     affected_downstream_count: int          # 다운스트림 데이터셋 수 (다단계)
@@ -50,6 +61,7 @@ class ImpactReport:
 
 @dataclass
 class NotifyInput:
+    """send_notifications 입력 — CR id, 통지 단계, 발송 채널 목록."""
     cr_id: int
     stage: str                       # NotificationStage 값
     channels: list[str]              # ["EMAIL", "SLACK", ...]
@@ -57,6 +69,7 @@ class NotifyInput:
 
 @dataclass
 class ApplyInput:
+    """apply_change 입력."""
     cr_id: int
 
 
@@ -86,6 +99,7 @@ def _parse_schema_after(raw: str | None) -> tuple[list[dict], list[str]]:
         return [], []
 
     def _normalize(field_path: str, value) -> dict:
+        # 평면 맵 값 → upsert dict. 속성 맵의 "type" 키는 field_type 으로 옮긴다(없으면 STRING).
         if isinstance(value, dict):
             d = dict(value)
             d["field_path"] = field_path
@@ -93,8 +107,10 @@ def _parse_schema_after(raw: str | None) -> tuple[list[dict], list[str]]:
             return d
         return {"field_path": field_path, "field_type": str(value)}
 
-    # 1. 구조화 형식
-    if isinstance(data, dict) and "fields" in data:
+    # 1. 구조화 형식 — 삭제만 있는 명세(``{"drop": ["col"]}``)도 포함. 예전에는 "fields" 가 없으면
+    #    평면 맵으로 읽어 "drop" 이라는 컬럼을 추가하려 했다(IT CHG-T11). "drop" 값이 목록일 때만
+    #    구조화로 본다 — 평면 맵의 "drop" 컬럼(``{"drop": "INT"}``)과 구분.
+    if isinstance(data, dict) and ("fields" in data or isinstance(data.get("drop"), list)):
         upserts = []
         for f in data.get("fields", []):
             if isinstance(f, dict) and f.get("field_path"):
@@ -129,6 +145,7 @@ async def _downstream_dataset_ids(
     """리니지 그래프를 따라 다운스트림(영향받는) 데이터셋을 다단계로 수집한다.
 
     A → B → C 에서 A 변경 시 B, C 모두 영향. 순환 방지를 위해 visited 추적.
+    BFS 로 최대 ``max_hops`` 단계까지만 따라가며, 루트 자신은 제외한 정렬된 id 목록을 반환한다.
     """
     visited: set[int] = set()
     frontier: set[int] = {root_id}
@@ -151,7 +168,7 @@ async def _downstream_dataset_ids(
 async def _affected_downstream_columns(
     session, root_id: int, changed_columns: set[str]
 ) -> list[str]:
-    """변경 컬럼을 참조하는 직속 다운스트림 컬럼을 컬럼 매핑에서 찾는다.
+    """변경 컬럼을 참조하는 직속(1단계) 다운스트림 컬럼을 컬럼 매핑에서 찾는다.
 
     반환 형식: ``"<target_dataset_id>.<target_column>"``.
     """
@@ -188,7 +205,13 @@ async def analyze_impact(cr_id: int) -> ImpactReport:
     async with async_session_factory() as session:
         cr = await session.get(models.ChangeRequest, cr_id)
         if cr is None:
-            raise ValueError(f"CR not found: {cr_id}")
+            _log_missing_cr("analyze_impact", cr_id)
+            return ImpactReport(
+                change_type="", changed_columns=[], affected_downstream_count=0,
+                affected_dataset_ids=[], affected_columns=[], affected_consumer_count=0,
+                affected_consumers=[], mission_critical_consumers=0, risk_score=0.0,
+                summary="CR 이 삭제됨 — 영향 분석 생략",
+            )
 
         # 변경 컬럼 추출 (schema_after 의 upsert + drop 키)
         upserts, drops = _parse_schema_after(cr.schema_after)
@@ -207,7 +230,8 @@ async def analyze_impact(cr_id: int) -> ImpactReport:
             session, cr.dataset_id, changed_columns
         )
 
-        # 위험도 산정
+        # 위험도 산정: 변경 유형 기본값 + 0.1 × 규모(다운스트림+소비자, 20 이상이면 1.0)
+        #             + 중요도 가중(MISSION_CRITICAL 0.3 / IMPORTANT 0.15), 최대 1.0
         base = _BASE_RISK.get(cr.change_type, 0.4)
         reach = min(len(downstream_ids) + len(consumers), 20) / 20.0
         crit_bump = 0.3 if mission_critical else (0.15 if important else 0.0)
@@ -243,9 +267,14 @@ async def analyze_impact(cr_id: int) -> ImpactReport:
 
 @activity.defn(name="record_decision")
 async def record_decision(
-    cr_id: int, step_order: int, decision: str, comment: str | None, decided_by: str
+    cr_id: int, step_order: int, decision: str, comment: str | None, decided_by: str,
+    delegated_to: str | None = None,
 ) -> None:
-    """결재 단계의 결정 결과를 DB에 기록한다."""
+    """결재 단계의 결정 결과를 DB에 기록한다.
+
+    위임(DELEGATED)이면 요청의 대결자(``delegated_to``)를 기록한다 — 예전에는 결정자 본인을
+    저장했다(IT CHG-T14). 대결자 없이 온 예전 Signal 은 비워 둔다.
+    """
     async with async_session_factory() as session:
         step = (
             await session.execute(
@@ -256,26 +285,34 @@ async def record_decision(
             )
         ).scalar_one_or_none()
         if step is None:
-            raise ValueError(f"ApprovalStep not found: cr={cr_id} order={step_order}")
+            # CR 이 연쇄 삭제되면 단계도 없다 — 재시도해도 소용없으니 건너뛴다
+            _log_missing_cr("record_decision", cr_id)
+            return
 
         step.decision = decision
         step.comment = comment
         step.decided_at = datetime.now(timezone.utc)
         if decision == schemas.Decision.DELEGATED.value:
-            step.delegated_to = decided_by
+            step.delegated_to = delegated_to
         await session.commit()
+        logger.info("결재 결정 기록: cr_id=%s step=%s decision=%s by=%s",
+                    cr_id, step_order, decision, decided_by)
 
 
 @activity.defn(name="update_cr_status")
 async def update_cr_status(cr_id: int, status: str) -> None:
+    """CR 상태를 전이한다. APPLIED 로 바뀌면 applied_at 도 기록한다. CR 이 없으면 건너뛴다."""
     async with async_session_factory() as session:
         cr = await session.get(models.ChangeRequest, cr_id)
         if cr is None:
-            raise ValueError(f"CR not found: {cr_id}")
+            _log_missing_cr("update_cr_status", cr_id)
+            return
+        prev = cr.status
         cr.status = status
         if status == schemas.CRStatus.APPLIED.value:
             cr.applied_at = datetime.now(timezone.utc)
         await session.commit()
+        logger.info("CR 상태 전이: cr=%s %s -> %s", cr.cr_code, prev, status)
 
 
 # ---------------------------------------------------------------------------
@@ -303,6 +340,7 @@ def _build_notification_payload(cr, dataset_name: str, stage: str) -> dict:
 
 
 def _safe_json(raw: str | None):
+    """JSON 문자열이면 파싱한 값, 아니면 원문 그대로(빈 값은 None)."""
     if not raw:
         return None
     try:
@@ -343,7 +381,8 @@ async def send_notifications(payload: NotifyInput) -> int:
     async with async_session_factory() as session:
         cr = await session.get(models.ChangeRequest, payload.cr_id)
         if cr is None:
-            raise ValueError(f"CR not found: {payload.cr_id}")
+            _log_missing_cr("send_notifications", payload.cr_id)
+            return 0
 
         dataset = await session.get(Dataset, cr.dataset_id)
         dataset_name = dataset.name if dataset else str(cr.dataset_id)
@@ -355,8 +394,11 @@ async def send_notifications(payload: NotifyInput) -> int:
         ).scalars().all()
 
         content = _build_notification_payload(cr, dataset_name, payload.stage)
+        logger.debug("통지 발송 시작: cr=%s stage=%s consumers=%d channels=%s",
+                     cr.cr_code, payload.stage, len(consumers), payload.channels)
 
         count = 0
+        failed = 0  # 완료 요약 로그용
         for consumer in consumers:
             for channel in payload.channels:
                 status, error = await _deliver(channel, consumer, content)
@@ -371,18 +413,31 @@ async def send_notifications(payload: NotifyInput) -> int:
                 )
                 session.add(log)
                 count += 1
-                logger.info(
-                    "통지 %s: cr=%s consumer=%s channel=%s stage=%s%s",
-                    status, cr.cr_code, consumer.consumer_name, channel, payload.stage,
-                    f" error={error}" if error else "",
-                )
+                # 루프 안 건별 로그 — 실패는 WARNING, 성공은 DEBUG(완료 요약은 루프 뒤 INFO)
+                if status == "FAILED":
+                    failed += 1
+                    logger.warning(
+                        "통지 실패: cr=%s consumer=%s channel=%s stage=%s error=%s",
+                        cr.cr_code, consumer.consumer_name, channel, payload.stage, error,
+                    )
+                else:
+                    logger.debug(
+                        "통지 %s: cr=%s consumer=%s channel=%s stage=%s",
+                        status, cr.cr_code, consumer.consumer_name, channel, payload.stage,
+                    )
         await session.commit()
+        logger.info("통지 발송 완료: cr=%s stage=%s sent=%d failed=%d",
+                    cr.cr_code, payload.stage, count, failed)
         return count
 
 
 @activity.defn(name="wait_acks_summary")
 async def wait_acks_summary(cr_id: int) -> dict:
-    """미확인 소비자 수를 집계해 반환 (워크플로우의 에스컬레이션 판단용)."""
+    """통지 로그 기준 ACK 현황을 집계해 반환 (워크플로우의 에스컬레이션 판단용).
+
+    집계 단위는 소비자가 아니라 통지 로그(소비자 × 채널 × 단계) 행이다.
+    Returns: {"total", "acked", "pending"}
+    """
     async with async_session_factory() as session:
         logs = (
             await session.execute(
@@ -391,6 +446,7 @@ async def wait_acks_summary(cr_id: int) -> dict:
         ).scalars().all()
         total = len(logs)
         acked = sum(1 for log in logs if log.acked_at is not None)
+        logger.debug("ACK 집계: cr_id=%s total=%d acked=%d", cr_id, total, acked)
         return {"total": total, "acked": acked, "pending": total - acked}
 
 
@@ -441,7 +497,8 @@ async def apply_change(payload: ApplyInput) -> None:
     async with async_session_factory() as session:
         cr = await session.get(models.ChangeRequest, payload.cr_id)
         if cr is None:
-            raise ValueError(f"CR not found: {payload.cr_id}")
+            _log_missing_cr("apply_change", payload.cr_id)
+            return
 
         upserts, drops = _parse_schema_after(cr.schema_after)
         if not upserts and not drops:

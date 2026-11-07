@@ -58,6 +58,10 @@ const userSchema = z.object({
   createdAt: z.coerce.date(),
   /** Timestamp of the most recent profile update. */
   updatedAt: z.coerce.date(),
+  /** 마지막 로그인 시각 (로그인한 적 없으면 null). */
+  lastLoginAt: z.coerce.date().nullable().optional(),
+  /** 로그인 실패 반복으로 잠긴 경우 잠금 해제 시각, 잠기지 않았으면 null. */
+  lockedUntil: z.coerce.date().nullable().optional(),
 })
 export type User = z.infer<typeof userSchema>
 

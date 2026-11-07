@@ -5,13 +5,17 @@
 finding 목록을 만든다. 심각도: error / warn / info.
 
 OAS 3.x 와 Swagger 2.0 을 함께 지원한다(경로/오퍼레이션 구조가 동일).
+품질 점수는 100 에서 심각도별 가중치(error 5 / warn 2 / info 1)의 합을 뺀 값(최저 0)이다.
 """
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from app.apis import openapi_parser as parser
+
+logger = logging.getLogger(__name__)
 
 _METHODS = {"get", "put", "post", "delete", "options", "head", "patch", "trace"}
 
@@ -20,11 +24,16 @@ _WEIGHT = {"error": 5, "warn": 2, "info": 1}
 
 
 def _is_oas3(spec: dict[str, Any]) -> bool:
+    """``openapi`` 키가 있으면 OAS 3.x 로 본다(없으면 Swagger 2.0)."""
     return "openapi" in spec
 
 
 def lint_spec(raw: str) -> dict[str, Any]:
-    """원본 스펙 문자열을 린팅해 finding 목록과 요약을 돌려준다."""
+    """원본 스펙 문자열을 린팅해 finding 목록과 요약을 돌려준다.
+
+    파싱에 실패해도 예외를 올리지 않고 ``spec-parse`` error finding 하나로 결과를 만든다.
+    반환 형식은 ``_summarize`` 참고.
+    """
     findings: list[dict[str, Any]] = []
 
     def add(rule: str, severity: str, message: str, location: str = "") -> None:
@@ -33,6 +42,7 @@ def lint_spec(raw: str) -> dict[str, Any]:
     try:
         spec = parser.load_spec(raw or "")
     except Exception as e:  # noqa: BLE001
+        logger.debug("린트 대상 스펙 파싱 실패: %s", e)
         add("spec-parse", "error", f"스펙을 파싱할 수 없습니다: {e}")
         return _summarize(findings)
 
@@ -182,6 +192,7 @@ def _split_braces(path: str) -> list[str]:
 
 
 def _summarize(findings: list[dict[str, Any]]) -> dict[str, Any]:
+    """finding 목록 → ``{score, error_count, warning_count, info_count, findings(심각도·규칙순)}``."""
     errors = sum(1 for f in findings if f["severity"] == "error")
     warnings = sum(1 for f in findings if f["severity"] == "warn")
     infos = sum(1 for f in findings if f["severity"] == "info")
@@ -190,6 +201,7 @@ def _summarize(findings: list[dict[str, Any]]) -> dict[str, Any]:
     # 심각도 우선 정렬(error → warn → info)
     order = {"error": 0, "warn": 1, "info": 2}
     findings_sorted = sorted(findings, key=lambda f: (order.get(f["severity"], 9), f["rule"]))
+    logger.debug("스펙 린트 결과: score=%d error=%d warn=%d info=%d", score, errors, warnings, infos)
     return {
         "score": score,
         "error_count": errors,

@@ -6,7 +6,7 @@
 
 대상 엔티티:
 - dataset (``catalog_dataset_embeddings``, 1:1 FK CASCADE)
-- glossary_term / ai_agent / api (``catalog_entity_embeddings``, 다형)
+- glossary_term / ai_agent / api / mcp_server (``catalog_entity_embeddings``, 다형)
 """
 
 import asyncio
@@ -22,7 +22,7 @@ from app.embedding.registry import get_provider
 logger = logging.getLogger(__name__)
 
 # 다형 임베딩이 지원하는 엔티티 타입 (dataset 은 전용 테이블 사용)
-ENTITY_TYPES = ("glossary_term", "ai_agent", "api")
+ENTITY_TYPES = ("glossary_term", "ai_agent", "api", "mcp_server")
 
 # ---------------------------------------------------------------------------
 # 자동 임베딩(embed-on-write) 정책
@@ -43,9 +43,11 @@ def set_auto_on_write(value: bool) -> None:
     """embed-on-write 활성 여부를 설정한다(설정 로딩 시 호출)."""
     global _auto_on_write
     _auto_on_write = value
+    logger.info("임베딩 자동 생성(embed-on-write) 설정: enabled=%s", value)
 
 
 def is_auto_on_write() -> bool:
+    """현재 embed-on-write 활성 여부."""
     return _auto_on_write
 
 
@@ -56,6 +58,7 @@ def _schedule_debounced(key: str, do_embed) -> None:
     """
     existing = _pending_embed.get(key)
     if existing is not None and not existing.done():
+        logger.debug("대기 중 임베딩 재예약(코얼레싱): key=%s", key)
         existing.cancel()
 
     async def _runner():
@@ -65,6 +68,7 @@ def _schedule_debounced(key: str, do_embed) -> None:
         except asyncio.CancelledError:
             pass
         finally:
+            # 재예약으로 다른 태스크가 key 를 차지했으면 그 항목은 지우지 않는다
             if _pending_embed.get(key) is asyncio.current_task():
                 _pending_embed.pop(key, None)
 
@@ -119,13 +123,27 @@ async def build_source_text(session: AsyncSession, dataset_id: int) -> str | Non
     return " | ".join(parts)
 
 
+def _is_up_to_date(row, source_text: str, provider) -> bool:
+    """저장된 임베딩을 그대로 써도 되는지 — 원문과 제공자·모델이 모두 같아야 한다.
+
+    같은 384차원이라도 모델이 다르면(예: all-MiniLM-L6-v2 → 다국어 MiniLM) 벡터 공간이 달라
+    질의 벡터와 비교할 수 없다. 원문만 비교하면 모델을 바꾼 뒤 백필해도 전부 "건너뜀"이 되어
+    옛 모델 벡터가 남는다(SRCH-T15).
+    """
+    if row is None or row.source_text != source_text:
+        return False
+    return row.model_name == provider.model_name() and row.provider == provider.provider_name()
+
+
 async def embed_dataset(session: AsyncSession, dataset_id: int) -> bool:
     """단일 데이터셋의 임베딩을 생성하고 저장.
 
-    임베딩이 생성/갱신되면 True, 건너뛰면 False 를 반환.
+    임베딩이 생성/갱신되면 True, 건너뛰면 False 를 반환(제공자 미초기화·데이터셋 없음·변경 없음).
+    제공자 호출 오류는 그대로 올린다 — 백필·백그라운드 호출 측이 잡아 WARNING 으로 남긴다.
     """
     provider = await get_provider()
     if provider is None:
+        logger.debug("임베딩 제공자 미초기화 — 데이터셋 %d 임베딩 건너뜀", dataset_id)
         return False
 
     source_text = await build_source_text(session, dataset_id)
@@ -133,25 +151,18 @@ async def embed_dataset(session: AsyncSession, dataset_id: int) -> bool:
         logger.warning("데이터셋 %d 임베딩 불가: 찾을 수 없음", dataset_id)
         return False
 
-    # 기존 임베딩이 동일한 원본 텍스트인지 확인 (변경 없으면 건너뜀)
-    existing = await session.execute(
-        select(DatasetEmbedding.source_text)
-        .where(DatasetEmbedding.dataset_id == dataset_id)
-    )
-    existing_text = existing.scalar()
-    if existing_text == source_text:
-        return False  # 변경 없음
+    row = (await session.execute(
+        select(DatasetEmbedding).where(DatasetEmbedding.dataset_id == dataset_id)
+    )).scalars().first()
+    if _is_up_to_date(row, source_text, provider):
+        logger.debug("데이터셋 %d 임베딩 최신 상태 — 건너뜀", dataset_id)
+        return False  # 원문·모델 모두 그대로
 
     # 임베딩 생성
     vectors = await provider.embed([source_text])
     vector = vectors[0]
 
     # Upsert
-    existing_row = await session.execute(
-        select(DatasetEmbedding).where(DatasetEmbedding.dataset_id == dataset_id)
-    )
-    row = existing_row.scalars().first()
-
     if row:
         row.embedding = vector
         row.source_text = source_text
@@ -169,7 +180,8 @@ async def embed_dataset(session: AsyncSession, dataset_id: int) -> bool:
         ))
 
     await session.commit()
-    logger.info("데이터셋 %d 임베딩 완료 (%s, %d 차원)", dataset_id, provider.model_name(), provider.dimension())
+    # 건별 완료는 DEBUG — 백필 시 건수만큼 쌓이므로 요약은 백필 끝에서 INFO 로 남긴다
+    logger.debug("데이터셋 %d 임베딩 완료 (%s, %d 차원)", dataset_id, provider.model_name(), provider.dimension())
     return True
 
 
@@ -200,6 +212,7 @@ async def embed_all_datasets(session: AsyncSession) -> dict:
     """
     provider = await get_provider()
     if provider is None:
+        logger.warning("임베딩 제공자 미초기화 — 데이터셋 임베딩 백필을 수행하지 않음")
         return {"total": 0, "embedded": 0, "skipped": 0, "errors": 0, "error": "No provider"}
 
     result = await session.execute(
@@ -229,15 +242,16 @@ async def embed_all_datasets(session: AsyncSession) -> dict:
 
 
 async def delete_embedding(session: AsyncSession, dataset_id: int) -> None:
-    """데이터셋의 임베딩을 제거."""
+    """데이터셋의 임베딩을 제거하고 커밋한다."""
     await session.execute(
         delete(DatasetEmbedding).where(DatasetEmbedding.dataset_id == dataset_id)
     )
     await session.commit()
+    logger.debug("데이터셋 %d 임베딩 삭제", dataset_id)
 
 
 # ---------------------------------------------------------------------------
-# 비-데이터셋 엔티티 임베딩 (glossary_term / ai_agent / api)
+# 비-데이터셋 엔티티 임베딩 (glossary_term / ai_agent / api / mcp_server)
 # ---------------------------------------------------------------------------
 
 async def _build_glossary_term_text(session: AsyncSession, term_id: int) -> str | None:
@@ -340,10 +354,50 @@ async def _build_api_text(session: AsyncSession, api_id: int) -> str | None:
     return " | ".join(parts)
 
 
+async def _build_mcp_server_text(session: AsyncSession, server_id: int) -> str | None:
+    """MCP 서버 정의: 이름/설명/분류/대상 플랫폼/태그 + 도구 그룹 + 도구 시그니처 + 배포 이름."""
+    from app.mcp_servers.models import McpDeployment, McpServer, McpServerTool, McpServerToolGroup
+
+    server = (await session.execute(select(McpServer).where(McpServer.id == server_id))).scalars().first()
+    if not server:
+        return None
+
+    parts = [server.name]
+    for v in (server.display_name, server.title, server.description, server.category, server.target_platform,
+              server.vendor):
+        if v:
+            parts.append(v)
+    if server.tags:
+        parts.append("tags: " + ", ".join(str(t) for t in server.tags))
+    groups = (await session.execute(
+        select(McpServerToolGroup.key, McpServerToolGroup.label)
+        .where(McpServerToolGroup.mcp_server_id == server_id)
+        .order_by(McpServerToolGroup.sort_order, McpServerToolGroup.id)
+    )).all()
+    if groups:
+        parts.append("tool groups: " + ", ".join(f"{k} ({lb})" if lb else k for k, lb in groups))
+    # 도구 시그니처 — AI Agent 의 도구와 같은 역할의 매칭 신호 (제거된 도구 제외)
+    tools = (await session.execute(
+        select(McpServerTool.name, McpServerTool.description)
+        .where(McpServerTool.mcp_server_id == server_id, McpServerTool.removed_at.is_(None))
+        .order_by(McpServerTool.name)
+    )).all()
+    if tools:
+        parts.append("tools: " + "; ".join(f"{n} -- {d}" if d else n for n, d in tools))
+    deps = (await session.execute(
+        select(McpDeployment.name, McpDeployment.environment)
+        .where(McpDeployment.mcp_server_id == server_id).order_by(McpDeployment.name)
+    )).all()
+    if deps:
+        parts.append("deployments: " + ", ".join(f"{n} ({e})" if e else n for n, e in deps))
+    return " | ".join(parts)
+
+
 _ENTITY_TEXT_BUILDERS = {
     "glossary_term": _build_glossary_term_text,
     "ai_agent": _build_ai_agent_text,
     "api": _build_api_text,
+    "mcp_server": _build_mcp_server_text,
 }
 
 
@@ -358,9 +412,13 @@ async def build_entity_source_text(
 
 
 async def embed_entity(session: AsyncSession, entity_type: str, entity_id: int) -> bool:
-    """단일 엔티티 임베딩 생성/갱신. 변경 없으면 False."""
+    """단일 엔티티 임베딩 생성/갱신. 변경 없으면 False.
+
+    제공자 미초기화·엔티티 없음이면 False, 미지원 ``entity_type`` 이면 ``ValueError``.
+    """
     provider = await get_provider()
     if provider is None:
+        logger.debug("임베딩 제공자 미초기화 — %s %d 임베딩 건너뜀", entity_type, entity_id)
         return False
 
     source_text = await build_entity_source_text(session, entity_type, entity_id)
@@ -368,24 +426,18 @@ async def embed_entity(session: AsyncSession, entity_type: str, entity_id: int) 
         logger.warning("%s %d 임베딩 불가: 찾을 수 없음", entity_type, entity_id)
         return False
 
-    existing_text = (await session.execute(
-        select(EntityEmbedding.source_text).where(
-            EntityEmbedding.entity_type == entity_type,
-            EntityEmbedding.entity_id == entity_id,
-        )
-    )).scalar()
-    if existing_text == source_text:
-        return False  # 변경 없음
-
-    vectors = await provider.embed([source_text])
-    vector = vectors[0]
-
     row = (await session.execute(
         select(EntityEmbedding).where(
             EntityEmbedding.entity_type == entity_type,
             EntityEmbedding.entity_id == entity_id,
         )
     )).scalars().first()
+    if _is_up_to_date(row, source_text, provider):
+        logger.debug("%s %d 임베딩 최신 상태 — 건너뜀", entity_type, entity_id)
+        return False  # 원문·모델 모두 그대로
+
+    vectors = await provider.embed([source_text])
+    vector = vectors[0]
 
     if row:
         row.embedding = vector
@@ -405,7 +457,7 @@ async def embed_entity(session: AsyncSession, entity_type: str, entity_id: int) 
         ))
 
     await session.commit()
-    logger.info("%s %d 임베딩 완료 (%s, %d 차원)",
+    logger.debug("%s %d 임베딩 완료 (%s, %d 차원)",
                 entity_type, entity_id, provider.model_name(), provider.dimension())
     return True
 
@@ -443,21 +495,25 @@ async def delete_entity_embedding(
 
 
 async def embed_all_entities(session: AsyncSession) -> dict:
-    """용어집/AI Agent/API 전체 임베딩 백필.
+    """용어집/AI Agent/API/MCP 서버 전체 임베딩 백필.
 
     Returns: {"<entity_type>": {"total": N, "embedded": M, "skipped": S, "errors": E}, ...}
     """
     provider = await get_provider()
     if provider is None:
+        logger.warning("임베딩 제공자 미초기화 — 엔티티 임베딩 백필을 수행하지 않음")
         return {t: {"total": 0, "embedded": 0, "skipped": 0, "errors": 0} for t in ENTITY_TYPES}
 
     from app.agents.models import AIAgent
     from app.apis.models import CatalogApi
+    from app.mcp_servers.models import McpServer
 
     id_queries = {
         "glossary_term": select(GlossaryTerm.id).order_by(GlossaryTerm.id),
-        "ai_agent": select(AIAgent.id).where(AIAgent.status != "deleted").order_by(AIAgent.id),
-        "api": select(CatalogApi.id).where(CatalogApi.status != "deleted").order_by(CatalogApi.id),
+        # AI Agent·API 는 삭제 시 행을 지우므로(소프트 삭제 상태 없음) 남은 행 전체가 대상
+        "ai_agent": select(AIAgent.id).order_by(AIAgent.id),
+        "api": select(CatalogApi.id).order_by(CatalogApi.id),
+        "mcp_server": select(McpServer.id).where(McpServer.status != "retired").order_by(McpServer.id),
     }
 
     summary: dict[str, dict] = {}
@@ -480,7 +536,7 @@ async def embed_all_entities(session: AsyncSession) -> dict:
 
 
 async def clear_all_embeddings(session: AsyncSession) -> int:
-    """모든 임베딩을 삭제 (예: 제공자 교체 전). 삭제된 행 수를 반환."""
+    """모든 임베딩(데이터셋 + 다형 엔티티)을 삭제 (예: 제공자 교체 전). 삭제된 행 수를 반환."""
     result = await session.execute(delete(DatasetEmbedding))
     entity_result = await session.execute(delete(EntityEmbedding))
     await session.commit()
@@ -496,8 +552,12 @@ async def get_embedding_stats(session: AsyncSession) -> dict:
         select(func.count()).select_from(Dataset).where(Dataset.status != "removed")
     )).scalar() or 0
 
+    # removed 데이터셋의 임베딩 행은 남아 있을 수 있다(재활성화 대비) — 분모와 같은 기준으로
+    # 세지 않으면 커버리지가 100% 를 넘는다(SRCH-T12).
     total_embeddings = (await session.execute(
         select(func.count()).select_from(DatasetEmbedding)
+        .join(Dataset, Dataset.id == DatasetEmbedding.dataset_id)
+        .where(Dataset.status != "removed")
     )).scalar() or 0
 
     provider = await get_provider()
@@ -508,7 +568,7 @@ async def get_embedding_stats(session: AsyncSession) -> dict:
     emb_cfg = await get_config_by_category(session, "embedding")
     dim = int(emb_cfg.get("embedding_dimension", "384")) if emb_cfg else None
 
-    # 엔티티 타입별 임베딩 수 (glossary_term / ai_agent / api)
+    # 엔티티 타입별 임베딩 수 (glossary_term / ai_agent / api / mcp_server)
     entity_counts_result = await session.execute(
         select(EntityEmbedding.entity_type, func.count())
         .group_by(EntityEmbedding.entity_type)

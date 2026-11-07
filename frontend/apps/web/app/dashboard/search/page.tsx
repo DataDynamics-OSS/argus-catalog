@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
-import { BookOpen, Bot, Database, Loader2, Search, Webhook } from "lucide-react"
+import { BookOpen, Bot, Database, Loader2, Plug, Search, Webhook } from "lucide-react"
 
 import { Badge } from "@workspace/ui/components/badge"
 import { DashboardHeader } from "@/components/dashboard-header"
@@ -11,6 +11,8 @@ import {
   type EntitySearchResult,
   type SemanticSearchResult,
 } from "@/features/datasets/api"
+import { datasetExcerpt } from "@/features/search/excerpt"
+import { errorMessage } from "@/lib/notify"
 
 function scoreColor(score: number): string {
   if (score >= 0.8) return "text-emerald-600"
@@ -85,6 +87,9 @@ function EntitySection({
                     {item.extra.protocol && (
                       <Badge variant="outline" className="text-xs">{item.extra.protocol}</Badge>
                     )}
+                    {item.extra.platform && (
+                      <Badge variant="outline" className="text-xs">{item.extra.platform}</Badge>
+                    )}
                     {item.extra.status && (
                       <Badge variant="outline" className="text-xs">{item.extra.status}</Badge>
                     )}
@@ -110,10 +115,12 @@ export default function SearchPage() {
   const [glossaryTerms, setGlossaryTerms] = useState<EntitySearchResult[]>([])
   const [aiAgents, setAiAgents] = useState<EntitySearchResult[]>([])
   const [apis, setApis] = useState<EntitySearchResult[]>([])
+  const [mcpServers, setMcpServers] = useState<EntitySearchResult[]>([])
   const [total, setTotal] = useState(0)
   const [isLoading, setIsLoading] = useState(false)
   const [provider, setProvider] = useState<string | null>(null)
   const [model, setModel] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   const doSearch = useCallback(async (searchQuery: string) => {
     if (!searchQuery.trim()) {
@@ -121,24 +128,30 @@ export default function SearchPage() {
       setGlossaryTerms([])
       setAiAgents([])
       setApis([])
+      setMcpServers([])
       setTotal(0)
       return
     }
     setIsLoading(true)
+    setError(null)
     try {
       const resp = await unifiedSearch(searchQuery.trim(), 50, 5)
       setDatasets(resp.datasets)
       setGlossaryTerms(resp.glossary_terms)
       setAiAgents(resp.ai_agents)
       setApis(resp.apis)
+      setMcpServers(resp.mcp_servers ?? [])
       setTotal(resp.total)
       setProvider(resp.provider)
       setModel(resp.model)
-    } catch {
+    } catch (e) {
+      // 실패를 "결과 없음"으로 보이지 않게 오류 안내를 따로 띄운다.
+      setError(errorMessage(e) ?? "검색하지 못했습니다.")
       setDatasets([])
       setGlossaryTerms([])
       setAiAgents([])
       setApis([])
+      setMcpServers([])
       setTotal(0)
     } finally {
       setIsLoading(false)
@@ -158,16 +171,16 @@ export default function SearchPage() {
 
   return (
     <>
-      <DashboardHeader title="Search Results" />
+      <DashboardHeader title="검색 결과" searchQuery={q} />
       <div className="flex flex-1 flex-col gap-4 p-4">
         {/* Search meta */}
-        {!isLoading && q && (
+        {!isLoading && q && !error && (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <span>{total} result{total !== 1 ? "s" : ""} for &ldquo;{q}&rdquo;</span>
+            <span>&ldquo;{q}&rdquo; 검색 결과 {total}건</span>
             {provider ? (
               <Badge variant="outline" className="text-[10px] px-1.5 py-0">{provider}/{model}</Badge>
             ) : (
-              <Badge variant="outline" className="text-[10px] px-1.5 py-0">keyword only</Badge>
+              <Badge variant="outline" className="text-[10px] px-1.5 py-0">키워드 검색만 (임베딩 비활성)</Badge>
             )}
           </div>
         )}
@@ -176,16 +189,23 @@ export default function SearchPage() {
         {isLoading && (
           <div className="flex items-center justify-center py-16 gap-2 text-muted-foreground">
             <Loader2 className="h-5 w-5 animate-spin" />
-            <span className="text-sm">Searching...</span>
+            <span className="text-sm">검색 중...</span>
+          </div>
+        )}
+
+        {/* Error */}
+        {!isLoading && error && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+            {error}
           </div>
         )}
 
         {/* No results */}
-        {!isLoading && q && !hasResults && (
+        {!isLoading && q && !error && !hasResults && (
           <div className="flex flex-col items-center justify-center py-16 gap-2">
             <Search className="h-10 w-10 text-muted-foreground" />
             <p className="text-sm text-muted-foreground">
-              No results found matching &ldquo;{q}&rdquo;
+              &ldquo;{q}&rdquo; 와 일치하는 결과가 없습니다.
             </p>
           </div>
         )}
@@ -202,13 +222,13 @@ export default function SearchPage() {
               <table className="w-full text-sm">
                 <thead className="bg-muted/60">
                   <tr>
-                    <th className="px-3 py-2 text-left font-medium">Dataset</th>
-                    <th className="px-3 py-2 text-left font-medium w-36">Datasource</th>
-                    <th className="px-3 py-2 text-center font-medium w-20">Origin</th>
-                    <th className="px-3 py-2 text-center font-medium w-16">Fields</th>
-                    <th className="px-3 py-2 text-center font-medium w-16">Tags</th>
-                    <th className="px-3 py-2 text-center font-medium w-20">Match</th>
-                    <th className="px-3 py-2 text-center font-medium w-20">Score</th>
+                    <th className="px-3 py-2 text-left font-medium">데이터셋</th>
+                    <th className="px-3 py-2 text-left font-medium w-36">데이터 소스</th>
+                    <th className="px-3 py-2 text-center font-medium w-20">환경</th>
+                    <th className="px-3 py-2 text-center font-medium w-16">필드</th>
+                    <th className="px-3 py-2 text-center font-medium w-16">태그</th>
+                    <th className="px-3 py-2 text-center font-medium w-20">매칭</th>
+                    <th className="px-3 py-2 text-center font-medium w-20">점수</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y">
@@ -219,10 +239,16 @@ export default function SearchPage() {
                       onClick={() => router.push(`/dashboard/datasets/${r.dataset.id}`)}
                     >
                       <td className="px-3 py-2.5">
-                        <div className="font-medium">{r.dataset.name}</div>
-                        {r.dataset.description && (
+                        {/* 물리명 + 논리명(display_name). 둘째 줄은 목록 화면처럼 요약 → 없으면 설명 평문 */}
+                        <div className="flex items-baseline gap-2">
+                          <span className="font-medium">{r.dataset.name}</span>
+                          {r.dataset.display_name && (
+                            <span className="text-xs text-muted-foreground">{r.dataset.display_name}</span>
+                          )}
+                        </div>
+                        {datasetExcerpt(r.dataset) && (
                           <p className="text-xs text-muted-foreground truncate max-w-[500px]">
-                            {r.dataset.description}
+                            {datasetExcerpt(r.dataset)}
                           </p>
                         )}
                       </td>
@@ -247,7 +273,7 @@ export default function SearchPage() {
           </div>
         )}
 
-        {/* Entity results — 용어집 / AI Agent / API */}
+        {/* Entity results — 용어집 / AI Agent / API / MCP 서버 */}
         {!isLoading && (
           <>
             <EntitySection
@@ -267,6 +293,12 @@ export default function SearchPage() {
               icon={Webhook}
               items={apis}
               onClickItem={(item) => router.push(`/dashboard/apis?api=${encodeURIComponent(item.name)}`)}
+            />
+            <EntitySection
+              title="MCP 서버"
+              icon={Plug}
+              items={mcpServers}
+              onClickItem={(item) => router.push(`/dashboard/mcp-servers?server=${encodeURIComponent(item.name)}`)}
             />
           </>
         )}

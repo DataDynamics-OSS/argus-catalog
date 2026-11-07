@@ -8,15 +8,19 @@ import {
   ChevronsLeft,
   ChevronsRight,
   Cpu,
+  FileUp,
   LayoutGrid,
   List,
+  ListChecks,
   MoreHorizontal,
   Plus,
   Search,
+  UserX,
 } from "lucide-react"
 
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
+import { Checkbox } from "@workspace/ui/components/checkbox"
 import { Card, CardContent, CardHeader, CardTitle } from "@workspace/ui/components/card"
 import {
   DropdownMenu,
@@ -40,20 +44,69 @@ import {
   TableHeader,
   TableRow,
 } from "@workspace/ui/components/table"
+import { Tabs, TabsList, TabsTrigger } from "@workspace/ui/components/tabs"
 import { cn } from "@workspace/ui/lib/utils"
 
-import { AGENT_STATUS_VARIANTS, type AIAgentSummary } from "../data/schema"
+import {
+  AGENT_STATUS_LABEL,
+  AGENT_STATUS_VARIANTS,
+  MANAGED_BY_LABEL,
+  OWNER_STATE_HINT,
+  OWNER_STATE_LABEL,
+  RISK_CLASS,
+  RISK_LABEL,
+  type AIAgentSummary,
+} from "../data/schema"
+import { AIAgentsDiscoveries } from "./ai-agents-discoveries"
+import { AIAgentsFilters } from "./ai-agents-filters"
 import { useAIAgents } from "./ai-agents-provider"
+import { AIAgentsStats } from "./ai-agents-stats"
+import { usePermissions } from "@/features/permissions/use-permissions"
 
 type AIAgentsTableProps = {
   data: AIAgentSummary[]
   isLoading?: boolean
 }
 
-const STATUS_OPTIONS = ["draft", "staging", "active", "blocked", "deprecated", "retired"]
-const STATUS_LABEL: Record<string, string> = {
-  draft: "초안", staging: "스테이징", active: "활성",
-  blocked: "차단", deprecated: "사용 중단", retired: "폐기",
+const STATUS_LABEL = AGENT_STATUS_LABEL
+
+/** 정보 완성도 막대(0~100). */
+export function CompletenessBar({ value, missing }: { value?: number | null; missing?: number }) {
+  if (value == null) return <span className="text-sm text-muted-foreground">-</span>
+  const color = value >= 80 ? "bg-emerald-500" : value >= 50 ? "bg-amber-500" : "bg-red-500"
+  return (
+    <div className="flex items-center gap-2" title={missing ? `빠진 항목 ${missing}개` : "모든 항목 채움"}>
+      <div className="h-1.5 w-14 overflow-hidden rounded-full bg-muted">
+        <div className={cn("h-full", color)} style={{ width: `${value}%` }} />
+      </div>
+      <span className="text-xs tabular-nums text-muted-foreground">{value}</span>
+    </div>
+  )
+}
+
+function OwnerCell({ agent }: { agent: AIAgentSummary }) {
+  const state = agent.owner_state
+  return (
+    <div className="flex flex-col">
+      <span className="text-sm text-muted-foreground">{agent.owner_email || "-"}</span>
+      {state && state !== "ok" && (
+        <span
+          className="flex w-fit items-center gap-1 text-[11px] text-amber-700 dark:text-amber-400"
+          title={OWNER_STATE_HINT[state]}
+        >
+          <UserX className="h-3 w-3" /> {OWNER_STATE_LABEL[state] ?? state}
+        </span>
+      )}
+      {agent.department && <span className="text-[11px] text-muted-foreground">{agent.department}</span>}
+    </div>
+  )
+}
+
+function RiskBadge({ risk }: { risk?: string | null }) {
+  if (!risk) return <span className="text-sm text-muted-foreground">-</span>
+  return (
+    <span className={cn("rounded-full px-2 py-0.5 text-xs", RISK_CLASS[risk])}>{RISK_LABEL[risk] ?? risk}</span>
+  )
 }
 
 // 데이터셋 목록 페이지네이션과 동일한 페이지 번호 생성(말줄임 포함)
@@ -80,13 +133,17 @@ function StatusBadge({ status, className }: { status: string; className?: string
 }
 
 export function AIAgentsTable({ data, isLoading }: AIAgentsTableProps) {
+  const canRegister = usePermissions().canUseFeature("agents.register")
   const {
     total,
     page,
     pageSize,
     setPage,
     setPageSize,
-    searchAgents,
+    query,
+    applyQuery,
+    selectedNames,
+    setSelectedNames,
     setSelectedAgentName,
     setOpen,
     // 상세 복귀 시에도 유지되도록 provider 에서 관리
@@ -94,9 +151,11 @@ export function AIAgentsTable({ data, isLoading }: AIAgentsTableProps) {
     setViewMode: setView,
     searchQuery,
     setSearchQuery,
-    statusFilter,
-    setStatusFilter,
     listScrollRef,
+    listTab,
+    setListTab,
+    statsKey,
+    bumpStats,
   } = useAIAgents()
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -115,30 +174,35 @@ export function AIAgentsTable({ data, isLoading }: AIAgentsTableProps) {
   }, [listScrollRef])
 
   const runSearch = useCallback(
-    (overrides?: Partial<{ search: string; status: string }>) => {
-      searchAgents({
-        search: overrides?.search ?? searchQuery,
-        status:
-          (overrides?.status ?? statusFilter) === "all"
-            ? ""
-            : (overrides?.status ?? statusFilter),
-        framework: "",
-        category: "",
-      })
-    },
-    [searchQuery, statusFilter, searchAgents],
+    (search?: string) => applyQuery({ ...query, search: search ?? searchQuery }),
+    [query, searchQuery, applyQuery],
   )
 
   function handleSearchChange(value: string) {
     setSearchQuery(value)
     if (debounceRef.current) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(() => runSearch({ search: value }), 400)
+    debounceRef.current = setTimeout(() => runSearch(value), 400)
   }
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
 
   return (
     <div className="flex flex-1 flex-col gap-4">
+      {/* 상단 지표 — 등록·삭제로 전체 수가 바뀌면 다시 조회 */}
+      <AIAgentsStats reloadKey={`${total}-${statsKey}`} />
+
+      <Tabs value={listTab} onValueChange={(v) => setListTab(v as "agents" | "discoveries")}>
+        <TabsList>
+          <TabsTrigger value="agents">에이전트</TabsTrigger>
+          <TabsTrigger value="discoveries">미등록 에이전트</TabsTrigger>
+        </TabsList>
+      </Tabs>
+
+      {listTab === "discoveries" ? (
+        <AIAgentsDiscoveries onChanged={bumpStats} />
+      ) : (
+      <>
+
       {/* Toolbar */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-1 flex-wrap items-center gap-2">
@@ -152,25 +216,17 @@ export function AIAgentsTable({ data, isLoading }: AIAgentsTableProps) {
               className="h-9 pl-8"
             />
           </div>
-          <Select
-            value={statusFilter}
-            onValueChange={(v) => {
-              setStatusFilter(v)
-              runSearch({ status: v })
-            }}
-          >
-            <SelectTrigger size="sm" className="w-[150px]">
-              <SelectValue placeholder="상태" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">전체 상태</SelectItem>
-              {STATUS_OPTIONS.map((s) => (
-                <SelectItem key={s} value={s}>
-                  {STATUS_LABEL[s] ?? s}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          {selectedNames.length > 0 && (
+            <>
+              <Button size="sm" variant="secondary" onClick={() => setOpen("bulk")}>
+                <ListChecks className="mr-1 h-4 w-4" />
+                선택 {selectedNames.length}개 일괄 변경
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setSelectedNames([])}>
+                선택 해제
+              </Button>
+            </>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {/* 뷰 토글 — 테이블 / 카드 */}
@@ -196,12 +252,22 @@ export function AIAgentsTable({ data, isLoading }: AIAgentsTableProps) {
               <LayoutGrid className="h-4 w-4" />
             </Button>
           </div>
-          <Button size="sm" onClick={() => setOpen("add")}>
-            <Plus className="mr-1 h-4 w-4" />
-            에이전트 등록
-          </Button>
+          {canRegister && (
+            <>
+              <Button size="sm" variant="outline" onClick={() => setOpen("import")}>
+                <FileUp className="mr-1 h-4 w-4" />
+                가져오기
+              </Button>
+              <Button size="sm" onClick={() => setOpen("add")}>
+                <Plus className="mr-1 h-4 w-4" />
+                에이전트 등록
+              </Button>
+            </>
+          )}
         </div>
       </div>
+
+      <AIAgentsFilters />
 
       {/* 목록 — 테이블 / 카드 */}
       {view === "table" ? (
@@ -209,25 +275,40 @@ export function AIAgentsTable({ data, isLoading }: AIAgentsTableProps) {
         <Table>
           <TableHeader>
             <TableRow>
+              <TableHead className="w-8">
+                <Checkbox
+                  aria-label="이 페이지 전체 선택"
+                  checked={data.length > 0 && data.every((a) => selectedNames.includes(a.name))}
+                  onCheckedChange={(c) =>
+                    setSelectedNames((prev) =>
+                      c
+                        ? Array.from(new Set([...prev, ...data.map((a) => a.name)]))
+                        : prev.filter((n) => !data.some((a) => a.name === n)),
+                    )
+                  }
+                />
+              </TableHead>
               <TableHead>이름</TableHead>
               <TableHead>상태</TableHead>
               <TableHead>버전</TableHead>
               <TableHead>프레임워크</TableHead>
-              <TableHead>기저 모델</TableHead>
-              <TableHead>카테고리</TableHead>
-              <TableHead>소유자</TableHead>
+              <TableHead>분류</TableHead>
+              <TableHead>소유자 · 부서</TableHead>
+              <TableHead>최고 위험도</TableHead>
+              <TableHead>완성도</TableHead>
+              <TableHead>관리 방식</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
+                <TableCell colSpan={10} className="h-24 text-center text-muted-foreground">
                   불러오는 중...
                 </TableCell>
               </TableRow>
             ) : data.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
+                <TableCell colSpan={10} className="h-24 text-center text-muted-foreground">
                   등록된 AI Agent가 없습니다.
                 </TableCell>
               </TableRow>
@@ -238,6 +319,17 @@ export function AIAgentsTable({ data, isLoading }: AIAgentsTableProps) {
                   className="cursor-pointer"
                   onClick={() => setSelectedAgentName(agent.name)}
                 >
+                  <TableCell onClick={(e) => e.stopPropagation()}>
+                    <Checkbox
+                      aria-label={`${agent.name} 선택`}
+                      checked={selectedNames.includes(agent.name)}
+                      onCheckedChange={(c) =>
+                        setSelectedNames((prev) =>
+                          c ? [...prev, agent.name] : prev.filter((n) => n !== agent.name),
+                        )
+                      }
+                    />
+                  </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-2">
                       <Bot className="h-4 w-4 shrink-0 text-muted-foreground" />
@@ -260,12 +352,24 @@ export function AIAgentsTable({ data, isLoading }: AIAgentsTableProps) {
                       <span className="text-sm text-muted-foreground">-</span>
                     )}
                   </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {agent.base_model || "-"}
-                  </TableCell>
                   <TableCell className="text-sm">{agent.category || "-"}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {agent.owner_email || "-"}
+                  <TableCell>
+                    <OwnerCell agent={agent} />
+                  </TableCell>
+                  <TableCell>
+                    <RiskBadge risk={agent.max_risk} />
+                  </TableCell>
+                  <TableCell>
+                    <CompletenessBar value={agent.completeness} missing={agent.missing_fields?.length} />
+                  </TableCell>
+                  <TableCell>
+                    {agent.managed_by && agent.managed_by !== "ui" ? (
+                      <Badge variant="secondary" className="text-xs">
+                        {MANAGED_BY_LABEL[agent.managed_by] ?? agent.managed_by}
+                      </Badge>
+                    ) : (
+                      <span className="text-sm text-muted-foreground">화면</span>
+                    )}
                   </TableCell>
                 </TableRow>
               ))
@@ -335,6 +439,14 @@ export function AIAgentsTable({ data, isLoading }: AIAgentsTableProps) {
                   <Cpu className="h-3.5 w-3.5 shrink-0" />
                   <span className="truncate">{agent.base_model || "-"}</span>
                 </div>
+                {/* 책임자 · 완성도 · 위험도 */}
+                <div className="flex items-center justify-between gap-2">
+                  <OwnerCell agent={agent} />
+                  <div className="flex flex-col items-end gap-1">
+                    <RiskBadge risk={agent.max_risk} />
+                    <CompletenessBar value={agent.completeness} missing={agent.missing_fields?.length} />
+                  </div>
+                </div>
               </CardContent>
             </Card>
           ))}
@@ -395,6 +507,8 @@ export function AIAgentsTable({ data, isLoading }: AIAgentsTableProps) {
           </Button>
         </div>
       </div>
+      </>
+      )}
     </div>
   )
 }

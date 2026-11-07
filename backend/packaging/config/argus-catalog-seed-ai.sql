@@ -32,38 +32,62 @@ VALUES
     ('argus.ml.film_recommender',
      'argus.ml.film_recommender.PROD.model',
      '영화 추천 모델 — 회원의 대여 이력(rental)과 장르 선호를 학습해 다음 대여 후보를 추천한다. 협업 필터링(implicit ALS) 기반.',
-     'mjkim', 'local', '/var/lib/argus-catalog-server/models/film_recommender',
+     'mjkim', 'local', 'file:///var/lib/argus-catalog-server/model-artifacts/argus.ml.film_recommender',
      2, 'active', 'admin'),
     ('argus.ml.churn_predictor',
      'argus.ml.churn_predictor.PROD.model',
      '회원 이탈 예측 모델 — 최근 90일 대여 빈도·연체 이력·결제 패턴으로 휴면 전환 확률을 예측한다. scikit-learn GradientBoosting.',
-     'jypark', 'local', '/var/lib/argus-catalog-server/models/churn_predictor',
+     'jypark', 'local', 'file:///var/lib/argus-catalog-server/model-artifacts/argus.ml.churn_predictor',
      1, 'active', 'admin'),
     ('argus.ml.rental_demand_forecast',
      'argus.ml.rental_demand_forecast.PROD.model',
      '대여 수요 예측 모델 — 점포·장르별 일간 대여량을 2주 선행 예측해 재고 배치에 활용한다. 시계열(Prophet) 기반.',
-     'tkoh', 'local', '/var/lib/argus-catalog-server/models/rental_demand_forecast',
+     'tkoh', 'local', 'file:///var/lib/argus-catalog-server/model-artifacts/argus.ml.rental_demand_forecast',
      1, 'active', 'admin')
 ON CONFLICT (name) DO NOTHING;
 
 -- 1.1 모델 버전
+-- 저장 경로는 모델 저장소 + /versions/{n} (API 로 등록한 버전과 같은 규칙). 데모 시드라 이 SQL 은 파일을 만들지 않는다 —
+-- 통합 테스트 스택은 design/integration-test/scripts/seed-ai-files.sh 가 샘플 파일을 넣는다(없으면 버전 탭에 "파일 없음"). 스테이지는 대문자(NONE/STAGING/PRODUCTION/ARCHIVED).
 INSERT INTO catalog_model_versions
-    (model_id, version, source, run_id, description, status, stage, artifact_count, artifact_size, created_by)
-SELECT m.id, v.version, v.source, v.run_id, v.description, 'READY', v.stage, v.artifact_count, v.artifact_size, 'admin'
+    (model_id, version, source, run_id, description, status, stage, artifact_count, artifact_size,
+     storage_location, finished_at, created_by)
+SELECT m.id, v.version, v.source, v.run_id, v.description, 'READY', v.stage, v.artifact_count, v.artifact_size,
+       m.storage_location || '/versions/' || v.version, now(), 'admin'
 FROM (VALUES
     ('argus.ml.film_recommender', 1, 'mlflow-artifacts:/1/a1b2c3/artifacts/model', 'a1b2c3d4e5f60001',
-     '최초 학습 — 2024년 대여 이력 전체', 'Archived', 6, 18874368),
+     '최초 학습 — 2024년 대여 이력 전체', 'ARCHIVED', 6, 18874368),
     ('argus.ml.film_recommender', 2, 'mlflow-artifacts:/1/f6e5d4/artifacts/model', 'f6e5d4c3b2a10002',
-     '장르 피처 추가 + 하이퍼파라미터 튜닝 (factors 128)', 'Production', 6, 19922944),
+     '장르 피처 추가 + 하이퍼파라미터 튜닝 (factors 128)', 'PRODUCTION', 6, 19922944),
     ('argus.ml.churn_predictor', 1, 'mlflow-artifacts:/2/09f8e7/artifacts/model', '09f8e7d6c5b40003',
-     '연체 횟수·평균 대여 간격 피처 기반 베이스라인', 'Production', 5, 2097152),
+     '연체 횟수·평균 대여 간격 피처 기반 베이스라인', 'PRODUCTION', 5, 2097152),
     ('argus.ml.rental_demand_forecast', 1, 'mlflow-artifacts:/3/778899/artifacts/model', '7788990011220004',
-     '점포×장르 시계열 96개 학습', 'Staging', 4, 5242880)
+     '점포×장르 시계열 96개 학습', 'STAGING', 4, 5242880)
 ) AS v(model_name, version, source, run_id, description, stage, artifact_count, artifact_size)
 JOIN catalog_registered_models m ON m.name = v.model_name
 ON CONFLICT (model_id, version) DO NOTHING;
 
--- 1.2 버전별 메트릭 (Metrics 탭 버전 비교용)
+-- 1.2 버전별 MLmodel 메타데이터 (catalog_models — 목록의 프레임워크·Python·크기 열)
+INSERT INTO catalog_models
+    (model_version_id, model_name, version, predict_fn, python_version, flavor, flavor_version,
+     sklearn_version, serialization_format, mlflow_version, model_size_bytes, requirements, source_type)
+SELECT mv.id, c.model_name, c.version, 'predict', c.python_version, c.flavor, c.flavor_version,
+       c.sklearn_version, c.serialization_format, '2.17.0', mv.artifact_size, c.requirements, 'mlflow'
+FROM (VALUES
+    ('argus.ml.film_recommender', 1, '3.11.9', 'python_function', NULL, NULL, NULL,
+     E'mlflow==2.17.0\nimplicit==0.7.2\npandas==2.2.3'),
+    ('argus.ml.film_recommender', 2, '3.11.9', 'python_function', NULL, NULL, NULL,
+     E'mlflow==2.17.0\nimplicit==0.7.2\npandas==2.2.3'),
+    ('argus.ml.churn_predictor', 1, '3.11.9', 'sklearn', '1.5.2', '1.5.2', 'cloudpickle',
+     E'mlflow==2.17.0\nscikit-learn==1.5.2\npandas==2.2.3'),
+    ('argus.ml.rental_demand_forecast', 1, '3.11.9', 'prophet', '1.1.5', NULL, NULL,
+     E'mlflow==2.17.0\nprophet==1.1.5\npandas==2.2.3')
+) AS c(model_name, version, python_version, flavor, flavor_version, sklearn_version, serialization_format, requirements)
+JOIN catalog_registered_models m ON m.name = c.model_name
+JOIN catalog_model_versions mv ON mv.model_id = m.id AND mv.version = c.version
+ON CONFLICT (model_name, version) DO NOTHING;
+
+-- 1.3 버전별 메트릭 (Metrics 탭 버전 비교용)
 INSERT INTO catalog_model_metrics (model_id, version, metric_key, metric_value)
 SELECT m.id, mt.version, mt.metric_key, mt.metric_value
 FROM (VALUES
@@ -82,6 +106,8 @@ ON CONFLICT (model_id, version, metric_key) DO NOTHING;
 
 -- ---------------------------------------------------------------------------
 -- 2. OCI 모델 허브 (catalog_oci_models)
+-- 시드 모델은 메타데이터(DB 행)만 넣는다. 통합 테스트 환경에서는 seed-ai-files.sh 가 ml-film-recommender-onnx v1 에
+-- 샘플 파일 3개를 넣고, LLM·임베딩 시드는 MinIO 파일이 없어 파일 탭이 비어 있고 다운로드는 404.
 -- ---------------------------------------------------------------------------
 
 INSERT INTO catalog_oci_models
@@ -93,19 +119,19 @@ VALUES
      '사내 표준 범용 LLM — 카탈로그 메타데이터 생성(설명/태그/PII)과 AI Agent 의 기반 모델로 사용.',
      E'# Qwen2.5 7B Instruct\n\n사내 GPU 서빙 표준 LLM 입니다.\n\n- 용도: 메타데이터 자동 생성, 에이전트 기반 모델\n- 서빙: vLLM (OpenAI 호환 엔드포인트)\n- 한국어/영어 지원',
      'text-generation', 'transformers', 'multilingual', 'apache-2.0',
-     'huggingface', 'Qwen/Qwen2.5-7B-Instruct', 'argus-models', 'llm-qwen2.5-7b-instruct',
+     'huggingface', 'Qwen/Qwen2.5-7B-Instruct', 'model-artifacts', 'llm-qwen2.5-7b-instruct',
      'admin', 1, 15728640000, 42, 'production'),
     ('embedding-bge-m3', 'BGE-M3 Embedding',
      '시맨틱 검색용 다국어 임베딩 모델 — 카탈로그 통합 검색(데이터셋/용어집/Agent/API)의 임베딩 백엔드 후보.',
      E'# BGE-M3\n\n다국어 임베딩 모델 (1024차원).\n\n- 용도: 카탈로그 시맨틱 검색 임베딩\n- 짧은 질의·긴 문서 모두 안정적',
      'feature-extraction', 'sentence-transformers', 'multilingual', 'mit',
-     'huggingface', 'BAAI/bge-m3', 'argus-models', 'embedding-bge-m3',
+     'huggingface', 'BAAI/bge-m3', 'model-artifacts', 'embedding-bge-m3',
      'admin', 1, 2415919104, 18, 'approved'),
     ('ml-film-recommender-onnx', 'Film Recommender (ONNX)',
      'MLflow 의 argus.ml.film_recommender v2 를 ONNX 로 변환한 서빙용 아티팩트 — 추천 API 의 경량 추론에 사용.',
      E'# Film Recommender ONNX\n\nMLflow film_recommender v2 의 ONNX 변환본.\n\n- 입력: customer_id 임베딩 + 후보 film 피처\n- 출력: 선호 점수 (float32)',
      'recommendation', 'onnx', 'ko', 'proprietary',
-     'mlflow', 'argus.ml.film_recommender', 'argus-models', 'ml-film-recommender-onnx',
+     'mlflow', 'argus.ml.film_recommender', 'model-artifacts', 'ml-film-recommender-onnx',
      'mjkim', 1, 20971520, 7, 'review')
 ON CONFLICT (name) DO NOTHING;
 
@@ -121,16 +147,16 @@ FROM (VALUES
 JOIN catalog_oci_models m ON m.name = v.model_name
 ON CONFLICT (model_id, version) DO NOTHING;
 
--- 2.2 OCI 모델 리니지 — 학습 데이터/기반 모델 관계
+-- 2.2 OCI 모델 리니지 — 학습 데이터/기반 모델 관계 (source_type: dataset|model|mlflow|external, relation 은 소문자)
 INSERT INTO catalog_oci_model_lineage (model_id, source_type, source_id, source_name, relation_type, description)
 SELECT m.id, l.source_type, l.source_id, l.source_name, l.relation_type, l.description
 FROM (VALUES
     ('ml-film-recommender-onnx', 'mlflow', 'argus.ml.film_recommender', 'argus.ml.film_recommender v2',
-     'CONVERTED_FROM', 'MLflow Production 버전을 ONNX 로 변환'),
+     'converted_from', 'MLflow Production 버전을 ONNX 로 변환'),
     ('ml-film-recommender-onnx', 'dataset', 'sakila-mysql.sakila.rental.dataset', 'sakila.rental',
-     'TRAINED_ON', '대여 트랜잭션 이력으로 학습'),
+     'trained_on', '대여 트랜잭션 이력으로 학습'),
     ('ml-film-recommender-onnx', 'dataset', 'sakila-mysql.sakila.film.dataset', 'sakila.film',
-     'TRAINED_ON', '영화 메타데이터(장르·등급) 피처로 사용')
+     'trained_on', '영화 메타데이터(장르·등급) 피처로 사용')
 ) AS l(model_name, source_type, source_id, source_name, relation_type, description)
 JOIN catalog_oci_models m ON m.name = l.model_name
 WHERE NOT EXISTS (

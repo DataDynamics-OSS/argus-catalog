@@ -12,6 +12,8 @@
   - 모든 ``pyproject.toml`` 의 ``[project].version`` (단, dynamic 버전은 제외)
   - ``__version__ = "..."`` 를 가진 모든 ``__init__.py``
   - 명시한 ``package.json`` (내부 빌드 설정 패키지는 제외 — private·0.0.0 유지)
+  - 모든 ``pom.xml`` 의 프로젝트 자신의 ``<version>`` (의존성·플러그인 버전은 건드리지 않음)
+  - 명시한 플러그인 설명 파일의 ``version=`` (StarRocks ``plugin.properties``)
 
 사용법:
   tools/sync-version.py            # VERSION → 매니페스트 동기화
@@ -40,10 +42,16 @@ _PACKAGE_JSON = [
     "docs/package.json",
 ]
 
+# 명시 관리하는 properties 파일의 ``version=`` (StarRocks 플러그인 설명 — INSTALL PLUGIN 이 읽음)
+_PROPERTIES = [
+    "extensions/argus-catalog-starrocks-audit-plugin/src/main/resources/plugin.properties",
+]
+
 _SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+([-.+][0-9A-Za-z.-]+)?$")
 
 
 def _read_version() -> str:
+    """루트 VERSION 파일을 읽어 SemVer 형식을 검증한다(없거나 형식 오류면 종료)."""
     if not VERSION_FILE.exists():
         sys.exit(f"[sync-version] VERSION 파일이 없습니다: {VERSION_FILE}")
     v = VERSION_FILE.read_text(encoding="utf-8").strip()
@@ -52,10 +60,19 @@ def _read_version() -> str:
     return v
 
 
+# 제품 버전과 무관한 시험용 데이터(외부 프로젝트 예시 등) — 경로 접두사로 제외
+_EXCLUDE_PREFIXES = (
+    "design/integration-test/scripts/extensions-it/data/",
+)
+
+
 def _iter_files(filename: str):
-    """_PRUNE 를 건너뛰며 주어진 파일명을 재귀 탐색한다."""
+    """_PRUNE·_EXCLUDE_PREFIXES 를 건너뛰며 주어진 파일명을 재귀 탐색한다."""
     for path in ROOT.rglob(filename):
-        if any(part in _PRUNE for part in path.relative_to(ROOT).parts):
+        rel = path.relative_to(ROOT)
+        if any(part in _PRUNE for part in rel.parts):
+            continue
+        if rel.as_posix().startswith(_EXCLUDE_PREFIXES):
             continue
         yield path
 
@@ -71,8 +88,9 @@ def _pyproject_section_span(text: str) -> tuple[int, int] | None:
     return start, end
 
 
-# (현재 버전 추출 정규식, 치환 함수) — 파일 유형별 핸들러
+# 파일 유형별 (현재 버전 추출 getter, 버전 치환 setter) 핸들러
 def _pyproject_get(text: str) -> str | None:
+    """``[project]`` 테이블의 리터럴 version 값(없거나 dynamic 이면 None)."""
     span = _pyproject_section_span(text)
     if not span:
         return None
@@ -82,6 +100,7 @@ def _pyproject_get(text: str) -> str | None:
 
 
 def _pyproject_set(text: str, version: str) -> str:
+    """``[project]`` 테이블 안의 첫 version 값만 치환한다(getter 가 값을 찾은 파일에만 호출됨)."""
     span = _pyproject_section_span(text)
     s, e = span
     body = text[s:e]
@@ -107,6 +126,36 @@ def _pkgjson_set(text: str, version: str) -> str:
     return re.sub(r'("version"\s*:\s*)"[^"]*"', rf'\1"{version}"', text, count=1)
 
 
+def _pom_head_span(text: str) -> tuple[int, int]:
+    """프로젝트 좌표가 있는 머리 부분(<project> 직속, parent·properties·dependencies·build 이전)."""
+    start = text.find("<project")
+    ends = [i for i in (text.find(t, start) for t in ("<parent>", "<properties>", "<dependencies>",
+                                                      "<dependencyManagement>", "<build>", "<profiles>"))
+            if i != -1]
+    return start, (min(ends) if ends else len(text))
+
+
+def _pom_get(text: str) -> str | None:
+    s, e = _pom_head_span(text)
+    m = re.search(r"<version>([^<]*)</version>", text[s:e])
+    return m.group(1).strip() if m else None
+
+
+def _pom_set(text: str, version: str) -> str:
+    s, e = _pom_head_span(text)
+    head = re.sub(r"<version>[^<]*</version>", f"<version>{version}</version>", text[s:e], count=1)
+    return text[:s] + head + text[e:]
+
+
+def _props_get(text: str) -> str | None:
+    m = re.search(r"(?m)^version\s*=\s*(\S+)\s*$", text)
+    return m.group(1) if m else None
+
+
+def _props_set(text: str, version: str) -> str:
+    return re.sub(r"(?m)^(version\s*=\s*)\S+\s*$", rf"\g<1>{version}", text, count=1)
+
+
 def _targets():
     """(경로, getter, setter) 목록. 존재하는 파일만."""
     out = []
@@ -119,10 +168,17 @@ def _targets():
         path = ROOT / rel
         if path.exists():
             out.append((path, _pkgjson_get, _pkgjson_set))
+    for path in _iter_files("pom.xml"):
+        out.append((path, _pom_get, _pom_set))
+    for rel in _PROPERTIES:
+        path = ROOT / rel
+        if path.exists():
+            out.append((path, _props_get, _props_set))
     return out
 
 
 def main() -> int:
+    """동기화(기본)·검증(--check)·버전 갱신(--set) — 종료코드 0 정상, 1 불일치(--check)."""
     ap = argparse.ArgumentParser(description="제품 버전 단일 소스 동기화")
     ap.add_argument("--check", action="store_true", help="일치 검증만(불일치 시 exit 1)")
     ap.add_argument("--set", metavar="X.Y.Z", help="VERSION 갱신 후 동기화")

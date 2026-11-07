@@ -3,11 +3,12 @@
 import { useCallback, useState } from "react"
 import dynamic from "next/dynamic"
 import { Check, Copy, Loader2 } from "lucide-react"
-import { toast } from "sonner"
+import { toast } from "@/lib/notify"
 import type { EditorProps } from "@monaco-editor/react"
 
 import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
+import { MONACO_FONT_SIZE } from "@/lib/monaco"
 
 type MonacoOptions = NonNullable<EditorProps["options"]>
 
@@ -49,7 +50,7 @@ const BASE_READONLY_OPTIONS: MonacoOptions = {
   domReadOnly: true,
   minimap: { enabled: false },
   scrollBeyondLastLine: false,
-  fontSize: 13,
+  fontSize: MONACO_FONT_SIZE,
   fontFamily: "D2Coding, Menlo, Consolas, monospace",
   lineNumbers: "on",
   renderLineHighlight: "none",
@@ -86,7 +87,7 @@ export function CodeViewer({
       toast.success(`${copyLabel} 내용을 클립보드에 복사했습니다.`)
       setTimeout(() => setCopied(false), 2000)
     } catch {
-      toast.error("클립보드 복사에 실패했습니다.")
+      toast.error("클립보드에 복사하지 못했습니다.")
     }
   }, [code, copyLabel])
 

@@ -11,6 +11,7 @@ import {
   type SchemaSnapshot,
   type SchemaChangeEntry,
 } from "@/features/datasets/api"
+import { errorMessage } from "@/lib/notify"
 
 type SchemaHistoryTabProps = {
   datasetId: number
@@ -138,15 +139,20 @@ export function SchemaHistoryTab({ datasetId }: SchemaHistoryTabProps) {
   const [snapshots, setSnapshots] = useState<SchemaSnapshot[]>([])
   const [total, setTotal] = useState(0)
   const [isLoading, setIsLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setIsLoading(true)
+    setLoadError(null)
     try {
       const data = await fetchSchemaHistory(datasetId, 1, 20)
       setSnapshots(data.items)
       setTotal(data.total)
     } catch (err) {
       console.error("Failed to load schema history", { datasetId, err })
+      setLoadError(errorMessage(err) ?? "")
+      setSnapshots([])
+      setTotal(0)
     } finally {
       setIsLoading(false)
     }
@@ -176,6 +182,11 @@ export function SchemaHistoryTab({ datasetId }: SchemaHistoryTabProps) {
         {isLoading ? (
           <div className="flex items-center justify-center py-8">
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : loadError !== null ? (
+          <div className="py-8 text-center text-sm">
+            <p className="text-destructive">스키마 변경 이력을 불러오지 못했습니다.</p>
+            {loadError && <p className="mt-1 text-xs text-muted-foreground">{loadError}</p>}
           </div>
         ) : snapshots.length === 0 ? (
           <p className="text-sm text-muted-foreground text-center py-8">

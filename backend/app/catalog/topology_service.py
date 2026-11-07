@@ -38,7 +38,8 @@ logger = logging.getLogger(__name__)
 def _slugify(name: str) -> str:
     """이름을 URL 친화적 slug 로 변환 (영숫자/한글 외 → '-')."""
     s = re.sub(r"[^0-9a-zA-Z가-힣]+", "-", name.strip().lower()).strip("-")
-    return s or "item"
+    # code 컬럼은 VARCHAR(100) — 충돌 접미사(-N) 여유를 두고 자른다
+    return s[:90].rstrip("-") or "item"
 
 
 async def _unique_code(session: AsyncSession, model, name: str) -> str:
@@ -57,6 +58,7 @@ async def _unique_code(session: AsyncSession, model, name: str) -> str:
 # ---------------------------------------------------------------------------
 
 async def list_organizations(session: AsyncSession) -> list[OrganizationResponse]:
+    """조직 전체(sort_order, 이름 순) — 트리가 아닌 평면 목록."""
     rows = (
         await session.execute(
             select(Organization).order_by(Organization.sort_order, Organization.name)
@@ -72,8 +74,9 @@ async def get_organization(session: AsyncSession, org_id: int) -> Organization |
 async def create_organization(
     session: AsyncSession, req: OrganizationCreate
 ) -> OrganizationResponse:
+    """조직을 만들고 커밋한다. 상위 조직이 없으면 ``ValueError``."""
     if req.parent_id is not None and await session.get(Organization, req.parent_id) is None:
-        raise ValueError(f"parent organization not found: {req.parent_id}")
+        raise ValueError(f"상위 조직을 찾을 수 없습니다: {req.parent_id}")
     org = Organization(
         code=await _unique_code(session, Organization, req.name),
         name=req.name,
@@ -107,6 +110,10 @@ async def _descendant_org_ids(session: AsyncSession, org_id: int) -> set[int]:
 async def update_organization(
     session: AsyncSession, org_id: int, req: OrganizationUpdate
 ) -> OrganizationResponse | None:
+    """조직 수정·이동(보낸 필드만 반영). 없으면 None.
+
+    자기 자신·존재하지 않는 조직·자기 후손 아래로의 이동은 ``ValueError``.
+    """
     org = await session.get(Organization, org_id)
     if org is None:
         return None
@@ -117,11 +124,11 @@ async def update_organization(
         new_parent = data["parent_id"]
         if new_parent is not None:
             if new_parent == org_id:
-                raise ValueError("organization cannot be its own parent")
+                raise ValueError("조직을 자기 자신의 하위로 옮길 수 없습니다.")
             if await session.get(Organization, new_parent) is None:
-                raise ValueError(f"parent organization not found: {new_parent}")
+                raise ValueError(f"상위 조직을 찾을 수 없습니다: {new_parent}")
             if new_parent in await _descendant_org_ids(session, org_id):
-                raise ValueError("cannot move organization under its own descendant (cycle)")
+                raise ValueError("조직을 자신의 하위 조직 아래로 옮길 수 없습니다.")
 
     for key, value in data.items():
         setattr(org, key, value)
@@ -143,6 +150,7 @@ async def count_org_children(session: AsyncSession, org_id: int) -> tuple[int, i
 
 
 async def delete_organization(session: AsyncSession, org_id: int) -> bool:
+    """조직 삭제. 없으면 False. 하위 조직·시스템 존재 여부는 호출 측이 먼저 검사한다(FK RESTRICT)."""
     org = await session.get(Organization, org_id)
     if org is None:
         return False
@@ -159,6 +167,7 @@ async def delete_organization(session: AsyncSession, org_id: int) -> bool:
 async def list_systems(
     session: AsyncSession, org_id: int | None = None
 ) -> list[SystemResponse]:
+    """시스템 목록(sort_order, 이름 순). ``org_id`` 가 주어지면 그 조직 소속만."""
     stmt = select(System).order_by(System.sort_order, System.name)
     if org_id is not None:
         stmt = stmt.where(System.org_id == org_id)
@@ -171,8 +180,9 @@ async def get_system(session: AsyncSession, system_id: int) -> System | None:
 
 
 async def create_system(session: AsyncSession, req: SystemCreate) -> SystemResponse:
+    """시스템을 만들고 커밋한다. 지정한 조직이 없으면 ``ValueError``."""
     if req.org_id is not None and await session.get(Organization, req.org_id) is None:
-        raise ValueError(f"organization not found: {req.org_id}")
+        raise ValueError(f"조직을 찾을 수 없습니다: {req.org_id}")
     system = System(
         code=await _unique_code(session, System, req.name),
         name=req.name,
@@ -186,19 +196,20 @@ async def create_system(session: AsyncSession, req: SystemCreate) -> SystemRespo
     session.add(system)
     await session.commit()
     await session.refresh(system)
-    logger.info("시스템 생성: %s (id=%d, org=%d)", system.name, system.id, system.org_id)
+    logger.info("시스템 생성: %s (id=%d, org=%s)", system.name, system.id, system.org_id)
     return SystemResponse.model_validate(system)
 
 
 async def update_system(
     session: AsyncSession, system_id: int, req: SystemUpdate
 ) -> SystemResponse | None:
+    """시스템 수정(보낸 필드만 반영). 없으면 None, 지정한 조직이 없으면 ``ValueError``."""
     system = await session.get(System, system_id)
     if system is None:
         return None
     data = req.model_dump(exclude_unset=True)
     if data.get("org_id") is not None and await session.get(Organization, data["org_id"]) is None:
-        raise ValueError(f"organization not found: {data['org_id']}")
+        raise ValueError(f"조직을 찾을 수 없습니다: {data['org_id']}")
     for key, value in data.items():
         setattr(system, key, value)
     await session.commit()
@@ -208,6 +219,7 @@ async def update_system(
 
 
 async def count_system_datasources(session: AsyncSession, system_id: int) -> int:
+    """시스템에 배정된 데이터 소스 수 — 삭제 가드용."""
     return int(
         await session.scalar(
             select(func.count(Datasource.id)).where(Datasource.system_id == system_id)
@@ -216,7 +228,7 @@ async def count_system_datasources(session: AsyncSession, system_id: int) -> int
 
 
 async def delete_system(session: AsyncSession, system_id: int) -> bool:
-    """시스템 삭제. 소속 데이터 소스은 FK SET NULL 로 미분류로 떨어진다."""
+    """시스템 삭제. 소속 데이터 소스는 FK SET NULL 로 미분류로 떨어진다. 없으면 False."""
     system = await session.get(System, system_id)
     if system is None:
         return False
@@ -233,12 +245,15 @@ async def delete_system(session: AsyncSession, system_id: int) -> bool:
 async def assign_datasource_system(
     session: AsyncSession, datasource_id: int, system_id: int | None
 ) -> Datasource | None:
-    """데이터 소스을 시스템에 배정/이동하거나 해제(system_id=None)한다."""
+    """데이터 소스를 시스템에 배정/이동하거나 해제(system_id=None)한다.
+
+    데이터 소스가 없으면 None, 시스템이 없으면 ``ValueError``.
+    """
     datasource = await session.get(Datasource, datasource_id)
     if datasource is None:
         return None
     if system_id is not None and await session.get(System, system_id) is None:
-        raise ValueError(f"system not found: {system_id}")
+        raise ValueError(f"시스템을 찾을 수 없습니다: {system_id}")
     datasource.system_id = system_id
     await session.commit()
     await session.refresh(datasource)
@@ -251,10 +266,10 @@ async def assign_datasource_system(
 # ---------------------------------------------------------------------------
 
 async def get_topology(session: AsyncSession) -> TopologyResponse:
-    """조직 트리 → 시스템 → 데이터 소스(+데이터셋 수)을 한 번에 조립한다.
+    """조직 트리 → 시스템 → 데이터 소스(+데이터셋 수)를 한 번에 조립한다.
 
     각 엔티티를 1쿼리씩 읽어 메모리에서 조립한다 (N+1 회피). system_id 가 NULL 인
-    데이터 소스은 'unassigned' 버킷으로 모은다.
+    데이터 소스와 org_id 가 NULL 인 시스템은 'unassigned' 버킷으로 모은다.
     """
     orgs = (
         await session.execute(
@@ -272,7 +287,10 @@ async def get_topology(session: AsyncSession) -> TopologyResponse:
     # 데이터셋 수 (datasource_id 별 집계) 1쿼리
     counts_rows = (
         await session.execute(
-            select(Dataset.datasource_id, func.count(Dataset.id)).group_by(Dataset.datasource_id)
+            # 상세 화면·삭제 영향(get_datasource_dataset_count)과 같은 기준: removed 제외
+            select(Dataset.datasource_id, func.count(Dataset.id))
+            .where(Dataset.status != "removed")
+            .group_by(Dataset.datasource_id)
         )
     ).all()
     ds_count = {pid: cnt for pid, cnt in counts_rows}
@@ -317,6 +335,10 @@ async def get_topology(session: AsyncSession) -> TopologyResponse:
         )
 
     roots = [build(o) for o in children_by_parent.get(None, [])]
+    logger.debug(
+        "토폴로지 조립: orgs=%d systems=%d datasources=%d unassigned_datasources=%d unassigned_systems=%d",
+        len(orgs), len(systems), len(datasources), len(unassigned), len(unassigned_systems),
+    )
     return TopologyResponse(
         organizations=roots,
         unassigned=TopologyUnassigned(datasources=unassigned, systems=unassigned_systems),

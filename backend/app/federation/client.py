@@ -3,7 +3,7 @@
 
 각 peer 의 페더레이션 export API(``/api/v1/federation/export/*``)를 호출한다.
 타임아웃·인증 헤더를 캡슐화하며, 네트워크 오류는 호출자가 degrade 할 수 있도록
-예외를 그대로 전파한다(circuit breaker 는 후속 단계).
+예외를 그대로 전파한다(circuit breaker 는 호출자인 search/drilldown 모듈이 적용한다).
 """
 
 import logging
@@ -27,13 +27,18 @@ DEFAULT_TIMEOUT_SEC = 5.0
 
 
 def _headers(instance: FederatedInstance) -> dict[str, str]:
+    """요청 헤더를 만든다. 저장된 토큰을 복호화해 Bearer 헤더로 싣는다(토큰은 로그 금지)."""
+    from app.federation.token_store import unseal
+
     headers = {"Accept": "application/json"}
-    if instance.auth_token:
-        headers["Authorization"] = f"Bearer {instance.auth_token}"
+    token = unseal(instance.auth_token)  # 저장값은 암호문(레거시 평문·임시 객체는 그대로)
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     return headers
 
 
 def _base(instance: FederatedInstance) -> str:
+    """peer base_url 에서 끝의 '/' 를 제거해 경로 결합 시 '//' 를 막는다."""
     return instance.base_url.rstrip("/")
 
 
@@ -50,6 +55,10 @@ async def search_peer(
     """
     url = f"{_base(instance)}/api/v1/federation/export/search"
     params = {"q": query, "limit": limit, "threshold": threshold}
+    logger.debug(
+        "peer 검색 호출: instance=%s limit=%d threshold=%s",
+        instance.instance_key, limit, threshold,
+    )
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.get(url, params=params, headers=_headers(instance))
         resp.raise_for_status()
@@ -72,6 +81,10 @@ async def fetch_export_datasets(
     params: dict = {"limit": limit, "offset": offset}
     if updated_after is not None:
         params["updated_after"] = updated_after.isoformat()
+    logger.debug(
+        "peer export 데이터셋 페이지 요청: instance=%s offset=%d limit=%d updated_after=%s",
+        instance.instance_key, offset, limit, params.get("updated_after"),
+    )
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.get(url, params=params, headers=_headers(instance))
         resp.raise_for_status()
@@ -84,6 +97,7 @@ async def fetch_export_lineage(
 ) -> FederatedExportLineageResponse:
     """peer 의 리니지 엣지(URN→URN) 전체를 가져온다(cross-instance stitching 용)."""
     url = f"{_base(instance)}/api/v1/federation/export/lineage"
+    logger.debug("peer 리니지 엣지 요청: instance=%s", instance.instance_key)
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.get(url, headers=_headers(instance))
         resp.raise_for_status()
@@ -97,6 +111,7 @@ async def fetch_export_dataset(
 ) -> dict:
     """peer 의 단일 데이터셋 상세 메타데이터(드릴다운)를 가져온다."""
     url = f"{_base(instance)}/api/v1/federation/export/dataset"
+    logger.debug("peer 데이터셋 상세 요청: instance=%s urn=%s", instance.instance_key, urn)
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.get(url, params={"urn": urn}, headers=_headers(instance))
         resp.raise_for_status()
@@ -112,6 +127,9 @@ async def fetch_export_sample(
     """peer 의 데이터셋 샘플 데이터(드릴다운)를 가져온다."""
     url = f"{_base(instance)}/api/v1/federation/export/dataset/sample"
     params = {"urn": urn, "limit": limit}
+    logger.debug(
+        "peer 샘플 요청: instance=%s urn=%s limit=%d", instance.instance_key, urn, limit
+    )
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.get(url, params=params, headers=_headers(instance))
         resp.raise_for_status()
@@ -127,6 +145,7 @@ async def fetch_export_capabilities(
     ``instance`` 는 영속화 전 임시 객체여도 된다(base_url/auth_token 만 사용).
     """
     url = f"{_base(instance)}/api/v1/federation/export/capabilities"
+    logger.debug("peer capabilities 요청: base_url=%s", _base(instance))
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.get(url, headers=_headers(instance))
         resp.raise_for_status()
@@ -149,6 +168,10 @@ async def check_health(
             version = resp.json().get("version")
         except Exception:  # noqa: BLE001 — 비정상 응답이어도 도달성 점검은 계속
             pass
+        logger.debug(
+            "peer 상태점검 응답: instance=%s status=%d latency_ms=%d",
+            instance.instance_key, resp.status_code, latency_ms,
+        )
         return InstanceHealth(
             instance_key=instance.instance_key,
             reachable=resp.status_code == 200,

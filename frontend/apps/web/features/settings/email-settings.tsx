@@ -10,6 +10,7 @@ import { Label } from "@workspace/ui/components/label"
 import { Switch } from "@workspace/ui/components/switch"
 
 import { fetchMailConfig, updateMailConfig, testMail, type MailConfig } from "./api"
+import { errorMessage, notifyError, notifySuccess } from "@/lib/notify"
 
 const EMPTY: MailConfig = {
   enabled: false,
@@ -52,13 +53,12 @@ export function EmailSettings() {
 
   const handleSave = async () => {
     setSaving(true)
-    setMessage(null)
     try {
       await updateMailConfig(cfg)
-      setMessage({ type: "success", text: "메일 설정을 저장했습니다." })
+      notifySuccess("메일 설정을 저장했습니다.")
       await loadConfig() // 비밀번호 마스킹 값 재반영
     } catch (e) {
-      setMessage({ type: "error", text: e instanceof Error ? e.message : "저장에 실패했습니다." })
+      notifyError(e, "메일 설정을 저장하지 못했습니다.")
     } finally {
       setSaving(false)
     }
@@ -73,7 +73,7 @@ export function EmailSettings() {
       const result = await testMail({ to: testTo })
       setMessage({ type: result.success ? "success" : "error", text: result.message })
     } catch (e) {
-      setMessage({ type: "error", text: e instanceof Error ? e.message : "테스트에 실패했습니다." })
+      setMessage({ type: "error", text: errorMessage(e) ?? "테스트 메일을 보내지 못했습니다." })
     } finally {
       setTesting(false)
     }
@@ -160,8 +160,8 @@ export function EmailSettings() {
               <Input value={cfg.smtp_user} onChange={(e) => set("smtp_user", e.target.value)} placeholder="비우면 발신자 이메일 사용" />
             </div>
             <div className="space-y-1.5">
-              <Label>비밀번호 / 앱 비밀번호</Label>
-              <Input type="password" value={cfg.smtp_password} onChange={(e) => set("smtp_password", e.target.value)} placeholder="••••••••" />
+              <Label>비밀번호 / 앱 비밀번호 (선택)</Label>
+              <Input type="password" value={cfg.smtp_password} onChange={(e) => set("smtp_password", e.target.value)} placeholder="비우면 인증 없이 발송" />
             </div>
           </div>
 

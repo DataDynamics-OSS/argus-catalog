@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Merge LoRA adapter into base model and export for Ollama.
 
+LoRA 어댑터를 베이스 모델에 병합해 SafeTensors 로 저장한다(GGUF 변환은 아래 llama.cpp 명령으로 별도 수행).
+
 Steps:
   1. Load base model (FP16)
   2. Load LoRA adapter
@@ -26,6 +28,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
 def main():
+    """베이스 모델(FP16, CPU) 로드 → LoRA 어댑터 로드 → 병합 → 병합 모델·토크나이저 저장."""
     parser = argparse.ArgumentParser(description="Merge LoRA adapter into base model")
     parser.add_argument(
         "--base-model", default="Qwen/Qwen2.5-7B-Instruct",

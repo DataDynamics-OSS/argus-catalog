@@ -4,14 +4,14 @@
 sentence-transformers 모델을 로컬에 로드하고, async 이벤트 루프를 막지 않도록
 스레드 풀에서 추론을 실행한다.
 
-기본 모델: all-MiniLM-L6-v2 (384 차원, 약 80MB)
-한국어+영어: paraphrase-multilingual-MiniLM-L12-v2 (384 차원, 약 470MB)
+기본 모델: paraphrase-multilingual-MiniLM-L12-v2 (한국어+영어, 384 차원, 약 470MB)
+영어 전용 경량: all-MiniLM-L6-v2 (384 차원, 약 80MB)
 """
 
 import asyncio
 import logging
 
-from app.embedding.base import EmbeddingProvider
+from app.embedding.base import DEFAULT_EMBEDDING_MODEL, EmbeddingProvider
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 class LocalEmbeddingProvider(EmbeddingProvider):
     """sentence-transformers 기반 로컬 임베딩 제공자."""
 
-    def __init__(self, model_id: str = "all-MiniLM-L6-v2"):
+    def __init__(self, model_id: str = DEFAULT_EMBEDDING_MODEL):
         self._model_id = model_id
         self._model = None
         self._dim: int | None = None
@@ -43,6 +43,7 @@ class LocalEmbeddingProvider(EmbeddingProvider):
     async def embed(self, texts: list[str]) -> list[list[float]]:
         """sentence-transformers 로 텍스트를 임베딩 (스레드 풀에서 실행)."""
         model = self._get_model()
+        logger.debug("로컬 임베딩 요청: model=%s count=%d", self._model_id, len(texts))
         loop = asyncio.get_event_loop()
         embeddings = await loop.run_in_executor(
             None,
@@ -63,6 +64,7 @@ class LocalEmbeddingProvider(EmbeddingProvider):
         return "local"
 
     async def close(self) -> None:
+        """로드한 모델 참조를 놓아 메모리를 GC 가 회수하게 한다."""
         self._model = None
         self._dim = None
         logger.info("로컬 임베딩 제공자 종료됨")

@@ -27,6 +27,7 @@ import app.federation.models as fm
 from app.core.config import settings
 from app.federation import harvester, service
 from app.federation import schemas as s
+from app.federation import search as fed_search
 from app.federation.auth import verify_export_token
 from app.search import service as search_service
 
@@ -89,10 +90,10 @@ async def _test_harvest_and_search() -> None:
     from app.federation import client as fed_client
     orig_fetch = fed_client.fetch_export_datasets
     orig_hp = harvester.get_provider
-    orig_sp = service.get_provider
+    orig_sp = fed_search.get_provider
     fed_client.fetch_export_datasets = fake_fetch
     harvester.get_provider = no_provider
-    service.get_provider = no_provider
+    fed_search.get_provider = no_provider
     try:
         # 1차 가져오기 — 2건 upsert
         async with Session() as db:
@@ -162,13 +163,18 @@ async def _test_harvest_and_search() -> None:
     finally:
         fed_client.fetch_export_datasets = orig_fetch
         harvester.get_provider = orig_hp
-        service.get_provider = orig_sp
+        fed_search.get_provider = orig_sp
 
 
 def _make_request(headers: dict[str, str]):
     from starlette.requests import Request
     raw = [(k.lower().encode(), v.encode()) for k, v in headers.items()]
-    return Request({"type": "http", "headers": raw})
+    # path/client — 토큰 거부 시 경로·호출자를 로깅하므로 scope 에 포함해야 한다.
+    return Request({
+        "type": "http", "headers": raw, "path": "/api/v1/federation/export/search",
+        "query_string": b"", "server": ("hub", 80), "scheme": "http",
+        "client": ("10.0.0.1", 12345),
+    })
 
 
 async def _test_export_token_auth() -> None:

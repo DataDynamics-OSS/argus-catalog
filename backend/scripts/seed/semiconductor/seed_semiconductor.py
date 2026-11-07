@@ -4,14 +4,24 @@
 
 Catalog Server Standard API를 호출하여 반도체 Fab 표준 단어/도메인/코드/용어를 일괄 등록한다.
 
+표준 API 는 로그인이 필요하다(쓰기는 표준사전 편집 권한). 스크립트는 먼저
+``POST /api/v1/auth/login`` 으로 토큰을 받아 모든 요청에 ``Authorization: Bearer`` 헤더를 붙인다.
+계정은 SDK CLI 와 같은 관례를 따른다.
+
+  - 사용자: ``--username`` > 환경변수 ``ARGUS_USERNAME`` > ``admin``
+  - 비밀번호: ``--password`` > 환경변수 ``ARGUS_PASSWORD`` > (터미널이면) 입력 프롬프트
+  - 이미 받은 토큰: ``--token`` 또는 환경변수 ``ARGUS_TOKEN`` (주면 로그인 생략)
+
 Usage:
-    python seed_semiconductor.py                          # localhost:4600
-    python seed_semiconductor.py --base-url http://localhost:4600
-    python seed_semiconductor.py --dry-run                # API 호출 없이 데이터 검증만
+    ARGUS_PASSWORD=... python seed_semiconductor.py      # localhost:4600, admin 계정
+    python seed_semiconductor.py --base-url http://localhost:4600 --username admin
+    python seed_semiconductor.py --dry-run                # API 호출 없이 데이터 검증만(로그인 안 함)
 """
 
 import argparse
+import getpass
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -20,19 +30,107 @@ from urllib.request import Request, urlopen
 
 SEED_DIR = Path(__file__).parent
 API_PREFIX = "/api/v1/standards"
+LOGIN_PATH = "/api/v1/auth/login"
+
+# 로그인 후 모든 API 호출에 붙일 액세스 토큰(main 에서 설정)
+_access_token: str | None = None
+
+
+class SeedAuthError(Exception):
+    """로그인 실패 — 메시지는 사용자에게 그대로 보여 준다."""
+
+
+def _error_detail(body: str) -> tuple[str, str | None]:
+    """오류 응답 본문에서 (detail, code) 를 뽑는다. JSON 이 아니면 본문 앞부분."""
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return body[:300], None
+    if isinstance(data, dict):
+        return str(data.get("detail") or body[:300]), data.get("code")
+    return body[:300], None
+
+
+def login(base_url: str, username: str, password: str, timeout: float = 30) -> str:
+    """``POST /api/v1/auth/login`` 으로 로그인해 액세스 토큰을 돌려준다.
+
+    실패하면 ``SeedAuthError`` (사용자에게 보여 줄 한국어 메시지).
+    """
+    url = f"{base_url}{LOGIN_PATH}"
+    body = json.dumps({"username": username, "password": password}).encode("utf-8")
+    req = Request(url, data=body, method="POST")
+    req.add_header("Content-Type", "application/json")
+    try:
+        with urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except HTTPError as e:
+        detail, _ = _error_detail(e.read().decode("utf-8", errors="replace"))
+        if e.code == 401:
+            raise SeedAuthError(f"로그인 실패: 사용자명 또는 비밀번호가 올바르지 않습니다 ({username}).") from e
+        if e.code == 423:
+            raise SeedAuthError(f"로그인 실패: 계정이 잠겼습니다 — {detail}") from e
+        raise SeedAuthError(f"로그인 실패 (HTTP {e.code}): {detail}") from e
+    except URLError as e:
+        raise SeedAuthError(f"로그인 실패: 서버에 연결할 수 없습니다 ({url}): {e.reason}") from e
+
+    token = data.get("access_token") if isinstance(data, dict) else None
+    if not token:
+        raise SeedAuthError("로그인 실패: 응답에 access_token 이 없습니다.")
+    if _token_requires_password_change(token):
+        raise SeedAuthError(
+            f"'{username}' 계정은 비밀번호를 먼저 변경해야 합니다(최초 로그인 강제 변경 대상). "
+            "웹 UI 에 로그인해 비밀번호를 바꾼 뒤 새 비밀번호로 다시 실행하세요."
+        )
+    return token
+
+
+def _token_requires_password_change(token: str) -> bool:
+    """로컬 JWT 의 ``must_change_password`` claim 확인(서명 검증 없이 payload 만 읽음).
+
+    Keycloak 토큰 등 claim 이 없거나 해석할 수 없으면 False — 실제 차단은 API 의 403 응답으로 다시 잡는다.
+    """
+    import base64
+
+    try:
+        payload_b64 = token.split(".")[1]
+        payload_b64 += "=" * (-len(payload_b64) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+    except (IndexError, ValueError):
+        return False
+    return bool(isinstance(payload, dict) and payload.get("must_change_password"))
+
+
+def _fatal_auth(code: int, detail: str, error_code: str | None) -> None:
+    """인증·권한 오류는 계속해도 모두 실패하므로 원인을 알리고 종료한다."""
+    if code == 403 and error_code == "PASSWORD_CHANGE_REQUIRED":
+        print("\nFATAL: 비밀번호를 먼저 변경해야 하는 계정입니다(강제 변경 게이트). "
+              "웹 UI 에서 비밀번호를 바꾼 뒤 다시 실행하세요.")
+    elif code == 401:
+        print(f"\nFATAL: 인증이 거부되었습니다(401) — 토큰이 없거나 만료되었습니다: {detail}")
+    else:
+        print(f"\nFATAL: 권한이 없습니다(403) — 표준사전 편집 권한이 있는 계정으로 실행하세요: {detail}")
+    sys.exit(1)
 
 
 def load_json(filename: str) -> list | dict:
+    """이 스크립트 옆의 시드 JSON 파일을 읽는다."""
     path = SEED_DIR / filename
     with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 
 def api_call(base_url: str, method: str, path: str, data: dict | None = None) -> dict | None:
+    """표준 API 호출 — JSON 응답 반환, 204·중복(409/unique)·기타 HTTP 오류는 None.
+
+    토큰이 있으면 ``Authorization: Bearer`` 헤더를 붙인다. 연결 실패와 인증/권한 오류(401/403)는
+    이후 호출도 모두 실패하므로 즉시 종료한다.
+    """
     url = f"{base_url}{API_PREFIX}{path}"
     body = json.dumps(data, ensure_ascii=False).encode("utf-8") if data else None
     req = Request(url, data=body, method=method)
     req.add_header("Content-Type", "application/json")
+    if _access_token:
+        req.add_header("Authorization", f"Bearer {_access_token}")
 
     try:
         with urlopen(req, timeout=30) as resp:
@@ -41,6 +139,9 @@ def api_call(base_url: str, method: str, path: str, data: dict | None = None) ->
             return json.loads(resp.read().decode("utf-8"))
     except HTTPError as e:
         error_body = e.read().decode("utf-8", errors="replace")
+        if e.code in (401, 403):
+            detail, error_code = _error_detail(error_body)
+            _fatal_auth(e.code, detail, error_code)
         if e.code == 409 or "already exists" in error_body.lower() or "unique" in error_body.lower():
             return None  # duplicate, skip
         print(f"  ERROR {e.code}: {url}")
@@ -238,10 +339,9 @@ def seed_terms(
             words_found = all(w in word_map for w in t.get("words", []))
             domain_found = t.get("domain") in domain_map if t.get("domain") else True
             if words_found and domain_found:
-                # Build physical name from word abbreviations
+                # (dry-run) 단어 매핑 확인용 — word_map 값은 dry-run 에서 -1 이라 약어는 만들지 않는다
                 abbrs = []
                 for w_name in t["words"]:
-                    # Find the word's abbreviation from words.json
                     abbrs.append(word_map.get(w_name, w_name))
                 print(f"  (dry-run) {t['term_name']:20s} → words: {t.get('words', [])}")
                 ok += 1
@@ -259,6 +359,9 @@ def seed_terms(
         print(f"\n  Valid: {ok}/{len(terms)}")
         return ok
 
+    # 단어 영문명·약어 조회표 — words.json 은 한 번만 읽는다
+    word_lookup = {w["word_name"]: w for w in load_json("words.json")}
+
     # Load existing terms
     existing = api_call(base_url, "GET", f"/terms?dictionary_id={dict_id}")
     existing_names = set()
@@ -274,24 +377,11 @@ def seed_terms(
             skipped += 1
             continue
 
-        # Build term_english and term_abbr from word composition
+        # words.json 의 영문명·약어로 용어 영문명/약어를 직접 조합한다(형태소 분석 API 는 쓰지 않음).
+        # 사전에 없는 단어(X, Y 같은 한 글자·복합어)는 이름을 그대로 쓴다.
         word_names = t.get("words", [])
         term_english_parts = []
         term_abbr_parts = []
-
-        all_words_found = True
-        for w_name in word_names:
-            if w_name not in word_map:
-                # Single-char words (X, Y) or compound words not in dictionary
-                term_english_parts.append(w_name)
-                term_abbr_parts.append(w_name)
-                continue
-
-        # Use the morpheme analyzer API if words are in the dictionary
-        # Otherwise build manually from word data
-        words_data = load_json("words.json")
-        word_lookup = {w["word_name"]: w for w in words_data}
-
         for w_name in word_names:
             if w_name in word_lookup:
                 w = word_lookup[w_name]
@@ -330,15 +420,43 @@ def seed_terms(
     return created
 
 
+def authenticate(args: argparse.Namespace) -> None:
+    """토큰을 정해 ``_access_token`` 에 둔다. 실패하면 메시지를 찍고 종료."""
+    global _access_token
+
+    if args.token:
+        _access_token = args.token
+        print("  Auth:    --token / ARGUS_TOKEN 사용")
+        return
+
+    password = args.password
+    if not password:
+        if not sys.stdin.isatty():
+            print("\nFATAL: 비밀번호가 없습니다. --password 또는 환경변수 ARGUS_PASSWORD 로 지정하세요.")
+            sys.exit(1)
+        password = getpass.getpass(f"  '{args.username}' 비밀번호: ")
+
+    try:
+        _access_token = login(args.base_url, args.username, password)
+    except SeedAuthError as e:
+        print(f"\nFATAL: {e}")
+        sys.exit(1)
+    print(f"  Auth:    {args.username} 로그인 성공")
+
+
 def main():
+    """사전 → 단어 → 도메인 → 코드그룹/코드값 → 용어 순서로 시드한다(사전 생성 실패 시 종료)."""
     parser = argparse.ArgumentParser(
         description="반도체 제조 표준사전 시드 데이터 로딩",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python seed_semiconductor.py                            # localhost:4600
-  python seed_semiconductor.py --base-url http://localhost:4600
-  python seed_semiconductor.py --dry-run                  # 데이터 검증만
+  ARGUS_PASSWORD=... python seed_semiconductor.py         # localhost:4600, admin 계정
+  python seed_semiconductor.py --base-url http://localhost:4600 --username admin
+  python seed_semiconductor.py --dry-run                  # 데이터 검증만(로그인 안 함)
+
+계정: --username / ARGUS_USERNAME (기본 admin), --password / ARGUS_PASSWORD
+(없으면 터미널에서 입력), 또는 --token / ARGUS_TOKEN.
         """,
     )
     parser.add_argument(
@@ -351,7 +469,23 @@ Examples:
         action="store_true",
         help="API 호출 없이 데이터 검증만 수행",
     )
+    parser.add_argument(
+        "--username",
+        default=os.environ.get("ARGUS_USERNAME", "admin"),
+        help="로그인 사용자 (env ARGUS_USERNAME, 기본 admin)",
+    )
+    parser.add_argument(
+        "--password",
+        default=os.environ.get("ARGUS_PASSWORD"),
+        help="로그인 비밀번호 (env ARGUS_PASSWORD, 없으면 입력 프롬프트)",
+    )
+    parser.add_argument(
+        "--token",
+        default=os.environ.get("ARGUS_TOKEN"),
+        help="이미 받은 액세스 토큰 (env ARGUS_TOKEN, 주면 로그인 생략)",
+    )
     args = parser.parse_args()
+    args.base_url = args.base_url.rstrip("/")
 
     print("=" * 60)
     print("  Argus Catalog - Semiconductor Standard Dictionary Seeder")
@@ -359,6 +493,9 @@ Examples:
     print(f"  Server:  {args.base_url}")
     print(f"  Dry-run: {args.dry_run}")
     print(f"  Data:    {SEED_DIR}")
+
+    if not args.dry_run:
+        authenticate(args)
 
     start = time.time()
 

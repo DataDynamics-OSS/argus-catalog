@@ -42,12 +42,47 @@ from app.ai.service import (
     reject_suggestion,
     suggest_tags,
 )
-from app.core.auth import AdminUser, CurrentUser
+from app.core.auth import AdminUser, CurrentUser, assert_owner_or_admin
 from app.core.database import get_session
+from app.permissions.router import require_feature
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ai", tags=["ai"])
+
+
+async def _require_dataset_editor(current, session: AsyncSession, dataset_id: int) -> None:
+    """AI 생성·제안 적용은 데이터셋 수정과 같은 기준 — 생성자 또는 관리자. 데이터셋이 없으면 404.
+
+    생성 결과(제안)도 데이터셋 메타데이터를 바꾸는 입력이고 LLM 비용이 드므로, 화면(작업 메뉴)과
+    같이 편집 권한이 있는 사용자만 부를 수 있다.
+    """
+    from app.catalog import service as catalog_service
+
+    created_by = await catalog_service.get_dataset_created_by(session, dataset_id)
+    if created_by is None and not await catalog_service.dataset_exists(session, dataset_id):
+        logger.warning("AI 생성 권한 확인: 데이터셋 없음 dataset_id=%d", dataset_id)
+        raise HTTPException(status_code=404, detail="데이터셋을 찾을 수 없습니다.")
+    assert_owner_or_admin(current, created_by, "데이터셋")
+
+
+async def _require_suggestion_editor(current, session: AsyncSession, suggestion_ids: list[int]) -> None:
+    """제안이 속한 데이터셋마다 편집 권한 확인 — 없는 제안은 이후 단계의 404 에 맡긴다.
+
+    관리자이거나 ID 목록이 비어 있으면 검사를 생략한다. 권한이 없으면 403.
+    """
+    if current.is_admin or not suggestion_ids:
+        return
+    from sqlalchemy import select
+
+    from app.ai.models import AIGenerationLog
+
+    dataset_ids = (await session.execute(
+        select(AIGenerationLog.dataset_id).where(AIGenerationLog.id.in_(suggestion_ids)).distinct()
+    )).scalars().all()
+    for dataset_id in dataset_ids:
+        if dataset_id is not None:
+            await _require_dataset_editor(current, session, dataset_id)
 
 
 # ---------------------------------------------------------------------------
@@ -65,7 +100,9 @@ _ASSISTANT_SYSTEM_PROMPT = (
     "한국어로 간결하고 정확하게 답합니다. 모르는 내용은 모른다고 답하세요."
 )
 
-# conversation_id → [{"role": "user"|"assistant", "text": ...}] (최근 20턴 유지)
+# conversation_id → [{"role": "user"|"assistant", "text": ...}]
+# 최근 _MAX_TURNS(20)개 메시지(= 사용자/어시스턴트 10회 왕복)만 유지한다.
+# 대화 수가 _MAX_CONVERSATIONS 를 넘으면 전체를 비운다(단순 용량 가드).
 _conversations: dict[str, list[dict]] = {}
 _MAX_TURNS = 20
 _MAX_CONVERSATIONS = 200
@@ -76,7 +113,7 @@ def _sse(event: dict) -> str:
     return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
 
-@router.post("/assistant/chat")
+@router.post("/assistant/chat", dependencies=[Depends(require_feature("ai.assistant"))])
 async def assistant_chat(body: dict, _user: CurrentUser, request: Request,
                          session: AsyncSession = Depends(get_session)):
     """어시스턴트 채팅 — SSE 스트리밍.
@@ -108,6 +145,7 @@ async def assistant_chat(body: dict, _user: CurrentUser, request: Request,
         import httpx
 
         token = (request.headers.get("Authorization") or "").removeprefix("Bearer ").strip()
+        logger.debug("어시스턴트 채팅을 외부 에이전트로 프록시: conv=%s msg_len=%d", conv_id, len(message))
 
         async def proxy_stream():
             try:
@@ -119,6 +157,10 @@ async def assistant_chat(body: dict, _user: CurrentUser, request: Request,
                     ) as resp:
                         if resp.status_code != 200:
                             detail = (await resp.aread()).decode(errors="replace")[:200]
+                            logger.warning(
+                                "어시스턴트 에이전트 응답 오류: status=%d conv=%s",
+                                resp.status_code, conv_id,
+                            )
                             yield _sse({"type": "error", "data": {
                                 "reason": f"어시스턴트 에이전트 오류 {resp.status_code}: {detail}"}})
                             return
@@ -134,10 +176,12 @@ async def assistant_chat(body: dict, _user: CurrentUser, request: Request,
 
     async def stream():
         if not message:
+            logger.warning("어시스턴트 채팅: 빈 메시지 무시 conv=%s", conv_id)
             yield _sse({"type": "error", "data": {"reason": "메시지가 비어 있습니다."}})
             return
         provider = await get_provider()
         if provider is None:
+            logger.warning("어시스턴트 채팅: LLM 제공자 미활성 conv=%s", conv_id)
             yield _sse({"type": "error", "data": {
                 "reason": "LLM 제공자가 활성화되어 있지 않습니다 — 설정 > AI 에서 제공자를 구성하세요."}})
             return
@@ -147,6 +191,8 @@ async def assistant_chat(body: dict, _user: CurrentUser, request: Request,
         lines = [f"{'사용자' if t['role'] == 'user' else '어시스턴트'}: {t['text']}" for t in history]
         lines.append(f"사용자: {message}")
         prompt = "\n".join(lines)
+        logger.debug("어시스턴트 내장 채팅: conv=%s history=%d prompt_len=%d",
+                     conv_id, len(history), len(prompt))
 
         try:
             result = await provider.generate(
@@ -221,9 +267,10 @@ async def ai_status(session: AsyncSession = Depends(get_session)):
 async def api_generate_description(_guard: CurrentUser,
     dataset_id: int,
     body: GenerateRequest = GenerateRequest(),
-    session: AsyncSession = Depends(get_session),
+    _perm=Depends(require_feature("ai.generate")), session: AsyncSession = Depends(get_session),
 ):
     """AI 로 테이블 설명을 생성."""
+    await _require_dataset_editor(_guard, session, dataset_id)
     try:
         result = await generate_dataset_description(
             session, dataset_id,
@@ -238,9 +285,10 @@ async def api_generate_description(_guard: CurrentUser,
 async def api_generate_summary(_guard: CurrentUser,
     dataset_id: int,
     body: GenerateRequest = GenerateRequest(),
-    session: AsyncSession = Depends(get_session),
+    _perm=Depends(require_feature("ai.generate")), session: AsyncSession = Depends(get_session),
 ):
     """한 줄 요약(summary) AI 생성."""
+    await _require_dataset_editor(_guard, session, dataset_id)
     try:
         result = await generate_dataset_summary(
             session, dataset_id,
@@ -255,9 +303,10 @@ async def api_generate_summary(_guard: CurrentUser,
 async def api_generate_column_descriptions(_guard: CurrentUser,
     dataset_id: int,
     body: GenerateRequest = GenerateRequest(),
-    session: AsyncSession = Depends(get_session),
+    _perm=Depends(require_feature("ai.generate")), session: AsyncSession = Depends(get_session),
 ):
     """AI 로 컬럼 설명을 생성."""
+    await _require_dataset_editor(_guard, session, dataset_id)
     try:
         result = await generate_column_descriptions(
             session, dataset_id,
@@ -272,9 +321,10 @@ async def api_generate_column_descriptions(_guard: CurrentUser,
 async def api_suggest_tags(_guard: CurrentUser,
     dataset_id: int,
     body: GenerateRequest = GenerateRequest(),
-    session: AsyncSession = Depends(get_session),
+    _perm=Depends(require_feature("ai.generate")), session: AsyncSession = Depends(get_session),
 ):
     """AI 로 데이터셋의 태그를 제안."""
+    await _require_dataset_editor(_guard, session, dataset_id)
     try:
         result = await suggest_tags(
             session, dataset_id,
@@ -289,9 +339,10 @@ async def api_suggest_tags(_guard: CurrentUser,
 async def api_detect_pii(_guard: CurrentUser,
     dataset_id: int,
     body: GenerateRequest = GenerateRequest(),
-    session: AsyncSession = Depends(get_session),
+    _perm=Depends(require_feature("ai.generate")), session: AsyncSession = Depends(get_session),
 ):
     """AI 로 데이터셋의 PII 컬럼을 탐지."""
+    await _require_dataset_editor(_guard, session, dataset_id)
     try:
         result = await detect_pii(
             session, dataset_id, apply=body.apply, language=body.language,
@@ -305,9 +356,10 @@ async def api_detect_pii(_guard: CurrentUser,
 async def api_generate_all(_guard: CurrentUser,
     dataset_id: int,
     body: GenerateRequest = GenerateRequest(),
-    session: AsyncSession = Depends(get_session),
+    _perm=Depends(require_feature("ai.generate")), session: AsyncSession = Depends(get_session),
 ):
     """데이터셋에 대한 모든 AI 생성 작업을 실행."""
+    await _require_dataset_editor(_guard, session, dataset_id)
     try:
         result = await generate_all_for_dataset(
             session, dataset_id,
@@ -323,11 +375,15 @@ async def api_generate_all(_guard: CurrentUser,
 # ---------------------------------------------------------------------------
 
 @router.post("/bulk-generate", response_model=BulkGenerateResponse)
-async def api_bulk_generate(_guard: CurrentUser,
+async def api_bulk_generate(_guard: AdminUser,
     body: BulkGenerateRequest,
     session: AsyncSession = Depends(get_session),
 ):
-    """여러 데이터셋에 대한 메타데이터를 일괄 생성."""
+    """여러 데이터셋에 대한 메타데이터를 일괄 생성 (관리자 전용 — 데이터 소스 전체에 LLM 호출·적용)."""
+    logger.info(
+        "AI 일괄 생성 요청: types=%s apply=%s datasource_id=%s empty_only=%s",
+        body.generation_types, body.apply, body.datasource_id, body.empty_only,
+    )
     try:
         result = await bulk_generate(
             session,
@@ -359,6 +415,7 @@ async def import_suggestions(
         {"entity_type": "dataset|column|tag|pii", "entity_id": <id>,
          "field_name": "...", "generation_type": "...", "generated_text": "..."}]}
     반입된 제안은 UI 의 AI 제안 목록에서 사람이 승인/거절한다.
+    데이터셋이 없으면(ValueError) 404.
     """
     try:
         return await service.import_suggestions(
@@ -377,6 +434,7 @@ async def api_get_suggestions(
     session: AsyncSession = Depends(get_session),
 ):
     """데이터셋의 미적용 AI 제안을 조회."""
+    logger.debug("AI 제안 목록 조회: dataset_id=%d", dataset_id)
     return await get_suggestions(session, dataset_id)
 
 
@@ -386,6 +444,7 @@ async def api_apply_suggestion(_guard: CurrentUser,
     session: AsyncSession = Depends(get_session),
 ):
     """특정 AI 제안을 적용."""
+    await _require_suggestion_editor(_guard, session, [suggestion_id])
     try:
         return await apply_suggestion(session, suggestion_id)
     except ValueError as e:
@@ -398,6 +457,7 @@ async def api_apply_suggestions(_guard: CurrentUser,
     session: AsyncSession = Depends(get_session),
 ):
     """여러 AI 제안을 한 번에 적용 — 컬럼 설명 일괄 적용 등."""
+    await _require_suggestion_editor(_guard, session, body.suggestion_ids)
     return await apply_suggestions(session, body.suggestion_ids)
 
 
@@ -407,6 +467,7 @@ async def api_reject_suggestion(_guard: CurrentUser,
     session: AsyncSession = Depends(get_session),
 ):
     """특정 AI 제안을 거절하고 삭제."""
+    await _require_suggestion_editor(_guard, session, [suggestion_id])
     try:
         return await reject_suggestion(session, suggestion_id)
     except ValueError as e:
@@ -420,4 +481,5 @@ async def api_reject_suggestion(_guard: CurrentUser,
 @router.get("/stats", response_model=AIStatsResponse)
 async def api_get_ai_stats(session: AsyncSession = Depends(get_session)):
     """AI 생성 통계와 커버리지 지표를 반환."""
+    logger.debug("AI 생성 통계 조회")
     return await get_ai_stats(session)

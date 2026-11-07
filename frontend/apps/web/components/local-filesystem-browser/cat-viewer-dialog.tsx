@@ -15,6 +15,7 @@ import { RadioGroup, RadioGroupItem } from "@workspace/ui/components/radio-group
 import type { FilesystemEntry } from "./types"
 import { HexViewer } from "./hex-viewer"
 import { CodeViewer } from "@/components/code-viewer"
+import { assertFileResponse, fileLoadErrorMessage } from "./utils"
 
 type ViewType = "raw" | "hex"
 
@@ -57,14 +58,15 @@ export function CatViewerDialog({
     getDownloadUrl(entry.key)
       .then(async (url) => {
         const res = await fetch(url)
-        if (!res.ok) throw new Error(`Failed to fetch file (${res.status})`)
+        assertFileResponse(res)
         const buf = await res.arrayBuffer()
+        if (url.startsWith("blob:")) URL.revokeObjectURL(url)
         setHexData(buf)
         setRawContent(new TextDecoder("UTF-8", { fatal: false }).decode(buf))
         setIsLoading(false)
       })
       .catch((err) => {
-        setError(err instanceof Error ? err.message : "Failed to load file")
+        setError(fileLoadErrorMessage(err))
         setIsLoading(false)
       })
   }, [open, entry, getDownloadUrl, reset])

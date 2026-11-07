@@ -11,7 +11,7 @@ import {
 } from "@workspace/ui/components/dialog"
 
 import type { FilesystemEntry } from "./types"
-import { getExtension } from "./utils"
+import { assertFileResponse, fileLoadErrorMessage, getExtension } from "./utils"
 import { CsvViewer } from "./csv-viewer"
 import { PdfViewer } from "./pdf-viewer"
 import { VideoViewer } from "./video-viewer"
@@ -79,8 +79,9 @@ const pdfExtensions = new Set(["pdf"])
 const videoExtensions = new Set(["mp4", "webm", "ogg", "mov", "m4v", "avi", "mkv"])
 const audioExtensions = new Set(["mp3", "wav", "m4a", "flac", "aac", "wma"])
 
-/** Extensions handled by server-side preview API. */
-const serverPreviewExtensions = new Set(["xls", "xlsx", "docx", "pptx", "parquet"])
+/** Extensions handled by server-side preview API.
+ *  구형 바이너리 .xls 는 서버(openpyxl)가 읽지 못하므로 미리보기 대상에서 제외한다. */
+const serverPreviewExtensions = new Set(["xlsx", "docx", "pptx", "parquet"])
 
 type FileCategory =
   | "text"
@@ -107,7 +108,7 @@ function getFileCategoryByExt(ext: string): FileCategory {
   if (pdfExtensions.has(ext)) return "pdf"
   if (videoExtensions.has(ext)) return "video"
   if (audioExtensions.has(ext)) return "audio"
-  if (ext === "xls" || ext === "xlsx") return "xlsx"
+  if (ext === "xlsx") return "xlsx"
   if (ext === "docx") return "docx"
   if (ext === "pptx") return "pptx"
   if (ext === "parquet") return "parquet"
@@ -148,7 +149,7 @@ type FileViewerDialogProps = {
   entry: FilesystemEntry | null
   /** Returns a download URL for the given path. */
   getDownloadUrl: (path: string) => Promise<string>
-  /** Server-side file preview (parquet, xlsx, xls, docx, pptx). */
+  /** Server-side file preview (parquet, xlsx, docx, pptx). */
   previewFile?: (
     path: string,
     options?: { sheet?: string; maxRows?: number },
@@ -192,13 +193,13 @@ export function FileViewerDialog({
     const category = getFileCategoryByName(entry.name, ext)
 
     if (!category) {
-      setError("Unsupported file format.")
+      setError("미리보기를 지원하지 않는 형식입니다. 내려받아 확인하세요.")
       return
     }
 
     const sizeLimit = SIZE_UNLIMITED_CATEGORIES.has(category) ? null : MAX_VIEW_SIZE
     if (sizeLimit !== null && entry.size > sizeLimit) {
-      setError(`Only files of ${formatSizeLimit(sizeLimit)} or smaller can be displayed.`)
+      setError(`${formatSizeLimit(sizeLimit)} 이하 파일만 미리 볼 수 있습니다. 내려받아 확인하세요.`)
       return
     }
 
@@ -213,7 +214,7 @@ export function FileViewerDialog({
           setIsLoading(false)
         })
         .catch((err) => {
-          setError(err instanceof Error ? err.message : "Failed to load file")
+          setError(fileLoadErrorMessage(err))
           setIsLoading(false)
         })
       return
@@ -223,23 +224,30 @@ export function FileViewerDialog({
       .then((url) => {
         if (category === "text") {
           return fetch(url)
-            .then((res) => {
-              if (!res.ok) throw new Error(`Failed to fetch file (${res.status})`)
-              return res.text()
-            })
+            .then((res) => assertFileResponse(res).text())
             .then((text) => {
               setContent(text)
               setIsLoading(false)
+            })
+            .finally(() => {
+              if (url.startsWith("blob:")) URL.revokeObjectURL(url)
             })
         }
         setMediaUrl(url)
         setIsLoading(false)
       })
       .catch((err) => {
-        setError(err instanceof Error ? err.message : "Failed to load file")
+        setError(fileLoadErrorMessage(err))
         setIsLoading(false)
       })
   }, [open, entry, getDownloadUrl, previewFile, reset])
+
+  // 보기용 blob: 주소는 대화상자를 닫거나 다른 파일로 바뀔 때 해제한다
+  useEffect(() => {
+    return () => {
+      if (mediaUrl?.startsWith("blob:")) URL.revokeObjectURL(mediaUrl)
+    }
+  }, [mediaUrl])
 
   if (!entry) return null
 

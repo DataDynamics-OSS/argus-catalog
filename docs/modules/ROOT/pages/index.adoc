@@ -3,16 +3,37 @@
 Argus Catalog 매뉴얼에 오신 것을 환영합니다. 이 페이지는 제품을 처음 접하는 분이
 무엇을 할 수 있는 도구인지 한눈에 파악할 수 있도록 안내합니다.
 
-Argus Catalog는 *Airgap* 환경에서 *데이터 카탈로그* 와 *ML 모델 레지스트리* 를 하나의 시스템으로
-통합 제공하는 메타데이터 관리 플랫폼입니다. DataHub 스타일의 데이터 메타데이터
-관리와 Unity Catalog OSS 호환 모델 레지스트리를 동시에 운영하므로, 데이터부터
-모델까지의 자산을 단일 카탈로그로 추적할 수 있습니다.
+Argus Catalog는 *데이터 카탈로그* · *AI Agent 카탈로그* · *MCP Server 카탈로그* · *API 카탈로그* ·
+*데이터 거버넌스* · *ML 모델 레지스트리* 를 하나의 시스템으로 통합 제공하는 메타데이터 관리 플랫폼입니다.
+인터넷이 차단된 *Airgap(폐쇄망)* 환경에서도 그대로 동작합니다.
+데이터 테이블부터 API, AI Agent, MCP Server, ML 모델까지 회사의 데이터·AI 자산을 한 곳에서 찾고,
+표준·용어·태그·변경 관리 같은 거버넌스를 같은 기준으로 적용할 수 있습니다.
 
 Argus Catalog는 Data 및 AI를 활용하는 기업에게 가장 기초적인 정보이면서 동시에 매우 중요한 기반이 되는
 메타데이터를, 비용 부담 없이 손쉽게 관리할 수 있도록 돕기 위해 시작한 프로젝트입니다.
 
-// TODO: screenshot - 대시보드 메인 (제품 첫 인상)
-image::index/dashboard.png[Argus Catalog 대시보드, 800]
+image::catalog-dashboard/dashboard.png[Argus Catalog 대시보드, 800]
+
+== 플랫폼 한눈에 보기
+
+자산 등록에서 메타데이터 통합, 검색·거버넌스, 활용·확장까지의 전체 흐름입니다.
+데이터셋뿐 아니라 모델·API·AI 에이전트를 공통 메타데이터로 연결하고,
+UI·REST API·CLI와 페더레이션으로 활용합니다.
+
+.Argus Catalog 플랫폼 개요 — 자산 등록부터 활용·확장까지
+image::architecture/platform-overview.png[외부 자산과 Argus Catalog 코어 및 검색·거버넌스·활용 인터페이스의 연결,role="diagram"]
+
+출처: https://www.data-dynamics.io/ko/solutions/argus-catalog[Data Dynamics — Argus Catalog].
+
+메타데이터와 검색 벡터는 PostgreSQL·pgvector에, 모델 아티팩트는 S3·MinIO에 저장합니다.
+그림의 기본 DB 동기화와 Enterprise 수집 확장은 별도 구성입니다.
+설치할 컴포넌트와 선택 항목은 xref:install/requirements.adoc[시스템 요구사항]에서 확인하세요.
+
+전체 그림을 먼저 한 장으로 살펴보겠습니다. 흩어진 데이터 소스와 API·AI 자산을 Argus Catalog가
+수집·등록해 여섯 가지 카탈로그·거버넌스 기능과 검색·AI 기능으로 펼쳐 주는 흐름입니다.
+
+.데이터·AI 자산과 통합 카탈로그
+image::diagrams/index-01.png[데이터·AI 자산과 통합 카탈로그,role="diagram"]
 
 == 핵심 가치
 
@@ -27,23 +48,25 @@ Cross-Platform 리니지::
 입력/출력을 등록합니다.
 
 ML 모델 레지스트리::
-MLflow 호환 등록 · Stage 전이 · 메트릭 비교 · 모델 카드 · OCI Model Hub 까지
+MLflow 호환 등록 · Stage 전이 · 메트릭 비교 · 모델 카드 · OCI 모델 허브 까지
 한 곳에서 일원화합니다.
 
 시맨틱 검색::
 pgvector 기반의 *키워드 + 시맨틱 하이브리드* 검색입니다. "고객 거래 내역" 같은 자연어
 질의로 `fact_purchases` · `order_history` 같이 의미가 유사한 데이터셋을 함께
-찾아 줍니다.
+찾아 줍니다. 데이터셋뿐 아니라 용어집 · AI Agent · API · MCP Server 도 함께 검색합니다.
 +
-* *임베딩 대상* — 데이터셋의 이름 · 설명 · qualified name · 플랫폼 · 태그 ·
-  소유자를 `|` 구분자로 결합한 텍스트.
+* *임베딩 대상* — 데이터셋의 이름 · 요약 · 설명 · qualified name · 데이터 소스
+  이름 · 유형 · 컬럼(이름 · 타입 · 설명)을 `|` 구분자로 결합한 텍스트. 용어집 · AI Agent ·
+  API · MCP Server 도 각각 임베딩합니다.
 * *기본 모델* — `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`
   (384 차원, 약 470 MB, 50+ 개 언어). 한국어·영어 혼용 메타데이터에 적합하며
   Air-gapped 환경에서도 로컬 추론. 영문 위주라면 더 가벼운
-  `all-MiniLM-L6-v2` (80 MB), 최고 품질은 OpenAI `text-embedding-3-small`
-  (1536 차원).
+  `all-MiniLM-L6-v2` (80 MB). 벡터 컬럼이 384 차원 고정이라 384 차원 모델만 쓸 수
+  있습니다(OpenAI `text-embedding-3-small` 1536 차원 등은 설정할 수 없음).
 * *저장* — pgvector `vector(384)` 컬럼 + IVFFlat 코사인 유사도 인덱스.
-  데이터셋 생성·수정 시 백그라운드로 자동 임베딩 (`source_text` 미변경 시 skip).
+  임베딩은 백필로 만들고, *쓰기 시 자동 임베딩* 을 켜면(기본 꺼짐) 생성·수정 때도
+  자동으로 만듭니다 (`source_text` 와 모델이 그대로면 skip).
 * *검색 방식* — 시맨틱 점수 70 % + 키워드 점수 30 % 가중 결합. 임베딩 비활성
   시 키워드 단독으로 자동 폴백.
 
@@ -52,7 +75,7 @@ pgvector 기반의 *키워드 + 시맨틱 하이브리드* 검색입니다. "고
 자동 수집 Extension::
 Hive · Impala · Trino · StarRocks 의 *쿼리 이벤트* 와 Greenplum · Kudu 의
 *메타데이터* 를 사내에 설치된 Extension 이 비동기로 직접 수집합니다. 별도 ETL 없이
-실시간 리니지·쿼리 이력을 확보할 수 있습니다. xref:appendix/extensions.adoc[자세히].
+실시간 리니지·쿼리 이력을 확보할 수 있습니다. xref:extensions/index.adoc[자세히].
 
 외부 통합 SDK::
 `argus-model` CLI 와 Python SDK 로 OCI 모델 저장소 (HuggingFace 임포트 ·
@@ -61,23 +84,46 @@ xref:appendix/sdk.adoc[자세히].
 
 == 시스템 구성
 
-Argus Catalog는 다음 네 가지 컴포넌트로 이루어져 있습니다.
+다음 아키텍처는 사용자 접점인 SDK·UI·CLI, 카탈로그 서버, 저장소와 외부 제공자,
+수집·분석 확장 모듈의 배치를 보여 줍니다. 위 플랫폼 개요와 함께 보면 기능과 구성 요소를
+연결해 이해할 수 있습니다.
+
+.Argus Catalog 상세 아키텍처 — 클라이언트·서버·저장소·확장 모듈
+image::architecture/system-architecture.png[SDK·UI·CLI와 카탈로그 서버 및 저장소·변경 관리·AI 서비스·수집 확장의 아키텍처,role="diagram"]
+
+현재 매뉴얼의 구성 요소를 기준으로 다시 그린 아키텍처입니다. 파랑 실선은 주요 연결을,
+보라 점선은 선택 연동을 나타냅니다.
+
+그림은 확장 모듈을 포함한 전체 구성을 보여 줍니다. 실제 배포에는 사용하는 기능에 맞는
+컴포넌트를 선택하며, xref:install/production.adoc[운영 배포]와
+xref:extensions/index.adoc[Extension 가이드]에서 구성 방법을 확인할 수 있습니다.
+
+Argus Catalog는 다음 컴포넌트로 이루어져 있습니다.
 
 [cols="1,3"]
 |===
 | 컴포넌트 | 역할
 
-| `argus-catalog-server`
-| FastAPI 기반 카탈로그 관리 API.
+| `argus-catalog-server` (`backend/`)
+| FastAPI 기반 카탈로그 · 모델 레지스트리 API 서버 (포트 4600).
 
-| `argus-catalog-ui`
-| 사용자 / 관리자 웹 UI (Next.js).
+| 변경 관리 워커 (`backend/`)
+| 같은 서버 코드로 띄우는 Temporal 워커(`python -m app.change_mgmt.worker`). 변경 관리 결재 워크플로를 실행합니다.
 
-| `argus-catalog-sdk`
-| 외부 시스템 통합용 Python SDK.
+| 웹 UI (`frontend/`)
+| 사용자 / 관리자 웹 화면 (Next.js, 포트 3000).
 
-| `argus-catalog-extensions`
-| Trino · Impala · StarRocks · Hive 등 플랫폼별 메타데이터 / 쿼리 수집 확장.
+| `argus-catalog-ai-service` (`ai-service/`)
+| AI 메타데이터 생성 · AI 어시스턴트 서버 (선택, 기본 포트 8930).
+
+| `argus-catalog-sdk` (`sdk/`)
+| 외부 시스템 통합용 Python SDK 와 `argus-model` CLI.
+
+| Extension (`extensions/`)
+| Trino · Impala · StarRocks · Hive 등 플랫폼별 메타데이터 / 쿼리 수집 확장, LDAP 사용자 동기화 등.
+
+| 플러그인 (`frontend/apps/web/plugins/`)
+| 코어를 고치지 않고 고객사 전용 화면을 얹는 프론트엔드 플러그인.
 |===
 
 == 사용자 그룹
@@ -94,6 +140,7 @@ Argus Catalog는 다음 네 가지 컴포넌트로 이루어져 있습니다.
 이 매뉴얼은 다음 순서로 살펴보시면 좋습니다.
 
 * 처음 사용한다면 xref:getting-started.adoc[시작하기] 부터 보시기 바랍니다.
-* 메뉴별 사용법은 좌측 사이드바의 *데이터 카탈로그 · ML 모델 · 운영* 카테고리를 참조하세요.
-* 자체 설치·운영하는 경우 xref:install/requirements.adoc[설치 / 운영] 섹션을 참조하세요.
-* 외부 통합 개발은 xref:appendix/sdk.adoc[부록] 의 SDK · API · Extension 가이드를 참고하세요.
+* 화면별 사용법은 좌측 *사용자 가이드* 를 보세요. 웹 화면의 사이드바와 같은 순서(*데이터 카탈로그 · AI 카탈로그 · API 카탈로그 · 거버넌스*)로 정리돼 있습니다.
+* 설치·사용자/권한 관리·인증·확장 설치는 *관리자 가이드* 에 있습니다. 처음 띄워 본다면 xref:install/docker.adoc[Docker Compose 로 띄우기] 하나면 충분합니다.
+* 플러그인 개발, SDK · External API 연동, LLM Fine-tuning 은 *개발자 가이드* 를 참고하세요.
+* 각 페이지는 따라 하기 중심으로 쓰여 있고, 내부 동작·API·튜닝은 *고급 사용자* 상자나 "고급" 하위 페이지로 분리돼 있습니다. 처음에는 건너뛰어도 됩니다.

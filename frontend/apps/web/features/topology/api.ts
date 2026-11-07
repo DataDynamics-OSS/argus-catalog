@@ -5,13 +5,12 @@
  * 백엔드: /api/v1/catalog/{topology,organizations,systems,datasources/{id}/system}
  */
 
+import { authFetch, throwOnError } from "@/features/auth/auth-fetch"
+
 const BASE = "/api/v1/catalog"
 
 async function jsonOrThrow<T>(res: Response): Promise<T> {
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error((err as { detail?: string }).detail || `요청 실패: ${res.status}`)
-  }
+  if (!res.ok) await throwOnError(res, "요청을 처리하지 못했습니다.")
   return res.json() as Promise<T>
 }
 
@@ -81,7 +80,7 @@ export interface Topology {
 // ---------------------------------------------------------------------------
 
 export async function fetchTopology(): Promise<Topology> {
-  return jsonOrThrow(await fetch(`${BASE}/topology`))
+  return jsonOrThrow(await authFetch(`${BASE}/topology`))
 }
 
 // ---------------------------------------------------------------------------
@@ -94,7 +93,7 @@ export async function createOrganization(payload: {
   description?: string
 }): Promise<Organization> {
   return jsonOrThrow(
-    await fetch(`${BASE}/organizations`, {
+    await authFetch(`${BASE}/organizations`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -107,7 +106,7 @@ export async function updateOrganization(
   payload: { name?: string; parent_id?: number | null; description?: string },
 ): Promise<Organization> {
   return jsonOrThrow(
-    await fetch(`${BASE}/organizations/${id}`, {
+    await authFetch(`${BASE}/organizations/${id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -116,11 +115,8 @@ export async function updateOrganization(
 }
 
 export async function deleteOrganization(id: number): Promise<void> {
-  const res = await fetch(`${BASE}/organizations/${id}`, { method: "DELETE" })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error((err as { detail?: string }).detail || `요청 실패: ${res.status}`)
-  }
+  const res = await authFetch(`${BASE}/organizations/${id}`, { method: "DELETE" })
+  if (!res.ok) await throwOnError(res, "조직을 삭제하지 못했습니다.")
 }
 
 // ---------------------------------------------------------------------------
@@ -136,7 +132,7 @@ export async function createSystem(payload: {
   status?: string
 }): Promise<System> {
   return jsonOrThrow(
-    await fetch(`${BASE}/systems`, {
+    await authFetch(`${BASE}/systems`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -156,7 +152,7 @@ export async function updateSystem(
   },
 ): Promise<System> {
   return jsonOrThrow(
-    await fetch(`${BASE}/systems/${id}`, {
+    await authFetch(`${BASE}/systems/${id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -165,11 +161,8 @@ export async function updateSystem(
 }
 
 export async function deleteSystem(id: number, force = false): Promise<void> {
-  const res = await fetch(`${BASE}/systems/${id}?force=${force}`, { method: "DELETE" })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error((err as { detail?: string }).detail || `요청 실패: ${res.status}`)
-  }
+  const res = await authFetch(`${BASE}/systems/${id}?force=${force}`, { method: "DELETE" })
+  if (!res.ok) await throwOnError(res, "시스템을 삭제하지 못했습니다.")
 }
 
 // ---------------------------------------------------------------------------
@@ -180,13 +173,10 @@ export async function assignDatasourceSystem(
   datasourceId: number,
   systemId: number | null,
 ): Promise<void> {
-  const res = await fetch(`${BASE}/datasources/${datasourceId}/system`, {
+  const res = await authFetch(`${BASE}/datasources/${datasourceId}/system`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ system_id: systemId }),
   })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error((err as { detail?: string }).detail || `요청 실패: ${res.status}`)
-  }
+  if (!res.ok) await throwOnError(res, "데이터 소스의 시스템을 지정하지 못했습니다.")
 }

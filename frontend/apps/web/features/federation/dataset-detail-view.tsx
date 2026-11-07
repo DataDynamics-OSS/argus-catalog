@@ -40,8 +40,12 @@ import {
   TabsTrigger,
 } from "@workspace/ui/components/tabs"
 import { CodeViewer } from "@/components/code-viewer"
+import { ConfirmDialog } from "@/components/confirm-dialog"
+import { useAuth } from "@/features/auth"
+import { usePermissions } from "@/features/permissions/use-permissions"
 import { DatasetMetadataSummary } from "@/features/datasets/components/dataset-metadata-summary"
 import type { DatasetDetail } from "@/features/datasets/data/schema"
+import { ddlTitle } from "@/features/datasets/ddl"
 
 import {
   datasetDetail,
@@ -53,7 +57,9 @@ import {
   type FederatedLineageGraph,
   type FederatedSample,
 } from "./api"
+import { remoteItemVisible } from "./detail-visibility"
 import { LineageBody, SourceBadge } from "./search-panel"
+import { errorMessage } from "@/lib/notify"
 
 const MONO = "font-[family-name:var(--font-d2coding)]"
 
@@ -131,7 +137,7 @@ function toLocalDetail(detail: FederatedDatasetDetail, urn: string): DatasetDeta
       datasource_id: "",
       name: meta.datasource?.name ?? "",
       type: meta.datasource?.type ?? "",
-      origin: meta.origin ?? "DEV",
+      origin: meta.origin ?? "",
       created_at: "",
     },
     summary: str(ext.summary),
@@ -184,6 +190,8 @@ function toLocalDetail(detail: FederatedDatasetDetail, urn: string): DatasetDeta
 /** 페더레이션(원격) 데이터셋 상세 — 로컬 데이터셋 상세와 동일한 모양(읽기 전용). */
 export function FederationDatasetDetailView({ urn }: { urn: string }) {
   const router = useRouter()
+  const { user } = useAuth()
+  const { isFeatureAllowed } = usePermissions()
   const [detail, setDetail] = useState<FederatedDatasetDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -196,7 +204,8 @@ export function FederationDatasetDetailView({ urn }: { urn: string }) {
   const [sampleLoading, setSampleLoading] = useState(false)
   const [sampleError, setSampleError] = useState<string | null>(null)
 
-  // 로컬 승격(import) 상태
+  // 로컬 승격(import) 상태 — 확인 다이얼로그를 거친 뒤 실행
+  const [confirmImport, setConfirmImport] = useState(false)
   const [importing, setImporting] = useState(false)
   const [importResult, setImportResult] = useState<
     { ok: boolean; text: string; id?: number } | null
@@ -215,12 +224,19 @@ export function FederationDatasetDetailView({ urn }: { urn: string }) {
     } catch (e) {
       setImportResult({
         ok: false,
-        text: e instanceof Error ? e.message : String(e),
+        text: errorMessage(e) ?? String(e),
       })
     } finally {
       setImporting(false)
+      setConfirmImport(false)
     }
   }, [urn])
+
+  // 브라우저 이력이 없으면(새 탭·직접 링크) 페더레이션 메인으로 이동
+  const goBack = useCallback(() => {
+    if (typeof window !== "undefined" && window.history.length > 1) router.back()
+    else router.push("/dashboard/federation")
+  }, [router])
 
   useEffect(() => {
     let alive = true
@@ -233,7 +249,7 @@ export function FederationDatasetDetailView({ urn }: { urn: string }) {
     setError(null)
     datasetDetail(urn)
       .then((d) => alive && setDetail(d))
-      .catch((e) => alive && setError(e instanceof Error ? e.message : String(e)))
+      .catch((e) => alive && setError(errorMessage(e) ?? String(e)))
       .finally(() => alive && setLoading(false))
     return () => {
       alive = false
@@ -246,7 +262,7 @@ export function FederationDatasetDetailView({ urn }: { urn: string }) {
     setLineageError(null)
     datasetLineage(urn, 2)
       .then(setLineage)
-      .catch((e) => setLineageError(e instanceof Error ? e.message : String(e)))
+      .catch((e) => setLineageError(errorMessage(e) ?? String(e)))
       .finally(() => setLineageLoading(false))
   }, [urn, lineage, lineageLoading])
 
@@ -256,7 +272,7 @@ export function FederationDatasetDetailView({ urn }: { urn: string }) {
     setSampleError(null)
     datasetSample(urn, 100)
       .then(setSample)
-      .catch((e) => setSampleError(e instanceof Error ? e.message : String(e)))
+      .catch((e) => setSampleError(errorMessage(e) ?? String(e)))
       .finally(() => setSampleLoading(false))
   }, [urn, sample, sampleLoading])
 
@@ -268,13 +284,11 @@ export function FederationDatasetDetailView({ urn }: { urn: string }) {
     )
   }
 
-  if (error || !detail || detail._error) {
+  if (error || !detail) {
     return (
       <div className="flex flex-col gap-3">
-        <BackButton onClick={() => router.back()} />
-        <div className="flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          <AlertTriangle className="h-4 w-4" /> {error || detail?._error}
-        </div>
+        <BackButton onClick={goBack} />
+        <ErrorBox msg={error || "데이터셋을 찾을 수 없습니다."} />
       </div>
     )
   }
@@ -301,13 +315,16 @@ export function FederationDatasetDetailView({ urn }: { urn: string }) {
   const showPii = show("schema.pii")
   const showColDesc = show("schema.description")
   const showSchema = show("schema") && schema.length > 0
-  const showSample = show("sample")
-  const showLineage = show("lineage")
-  const showDdl = show("ddl") && !!meta.ddl
+  // 샘플/DDL 은 실데이터·구조 노출 — 로컬 상세와 같은 기능 권한으로 통제(백엔드도 동일 검사)
+  // 샘플·리니지 탭은 peer 노출 항목(peer_exposed)도 본다 — 노출하지 않으면 숨김(알 수 없으면 보임)
+  const peerShows = (key: string) => remoteItemVisible(key, display, detail.peer_exposed)
+  const showSample = peerShows("sample") && isFeatureAllowed("datasets.sample-view")
+  const showLineage = peerShows("lineage")
+  const showDdl = show("ddl") && !!meta.ddl && isFeatureAllowed("datasets.ddl-view")
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
-      <BackButton onClick={() => router.back()} />
+      <BackButton onClick={goBack} />
 
       {/* 헤더 카드 — 로컬 상세와 동일 구조 */}
       <Card>
@@ -333,25 +350,49 @@ export function FederationDatasetDetailView({ urn }: { urn: string }) {
               {show("status") && meta.status && (
                 <Badge variant="outline">{meta.status}</Badge>
               )}
-              {/* 로컬 승격 — 전체 메타/스키마/샘플을 로컬 카탈로그로 가져온다(admin) */}
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={doImport}
-                disabled={importing}
-                title="이 데이터셋을 로컬 카탈로그로 가져옵니다"
-              >
-                {importing ? (
-                  <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <DownloadCloud className="mr-1 h-3.5 w-3.5" />
-                )}
-                로컬로 가져오기
-              </Button>
+              {/* 로컬 승격 — 전체 메타/스키마/샘플을 로컬 카탈로그로 가져온다(백엔드 admin 전용) */}
+              {user?.is_admin && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setConfirmImport(true)}
+                  disabled={importing}
+                  title="이 데이터셋을 로컬 카탈로그로 가져옵니다"
+                >
+                  {importing ? (
+                    <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <DownloadCloud className="mr-1 h-3.5 w-3.5" />
+                  )}
+                  로컬로 가져오기
+                </Button>
+              )}
             </div>
           </div>
         </CardHeader>
       </Card>
+
+      <ConfirmDialog
+        open={confirmImport}
+        onOpenChange={(o) => !importing && setConfirmImport(o)}
+        title="로컬 카탈로그로 가져오기"
+        desc={
+          <div className="space-y-2">
+            <p>
+              <span className="font-medium">
+                {local.display_name || local.name || urn}
+              </span>{" "}
+              의 메타데이터·스키마·샘플(노출 범위 내)을 로컬 데이터셋으로 생성합니다.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              가져온 데이터셋은 원본과 동기화되지 않는 로컬 사본입니다.
+            </p>
+          </div>
+        }
+        confirmText="가져오기"
+        isLoading={importing}
+        handleConfirm={doImport}
+      />
 
       {/* 로컬 승격 결과 — 성공 시 로컬 데이터셋 링크, 실패 시 사유 */}
       {importResult && (
@@ -510,7 +551,7 @@ export function FederationDatasetDetailView({ urn }: { urn: string }) {
                 {sampleLoading ? (
                   <Loading text="샘플 불러오는 중..." />
                 ) : sampleError ? (
-                  <ErrorBox msg={sampleError} />
+                  <ErrorBox msg={sampleError} onRetry={loadSample} />
                 ) : sample ? (
                   sample.columns.length === 0 ? (
                     <Empty text="샘플 데이터가 없습니다." />
@@ -554,7 +595,7 @@ export function FederationDatasetDetailView({ urn }: { urn: string }) {
             <Card>
               <CardHeader className="py-3">
                 <CardTitle className="flex items-center gap-2 text-base">
-                  <Code2 className="h-4 w-4" /> CREATE TABLE DDL
+                  <Code2 className="h-4 w-4" /> {ddlTitle(meta.ddl)}
                 </CardTitle>
               </CardHeader>
               <CardContent>
@@ -575,7 +616,7 @@ export function FederationDatasetDetailView({ urn }: { urn: string }) {
             {lineageLoading ? (
               <Loading text="리니지 불러오는 중..." />
             ) : lineageError ? (
-              <ErrorBox msg={lineageError} />
+              <ErrorBox msg={lineageError} onRetry={loadLineage} />
             ) : lineage ? (
               <LineageBody graph={lineage} />
             ) : (
@@ -609,10 +650,21 @@ function Loading({ text }: { text: string }) {
   )
 }
 
-function ErrorBox({ msg }: { msg: string }) {
+function ErrorBox({ msg, onRetry }: { msg: string; onRetry?: () => void }) {
   return (
     <div className="flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-      <AlertTriangle className="h-4 w-4" /> {msg}
+      <AlertTriangle className="h-4 w-4 shrink-0" />
+      <span className="min-w-0 flex-1">{msg}</span>
+      {onRetry && (
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 shrink-0"
+          onClick={onRetry}
+        >
+          다시 시도
+        </Button>
+      )}
     </div>
   )
 }

@@ -1,0 +1,157 @@
+= 플러그인 설정·배포
+
+플러그인 코드를 다 만들었다면, 이제 원하는 고객 환경에서만 켜지도록 설치하고 설정할
+차례입니다. 프론트엔드와 백엔드는 켜는 방식이 다르므로 나눠서 살펴보겠습니다.
+
+[cols="1,2,2"]
+|===
+| 구분 | 켜는 방법 | 반영 시점
+
+| 프론트엔드 화면
+| `plugins/registry.ts` 의 `plugins` 배열에 등록
+| *빌드 시점* — 다시 빌드·배포해야 반영
+
+| 백엔드 API
+| 플러그인 패키지 설치 + `plugins.enabled` 설정
+| *서버 기동 시점* — 백엔드 재시작으로 반영
+|===
+
+[IMPORTANT]
+====
+프론트 화면과 백엔드 API 는 *짝을 맞춰* 켜야 합니다. 화면만 켜고 API 를 켜지 않으면
+화면은 열리지만 데이터 호출이 404 로 실패합니다. 프론트 `ArgusPlugin.id` 와 백엔드
+entry point 이름을 같게(예: 둘 다 `acme`) 두면 짝을 관리하기 쉽습니다.
+====
+
+== 프론트엔드 활성화
+
+=== 켜기
+
+`frontend/apps/web/plugins/registry.ts` 의 `plugins` 배열에 플러그인을 추가합니다.
+
+[source,ts]
+----
+import { acmePlugin } from "./acme"
+
+const plugins: ArgusPlugin[] = [
+  acmePlugin,
+]
+----
+
+레지스트리는 빌드에 포함되므로, 수정한 뒤에는 프론트엔드를 다시 빌드해 배포합니다.
+
+[source,bash]
+----
+cd frontend
+pnpm --filter web build
+----
+
+=== 끄기
+
+배열에서 해당 항목(과 import)을 지우고 다시 빌드합니다. 플러그인 폴더
+(`plugins/<고객사>/`)는 남겨 둬도 레지스트리에 없으면 아무 데도 노출되지 않습니다.
+
+=== 기본 상태 (플러그인 없음)
+
+출고 상태의 `plugins` 배열은 비어 있습니다(`[]`). 이때는 메뉴·화면·아이콘·권한 항목이
+전혀 추가되지 않아 오픈소스 코어와 *완전히 동일* 하게 동작합니다. 저장소에 들어 있는
+`plugins/acme/` 는 작성 예시일 뿐 기본 빌드에서는 등록되어 있지 않습니다.
+
+== 백엔드 설치
+
+플러그인 API 는 별도 pip 패키지이므로, 해당 고객사 환경에만 설치합니다.
+
+[source,bash]
+----
+# 개발 환경 — 소스 수정이 바로 반영되는 편집 모드 설치
+pip install -e extensions/argus-plugin-acme
+
+# 운영 환경 — wheel 을 빌드해 고객 이미지/서버에 설치
+cd extensions/argus-plugin-acme
+python -m build            # → dist/argus_plugin_acme-0.5.0-py3-none-any.whl
+pip install dist/argus_plugin_acme-0.5.0-py3-none-any.whl
+
+# RPM · tar.gz 로 설치한 서버 — 서버의 venv 에 있는 pip 로 설치
+/opt/argus-catalog-server/venv/bin/pip install argus_plugin_acme-0.5.0-py3-none-any.whl
+----
+
+반드시 *백엔드 서버가 실행되는 같은 Python 환경(가상환경)* 에 설치해야 합니다. 다른
+환경에 설치하면 entry point 가 발견되지 않아 로드되지 않고, 서버 로그에 "설치되지 않은 플러그인" 경고가 남습니다.
+패키지로 설치한 서버는 `/opt/argus-catalog-server/venv` 가 그 환경입니다. 서버 패키지를 업그레이드하면 이 venv 를
+새로 만들므로, 업그레이드 뒤에는 플러그인을 다시 설치해야 합니다.
+
+설치 여부는 다음 명령으로 확인할 수 있습니다.
+
+[source,bash]
+----
+python -c "from importlib.metadata import entry_points; print([e.name for e in entry_points(group='argus.plugins')])"
+# ['acme']
+----
+
+== 백엔드 활성화 제어 (`plugins.enabled`)
+
+설치된 플러그인 중 무엇을 켤지는 백엔드 설정 파일 `config.yml` 의 `plugins.enabled`
+로 정합니다. *이름을 적은 플러그인만 켜지는 명시 허용 방식* 이라, 패키지를 설치만 하고
+설정에 적지 않으면 로드되지 않습니다. 설정 파일의 위치와 구성은 xref:install/setup.adoc[설치] 를 참고하세요.
+출고된 `config.yml`(패키지 설치 시 `/etc/argus-catalog-server/config.yml`)에는 `plugins:` 절이 없으므로
+아래 내용을 직접 추가해야 합니다.
+
+[source,yaml]
+----
+plugins:
+  enabled: acme        # 쉼표 구분. 비워두면 아무 것도 로드하지 않음
+----
+
+[cols="1,3"]
+|===
+| 값 | 동작
+
+| (미설정 / 빈 목록) | *아무 것도 로드하지 않음* (기본값)
+| `acme,beta` | 이름이 목록에 *포함된 것만* 로드(나머지는 건너뜀)
+| `*` | 설치되어 *발견된 플러그인을 모두* 로드 — 개발 환경용
+|===
+
+다른 설정처럼 `config.properties` 변수로 빼 둘 수도 있습니다.
+
+[source,yaml]
+----
+# config.yml
+plugins:
+  enabled: ${plugins.enabled:}
+----
+
+[source,properties]
+----
+# config.properties
+plugins.enabled=acme
+----
+
+[NOTE]
+====
+* `enabled` 는 *발견된 것 중 무엇을 켤지* 의 필터입니다. 애초에 설치하지 않은 플러그인은
+  어떤 값을 줘도 로드되지 않습니다.
+* 기본값이 "아무 것도 켜지 않음" 인 이유는, 의존성 설치 중 `argus.plugins` entry point 를
+  가진 패키지가 딸려 들어와도 설정 없이 API 가 노출되지 않게 하기 위해서입니다.
+* `*` 는 개발 환경에서만 쓰고, 운영 환경에서는 켤 플러그인 이름을 적어 주세요.
+* 목록에 적었는데 설치되지 않은 이름이 있으면 서버 기동 시 경고 로그가 남습니다.
+====
+
+설정을 바꾼 뒤에는 백엔드를 재시작해야 반영됩니다.
+
+== 배포 체크리스트
+
+고객 환경에 플러그인을 처음 배포할 때는 다음 순서를 따릅니다.
+
+. 프론트: `registry.ts` 에 플러그인 등록 → 빌드 → 배포
+. 백엔드: 플러그인 wheel 을 백엔드와 같은 Python 환경에 설치
+. 백엔드: `config.yml` 의 `plugins.enabled` 에 플러그인 이름 추가 → 재시작
+. 서버 로그에서 `플러그인 '<이름>' 등록 완료` 확인
+. 권한 관리 화면에서 플러그인 메뉴의 역할별 노출 설정 → xref:plugin/usage.adoc[플러그인 사용·운영]
+
+== 제거
+
+. 프론트: `registry.ts` 에서 항목 삭제 → 빌드 → 배포
+. 백엔드: `plugins.enabled` 에서 이름 삭제(또는 `pip uninstall argus-plugin-<고객사>`) → 재시작
+
+권한 관리 화면에 저장해 둔 플러그인 메뉴 권한(`plugin.<아이템 id>`)은 DB 에 남아 있다가,
+플러그인을 끈 상태에서 권한 매트릭스를 다시 저장하면 함께 정리됩니다.

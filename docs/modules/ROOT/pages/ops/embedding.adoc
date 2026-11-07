@@ -1,395 +1,204 @@
 = 임베딩 운영
+:toc: macro
+:toclevels: 2
 
-이 문서는 xref:ops/search.adoc[검색] 의 시맨틱 모드를 받쳐주는 *임베딩 파이프라인* 운영 가이드입니다.
-프로바이더 설치부터 에어갭 배포, 차원 마이그레이션, 트러블슈팅까지 차례로 다룹니다.
+**임베딩**은 데이터셋·용어 같은 메타데이터를 숫자 벡터로 바꿔 두는 작업입니다. 임베딩을 켜 두면
+xref:ops/search.adoc[검색] 에서 글자가 달라도 뜻이 비슷한 항목을 찾는 **시맨틱(의미) 검색**이 동작합니다.
 
-// TODO: screenshot - Settings → Embedding 탭 (커버리지 통계 + 테스트 버튼)
+이 문서는 관리자가 화면에서 임베딩을 켜고, 백필(일괄 임베딩)하고, 모델을 바꾸는 순서대로 설명합니다.
+프로바이더 설치·에어갭 배포·DB 스키마 같은 심화 내용은 xref:ops/embedding-advanced.adoc[임베딩 — 고급 설정] 에 있습니다.
+
+toc::[]
+
+== 시작하기 전에
+
+=== 이런 일을 할 수 있습니다
+
+* **시맨틱 검색 켜기·끄기** — 스위치 하나로 켜고 끄며, 재시작이 필요 없습니다.
+* **백필** — 기존 데이터셋과 용어집 · AI Agent · API · MCP 서버를 한꺼번에 임베딩합니다.
+* **자동 임베딩** — 새로 만들거나 고친 항목을 바로 임베딩해 곧장 검색되게 합니다.
+* **모델 바꾸기** — 다른 384 차원 모델로 바꾸고 다시 임베딩합니다.
+* **현황 보기** — 커버리지(임베딩된 비율)를 확인합니다.
+
+=== 먼저 알아 둘 용어
+
+[cols="1,3",options="header"]
+|===
+| 용어 | 뜻
+
+| 프로바이더(제공자)
+| 텍스트를 벡터로 바꾸는 엔진입니다. Local(sentence-transformers, 기본) · Ollama · OpenAI 중 하나를 고릅니다.
+| pgvector
+| 벡터를 저장하고 검색하는 PostgreSQL 확장입니다. 어떤 프로바이더를 쓰든 필요합니다.
+| 백필
+| 저장된 항목 전체를 한꺼번에 임베딩하는 작업입니다.
+| 커버리지
+| 전체 데이터셋 중 임베딩된 비율입니다.
+| 384 차원
+| 벡터 저장 컬럼이 `vector(384)` 로 고정되어 있어, 384 차원 모델만 쓸 수 있습니다.
+|===
+
+=== 메뉴 위치
+
+[cols="1,2,3",options="header"]
+|===
+| 메뉴 | 주소 | 용도
+
+| 관리 → 설정 → AI → 임베딩 | `/dashboard/settings?tab=embedding` | 켜기·끄기, 제공자·모델, 백필·삭제, 상태 확인
+|===
+
+=== 누가 무엇을 할 수 있나요
+
+[cols="3,1,1",options="header"]
+|===
+| 작업 | 로그인 사용자 | 관리자
+
+| 시맨틱 검색 사용, 임베딩 통계 조회 | ✓ | ✓
+| 임베딩 켜기 · 모델 변경 · 백필 · 삭제 | — | ✓
+|===
+
+NOTE: 데이터베이스에 pgvector 확장이 있어야 합니다. 스키마 DDL(`argus-catalog-postgresql.sql`)이 만들어 주며,
+없을 때 설치하는 법은 xref:ops/embedding-advanced.adoc#_pgvector_설치[pgvector 설치] 를 보세요.
+
+== 시맨틱 검색 켜기
+
+. **관리 → 설정 → AI → 임베딩** 을 엽니다.
+. **시맨틱 검색 활성화** 스위치를 켭니다.
+. **제공자**와 **모델**을 고릅니다. 기본값은 `Local (sentence-transformers)` 와 다국어 모델 `paraphrase-multilingual-MiniLM-L12-v2` 이며, 한국어·영어가 섞인 메타데이터에 알맞습니다.
+. **연결 테스트** 로 응답 시간 · 차원 · 모델을 확인합니다. 처음에는 모델을 내려받느라 수십 초 걸릴 수 있습니다. 연결 테스트는 설정을 저장하지 않습니다.
+. **저장** 을 누릅니다. 저장하면 프로바이더가 재초기화됩니다.
+
 image::ops-embedding/settings.png[임베딩 설정, 800]
 
-== pgvector 와 프로바이더의 역할 분리
+화면 그림과 함께 보는 단계별 안내는 xref:ops/search.adoc#_시맨틱_검색_켜기_관리자[검색 → 시맨틱 검색 켜기] 에도 있습니다.
 
-임베딩은 크게 두 부분으로 나뉩니다. 텍스트를 벡터로 바꾸는 *프로바이더* 와, 그 벡터를 저장하고 검색하는 *pgvector* 입니다. 둘의 역할을 구분해 두면 프로바이더를 갈아 끼워도 저장·검색 계층은 그대로 둘 수 있습니다.
+NOTE: 임베딩을 켜지 않은 설치에서 모델이 예전 기본값 `all-MiniLM-L6-v2` 그대로라면, 서버가 시작될 때 다국어 모델로 바뀝니다.
+이미 임베딩을 켜서 쓰고 있거나 다른 모델을 고른 설치는 그대로 둡니다.
 
-[cols="1,3,1"]
+== 백필로 한꺼번에 임베딩하기
+
+. **임베딩 관리** 카드의 **전체 데이터셋 백필** 을 누릅니다.
+. 끝나면 `N건 임베딩, S건 건너뜀, E건 오류 (총 T건)` 알림이 뜹니다.
+. **임베딩 상태** 카드에서 **커버리지**를 확인합니다.
+
+이미 임베딩한 항목 중 원문과 프로바이더 · 모델이 모두 같은 항목은 건너뜁니다(중복 방지). 그래서 백필은 여러 번 눌러도 안전합니다.
+
+[TIP]
+.고급 사용자 — 임베딩이 만들어지는 경로
+====
+.변경 감지와 임베딩 생성
+image::diagrams/ops-embedding-01.png[변경 감지와 임베딩 생성,role="diagram"]
+
+어떤 텍스트를 임베딩하는지는 xref:ops/embedding-advanced.adoc#_임베딩_소스_텍스트[임베딩 소스 텍스트] 를 보세요.
+====
+
+== 새 데이터를 자동으로 임베딩하기
+
+임베딩은 기본적으로 백필로 한꺼번에 만듭니다. **쓰기 시 자동 임베딩**(`embedding_auto_on_write`, 기본 꺼짐)을 켜고 저장하면
+데이터셋을 생성하거나 수정할 때도 **비동기로 자동 임베딩** 됩니다. 끄면 새 데이터는 다음 백필 때 임베딩됩니다.
+
+[[_4_모델_프로바이더_바꾸기]]
+== 모델 · 프로바이더 바꾸기
+
+모델이나 프로바이더가 다르면 같은 384 차원이라도 벡터 공간이 달라 다시 임베딩해야 합니다.
+저장된 임베딩에는 원문(`source_text`)과 함께 **프로바이더 · 모델 이름**이 기록되어 있고, 백필은 둘 중 하나라도 다르면
+그 데이터셋을 다시 임베딩합니다. 그래서 절차는 간단합니다.
+
+. 새 모델(384 차원)을 고르고 **저장** 합니다.
+. **연결 테스트** 로 응답 시간 · 차원 · 모델을 확인합니다.
+. **전체 데이터셋 백필** 을 누릅니다. 이전 모델로 만든 임베딩이 모두 새 모델로 다시 만들어집니다.
+
+미리 **모든 임베딩 삭제** 를 할 필요는 없습니다. 삭제하면 백필이 끝날 때까지 시맨틱 검색 결과가 비므로,
+임베딩을 완전히 비우고 싶을 때만 쓰세요.
+
+고를 수 있는 384 차원 모델은 다음과 같습니다.
+
+[cols="2,1,2",options="header"]
 |===
-| 구성 요소 | 역할 | 의존
+| 모델 | 한국어 | 비고
 
-| *pgvector*
-| 벡터 *저장 + 검색* — PostgreSQL 확장
-| 필수 (어떤 프로바이더든 벡터 저장 필요)
-
-| *Embedding Provider*
-| 텍스트 → 벡터 *생성*
-| 3 종 중 택 1 — Local / OpenAI / Ollama
+| `paraphrase-multilingual-MiniLM-L12-v2` (Local, 기본) | O | 470 MB, 한국어·영어 혼용 메타데이터에 적합
+| `all-MiniLM-L6-v2` (Local) | △ | 80 MB, 영문 위주 경량
+| `bge-small-en-v1.5` (Local) | X | 130 MB, 영문 고품질
+| `all-minilm` (Ollama) | — | 별도 Ollama 서버 필요
 |===
 
-----
-"고객 구매 테이블"
-    ↓
-[Embedding Provider]  ← 교체 가능 (Local / OpenAI / Ollama)
-    ↓
-[0.012, -0.034, ...]  ← 384 또는 1536 차원
-    ↓
-[pgvector]  ← 항상 고정
-    ├─ 저장: INSERT INTO catalog_dataset_embeddings
-    └─ 검색: ORDER BY embedding <=> query_vec
-----
+IMPORTANT: 384 차원이 아닌 모델(예: `bge-m3` 1024 차원, OpenAI `text-embedding-3-small` 1536 차원,
+Ollama `nomic-embed-text` 768 차원)은 설정 저장 단계에서 **422** 로 거부되고 기존 설정이 그대로 유지됩니다.
 
-== pgvector 설치
+[TIP]
+.고급 사용자 — 프로바이더별 설치와 모델 비교
+====
+Local 프로바이더 설치(CPU/GPU), Ollama · OpenAI 설정, 에어갭 환경에 모델 옮기기, MTEB 품질 비교는
+xref:ops/embedding-advanced.adoc[임베딩 — 고급 설정] 에 있습니다.
+====
 
-[source,bash]
-----
-# Ubuntu/Debian
-sudo apt install postgresql-16-pgvector
+== 끄기 · 임베딩 비우기
 
-# RHEL/Rocky
-sudo dnf install pgvector_16
+* **시맨틱 검색 활성화** 를 끄고 저장하면 재시작 없이 키워드 검색으로 돌아갑니다. 만든 임베딩은 남아 있어, 다시 켜면 그대로 씁니다.
+* **모든 임베딩 삭제** 는 저장된 임베딩을 모두 지웁니다. 다시 쓰려면 백필을 실행해야 합니다.
 
-# macOS
-brew install pgvector
+== 자주 묻는 질문
 
-# Docker — pgvector 통합 이미지
-docker run -d pgvector/pgvector:pg16
-----
+[qanda]
+모델(프로바이더)을 바꾼 뒤 검색 결과가 이상합니다.::
+  **전체 데이터셋 백필** 을 한 번 실행하세요. 모델이 바뀐 데이터셋을 다시 임베딩합니다. <<_모델_프로바이더_바꾸기>> 참고.
 
-확장 활성화는 *슈퍼유저* 만 할 수 있습니다. 일반 DB 사용자로 시도하면 권한 부족 에러가 납니다.
-
+`ERROR: type "vector" does not exist` 가 납니다.::
+  pgvector 확장이 설치되지 않았습니다. 슈퍼유저로 활성화합니다.
++
 [source,bash]
 ----
 sudo -u postgres psql -d argus_catalog \
   -c "CREATE EXTENSION IF NOT EXISTS vector;"
 ----
 
-== Local 프로바이더 (sentence-transformers)
+`RuntimeError: sentence-transformers is required` 가 납니다.::
+  Local 프로바이더에서만 납니다. `pip install "sentence-transformers>=3.0.0"` 으로 설치하세요. OpenAI / Ollama 만 쓰면 설치하지 않아도 됩니다.
 
-기본 프로바이더입니다. 인터넷 연결이 필요 없어 에어갭 환경에서도 그대로 쓸 수 있습니다.
+`OSError: Can't load model 'paraphrase-multilingual-MiniLM-L12-v2'` 가 납니다(인터넷 없는 환경).::
+  모델을 미리 내려받아 로컬 경로를 지정해야 합니다. xref:ops/embedding-advanced.adoc#_에어갭_배포[에어갭 배포] 를 보세요.
 
-[cols="1,1,1,2"]
+`torch.cuda.OutOfMemoryError` 가 납니다.::
+  `export CUDA_VISIBLE_DEVICES=""` 로 CPU 모드를 강제하거나, 더 작은 모델(`all-MiniLM-L6-v2`, 80 MB · 영문 위주)을 쓰세요.
+
+OpenAI 모델을 저장하면 422 오류가 납니다.::
+  OpenAI 임베딩 모델은 1536 · 3072 차원이라 `vector(384)` 컬럼에 저장할 수 없습니다. 384 차원 Local · Ollama 모델을 쓰세요.
+
+[[_임베딩_rest_api]]
+== 부록: REST API
+
+[cols="1,3,2",options="header"]
 |===
-| 항목 | 값 | 한국어 | 비고
+| Method | Path | 권한
 
-| 기본 모델 | `all-MiniLM-L6-v2` | △ | 384 차원, 80 MB, 영문 위주
-| 한국어 권장 | `paraphrase-multilingual-MiniLM-L12-v2` | O | 384 차원, 470 MB
-| 영문 고품질 | `BAAI/bge-small-en-v1.5` | X | 384 차원, 130 MB
-| 다국어 고품질 | `BAAI/bge-m3` | O | 1024 차원, 2.2 GB
+| GET | `/api/v1/settings/embedding` | 관리자
+| PUT | `/api/v1/settings/embedding` | 관리자
+| POST | `/api/v1/settings/embedding/test` | 관리자
+| GET | `/api/v1/catalog/search/embeddings/stats` | 로그인 사용자
+| POST | `/api/v1/catalog/search/embeddings/backfill` | 관리자
+| DELETE | `/api/v1/catalog/search/embeddings` | 관리자
 |===
 
-설치 방법은 다음과 같습니다.
-
 [source,bash]
 ----
-# CPU
-pip install "sentence-transformers>=3.0.0"
-
-# GPU (CUDA 12.x)
-pip install "sentence-transformers>=3.0.0" torch \
-  --index-url https://download.pytorch.org/whl/cu121
-
-# GPU (CUDA 11.8)
-pip install "sentence-transformers>=3.0.0" torch \
-  --index-url https://download.pytorch.org/whl/cu118
-----
-
-OpenAI / Ollama 만 사용한다면 sentence-transformers 를 설치하지 않아도 됩니다. 코드에서
-lazy import 하기 때문입니다.
-
-== 에어갭 배포
-
-인터넷이 없는 환경에서 Local 프로바이더를 쓰려면, 모델 파일을 미리 받아 옮겨 두어야 합니다. 순서는 다음과 같습니다.
-
-. *인터넷 환경에서 다운로드*
-+
-[source,bash]
-----
-# sentence-transformers
-python -c "
-from sentence_transformers import SentenceTransformer
-model = SentenceTransformer('all-MiniLM-L6-v2')
-model.save('/tmp/all-MiniLM-L6-v2')
-"
-
-# 또는 huggingface-cli
-pip install huggingface_hub
-huggingface-cli download sentence-transformers/all-MiniLM-L6-v2 \
-  --local-dir /tmp/all-MiniLM-L6-v2
-----
-
-. *에어갭 서버로 전송*
-+
-[source,bash]
-----
-tar -czf all-MiniLM-L6-v2.tar.gz -C /tmp all-MiniLM-L6-v2
-# USB / SCP 로 전송 후
-tar -xzf all-MiniLM-L6-v2.tar.gz -C /opt/models/
-----
-
-. *Settings → Embedding 에서 로컬 경로 지정*
-+
-Model 필드에 `/opt/models/all-MiniLM-L6-v2` 를 입력하고 Save 합니다.
-+
-또는 API 로도 지정할 수 있습니다.
-+
-[source,bash]
-----
-curl -X PUT http://<server>:4600/api/v1/settings/embedding \
+# 관리자 토큰 받기
+TOKEN=$(curl -s -X POST http://<server>:4600/api/v1/auth/login \
   -H "Content-Type: application/json" \
-  -d '{
-    "enabled": true,
-    "provider": "local",
-    "model": "/opt/models/all-MiniLM-L6-v2",
-    "dimension": 384
-  }'
-----
+  -d '{"username":"<관리자>","password":"<비밀번호>"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 
-== Ollama 프로바이더
-
-로컬에 띄운 Ollama 인스턴스를 임베딩 서버로 사용할 수 있습니다.
-
-[source,bash]
-----
-# 설치
-curl -fsSL https://ollama.com/install.sh | sh
-
-# 모델 pull
-ollama pull all-minilm        # 384 차원, 23 MB
-ollama pull nomic-embed-text  # 768 차원, 274 MB (한국어 양호)
-ollama pull mxbai-embed-large # 1024 차원, 670 MB
-
-# 동작 확인
-curl http://localhost:11434/api/embeddings \
-  -d '{"model": "all-minilm", "prompt": "test"}'
-----
-
-에어갭 환경에서는 Ollama 모델 파일을 수동으로 복사해 배포합니다.
-
-== OpenAI / Azure 프로바이더
-
-API 키만 있으면 바로 사용할 수 있습니다. Azure OpenAI 도 `api_url` 만 다르게 설정하면 됩니다.
-
-[source,bash]
-----
-# OpenAI
-curl -X PUT http://<server>:4600/api/v1/settings/embedding \
-  -d '{
-    "enabled": true,
-    "provider": "openai",
-    "model": "text-embedding-3-small",
-    "api_key": "sk-...",
-    "dimension": 1536
-  }'
-
-# Azure OpenAI — api_url 만 변경
-curl -X PUT http://<server>:4600/api/v1/settings/embedding \
-  -d '{
-    "provider": "openai",
-    "api_url": "https://my-resource.openai.azure.com/openai/deployments/my-embedding",
-    "api_key": "...",
-    "model": "text-embedding-3-small",
-    "dimension": 1536
-  }'
-----
-
-== 백필 / 통계
-
-데이터셋을 생성하거나 수정하면 *비동기로 자동 임베딩* 됩니다. 임베딩이 없는 기존 데이터셋은 백필로 한꺼번에 채워 줍니다.
-
-[source,bash]
-----
-# 커버리지 통계
-curl http://<server>:4600/api/v1/catalog/search/embeddings/stats
+# 커버리지 통계 (로그인 사용자)
+curl http://<server>:4600/api/v1/catalog/search/embeddings/stats \
+  -H "Authorization: Bearer $TOKEN"
 # → {"total_datasets": 135, "embedded_datasets": 120, "coverage_pct": 88.9,
-#    "provider": "local", "model": "all-MiniLM-L6-v2", "dimension": 384}
+#    "provider": "local", "model": "paraphrase-multilingual-MiniLM-L12-v2", "dimension": 384}
 
-# 전체 백필
-curl -X POST http://<server>:4600/api/v1/catalog/search/embeddings/backfill
+# 전체 백필 (관리자)
+curl -X POST http://<server>:4600/api/v1/catalog/search/embeddings/backfill \
+  -H "Authorization: Bearer $TOKEN"
 
-# 전체 초기화 (프로바이더 전환 전)
-curl -X DELETE http://<server>:4600/api/v1/catalog/search/embeddings
+# 전체 삭제 (관리자 — 임베딩을 비우고 처음부터 다시 만들 때)
+curl -X DELETE http://<server>:4600/api/v1/catalog/search/embeddings \
+  -H "Authorization: Bearer $TOKEN"
 ----
-
-== 프로바이더 전환
-
-프로바이더마다 벡터 공간이 다르므로, 전환할 때는 *반드시 재임베딩* 해야 합니다. 순서는 다음과 같습니다.
-
-. *Settings → Embedding* 에서 새 프로바이더를 저장하고 재초기화합니다.
-. *Embeddings → Reset* 으로 기존 임베딩을 삭제합니다.
-. *Backfill* 로 전체를 다시 임베딩합니다.
-. *차원이 다를 때* (예: 384 → 1536) 는 pgvector 컬럼 차원도 함께 변경합니다.
-+
-[source,sql]
-----
-ALTER TABLE catalog_dataset_embeddings
-  ALTER COLUMN embedding TYPE vector(1536);
-----
-
-== 임베딩 소스 텍스트
-
-데이터셋의 메타데이터를 `|` 구분자로 결합해 임베딩.
-
-----
-{name} | {description} | {qualified_name} | {platform_name} | {platform_type} | {tags...} | {owners...}
-----
-
-예시.
-
-----
-fact_daily_sales | 일별 매출 집계 테이블 | warehouse.fact_daily_sales | Sakila MySQL | mysql | sales | analytics | data-team
-----
-
-`source_text` 가 바뀌지 않은 데이터셋은 재임베딩이 자동 skip 된다 (중복 방지).
-
-== DB 스키마
-
-[source,sql]
-----
-CREATE EXTENSION IF NOT EXISTS vector;
-
-CREATE TABLE catalog_dataset_embeddings (
-    id SERIAL PRIMARY KEY,
-    dataset_id INT NOT NULL UNIQUE
-        REFERENCES catalog_datasets(id) ON DELETE CASCADE,
-    embedding vector(384) NOT NULL,
-    source_text TEXT NOT NULL,
-    model_name VARCHAR(200) NOT NULL,
-    provider VARCHAR(50) NOT NULL,
-    dimension INT NOT NULL DEFAULT 384,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- IVFFlat 인덱스 (코사인 유사도)
-CREATE INDEX idx_dataset_embeddings_ivfflat
-    ON catalog_dataset_embeddings
-    USING ivfflat (embedding vector_cosine_ops)
-    WITH (lists = 100);
-----
-
-== 트러블슈팅
-
-=== `ERROR: type "vector" does not exist`
-
-pgvector 확장 미설치. 슈퍼유저로 활성화.
-
-[source,bash]
-----
-sudo -u postgres psql -d argus_catalog \
-  -c "CREATE EXTENSION IF NOT EXISTS vector;"
-----
-
-=== embedding 컬럼이 `text` 로 잡힘
-
-pgvector 가 없는 상태에서 서버를 먼저 띄우면 SQLAlchemy 가 `vector(384)` 를
-인식하지 못해 `text` 로 fallback. 검색 시 `ERROR: 연산자 없음: text <=> vector`.
-
-[source,bash]
-----
-sudo -u postgres psql -d argus_catalog -c "
-DELETE FROM catalog_dataset_embeddings;
-ALTER TABLE catalog_dataset_embeddings
-  ALTER COLUMN embedding TYPE vector(384) USING embedding::vector(384);
-"
-
-curl -X POST http://<server>:4600/api/v1/catalog/search/embeddings/backfill
-----
-
-권장 설치 순서 — *pgvector 확장 설치 → 서버 시작*.
-
-=== `RuntimeError: sentence-transformers is required`
-
-Local 프로바이더만 발생.
-
-[source,bash]
-----
-pip install "sentence-transformers>=3.0.0"
-----
-
-OpenAI / Ollama 만 쓰면 설치 불필요.
-
-=== `OSError: Can't load model 'all-MiniLM-L6-v2'` (에어갭)
-
-모델을 사전 다운로드 후 로컬 경로 지정. *에어갭 배포* 섹션 참조.
-
-=== `torch.cuda.OutOfMemoryError`
-
-[source,bash]
-----
-# CPU 모드 강제
-export CUDA_VISIBLE_DEVICES=""
-
-# 또는 더 작은 모델 (all-MiniLM-L6-v2 → 80 MB)
-----
-
-=== `PostgresSyntaxError: 구문 오류, ":" 부근`
-
-SQLAlchemy `text()` 안에서 `::vector` 캐스트를 사용하면 바인드 파라미터 `:param`
-과 충돌합니다. `CAST(... AS vector)` 형태로 사용하세요 (서버 코드 수정 시 주의).
-
-=== 프로바이더 변경 후 검색 결과 이상
-
-기존 임베딩 삭제 후 백필 필요 (벡터 공간이 다름). *프로바이더 전환* 섹션 참조.
-
-== 모델 품질 참고 (MTEB 기준)
-
-[cols="2,1,1,1,1,1"]
-|===
-| 모델 | MTEB | 차원 | 한국어 | 에어갭 | 비용
-
-| `all-MiniLM-L6-v2` | 56.3 | 384 | X | O | 무료
-| `paraphrase-multilingual-MiniLM-L12-v2` | 53.8 | 384 | O | O | 무료
-| `bge-small-en-v1.5` | 62.2 | 384 | X | O | 무료
-| `text-embedding-3-small` (OpenAI) | 62.3 | 1536 | O | X | $0.02/1M
-| `text-embedding-3-large` (OpenAI) | 64.6 | 3072 | O | X | $0.13/1M
-| `nomic-embed-text` (Ollama) | 62.4 | 768 | O | O | 무료
-|===
-
-권장:
-
-* 영문 + 에어갭 — `all-MiniLM-L6-v2` (기본)
-* 한국어 + 에어갭 — `paraphrase-multilingual-MiniLM-L12-v2` 또는 `nomic-embed-text` (Ollama)
-* 최고 품질 — `text-embedding-3-small` / `bge-m3`
-
-== 서버 시작 시 동작
-
-. PostgreSQL `vector` 확장 활성화.
-. `embedding_*` 설정 시드 (최초 1 회).
-. `embedding_enabled = true` 일 때만 프로바이더 초기화 — false 시 *Embedding is disabled* 로그 후 건너뜀.
-. 서버 종료 시 프로바이더 정리.
-
-== 커스텀 프로바이더 (개발자)
-
-`EmbeddingProvider` 추상 클래스를 구현하면 새 프로바이더를 추가할 수 있다.
-
-[source,python]
-----
-# app/embedding/providers/my_provider.py
-from app.embedding.base import EmbeddingProvider
-
-class MyProvider(EmbeddingProvider):
-    async def embed(self, texts: list[str]) -> list[list[float]]:
-        ...
-
-    def dimension(self) -> int:
-        return 768
-
-    def model_name(self) -> str:
-        return "my-custom-model"
-
-    def provider_name(self) -> str:
-        return "custom"
-----
-
-`app/embedding/registry.py` 의 `initialize_provider()` 에 분기 추가.
-
-== 관련 API
-
-[cols="1,3"]
-|===
-| Method | Path
-
-| GET | `/api/v1/settings/embedding`
-| PUT | `/api/v1/settings/embedding`
-| POST | `/api/v1/settings/embedding/test`
-| GET | `/api/v1/catalog/search/embeddings/stats`
-| POST | `/api/v1/catalog/search/embeddings/backfill`
-| DELETE | `/api/v1/catalog/search/embeddings`
-|===

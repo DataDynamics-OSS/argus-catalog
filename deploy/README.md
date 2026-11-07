@@ -25,6 +25,7 @@ Argus Catalog 를 처음 손에 잡았다면 여기서 시작하면 됩니다. D
 | `docker-compose.infra.openldap.seed.yml` | (선택) OpenLDAP + 시드 데이터 |
 | `docker-compose.infra.openldap.changed.yml` | (선택) OpenLDAP 속성 변경 시나리오 |
 | `config/` | 카탈로그 서버 설정(`config.yml`·`config.properties`)과 Keycloak realm |
+| `initdb/catalog/` | 풀스택 `catalog-postgres` 최초 기동 시 DDL 적용(서버는 테이블을 만들지 않음). 볼륨을 지우면(`down -v`) 다시 적용 |
 | `download-sakila.sh` | 샘플 데이터셋(Sakila) 다운로드 |
 
 ## 빠른 시작

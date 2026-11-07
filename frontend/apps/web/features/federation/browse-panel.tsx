@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   AlertTriangle,
   ChevronDown,
@@ -35,6 +35,7 @@ import {
   type FederationStatsInstance,
 } from "./api"
 import { federatedDetailHref } from "./search-panel"
+import { errorMessage } from "@/lib/notify"
 
 /** 우측 데이터셋 그리드 기본 페이지 크기(선택 가능). */
 const PAGE_SIZE = 50
@@ -168,7 +169,7 @@ export function FederationBrowsePanel() {
   const [expandedInst, setExpandedInst] = useState<Set<number>>(new Set())
   const [data, setData] = useState<Record<number, InstState>>({})
 
-  // 우측 그리드에 표시할 현재 선택(좌측 트리에서 데이터소스/폴더 클릭).
+  // 우측 그리드에 표시할 현재 선택(좌측 트리에서 데이터소스 클릭).
   const [selection, setSelection] = useState<Selection | null>(null)
   // 우측 그리드 페이지(0-base) + 페이지당 행 수 — 선택이 바뀌면 0 으로 복귀.
   const [page, setPage] = useState(0)
@@ -187,7 +188,7 @@ export function FederationBrowsePanel() {
       const s = await fetchStats()
       setInstances(s.instances)
     } catch (e) {
-      setStatsError(e instanceof Error ? e.message : String(e))
+      setStatsError(errorMessage(e) ?? String(e))
       setInstances([])
     } finally {
       setStatsLoading(false)
@@ -199,22 +200,30 @@ export function FederationBrowsePanel() {
   }, [loadStats])
 
   const mirrorInstances = useMemo(
-    () => (instances ?? []).filter(hasMirror),
+    // 비활성(PAUSED) peer 는 드릴다운이 막히므로 탐색 대상에서 제외한다.
+    () => (instances ?? []).filter((i) => i.status === "ACTIVE" && hasMirror(i)),
     [instances]
   )
 
+  // 필터/새로고침 세대 — 이전 필터로 보낸 요청이 늦게 도착해 현재 트리를
+  // 덮어쓰지 않도록, 요청 시점 세대와 다르면 응답을 버린다.
+  const generation = useRef(0)
+
   const loadInstance = useCallback(
     async (id: number, q: string): Promise<FederatedBrowseResponse | null> => {
+      const gen = generation.current
       setData((d) => ({
         ...d,
         [id]: { loading: true, error: null, resp: d[id]?.resp ?? null },
       }))
       try {
         const resp = await browseInstanceDatasets(id, q || undefined)
+        if (gen !== generation.current) return null
         setData((d) => ({ ...d, [id]: { loading: false, error: null, resp } }))
         return resp
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e)
+        if (gen !== generation.current) return null
+        const msg = errorMessage(e) ?? String(e)
         setData((d) => ({
           ...d,
           [id]: { loading: false, error: msg, resp: null },
@@ -225,26 +234,27 @@ export function FederationBrowsePanel() {
     []
   )
 
+  // 펼칠 때만(아직 데이터가 없으면) 조회 — 상태 updater 밖에서 부수효과를 낸다.
   const toggleInstance = useCallback(
     (id: number) => {
+      const opening = !expandedInst.has(id)
       setExpandedInst((prev) => {
         const next = new Set(prev)
-        if (next.has(id)) {
-          next.delete(id)
-        } else {
-          next.add(id)
-          if (!data[id]?.resp && !data[id]?.loading) loadInstance(id, appliedQ)
-        }
+        if (opening) next.add(id)
+        else next.delete(id)
         return next
       })
+      const st = data[id]
+      if (opening && !st?.resp && !st?.loading) void loadInstance(id, appliedQ)
     },
-    [data, appliedQ, loadInstance]
+    [expandedInst, data, appliedQ, loadInstance]
   )
 
   // 필터 적용: 비어있으면 lazy 모드로 복귀, 값이 있으면 미러 인스턴스를 모두 즉시
   // 조회하고 결과가 있는 인스턴스를 자동 펼친다.
   const applyFilter = useCallback(async () => {
     const q = query.trim()
+    const gen = ++generation.current
     setAppliedQ(q)
     setData({})
     setSelection(null)
@@ -255,6 +265,7 @@ export function FederationBrowsePanel() {
     }
     const targets = mirrorInstances
     const results = await Promise.all(targets.map((i) => loadInstance(i.id, q)))
+    if (gen !== generation.current) return // 그 사이 다른 필터/새로고침
     const ei = new Set<number>()
     targets.forEach((inst, idx) => {
       const r = results[idx]
@@ -264,6 +275,7 @@ export function FederationBrowsePanel() {
   }, [query, mirrorInstances, loadInstance])
 
   const refresh = useCallback(() => {
+    generation.current++
     setData({})
     setExpandedInst(new Set())
     setSelection(null)
@@ -376,6 +388,7 @@ export function FederationBrowsePanel() {
                             key={dsKey}
                             role="button"
                             tabIndex={0}
+                            aria-pressed={selected}
                             onClick={() =>
                               selectNode({
                                 key: dsKey,
@@ -383,6 +396,16 @@ export function FederationBrowsePanel() {
                                 datasets: ds.datasets,
                               })
                             }
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault()
+                                selectNode({
+                                  key: dsKey,
+                                  breadcrumb: [inst.name, ds.datasource_name],
+                                  datasets: ds.datasets,
+                                })
+                              }
+                            }}
                             className={`flex w-full cursor-pointer items-center gap-1.5 py-1.5 pr-3 pl-8 text-left hover:bg-muted/50 ${
                               selected ? "bg-muted" : ""
                             }`}
@@ -442,8 +465,7 @@ export function FederationBrowsePanel() {
                         </>
                       ) : (
                         <p className="py-8 text-center text-sm text-muted-foreground">
-                          이 노드에 직접 속한 데이터셋이 없습니다. 하위 폴더를
-                          선택해 보세요.
+                          이 데이터소스에 표시할 데이터셋이 없습니다.
                         </p>
                       )}
                     </div>
@@ -452,7 +474,7 @@ export function FederationBrowsePanel() {
               })()
             ) : (
               <div className="flex h-full items-center justify-center p-8 text-center text-sm text-muted-foreground">
-                왼쪽 트리에서 데이터소스나 폴더를 선택하면 데이터셋이 표시됩니다.
+                왼쪽 트리에서 데이터소스를 선택하면 데이터셋이 표시됩니다.
               </div>
             )}
           </div>

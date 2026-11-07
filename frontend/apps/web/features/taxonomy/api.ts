@@ -3,6 +3,8 @@
  * 백엔드: /api/v1/catalog/{taxonomies,categories,datasets/{id}/categories}
  */
 
+import { authFetch } from "@/features/auth/auth-fetch"
+
 const BASE = "/api/v1/catalog"
 
 async function jsonOrThrow<T>(res: Response): Promise<T> {
@@ -62,27 +64,27 @@ export interface DatasetCategoryRef {
 
 // ---- Taxonomy ----
 export async function fetchTaxonomies(): Promise<Taxonomy[]> {
-  return jsonOrThrow(await fetch(`${BASE}/taxonomies`))
+  return jsonOrThrow(await authFetch(`${BASE}/taxonomies`))
 }
 
 export async function createTaxonomy(payload: { name: string; description?: string }): Promise<Taxonomy> {
-  return jsonOrThrow(await fetch(`${BASE}/taxonomies`, {
+  return jsonOrThrow(await authFetch(`${BASE}/taxonomies`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
   }))
 }
 
-export async function updateTaxonomy(id: number, payload: { name?: string; description?: string }): Promise<Taxonomy> {
-  return jsonOrThrow(await fetch(`${BASE}/taxonomies/${id}`, {
+export async function updateTaxonomy(id: number, payload: { name?: string; description?: string | null }): Promise<Taxonomy> {
+  return jsonOrThrow(await authFetch(`${BASE}/taxonomies/${id}`, {
     method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
   }))
 }
 
 export async function deleteTaxonomy(id: number): Promise<void> {
-  return okOrThrow(await fetch(`${BASE}/taxonomies/${id}`, { method: "DELETE" }))
+  return okOrThrow(await authFetch(`${BASE}/taxonomies/${id}`, { method: "DELETE" }))
 }
 
 export async function fetchTaxonomyTree(id: number): Promise<TaxonomyTree> {
-  return jsonOrThrow(await fetch(`${BASE}/taxonomies/${id}/tree`))
+  return jsonOrThrow(await authFetch(`${BASE}/taxonomies/${id}/tree`))
 }
 
 // ---- Category ----
@@ -92,7 +94,7 @@ export async function createCategory(payload: {
   parent_id?: number | null
   description?: string
 }): Promise<Category> {
-  return jsonOrThrow(await fetch(`${BASE}/categories`, {
+  return jsonOrThrow(await authFetch(`${BASE}/categories`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
   }))
 }
@@ -101,24 +103,29 @@ export async function updateCategory(
   id: number,
   payload: { name?: string; parent_id?: number | null; description?: string; sort_order?: number },
 ): Promise<Category> {
-  return jsonOrThrow(await fetch(`${BASE}/categories/${id}`, {
+  return jsonOrThrow(await authFetch(`${BASE}/categories/${id}`, {
     method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
   }))
 }
 
 export async function deleteCategory(id: number): Promise<void> {
-  return okOrThrow(await fetch(`${BASE}/categories/${id}`, { method: "DELETE" }))
+  return okOrThrow(await authFetch(`${BASE}/categories/${id}`, { method: "DELETE" }))
 }
 
 // ---- Dataset ↔ Category 매핑 ----
 export async function fetchDatasetCategories(datasetId: number): Promise<DatasetCategoryRef[]> {
-  return jsonOrThrow(await fetch(`${BASE}/datasets/${datasetId}/categories`))
+  return jsonOrThrow(await authFetch(`${BASE}/datasets/${datasetId}/categories`))
+}
+
+/** 이 분류에 직접 매핑된 데이터셋 id (하위 분류 매핑 제외). 매핑 해제는 직접 매핑만 가능하다. */
+export async function fetchDirectDatasetIds(categoryId: number): Promise<number[]> {
+  return jsonOrThrow(await authFetch(`${BASE}/categories/${categoryId}/direct-dataset-ids`))
 }
 
 export async function addDatasetCategory(datasetId: number, categoryId: number): Promise<void> {
-  return okOrThrow(await fetch(`${BASE}/datasets/${datasetId}/categories/${categoryId}`, { method: "POST" }))
+  return okOrThrow(await authFetch(`${BASE}/datasets/${datasetId}/categories/${categoryId}`, { method: "POST" }))
 }
 
 export async function removeDatasetCategory(datasetId: number, categoryId: number): Promise<void> {
-  return okOrThrow(await fetch(`${BASE}/datasets/${datasetId}/categories/${categoryId}`, { method: "DELETE" }))
+  return okOrThrow(await authFetch(`${BASE}/datasets/${datasetId}/categories/${categoryId}`, { method: "DELETE" }))
 }

@@ -1,5 +1,15 @@
+import path from "node:path"
+import { fileURLToPath } from "node:url"
+
+const here = path.dirname(fileURLToPath(import.meta.url))
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // 릴리스 패키지(release/)는 NEXT_OUTPUT=standalone 으로 빌드해 node 하나로 실행되는 묶음(server.js)을 만든다.
+  // 기본(next start·docker 이미지)은 기존과 같다. 모노레포라 추적 루트를 frontend/ 로 둔다.
+  ...(process.env.NEXT_OUTPUT === "standalone"
+    ? { output: "standalone", outputFileTracingRoot: path.join(here, "../..") }
+    : {}),
   transpilePackages: ["@workspace/ui"],
   logging: {
     fetches: {

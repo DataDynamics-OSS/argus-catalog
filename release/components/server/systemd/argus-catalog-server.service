@@ -1,0 +1,27 @@
+[Unit]
+Description=Argus Catalog Server (REST API)
+Documentation=file:///opt/argus-catalog-server/share/installer/README-INSTALL.md
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=argus
+Group=argus
+WorkingDirectory=/opt/argus-catalog-server
+Environment=ARGUS_CATALOG_SERVER_CONFIG_DIR=/etc/argus-catalog-server
+Environment=PYTHONUNBUFFERED=1
+Environment=HOME=/var/lib/argus-catalog-server
+# 추가 환경변수(프록시, HF_HOME 등)는 이 파일에 KEY=VALUE 로 둔다 (없어도 됨)
+EnvironmentFile=-/etc/sysconfig/argus-catalog-server
+# 호스트·포트는 config.properties 의 server.host / server.port
+ExecStart=/opt/argus-catalog-server/venv/bin/python -m app.main
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+LimitNOFILE=65536
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

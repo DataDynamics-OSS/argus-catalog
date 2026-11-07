@@ -14,6 +14,8 @@ import {
   Tooltip, TooltipContent, TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
 import { authFetch } from "@/features/auth/auth-fetch"
+import { SEVERITY_LABEL } from "@/features/alerts/labels"
+import { onAlertsChanged } from "@/features/alerts/events"
 
 type AlertSummary = {
   total_open: number
@@ -28,6 +30,8 @@ type AlertItem = {
   change_summary: string
   source_dataset_name: string | null
   source_datasource_type: string | null
+  entity_type?: string | null
+  entity_ref?: string | null
   affected_dataset_name: string | null
   affected_datasource_type: string | null
   created_at: string
@@ -35,11 +39,16 @@ type AlertItem = {
 
 interface DashboardHeaderProps {
   title: string
+  /** 검색 결과 화면에서 현재 검색어를 검색창에 채워 둔다(다듬어 다시 검색하기 쉽게). */
+  searchQuery?: string
 }
 
-export function DashboardHeader({ title }: DashboardHeaderProps) {
+export function DashboardHeader({ title, searchQuery }: DashboardHeaderProps) {
   const router = useRouter()
-  const [query, setQuery] = useState("")
+  const [query, setQuery] = useState(searchQuery ?? "")
+  useEffect(() => {
+    if (searchQuery !== undefined) setQuery(searchQuery)
+  }, [searchQuery])
   const [summary, setSummary] = useState<AlertSummary | null>(null)
   const [recentAlerts, setRecentAlerts] = useState<AlertItem[]>([])
   const [popoverOpen, setPopoverOpen] = useState(false)
@@ -64,14 +73,23 @@ export function DashboardHeader({ title }: DashboardHeaderProps) {
     return () => clearInterval(interval)
   }, [fetchSummary])
 
-  // Fetch recent alerts when popover opens
-  useEffect(() => {
-    if (!popoverOpen) return
+  const fetchRecent = useCallback(() => {
     authFetch("/api/v1/alerts?status=OPEN&page_size=5")
-      .then(r => r.json())
+      .then(r => (r.ok ? r.json() : { items: [] }))
       .then(data => setRecentAlerts(data.items || []))
       .catch(() => {})
-  }, [popoverOpen])
+  }, [])
+
+  // Fetch recent alerts when popover opens
+  useEffect(() => {
+    if (popoverOpen) fetchRecent()
+  }, [popoverOpen, fetchRecent])
+
+  // 알림 화면에서 상태를 바꾸면 30초 주기를 기다리지 않고 바로 반영
+  useEffect(() => onAlertsChanged(() => {
+    fetchSummary()
+    if (popoverOpen) fetchRecent()
+  }), [fetchSummary, fetchRecent, popoverOpen])
 
   const totalOpen = summary?.total_open ?? 0
 
@@ -105,12 +123,12 @@ export function DashboardHeader({ title }: DashboardHeaderProps) {
               <div className="flex items-center gap-1.5">
                 {(summary?.breaking_count ?? 0) > 0 && (
                   <Badge className="bg-red-500 text-white text-sm px-1.5 py-0 border-0">
-                    치명 {summary!.breaking_count}
+                    {SEVERITY_LABEL.BREAKING} {summary!.breaking_count}
                   </Badge>
                 )}
                 {(summary?.warning_count ?? 0) > 0 && (
                   <Badge className="bg-amber-500 text-white text-sm px-1.5 py-0 border-0">
-                    경고 {summary!.warning_count}
+                    {SEVERITY_LABEL.WARNING} {summary!.warning_count}
                   </Badge>
                 )}
               </div>
@@ -128,7 +146,7 @@ export function DashboardHeader({ title }: DashboardHeaderProps) {
                     type="button"
                     onClick={() => {
                       setPopoverOpen(false)
-                      router.push("/dashboard/alerts")
+                      router.push(`/dashboard/alerts?alert=${alert.id}`)
                     }}
                     className="w-full text-left px-4 py-3 border-b last:border-b-0 hover:bg-muted/50 transition-colors"
                   >
@@ -139,6 +157,7 @@ export function DashboardHeader({ title }: DashboardHeaderProps) {
                           {alert.change_summary}
                         </p>
                         <p className="text-sm text-muted-foreground mt-0.5">
+                          {alert.entity_ref && `${alert.entity_type === "mcp_deployment" ? "MCP 배포" : alert.entity_type} ${alert.entity_ref}`}
                           {alert.source_datasource_type && `${alert.source_datasource_type}`}
                           {alert.source_dataset_name && `.${alert.source_dataset_name}`}
                           {alert.affected_dataset_name && ` → ${alert.affected_datasource_type}.${alert.affected_dataset_name}`}
@@ -177,6 +196,7 @@ export function DashboardHeader({ title }: DashboardHeaderProps) {
           <Input
             type="search"
             placeholder="이름·설명·의미로 데이터셋 검색..."
+            maxLength={500} // 통합 검색 API q 최대 길이(초과 시 422)
             className="pl-8 w-96 h-9 text-sm"
             value={query}
             onChange={(e) => setQuery(e.target.value)}

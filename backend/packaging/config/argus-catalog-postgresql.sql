@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS catalog_datasources (
     created_at TIMESTAMPTZ DEFAULT now(),
     datasource_id VARCHAR(36) NOT NULL UNIQUE,
     type VARCHAR(100) NOT NULL,
-    -- 환경 구분 (DEV/STAGING/PROD). 생성 후 불변.
+    -- 환경 구분 (DEV/STAGING/PROD). 수정 가능 — 변경 시 소속 데이터셋 origin 에 전파.
     origin VARCHAR(20) NOT NULL DEFAULT 'DEV'
 );
 
@@ -127,12 +127,14 @@ CREATE TABLE IF NOT EXISTS catalog_dataset_tags (
 
 CREATE TABLE IF NOT EXISTS catalog_glossary_terms (
     id SERIAL PRIMARY KEY,
-    name VARCHAR(200) NOT NULL UNIQUE,
+    name VARCHAR(200) NOT NULL,
     description TEXT,
     parent_id INT REFERENCES catalog_glossary_terms(id),
     term_type VARCHAR(20) NOT NULL DEFAULT 'TERM',
     created_at TIMESTAMPTZ DEFAULT now(),
-    updated_at TIMESTAMPTZ DEFAULT now()
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    -- 이름은 유형별로 유일: 분류 '고객' 과 용어 '고객' 은 공존 가능
+    CONSTRAINT uq_glossary_terms_type_name UNIQUE (term_type, name)
 );
 
 -- ---------------------------------------------------------------------------
@@ -249,12 +251,19 @@ CREATE TABLE IF NOT EXISTS argus_users (
     -- 최초 로그인 시 비밀번호 강제 변경 플래그(LDAP 동기화 등 임시 비번 계정용)
     must_change_password BOOLEAN NOT NULL DEFAULT false,
     role_id INT NOT NULL REFERENCES argus_roles(id),
+    -- 마지막 로그인 성공 시각, 로컬 로그인 연속 실패 횟수와 잠금 해제 시각(5회 실패 → 15분 잠금)
+    last_login_at TIMESTAMPTZ,
+    failed_login_count INT NOT NULL DEFAULT 0,
+    locked_until TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now()
 );
 
 -- 기존 배포(컬럼이 없던 DB)도 멱등하게 수렴시키기 위한 컬럼 추가(이미 있으면 무시)
 ALTER TABLE argus_users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE argus_users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ;
+ALTER TABLE argus_users ADD COLUMN IF NOT EXISTS failed_login_count INT NOT NULL DEFAULT 0;
+ALTER TABLE argus_users ADD COLUMN IF NOT EXISTS locked_until TIMESTAMPTZ;
 
 -- ---------------------------------------------------------------------------
 -- User Preferences (per-user UI preferences keyed by token sub)
@@ -268,6 +277,27 @@ CREATE TABLE IF NOT EXISTS argus_user_preferences (
     avatar_preset_id VARCHAR(50),
     updated_at TIMESTAMPTZ DEFAULT now()
 );
+
+-- ---------------------------------------------------------------------------
+-- Admin Audit Log (사용자 관리·설정·권한 관리 변경 기록)
+--   category: users / settings / permissions, action: user.create, settings.llm, permissions.menus ...
+--   detail: 변경 내용 JSON — 비밀값은 값 없이 "(변경됨)"만 기록
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS argus_admin_audit_log (
+    id BIGSERIAL PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    actor VARCHAR(100),
+    category VARCHAR(30) NOT NULL,
+    action VARCHAR(60) NOT NULL,
+    target VARCHAR(200),
+    summary VARCHAR(500),
+    detail TEXT,
+    client_ip VARCHAR(64)
+);
+
+CREATE INDEX IF NOT EXISTS idx_admin_audit_created ON argus_admin_audit_log USING btree (created_at);
+CREATE INDEX IF NOT EXISTS idx_admin_audit_category ON argus_admin_audit_log USING btree (category, created_at);
 
 -- ---------------------------------------------------------------------------
 -- ML Model Registry - Registered Models
@@ -384,6 +414,8 @@ CREATE TABLE IF NOT EXISTS catalog_models (
     sklearn_version VARCHAR(20),
     mlflow_version VARCHAR(20),
     mlflow_model_id VARCHAR(100),
+    flavor VARCHAR(50),
+    flavor_version VARCHAR(50),
     model_size_bytes BIGINT,
     utc_time_created VARCHAR(50),
     time_created TIMESTAMPTZ,
@@ -539,11 +571,14 @@ CREATE TABLE IF NOT EXISTS catalog_configuration (
     id SERIAL PRIMARY KEY,
     category VARCHAR(50) NOT NULL,
     config_key VARCHAR(100) NOT NULL UNIQUE,
-    config_value VARCHAR(500) NOT NULL,
+    config_value TEXT NOT NULL,
     description VARCHAR(255),
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now()
 );
+
+-- 비밀값(API 키·비밀번호·client secret·webhook URL)은 "enc:" 접두사 암호문으로 저장한다 — 길이 제한을 없앤다
+ALTER TABLE catalog_configuration ALTER COLUMN config_value TYPE TEXT;
 
 -- ---------------------------------------------------------------------------
 -- Collector - Hive Query History
@@ -561,13 +596,22 @@ CREATE TABLE IF NOT EXISTS argus_collector_hive_query_history (
     query TEXT,
     status VARCHAR(16) NOT NULL,
     error_msg TEXT,
+    datasource_id VARCHAR(100),                                -- 수집 출처 데이터소스 식별자(hook 의 platformId)
     inputs_json TEXT,                                          -- hook 권위 입력 테이블(JSON 배열). 배치 write-lineage 우선 사용
     outputs_json TEXT,                                         -- hook 권위 출력 테이블(JSON 배열)
+    output_columns_json TEXT,                                  -- hook 출력 테이블별 컬럼 순서(JSON 객체). 컬럼 목록 없는 INSERT 의 위치 매핑
     received_at TIMESTAMPTZ DEFAULT now()
 );
 
 -- query_id 는 UNIQUE 제약이 인덱스를 겸하므로 별도 인덱스 불필요.
 CREATE INDEX IF NOT EXISTS idx_hive_query_history_status ON argus_collector_hive_query_history USING btree (status);
+
+-- 기존 설치 업그레이드용(재실행 안전): 수집기 ORM 이 쓰는 datasource_id 컬럼.
+ALTER TABLE argus_collector_hive_query_history ADD COLUMN IF NOT EXISTS datasource_id VARCHAR(100);
+-- 기존 설치 업그레이드용(재실행 안전): hook 권위 입출력 테이블(배치 write-lineage 가 SELECT 함).
+ALTER TABLE argus_collector_hive_query_history ADD COLUMN IF NOT EXISTS inputs_json TEXT;
+ALTER TABLE argus_collector_hive_query_history ADD COLUMN IF NOT EXISTS outputs_json TEXT;
+ALTER TABLE argus_collector_hive_query_history ADD COLUMN IF NOT EXISTS output_columns_json TEXT;
 
 -- ---------------------------------------------------------------------------
 -- Collector - Impala Query History
@@ -579,8 +623,11 @@ CREATE TABLE IF NOT EXISTS argus_collector_impala_query_history (
     query_type VARCHAR(32),
     query_state VARCHAR(32),
     statement TEXT,
+    plan TEXT,                                                 -- 실행 계획(Java Agent 가 줄 때)
     database VARCHAR(256),
     username VARCHAR(256),
+    connected_user VARCHAR(256),                               -- 인증된 접속 사용자
+    delegate_user VARCHAR(256),                                -- 위임/프록시 사용자
     coordinator_host VARCHAR(512),
     start_time TIMESTAMPTZ,
     end_time TIMESTAMPTZ,
@@ -589,6 +636,14 @@ CREATE TABLE IF NOT EXISTS argus_collector_impala_query_history (
     datasource_id VARCHAR(100),
     received_at TIMESTAMPTZ DEFAULT now()
 );
+
+-- 기존 설치 업그레이드용(재실행 안전): 수집기 ORM 이 쓰는 Impala Agent 필드.
+ALTER TABLE argus_collector_impala_query_history ADD COLUMN IF NOT EXISTS plan TEXT;
+ALTER TABLE argus_collector_impala_query_history ADD COLUMN IF NOT EXISTS connected_user VARCHAR(256);
+ALTER TABLE argus_collector_impala_query_history ADD COLUMN IF NOT EXISTS delegate_user VARCHAR(256);
+
+-- CM 폴러 ↔ Java Agent 동일 쿼리 병합 조회(datasource + 시작시각 근접)용.
+CREATE INDEX IF NOT EXISTS idx_impala_query_history_ds_start ON argus_collector_impala_query_history USING btree (datasource_id, start_time);
 
 -- ---------------------------------------------------------------------------
 -- Collector - Trino Query History
@@ -805,6 +860,7 @@ CREATE TABLE IF NOT EXISTS relationship_observations (
     UNIQUE (query_id, a_table, a_col, b_table, b_col)         -- 멱등(재처리 무해)
 );
 CREATE INDEX IF NOT EXISTS idx_relobs_datasource ON relationship_observations(datasource_id);
+CREATE INDEX IF NOT EXISTS idx_relobs_observed_at ON relationship_observations(observed_at);  -- 보존 기간 삭제용
 COMMENT ON TABLE relationship_observations IS '쿼리에서 추출한 JOIN 키 관측치(append-only staging). rollup 이 집계.';
 
 CREATE TABLE IF NOT EXISTS relationship_ingest_offset (
@@ -1547,6 +1603,36 @@ CREATE TABLE IF NOT EXISTS catalog_ai_agent_status_history (
 CREATE INDEX IF NOT EXISTS ix_catalog_ai_agent_status_history_agent_id ON catalog_ai_agent_status_history USING btree (agent_id);
 CREATE INDEX IF NOT EXISTS ix_catalog_ai_agent_status_history_changed_at ON catalog_ai_agent_status_history USING btree (changed_at);
 
+CREATE TABLE IF NOT EXISTS catalog_ai_agent_discoveries (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL UNIQUE,
+    first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    seen_count INTEGER NOT NULL DEFAULT 1,
+    invocation_count INTEGER NOT NULL DEFAULT 0,
+    hook_event_count INTEGER NOT NULL DEFAULT 0,
+    reported_by VARCHAR(200),
+    last_consumer VARCHAR(200),
+    status VARCHAR(20) NOT NULL DEFAULT 'new',
+    agent_id INTEGER REFERENCES catalog_ai_agents(id) ON DELETE SET NULL,
+    status_changed_by VARCHAR(200),
+    status_changed_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS ix_catalog_ai_agent_discoveries_status ON catalog_ai_agent_discoveries USING btree (status);
+CREATE INDEX IF NOT EXISTS ix_catalog_ai_agent_discoveries_last_seen_at ON catalog_ai_agent_discoveries USING btree (last_seen_at);
+
+CREATE TABLE IF NOT EXISTS catalog_ai_agent_views (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    owner_sub VARCHAR(100) NOT NULL,
+    owner_name VARCHAR(200),
+    shared BOOLEAN NOT NULL DEFAULT false,
+    query JSON NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_catalog_ai_agent_views_owner_sub ON catalog_ai_agent_views USING btree (owner_sub);
+
 CREATE TABLE IF NOT EXISTS catalog_apis (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL UNIQUE,
@@ -1654,6 +1740,8 @@ CREATE TABLE IF NOT EXISTS catalog_api_invocations (
 );
 CREATE INDEX IF NOT EXISTS ix_catalog_api_invocations_api_id ON catalog_api_invocations USING btree (api_id);
 CREATE INDEX IF NOT EXISTS ix_catalog_api_invocations_created_at ON catalog_api_invocations USING btree (created_at);
+-- 관측 탭 집계(API·기간 조건) 용 복합 인덱스
+CREATE INDEX IF NOT EXISTS ix_catalog_api_invocations_api_created ON catalog_api_invocations USING btree (api_id, created_at);
 
 CREATE TABLE IF NOT EXISTS catalog_api_lineage (
     id SERIAL PRIMARY KEY,
@@ -1793,6 +1881,10 @@ ALTER TABLE argus_users ADD COLUMN IF NOT EXISTS department VARCHAR(100);
 ALTER TABLE catalog_ai_agent_tools ADD COLUMN IF NOT EXISTS risk VARCHAR(20);
 ALTER TABLE catalog_ai_agent_tools ADD COLUMN IF NOT EXISTS requires_approval BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE catalog_ai_agents ADD COLUMN IF NOT EXISTS streaming BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE catalog_ai_agents ADD COLUMN IF NOT EXISTS managed_by VARCHAR(20) NOT NULL DEFAULT 'ui';
+ALTER TABLE catalog_ai_agents ADD COLUMN IF NOT EXISTS source_ref VARCHAR(1000);
+ALTER TABLE catalog_ai_agents ADD COLUMN IF NOT EXISTS last_applied_at TIMESTAMPTZ;
+ALTER TABLE catalog_ai_agents ADD COLUMN IF NOT EXISTS last_applied_by VARCHAR(200);
 ALTER TABLE catalog_dataset_schemas ADD COLUMN IF NOT EXISTS display_name VARCHAR(255);
 ALTER TABLE catalog_dataset_schemas ADD COLUMN IF NOT EXISTS pii_type VARCHAR(50);
 ALTER TABLE catalog_datasources ADD COLUMN IF NOT EXISTS system_id INTEGER REFERENCES catalog_systems(id) ON DELETE SET NULL;
@@ -2067,7 +2159,7 @@ COMMENT ON COLUMN argus_dataset_lineage.created_at IS '생성 시각';
 
 -- argus_lineage_alert
 COMMENT ON COLUMN argus_lineage_alert.id IS 'PK';
-COMMENT ON COLUMN argus_lineage_alert.alert_type IS '알림 유형 (SCHEMA_CHANGE/LINEAGE_BROKEN/SYNC_FAILED/QUALITY_FAILED)';
+COMMENT ON COLUMN argus_lineage_alert.alert_type IS '알림 유형 (SCHEMA_CHANGE/QUALITY_FAILED/MCP_POLICY_DRIFT/MCP_SECURITY_WARNING)';
 COMMENT ON COLUMN argus_lineage_alert.severity IS '심각도 (INFO/WARNING/BREAKING)';
 COMMENT ON COLUMN argus_lineage_alert.source_dataset_id IS '변경 발생 원본 데이터셋, catalog_datasets(id) 참조';
 COMMENT ON COLUMN argus_lineage_alert.affected_dataset_id IS '영향받은 하위 데이터셋, catalog_datasets(id) 참조';
@@ -2105,6 +2197,15 @@ COMMENT ON COLUMN argus_roles.created_at IS '생성 시각';
 COMMENT ON COLUMN argus_roles.updated_at IS '수정 시각';
 COMMENT ON COLUMN argus_roles.role_id IS '역할 식별자, Keycloak realm role 이름과 1:1 매칭 (예: argus-admin), UNIQUE';
 
+-- argus_admin_audit_log
+COMMENT ON TABLE argus_admin_audit_log IS '관리 감사 로그 — 사용자 관리·설정·권한 관리 변경 기록';
+COMMENT ON COLUMN argus_admin_audit_log.actor IS '작업자 아이디';
+COMMENT ON COLUMN argus_admin_audit_log.category IS 'users / settings / permissions';
+COMMENT ON COLUMN argus_admin_audit_log.action IS '작업 (예: user.create, settings.llm, permissions.menus)';
+COMMENT ON COLUMN argus_admin_audit_log.target IS '대상 (사용자 아이디, 설정 범주 등)';
+COMMENT ON COLUMN argus_admin_audit_log.detail IS '변경 내용 JSON (비밀값은 "(변경됨)" 만)';
+COMMENT ON COLUMN argus_admin_audit_log.client_ip IS '요청자 IP (프록시 뒤면 X-Forwarded-For 첫 값)';
+
 -- argus_user_preferences
 COMMENT ON COLUMN argus_user_preferences.sub IS 'PK, 사용자 식별자 (로컬=argus_users.id 문자열, Keycloak=user UUID)';
 COMMENT ON COLUMN argus_user_preferences.avatar_preset_id IS '선택한 아바타 preset 식별자';
@@ -2112,6 +2213,9 @@ COMMENT ON COLUMN argus_user_preferences.updated_at IS '수정 시각';
 
 -- argus_users
 COMMENT ON COLUMN argus_users.id IS 'PK';
+COMMENT ON COLUMN argus_users.last_login_at IS '마지막 로그인 성공 시각 (로컬·Keycloak 공통)';
+COMMENT ON COLUMN argus_users.failed_login_count IS '로컬 로그인 연속 실패 횟수 (성공·잠금 시 0)';
+COMMENT ON COLUMN argus_users.locked_until IS '로그인 잠금 해제 시각 (연속 실패 시 설정, 관리자 잠금 해제·비밀번호 재설정으로 해제)';
 COMMENT ON COLUMN argus_users.username IS '로그인 식별자 (UNIQUE)';
 COMMENT ON COLUMN argus_users.email IS '이메일 주소 (UNIQUE)';
 COMMENT ON COLUMN argus_users.first_name IS '이름';
@@ -2475,7 +2579,7 @@ COMMENT ON COLUMN catalog_comments.content_plain IS '댓글 본문 평문 (검�
 COMMENT ON COLUMN catalog_comments.author_name IS '작성자 표시 이름';
 COMMENT ON COLUMN catalog_comments.author_email IS '작성자 이메일';
 COMMENT ON COLUMN catalog_comments.author_avatar IS '작성자 아바타 이미지 URL';
-COMMENT ON COLUMN catalog_comments.reply_count IS '답글 수 (비정규화 캐시값)';
+COMMENT ON COLUMN catalog_comments.reply_count IS '보이는 직접 답글 수 (삭제됐어도 보이는 답글이 있으면 포함, 비정규화 캐시값)';
 COMMENT ON COLUMN catalog_comments.created_at IS '생성 시각';
 COMMENT ON COLUMN catalog_comments.updated_at IS '수정 시각';
 COMMENT ON COLUMN catalog_comments.is_deleted IS '소프트 삭제 여부';
@@ -2618,9 +2722,9 @@ COMMENT ON COLUMN catalog_datasources.id IS 'PK';
 COMMENT ON COLUMN catalog_datasources.name IS '데이터 소스 표시 이름';
 COMMENT ON COLUMN catalog_datasources.logo_url IS '데이터 소스 로고 이미지 URL';
 COMMENT ON COLUMN catalog_datasources.created_at IS '생성 시각';
-COMMENT ON COLUMN catalog_datasources.datasource_id IS '데이터 소스 외부 식별자 (UUID, 고유)';
+COMMENT ON COLUMN catalog_datasources.datasource_id IS '데이터 소스 외부 식별자 ({type}-{ms타임스탬프hex}{랜덤hex} 형식, 고유)';
 COMMENT ON COLUMN catalog_datasources.type IS '데이터 소스 플랫폼 유형 (예: hive/trino/postgres)';
-COMMENT ON COLUMN catalog_datasources.origin IS '환경 구분 (DEV/STAGING/PROD), 생성 후 불변';
+COMMENT ON COLUMN catalog_datasources.origin IS '환경 구분 (DEV/STAGING/PROD), 수정 가능 — 변경 시 소속 데이터셋 origin 에 전파';
 
 -- catalog_entity_embeddings
 COMMENT ON COLUMN catalog_entity_embeddings.id IS 'PK';
@@ -2636,7 +2740,7 @@ COMMENT ON COLUMN catalog_entity_embeddings.updated_at IS '수정 시각';
 
 -- catalog_glossary_terms
 COMMENT ON COLUMN catalog_glossary_terms.id IS 'PK';
-COMMENT ON COLUMN catalog_glossary_terms.name IS '용어명 (고유)';
+COMMENT ON COLUMN catalog_glossary_terms.name IS '용어명 (유형(term_type)별 고유)';
 COMMENT ON COLUMN catalog_glossary_terms.description IS '용어 설명';
 COMMENT ON COLUMN catalog_glossary_terms.parent_id IS '상위 용어 ID (catalog_glossary_terms(id) 자기참조, 계층 구조)';
 COMMENT ON COLUMN catalog_glossary_terms.term_type IS '항목 유형 (CATEGORY/TERM)';
@@ -2714,6 +2818,8 @@ COMMENT ON COLUMN catalog_models.serialization_format IS '모델 직렬화 포�
 COMMENT ON COLUMN catalog_models.sklearn_version IS 'scikit-learn 버전';
 COMMENT ON COLUMN catalog_models.mlflow_version IS 'MLflow 버전';
 COMMENT ON COLUMN catalog_models.mlflow_model_id IS 'MLflow 모델 식별자';
+COMMENT ON COLUMN catalog_models.flavor IS '대표 MLflow flavor (python_function 제외 첫 flavor — sklearn/pytorch/xgboost 등)';
+COMMENT ON COLUMN catalog_models.flavor_version IS '대표 flavor 라이브러리 버전';
 COMMENT ON COLUMN catalog_models.model_size_bytes IS '모델 아티팩트 크기(byte)';
 COMMENT ON COLUMN catalog_models.utc_time_created IS 'MLmodel 생성 시각 (UTC 원본 문자열)';
 COMMENT ON COLUMN catalog_models.time_created IS '생성 시각 (서버 로컬 타임존 변환값)';
@@ -3068,6 +3174,8 @@ CREATE TABLE IF NOT EXISTS federation_sync_runs (
     phase VARCHAR(20) NOT NULL DEFAULT 'FETCH',
     phase_done INT NOT NULL DEFAULT 0,
     phase_total INT NOT NULL DEFAULT 0,
+    is_full BOOLEAN NOT NULL DEFAULT FALSE,
+    watermark TIMESTAMPTZ,
     error TEXT,
     started_at TIMESTAMPTZ DEFAULT now(),
     finished_at TIMESTAMPTZ
@@ -3077,6 +3185,11 @@ ALTER TABLE federation_sync_runs ADD COLUMN IF NOT EXISTS datasets_total INT NOT
 ALTER TABLE federation_sync_runs ADD COLUMN IF NOT EXISTS phase VARCHAR(20) NOT NULL DEFAULT 'FETCH';
 ALTER TABLE federation_sync_runs ADD COLUMN IF NOT EXISTS phase_done INT NOT NULL DEFAULT 0;
 ALTER TABLE federation_sync_runs ADD COLUMN IF NOT EXISTS phase_total INT NOT NULL DEFAULT 0;
+-- 전체 동기화 여부 / 증분 watermark(SUCCESS 실행만 기록 — 부분 실패가 watermark 를 전진시키지 않도록)
+ALTER TABLE federation_sync_runs ADD COLUMN IF NOT EXISTS is_full BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE federation_sync_runs ADD COLUMN IF NOT EXISTS watermark TIMESTAMPTZ;
+COMMENT ON COLUMN federation_sync_runs.is_full IS '전체 동기화(prune 포함) 여부';
+COMMENT ON COLUMN federation_sync_runs.watermark IS '다음 증분 동기화 기준 시각(성공 실행에서 관측한 peer updated_at 최댓값)';
 CREATE INDEX IF NOT EXISTS ix_federation_sync_runs_instance
     ON federation_sync_runs (instance_id);
 
@@ -3106,3 +3219,404 @@ CREATE INDEX IF NOT EXISTS ix_federation_lineage_source ON federation_lineage (s
 CREATE INDEX IF NOT EXISTS ix_federation_lineage_target ON federation_lineage (target_urn);
 
 COMMENT ON TABLE federation_lineage IS 'HARVEST 로 가져온 peer 리니지 엣지(URN→URN, cross-instance stitching)';
+
+
+-- ===========================================================================
+-- MCP Server 카탈로그 (design/mcp-server-catalog.md)
+--   정의(catalog_mcp_servers) / 배포 인스턴스(catalog_mcp_deployments) 2계층.
+--   필드 출처(MCP 표준 / Registry server.json / 서버 설정 / Argus 전용)는
+--   backend/app/mcp_servers/origins.py 에서 관리한다.
+-- ===========================================================================
+
+CREATE TABLE IF NOT EXISTS catalog_mcp_servers (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL UNIQUE,
+    urn VARCHAR(500) NOT NULL UNIQUE,
+    display_name VARCHAR(255),
+    description TEXT,
+    status VARCHAR(20) NOT NULL DEFAULT 'draft',
+    version VARCHAR(50) NOT NULL DEFAULT '0.1.0',
+    owner_email VARCHAR(200),
+    department VARCHAR(200),
+    category VARCHAR(100),
+    tags JSON,
+    provider_type VARCHAR(30) NOT NULL DEFAULT 'community',
+    vendor VARCHAR(200),
+    framework VARCHAR(50) NOT NULL DEFAULT 'generic',
+    target_platform VARCHAR(100),
+    source_repo VARCHAR(500),
+    source_path VARCHAR(500),
+    registry_name VARCHAR(255),
+    title VARCHAR(255),
+    website_url VARCHAR(1000),
+    repository_url VARCHAR(1000),
+    license VARCHAR(100),
+    packages JSON,
+    remotes JSON,
+    package_checksum VARCHAR(200),
+    oci_artifact_ref VARCHAR(500),
+    supported_transports JSON,
+    launch_config JSON,
+    server_info JSON,
+    protocol_version VARCHAR(30),
+    capabilities JSON,
+    instructions TEXT,
+    capability_hash VARCHAR(64),
+    last_synced_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    created_by VARCHAR(200),
+    updated_by VARCHAR(200)
+);
+
+CREATE TABLE IF NOT EXISTS catalog_mcp_server_tool_groups (
+    id SERIAL PRIMARY KEY,
+    mcp_server_id INT NOT NULL REFERENCES catalog_mcp_servers(id) ON DELETE CASCADE,
+    group_key VARCHAR(100) NOT NULL,
+    label VARCHAR(200),
+    description TEXT,
+    config_key VARCHAR(300),
+    default_enabled BOOLEAN NOT NULL DEFAULT true,
+    default_risk VARCHAR(20) NOT NULL DEFAULT 'medium',
+    mutating BOOLEAN NOT NULL DEFAULT false,
+    sort_order INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    CONSTRAINT uq_mcp_tool_group_key UNIQUE (mcp_server_id, group_key)
+);
+
+CREATE TABLE IF NOT EXISTS catalog_mcp_server_tools (
+    id SERIAL PRIMARY KEY,
+    mcp_server_id INT NOT NULL REFERENCES catalog_mcp_servers(id) ON DELETE CASCADE,
+    group_id INT REFERENCES catalog_mcp_server_tool_groups(id) ON DELETE SET NULL,
+    name VARCHAR(200) NOT NULL,
+    title VARCHAR(300),
+    description TEXT,
+    input_schema JSON,
+    output_schema JSON,
+    annotations JSON,
+    meta JSON,
+    mutating BOOLEAN NOT NULL DEFAULT false,
+    risk VARCHAR(20),
+    risk_confirmed BOOLEAN NOT NULL DEFAULT false,
+    requires_approval BOOLEAN NOT NULL DEFAULT false,
+    resource_types JSON,
+    notes TEXT,
+    source VARCHAR(30) NOT NULL DEFAULT 'manual',
+    removed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    CONSTRAINT uq_mcp_tool_name UNIQUE (mcp_server_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS catalog_mcp_server_resources (
+    id SERIAL PRIMARY KEY,
+    mcp_server_id INT NOT NULL REFERENCES catalog_mcp_servers(id) ON DELETE CASCADE,
+    uri VARCHAR(1000) NOT NULL,
+    is_template BOOLEAN NOT NULL DEFAULT false,
+    name VARCHAR(300),
+    title VARCHAR(300),
+    description TEXT,
+    mime_type VARCHAR(200),
+    annotations JSON,
+    source VARCHAR(30) NOT NULL DEFAULT 'manual',
+    removed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    CONSTRAINT uq_mcp_resource_uri UNIQUE (mcp_server_id, uri)
+);
+
+CREATE TABLE IF NOT EXISTS catalog_mcp_server_prompts (
+    id SERIAL PRIMARY KEY,
+    mcp_server_id INT NOT NULL REFERENCES catalog_mcp_servers(id) ON DELETE CASCADE,
+    name VARCHAR(300) NOT NULL,
+    title VARCHAR(300),
+    description TEXT,
+    arguments JSON,
+    source VARCHAR(30) NOT NULL DEFAULT 'manual',
+    removed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    CONSTRAINT uq_mcp_prompt_name UNIQUE (mcp_server_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS catalog_mcp_deployments (
+    id SERIAL PRIMARY KEY,
+    mcp_server_id INT NOT NULL REFERENCES catalog_mcp_servers(id) ON DELETE CASCADE,
+    name VARCHAR(255) NOT NULL UNIQUE,
+    urn VARCHAR(500) NOT NULL UNIQUE,
+    display_name VARCHAR(255),
+    description TEXT,
+    environment VARCHAR(20) NOT NULL DEFAULT 'DEV',
+    status VARCHAR(20) NOT NULL DEFAULT 'draft',
+    owner_email VARCHAR(200),
+    department VARCHAR(200),
+    tags JSON,
+    transport VARCHAR(30) NOT NULL DEFAULT 'streamable_http',
+    endpoint VARCHAR(1000),
+    rest_api_base VARCHAR(1000),
+    auth_method VARCHAR(30) NOT NULL DEFAULT 'none',
+    auth_config JSON,
+    deployment_scope VARCHAR(30) NOT NULL DEFAULT 'shared',
+    host VARCHAR(300),
+    target_endpoint VARCHAR(1000),
+    datasource_id INT REFERENCES catalog_datasources(id) ON DELETE SET NULL,
+    service_principal VARCHAR(300),
+    principal_auth VARCHAR(50),
+    limits JSON,
+    security_warnings JSON,
+    deployed_version VARCHAR(100),
+    server_info JSON,
+    protocol_version VARCHAR(30),
+    policy_mode VARCHAR(20) NOT NULL DEFAULT 'observe',
+    policy_version VARCHAR(100),
+    collect_interval_minutes INT,
+    health_status VARCHAR(20) NOT NULL DEFAULT 'unknown',
+    last_health_check_at TIMESTAMPTZ,
+    latency_ms INT,
+    instance_id VARCHAR(200),
+    observed_hash VARCHAR(64),
+    last_observed_at TIMESTAMPTZ,
+    observed_source VARCHAR(30),
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    created_by VARCHAR(200),
+    updated_by VARCHAR(200)
+);
+CREATE INDEX IF NOT EXISTS ix_mcp_deployments_server ON catalog_mcp_deployments (mcp_server_id);
+
+CREATE TABLE IF NOT EXISTS catalog_mcp_deployment_credentials (
+    id SERIAL PRIMARY KEY,
+    deployment_id INT NOT NULL UNIQUE REFERENCES catalog_mcp_deployments(id) ON DELETE CASCADE,
+    kind VARCHAR(30) NOT NULL DEFAULT 'bearer',
+    header_name VARCHAR(100),
+    username VARCHAR(200),
+    secret_encrypted TEXT NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    updated_by VARCHAR(200)
+);
+
+CREATE TABLE IF NOT EXISTS catalog_mcp_deployment_group_states (
+    id SERIAL PRIMARY KEY,
+    deployment_id INT NOT NULL REFERENCES catalog_mcp_deployments(id) ON DELETE CASCADE,
+    group_id INT NOT NULL REFERENCES catalog_mcp_server_tool_groups(id) ON DELETE CASCADE,
+    observed_enabled BOOLEAN,
+    observed_basis VARCHAR(20),
+    approved_enabled BOOLEAN,
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    CONSTRAINT uq_mcp_dep_group_state UNIQUE (deployment_id, group_id)
+);
+
+CREATE TABLE IF NOT EXISTS catalog_mcp_deployment_tool_states (
+    id SERIAL PRIMARY KEY,
+    deployment_id INT NOT NULL REFERENCES catalog_mcp_deployments(id) ON DELETE CASCADE,
+    tool_id INT NOT NULL REFERENCES catalog_mcp_server_tools(id) ON DELETE CASCADE,
+    observed_exposed BOOLEAN,
+    observed_at TIMESTAMPTZ,
+    approved_blocked BOOLEAN NOT NULL DEFAULT false,
+    approved_requires_approval BOOLEAN,
+    CONSTRAINT uq_mcp_dep_tool_state UNIQUE (deployment_id, tool_id)
+);
+
+CREATE TABLE IF NOT EXISTS catalog_mcp_resource_scopes (
+    id SERIAL PRIMARY KEY,
+    deployment_id INT NOT NULL REFERENCES catalog_mcp_deployments(id) ON DELETE CASCADE,
+    agent_link_id INT REFERENCES catalog_ai_agent_mcp_servers(id) ON DELETE CASCADE,
+    layer VARCHAR(20) NOT NULL DEFAULT 'observed',
+    resource_type VARCHAR(50) NOT NULL,
+    action VARCHAR(20) NOT NULL DEFAULT 'any',
+    effect VARCHAR(20) NOT NULL,
+    patterns JSON NOT NULL,
+    match_type VARCHAR(20) NOT NULL DEFAULT 'fnmatch',
+    config_key VARCHAR(300),
+    description TEXT,
+    source VARCHAR(30) NOT NULL DEFAULT 'manual',
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_mcp_resource_scopes_deployment ON catalog_mcp_resource_scopes (deployment_id);
+
+CREATE TABLE IF NOT EXISTS catalog_mcp_status_history (
+    id SERIAL PRIMARY KEY,
+    entity_type VARCHAR(20) NOT NULL,
+    entity_id INT NOT NULL,
+    from_status VARCHAR(20),
+    to_status VARCHAR(20) NOT NULL,
+    note TEXT,
+    changed_by VARCHAR(200),
+    changed_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_mcp_status_history_entity ON catalog_mcp_status_history (entity_type, entity_id);
+
+CREATE TABLE IF NOT EXISTS catalog_mcp_sync_log (
+    id SERIAL PRIMARY KEY,
+    mcp_server_id INT NOT NULL REFERENCES catalog_mcp_servers(id) ON DELETE CASCADE,
+    deployment_id INT REFERENCES catalog_mcp_deployments(id) ON DELETE CASCADE,
+    kind VARCHAR(30) NOT NULL,
+    source VARCHAR(30),
+    ok BOOLEAN NOT NULL,
+    message TEXT,
+    diff JSON,
+    duration_ms INT,
+    triggered_by VARCHAR(200),
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_mcp_sync_log_deployment ON catalog_mcp_sync_log (deployment_id);
+
+-- ---------------------------------------------------------------------------
+-- Phase 2: 승인 정책 · finding · 감사 이벤트 · 서버 버전
+-- ---------------------------------------------------------------------------
+ALTER TABLE catalog_mcp_deployments ADD COLUMN IF NOT EXISTS approved_limits JSON;
+ALTER TABLE catalog_mcp_deployments ADD COLUMN IF NOT EXISTS approved_version VARCHAR(100);
+ALTER TABLE catalog_mcp_deployments ADD COLUMN IF NOT EXISTS policy_updated_at TIMESTAMPTZ;
+ALTER TABLE catalog_mcp_deployments ADD COLUMN IF NOT EXISTS policy_updated_by VARCHAR(200);
+ALTER TABLE catalog_mcp_deployments ADD COLUMN IF NOT EXISTS ingest_token_hash VARCHAR(64);
+ALTER TABLE catalog_mcp_deployments ADD COLUMN IF NOT EXISTS ingest_token_hint VARCHAR(20);
+ALTER TABLE catalog_mcp_deployments ADD COLUMN IF NOT EXISTS ingest_token_created_at TIMESTAMPTZ;
+ALTER TABLE catalog_mcp_deployments ADD COLUMN IF NOT EXISTS audit_retention_days INT NOT NULL DEFAULT 180;
+ALTER TABLE catalog_mcp_deployments ADD COLUMN IF NOT EXISTS health_fail_count INT NOT NULL DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS catalog_mcp_deployment_findings (
+    id SERIAL PRIMARY KEY,
+    deployment_id INT NOT NULL REFERENCES catalog_mcp_deployments(id) ON DELETE CASCADE,
+    kind VARCHAR(50) NOT NULL,
+    fingerprint VARCHAR(300) NOT NULL,
+    subject VARCHAR(500),
+    severity VARCHAR(20) NOT NULL DEFAULT 'medium',
+    title VARCHAR(500) NOT NULL,
+    detail JSON,
+    status VARCHAR(20) NOT NULL DEFAULT 'open',
+    first_seen_at TIMESTAMPTZ DEFAULT now(),
+    last_seen_at TIMESTAMPTZ DEFAULT now(),
+    resolved_at TIMESTAMPTZ,
+    acknowledged_by VARCHAR(200),
+    acknowledged_at TIMESTAMPTZ,
+    ack_note TEXT,
+    alert_id INT,
+    CONSTRAINT uq_mcp_finding_fp UNIQUE (deployment_id, fingerprint)
+);
+CREATE INDEX IF NOT EXISTS ix_mcp_findings_status ON catalog_mcp_deployment_findings (status, severity);
+
+CREATE TABLE IF NOT EXISTS catalog_mcp_policy_history (
+    id SERIAL PRIMARY KEY,
+    deployment_id INT NOT NULL REFERENCES catalog_mcp_deployments(id) ON DELETE CASCADE,
+    policy_version VARCHAR(100) NOT NULL,
+    snapshot JSON NOT NULL,
+    note TEXT,
+    changed_by VARCHAR(200),
+    changed_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_mcp_policy_history_deployment ON catalog_mcp_policy_history (deployment_id);
+
+CREATE TABLE IF NOT EXISTS catalog_mcp_audit_events (
+    id SERIAL PRIMARY KEY,
+    deployment_id INT NOT NULL REFERENCES catalog_mcp_deployments(id) ON DELETE CASCADE,
+    ts TIMESTAMPTZ NOT NULL,
+    session_id VARCHAR(200),
+    tool_name VARCHAR(200) NOT NULL,
+    tool_id INT REFERENCES catalog_mcp_server_tools(id) ON DELETE SET NULL,
+    group_key VARCHAR(100),
+    risk VARCHAR(20),
+    user_name VARCHAR(200),
+    args JSON,
+    ok BOOLEAN NOT NULL DEFAULT true,
+    error VARCHAR(500),
+    result_id VARCHAR(300),
+    resources JSON,
+    policy_decision VARCHAR(20),
+    policy_reason VARCHAR(500),
+    event_hash VARCHAR(64) NOT NULL,
+    received_via VARCHAR(20),
+    received_at TIMESTAMPTZ DEFAULT now(),
+    CONSTRAINT uq_mcp_audit_event UNIQUE (deployment_id, event_hash)
+);
+CREATE INDEX IF NOT EXISTS ix_mcp_audit_events_ts ON catalog_mcp_audit_events (deployment_id, ts);
+
+CREATE TABLE IF NOT EXISTS catalog_mcp_server_versions (
+    id SERIAL PRIMARY KEY,
+    mcp_server_id INT NOT NULL REFERENCES catalog_mcp_servers(id) ON DELETE CASCADE,
+    capability_hash VARCHAR(64) NOT NULL,
+    reported_version VARCHAR(100),
+    tool_count INT NOT NULL DEFAULT 0,
+    snapshot JSON NOT NULL,
+    diff JSON,
+    source VARCHAR(30),
+    deployment_id INT REFERENCES catalog_mcp_deployments(id) ON DELETE SET NULL,
+    created_by VARCHAR(200),
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_mcp_server_versions_server ON catalog_mcp_server_versions (mcp_server_id);
+
+-- 알림: 데이터셋이 아닌 엔터티(MCP 배포 등) 알림 지원
+ALTER TABLE argus_lineage_alert ALTER COLUMN source_dataset_id DROP NOT NULL;
+ALTER TABLE argus_lineage_alert ADD COLUMN IF NOT EXISTS entity_type VARCHAR(50);
+ALTER TABLE argus_lineage_alert ADD COLUMN IF NOT EXISTS entity_ref VARCHAR(500);
+CREATE INDEX IF NOT EXISTS idx_lineage_alert_entity ON argus_lineage_alert (entity_type, entity_ref);
+
+-- AI Agent ↔ MCP 배포 연결 (NULL = 직접 입력한 "미등록 MCP")
+ALTER TABLE catalog_ai_agent_mcp_servers ADD COLUMN IF NOT EXISTS mcp_deployment_id INT
+    REFERENCES catalog_mcp_deployments(id) ON DELETE SET NULL;
+ALTER TABLE catalog_ai_agent_mcp_servers ADD COLUMN IF NOT EXISTS allowed_groups JSON;
+ALTER TABLE catalog_ai_agent_mcp_servers ADD COLUMN IF NOT EXISTS allowed_tools JSON;
+
+COMMENT ON TABLE catalog_mcp_servers IS 'MCP 서버 정의 (제품/패키지 단위)';
+COMMENT ON TABLE catalog_mcp_server_tool_groups IS 'MCP 도구 그룹 (Forge allow.<그룹> 또는 annotation 기반 자동 그룹)';
+COMMENT ON TABLE catalog_mcp_server_tools IS 'MCP 서버가 제공하는 도구 (MCP 표준 필드 + Argus 위험도·승인 속성)';
+COMMENT ON TABLE catalog_mcp_server_resources IS 'MCP resources / resource templates';
+COMMENT ON TABLE catalog_mcp_server_prompts IS 'MCP prompts';
+COMMENT ON TABLE catalog_mcp_deployments IS 'MCP 서버 배포 인스턴스 (endpoint·환경·대상 시스템·실행 계정·헬스)';
+COMMENT ON TABLE catalog_mcp_deployment_credentials IS 'MCP 배포 접속 자격증명 (Fernet 암호문)';
+COMMENT ON TABLE catalog_mcp_deployment_group_states IS '배포별 도구 그룹 on/off (observed: 수집값, approved: 승인값)';
+COMMENT ON TABLE catalog_mcp_deployment_tool_states IS '배포별 도구 노출 상태(observed)와 차단(approved)';
+COMMENT ON TABLE catalog_mcp_resource_scopes IS 'MCP 리소스 범위 규칙 (resource_type × action × effect × patterns)';
+COMMENT ON TABLE catalog_mcp_status_history IS 'MCP 서버 정의·배포 상태 변경 이력';
+COMMENT ON TABLE catalog_mcp_sync_log IS 'MCP 수집·헬스체크·가져오기 실행 이력';
+COMMENT ON COLUMN catalog_mcp_servers.framework IS 'argus-forge / generic — 수집 경로·설정 매핑 선택';
+COMMENT ON COLUMN catalog_mcp_servers.registry_name IS 'MCP Registry server.json name (reverse-DNS, 예: io.github.org/server)';
+COMMENT ON COLUMN catalog_mcp_server_tools.source IS '행 출처: manual / mcp / forge_rest / registry / forge_seed / config';
+COMMENT ON COLUMN catalog_mcp_deployments.service_principal IS '대상 시스템 접속 계정 (서버 설정에서 수집)';
+COMMENT ON COLUMN catalog_mcp_deployments.policy_mode IS 'observe(수집·표시) / enforce(서버가 카탈로그 정책을 pull, Phase 3)';
+COMMENT ON COLUMN catalog_mcp_resource_scopes.effect IS 'allow / deny / protect(쓰기 금지, allow 보다 우선) / mask(값 가림)';
+COMMENT ON COLUMN catalog_ai_agent_mcp_servers.mcp_deployment_id IS 'MCP Server 카탈로그 배포 참조 (NULL = 미등록 MCP)';
+COMMENT ON COLUMN catalog_ai_agent_mcp_servers.allowed_groups IS '이 에이전트에 허용한 도구 그룹 (NULL = 전체)';
+COMMENT ON COLUMN catalog_ai_agent_mcp_servers.allowed_tools IS '이 에이전트에 허용한 도구 이름 (NULL = 전체)';
+COMMENT ON TABLE catalog_mcp_deployment_findings IS 'MCP 배포 드리프트·보안 finding (승인 정책 대비 관측값, 자동 해소·재오픈)';
+COMMENT ON TABLE catalog_mcp_policy_history IS 'MCP 배포 승인 정책 저장 이력 (전체 스냅숏)';
+COMMENT ON TABLE catalog_mcp_audit_events IS 'MCP 변경 도구 호출 감사 이벤트 (Forge Audit JSONL) + 승인 정책 판정';
+COMMENT ON TABLE catalog_mcp_server_versions IS 'MCP 서버 capability 버전 스냅숏 (도구 추가·제거·정의 변경)';
+COMMENT ON COLUMN catalog_mcp_deployments.ingest_token_hash IS '감사 이벤트 수집 토큰 sha256 (원문은 저장하지 않음)';
+COMMENT ON COLUMN catalog_mcp_deployments.audit_retention_days IS '감사 이벤트 보존 기간(일)';
+COMMENT ON COLUMN argus_lineage_alert.entity_type IS '데이터셋이 아닌 알림 대상 유형 (예: mcp_deployment)';
+
+-- ---------------------------------------------------------------------------
+-- MLflow 모델 메타 — 대표 flavor (기존 설치 업그레이드용, 재실행 안전)
+-- ---------------------------------------------------------------------------
+ALTER TABLE catalog_models ADD COLUMN IF NOT EXISTS flavor VARCHAR(50);
+ALTER TABLE catalog_models ADD COLUMN IF NOT EXISTS flavor_version VARCHAR(50);
+
+-- ---------------------------------------------------------------------------
+-- MCP Server 카탈로그 Phase 3: 정책 번들 pull 기록 · 감사 이벤트 에이전트/서버 판정 (재실행 안전)
+-- ---------------------------------------------------------------------------
+ALTER TABLE catalog_mcp_deployments ADD COLUMN IF NOT EXISTS policy_pulled_at TIMESTAMPTZ;
+ALTER TABLE catalog_mcp_deployments ADD COLUMN IF NOT EXISTS policy_pulled_version VARCHAR(100);
+ALTER TABLE catalog_mcp_deployments ADD COLUMN IF NOT EXISTS policy_pull_instance VARCHAR(200);
+ALTER TABLE catalog_mcp_audit_events ADD COLUMN IF NOT EXISTS agent_name VARCHAR(300);
+ALTER TABLE catalog_mcp_audit_events ADD COLUMN IF NOT EXISTS server_decision VARCHAR(20);
+COMMENT ON COLUMN catalog_mcp_deployments.policy_pulled_at IS '서버가 정책 번들을 마지막으로 받아간 시각 (enforce)';
+COMMENT ON COLUMN catalog_mcp_deployments.policy_pulled_version IS '마지막으로 받아간 번들 (policy_version@ETag 앞 8자)';
+COMMENT ON COLUMN catalog_mcp_deployments.policy_pull_instance IS '번들을 받아간 서버 instance_id';
+COMMENT ON COLUMN catalog_mcp_audit_events.agent_name IS '호출한 에이전트 (세션 토큰 agent 클레임)';
+COMMENT ON COLUMN catalog_mcp_audit_events.server_decision IS '서버가 카탈로그 정책으로 거부했으면 denied';
+
+-- ---------------------------------------------------------------------------
+-- 데이터 소스·데이터셋 외래키 인덱스 (재실행 안전)
+-- PostgreSQL 은 FK 컬럼에 인덱스를 자동으로 만들지 않는다. 데이터 소스 삭제·데이터셋 수 조회·
+-- ERD·스키마 조회와 데이터셋 삭제 시 CASCADE 검사가 매번 전체 스캔이 되지 않도록 보강.
+-- (MariaDB 는 FK 생성 시 인덱스를 자동으로 만든다.)
+-- ---------------------------------------------------------------------------
+CREATE INDEX IF NOT EXISTS idx_catalog_datasets_datasource ON catalog_datasets (datasource_id);
+CREATE INDEX IF NOT EXISTS idx_catalog_dataset_schemas_dataset ON catalog_dataset_schemas (dataset_id);
+CREATE INDEX IF NOT EXISTS idx_catalog_schema_snapshots_dataset ON catalog_schema_snapshots (dataset_id);
+CREATE INDEX IF NOT EXISTS idx_catalog_dataset_tags_dataset ON catalog_dataset_tags (dataset_id);
+CREATE INDEX IF NOT EXISTS idx_catalog_dataset_glossary_terms_dataset ON catalog_dataset_glossary_terms (dataset_id);
+CREATE INDEX IF NOT EXISTS idx_catalog_owners_dataset ON catalog_owners (dataset_id);
+CREATE INDEX IF NOT EXISTS idx_catalog_term_column_mapping_schema ON catalog_term_column_mapping (schema_id);
+CREATE INDEX IF NOT EXISTS idx_argus_change_request_dataset ON argus_change_request (dataset_id);
+CREATE INDEX IF NOT EXISTS idx_catalog_registered_models_datasource ON catalog_registered_models (datasource_id);
+CREATE INDEX IF NOT EXISTS idx_catalog_mcp_deployments_datasource ON catalog_mcp_deployments (datasource_id);

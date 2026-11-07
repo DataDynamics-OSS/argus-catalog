@@ -13,7 +13,7 @@
 import { z } from "zod"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
-import { toast } from "sonner"
+import { notifyError, toast } from "@/lib/notify"
 
 import { Button } from "@workspace/ui/components/button"
 import {
@@ -33,6 +33,7 @@ import {
   FormMessage,
 } from "@workspace/ui/components/form"
 import { PasswordInput } from "@/components/password-input"
+import { useAuth } from "@/features/auth"
 import { setUserPassword } from "../api"
 import { type User } from "../data/schema"
 import { useUsersOptional } from "./users-provider"
@@ -75,6 +76,9 @@ export function UsersChangePasswordDialog({
   onOpenChange,
 }: UsersChangePasswordDialogProps) {
   const refreshUsers = useUsersOptional()?.refreshUsers
+  // 비밀번호가 바뀌면 그 계정의 기존 로그인은 끊긴다(서버가 예전 토큰 거부) — 본인이면 다시 로그인
+  const { user, logout } = useAuth()
+  const isSelf = !!user && user.username === currentRow.username
 
   const form = useForm<ChangePasswordForm>({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -86,13 +90,19 @@ export function UsersChangePasswordDialog({
   const onSubmit = async (values: ChangePasswordForm) => {
     try {
       await setUserPassword(currentRow.id, values.password)
+      if (isSelf) {
+        toast.success("비밀번호를 변경했습니다. 새 비밀번호로 다시 로그인하세요.")
+        form.reset()
+        onOpenChange(false)
+        await logout()
+        return
+      }
       if (refreshUsers) await refreshUsers()
-      toast.success(`${currentRow.username} 님의 비밀번호를 변경했습니다.`)
+      toast.success(`${currentRow.username} 님의 비밀번호를 변경했습니다. 기존 로그인은 끊깁니다.`)
       form.reset()
       onOpenChange(false)
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "비밀번호 변경에 실패했습니다."
-      toast.error(msg)
+      notifyError(err, "비밀번호를 변경하지 못했습니다.")
     }
   }
 
@@ -114,6 +124,7 @@ export function UsersChangePasswordDialog({
           <DialogTitle>비밀번호 변경</DialogTitle>
           <DialogDescription>
             <span className="font-medium">{currentRow.username}</span> 님의 새 비밀번호를 설정합니다.
+            {" "}임시 비밀번호로 저장되어, 사용자가 다음 로그인 때 직접 바꿔야 합니다(본인 계정 제외).
             완료되면 저장 버튼을 누르세요.
           </DialogDescription>
         </DialogHeader>
@@ -134,7 +145,6 @@ export function UsersChangePasswordDialog({
                     </FormLabel>
                     <FormControl>
                       <PasswordInput
-                        defaultVisible
                         placeholder="e.g., S3cur3P@ssw0rd"
                         autoComplete="new-password"
                         {...field}
@@ -154,7 +164,6 @@ export function UsersChangePasswordDialog({
                     </FormLabel>
                     <FormControl>
                       <PasswordInput
-                        defaultVisible
                         disabled={!isPasswordTouched}
                         placeholder="e.g., S3cur3P@ssw0rd"
                         autoComplete="new-password"

@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
-import { Loader2, Save, Trash2 } from "lucide-react"
+import { Loader2, Save, Trash2, X } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@workspace/ui/components/card"
@@ -9,7 +9,9 @@ import { Input } from "@workspace/ui/components/input"
 import { Label } from "@workspace/ui/components/label"
 import { Switch } from "@workspace/ui/components/switch"
 
+import { useConfirm } from "@/components/confirm-provider"
 import { authFetch } from "@/features/auth/auth-fetch"
+import { notifyError, notifySuccess } from "@/lib/notify"
 
 // ---------------------------------------------------------------------------
 // API
@@ -34,7 +36,7 @@ interface CacheStats {
 
 async function fetchCacheConfig(): Promise<CacheConfig> {
   const res = await authFetch("/api/v1/external/cache/config")
-  if (!res.ok) throw new Error("캐시 설정 조회 실패")
+  if (!res.ok) throw new Error("캐시 설정을 불러오지 못했습니다.")
   return res.json()
 }
 
@@ -44,19 +46,19 @@ async function updateCacheConfig(data: { max_size: number; ttl_seconds: number; 
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
   })
-  if (!res.ok) throw new Error("캐시 설정 저장 실패")
+  if (!res.ok) throw new Error("캐시 설정을 저장하지 못했습니다.")
   return res.json()
 }
 
 async function fetchCacheStats(): Promise<CacheStats> {
   const res = await authFetch("/api/v1/external/cache/stats")
-  if (!res.ok) throw new Error("캐시 통계 조회 실패")
+  if (!res.ok) throw new Error("캐시 통계를 불러오지 못했습니다.")
   return res.json()
 }
 
 async function clearCache(): Promise<{ cleared: number }> {
   const res = await authFetch("/api/v1/external/cache", { method: "DELETE" })
-  if (!res.ok) throw new Error("캐시 초기화 실패")
+  if (!res.ok) throw new Error("캐시를 비우지 못했습니다.")
   return res.json()
 }
 
@@ -68,7 +70,8 @@ export function CacheSettings() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [clearing, setClearing] = useState(false)
-  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const askConfirm = useConfirm()
 
   const [enabled, setEnabled] = useState(true)
   const [maxSize, setMaxSize] = useState(1000)
@@ -79,6 +82,7 @@ export function CacheSettings() {
   const load = useCallback(async () => {
     try {
       setLoading(true)
+      setLoadError(null)
       const [cfg, st] = await Promise.all([
         fetchCacheConfig(),
         fetchCacheStats().catch(() => null),
@@ -88,7 +92,7 @@ export function CacheSettings() {
       setTtl(cfg.ttl_seconds)
       setStats(st)
     } catch {
-      setMessage({ type: "error", text: "캐시 설정을 불러오지 못했습니다." })
+      setLoadError("캐시 설정을 불러오지 못했습니다.")
     } finally {
       setLoading(false)
     }
@@ -98,30 +102,33 @@ export function CacheSettings() {
 
   const handleSave = async () => {
     setSaving(true)
-    setMessage(null)
     try {
       await updateCacheConfig({ max_size: maxSize, ttl_seconds: ttl, enabled })
-      setMessage({ type: "success", text: "캐시 설정을 저장했습니다." })
+      notifySuccess("캐시 설정을 저장했습니다.")
       const st = await fetchCacheStats().catch(() => null)
       setStats(st)
     } catch (e) {
-      setMessage({ type: "error", text: e instanceof Error ? e.message : "저장에 실패했습니다." })
+      notifyError(e, "캐시 설정을 저장하지 못했습니다.")
     } finally {
       setSaving(false)
     }
   }
 
   const handleClear = async () => {
-    if (!confirm("캐시된 모든 메타데이터를 비울까요? 캐시가 다시 채워질 때까지 후속 요청이 느려집니다.")) return
+    if (!(await askConfirm({
+      title: "캐시 비우기",
+      description: "캐시된 모든 메타데이터를 비울까요? 캐시가 다시 채워질 때까지 후속 요청이 느려집니다.",
+      confirmText: "비우기",
+      destructive: true,
+    }))) return
     setClearing(true)
-    setMessage(null)
     try {
       const result = await clearCache()
-      setMessage({ type: "success", text: `캐시를 비웠습니다: ${result.cleared}개 항목 제거됨` })
+      notifySuccess(`캐시를 비웠습니다. (${result.cleared}개 항목 제거)`)
       const st = await fetchCacheStats().catch(() => null)
       setStats(st)
     } catch (e) {
-      setMessage({ type: "error", text: e instanceof Error ? e.message : "캐시 비우기에 실패했습니다." })
+      notifyError(e, "캐시를 비우지 못했습니다.")
     } finally {
       setClearing(false)
     }
@@ -142,13 +149,10 @@ export function CacheSettings() {
   return (
     <div className="space-y-4 max-w-2xl">
       {/* Message */}
-      {message && (
-        <div className={`rounded-lg border px-4 py-3 text-sm ${
-          message.type === "success"
-            ? "border-green-200 bg-green-50 text-green-800"
-            : "border-red-200 bg-red-50 text-red-800"
-        }`}>
-          {message.text}
+      {loadError && (
+        <div className="flex items-center gap-2 rounded-md px-3 py-2 text-sm bg-red-50 text-red-700 border border-red-200">
+          <X className="h-4 w-4" />
+          {loadError}
         </div>
       )}
 

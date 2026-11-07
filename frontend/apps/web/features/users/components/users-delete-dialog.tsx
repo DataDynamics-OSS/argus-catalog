@@ -13,20 +13,31 @@
  *
  * The dialog also displays a prominent warning alert to emphasize that
  * the deletion is permanent and cannot be undone.
+ *
+ * 소유 자산(데이터셋·API·에이전트·MCP·모델 등 편집 권한이 아이디로 묶인 자산)이 있으면 넘겨받을
+ * 활성 사용자를 골라야 삭제할 수 있다 — 같은 아이디로 새 계정을 만들 때 권한이 이어지지 않도록.
  */
 
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { AlertTriangle } from "lucide-react"
 
 import { Alert, AlertDescription, AlertTitle } from "@workspace/ui/components/alert"
 import { Input } from "@workspace/ui/components/input"
 import { Label } from "@workspace/ui/components/label"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@workspace/ui/components/select"
 import { ConfirmDialog } from "@/components/confirm-dialog"
-import { deleteUser } from "../api"
+import { deleteUser, fetchOwnedAssets, fetchUsers, type OwnedAssets } from "../api"
 import { type User } from "../data/schema"
 import { useUsers } from "./users-provider"
+import { errorMessage } from "@/lib/notify"
 
 type UsersDeleteDialogProps = {
   /** Whether the dialog is open. */
@@ -53,17 +64,42 @@ export function UsersDeleteDialog({
    * Calls the deleteUser API, refreshes the list, and closes the dialog.
    */
   const [error, setError] = useState<string | null>(null)
+  const [owned, setOwned] = useState<OwnedAssets | null>(null)
+  const [heirs, setHeirs] = useState<User[]>([])
+  const [heir, setHeir] = useState("")
+
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    setOwned(null)
+    setHeir("")
+    fetchOwnedAssets(currentRow.id)
+      .then((o) => {
+        if (cancelled) return
+        setOwned(o)
+        if (o.total > 0) {
+          fetchUsers({ status: "active", pageSize: 0 })
+            .then((r) => { if (!cancelled) setHeirs(r.items.filter((u) => u.id !== currentRow.id)) })
+            .catch(() => {})
+        }
+      })
+      .catch(() => { if (!cancelled) setOwned({ username: currentRow.username, total: 0, items: [] }) })
+    return () => { cancelled = true }
+  }, [open, currentRow.id, currentRow.username])
+
+  const needsHeir = (owned?.total ?? 0) > 0
+  const ready = owned !== null && value.trim() === currentRow.username && (!needsHeir || !!heir)
 
   const handleDelete = async () => {
-    if (value.trim() !== currentRow.username) return
+    if (!ready) return
     setError(null)
 
     try {
-      await deleteUser(currentRow.id)
+      await deleteUser(currentRow.id, needsHeir ? heir : undefined)
       await refreshUsers()
       onOpenChange(false)
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "사용자 삭제에 실패했습니다."
+      const msg = errorMessage(err) ?? "사용자를 삭제하지 못했습니다."
       setError(msg)
     }
   }
@@ -81,7 +117,7 @@ export function UsersDeleteDialog({
       open={open}
       onOpenChange={onOpenChange}
       handleConfirm={handleDelete}
-      disabled={value.trim() !== currentRow.username}
+      disabled={!ready}
       title={
         <span className="text-destructive">
           <AlertTriangle
@@ -101,7 +137,33 @@ export function UsersDeleteDialog({
             시스템에서 영구히 제거됩니다. 이 작업은 되돌릴 수 없습니다.
           </p>
 
-          {/* 사용자명 확인 입력 */}
+          {/* 소유 자산 이관 */}
+          {needsHeir && owned && (
+            <div className="space-y-2 rounded-md border p-3 text-sm">
+              <p>
+                이 사용자가 소유한 자산이 있습니다. 삭제하려면 넘겨받을 사용자를 고르세요.
+              </p>
+              <ul className="list-inside list-disc text-muted-foreground">
+                {owned.items.filter((i) => i.count > 0).map((i) => (
+                  <li key={i.key}>{i.label} {i.count}건</li>
+                ))}
+              </ul>
+              <Select value={heir} onValueChange={setHeir}>
+                <SelectTrigger aria-label="자산을 넘겨받을 사용자">
+                  <SelectValue placeholder="자산을 넘겨받을 사용자" />
+                </SelectTrigger>
+                <SelectContent>
+                  {heirs.map((u) => (
+                    <SelectItem key={u.id} value={u.username}>
+                      {u.lastName}{u.firstName} ({u.username})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+                    {/* 사용자명 확인 입력 */}
           <Label className="my-2">
             <span className="min-w-[4.5rem] shrink-0">사용자명:</span>
             <Input

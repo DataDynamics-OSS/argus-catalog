@@ -1,8 +1,8 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import { ChevronDown, ChevronRight, FolderOpen, FolderTree, Minus, Plus } from "lucide-react"
-import { toast } from "sonner"
+import { ChevronDown, ChevronRight, FolderOpen, FolderTree, Minus, Pencil, Plus } from "lucide-react"
+import { notifyError, toast } from "@/lib/notify"
 
 import {
   AlertDialog,
@@ -38,6 +38,8 @@ import {
   SelectValue,
 } from "@workspace/ui/components/select"
 import { DashboardHeader } from "@/components/dashboard-header"
+import { useAuth } from "@/features/auth"
+import { usePermissions } from "@/features/permissions/use-permissions"
 import {
   addDatasetCategory,
   createCategory,
@@ -47,11 +49,14 @@ import {
   fetchTaxonomies,
   fetchTaxonomyTree,
   removeDatasetCategory,
+  fetchDirectDatasetIds,
   updateCategory,
+  updateTaxonomy,
   type Taxonomy,
   type TaxonomyTree,
   type TreeCategory,
 } from "@/features/taxonomy/api"
+import { countCategories } from "@/features/taxonomy/tree"
 import { fetchDatasets, type PaginatedDatasets } from "@/features/datasets/api"
 import { DatasetsGrid } from "@/features/datasets/components/datasets-grid"
 import { GridPagination } from "@/components/grid-pagination"
@@ -59,11 +64,18 @@ import { GridPagination } from "@/components/grid-pagination"
 type Sel = { kind: "category"; id: number } | { kind: "uncategorized" } | null
 
 export default function TaxonomiesPage() {
+  // 편집(분류체계·분류·데이터셋 매핑) — admin 이거나 권한 관리에서 taxonomies.edit 를 명시 허용받은 역할
+  // (미설정이면 admin 전용, 서버도 같은 키로 403). 조회는 누구나.
+  const { user } = useAuth()
+  const { isFeatureGranted } = usePermissions()
+  const canEdit = !!user?.is_admin || isFeatureGranted("taxonomies.edit")
   const [taxonomies, setTaxonomies] = useState<Taxonomy[]>([])
   const [taxId, setTaxId] = useState<number | null>(null)
   const [tree, setTree] = useState<TaxonomyTree | null>(null)
   const [selected, setSelected] = useState<Sel>(null)
   const [datasets, setDatasets] = useState<PaginatedDatasets>({ items: [], total: 0, page: 1, page_size: 50 })
+  // 선택한 분류에 *직접* 매핑된 데이터셋 id — 목록은 하위 분류까지 포함하지만 해제는 직접 매핑만 가능.
+  const [directIds, setDirectIds] = useState<Set<number>>(new Set())
   // 우측 그리드 페이지네이션 — page 는 1-base(서버), pageSize 는 페이지당 행 수.
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(50)
@@ -76,6 +88,9 @@ export default function TaxonomiesPage() {
   const [dropTarget, setDropTarget] = useState<{ id: number; pos: "before" | "after" } | null>(null)
   // 매핑 제거 확인 대상 데이터셋 id
   const [removeTarget, setRemoveTarget] = useState<number | null>(null)
+  // 삭제 확인 대상 — 분류(우클릭 삭제)·분류체계(삭제 버튼)
+  const [catDeleteTarget, setCatDeleteTarget] = useState<TreeCategory | null>(null)
+  const [taxDeleteOpen, setTaxDeleteOpen] = useState(false)
 
   // 카테고리/데이터셋 사이 separator 드래그로 트리 폭 조절
   const startResize = (e: React.MouseEvent) => {
@@ -100,7 +115,10 @@ export default function TaxonomiesPage() {
   }
 
   // dialogs
-  const [taxDialog, setTaxDialog] = useState<{ open: boolean; name: string }>({ open: false, name: "" })
+  // 분류체계 생성/수정(이름·설명) 공용 대화상자
+  const [taxDialog, setTaxDialog] = useState<{ open: boolean; mode: "create" | "edit"; name: string; description: string }>(
+    { open: false, mode: "create", name: "", description: "" },
+  )
   const [catDialog, setCatDialog] = useState<{ open: boolean; mode: "create" | "edit"; id?: number; name: string; parentId: number | null }>(
     { open: false, mode: "create", name: "", parentId: null },
   )
@@ -130,6 +148,13 @@ export default function TaxonomiesPage() {
       params = { page: pg, pageSize: ps }
     } else if (sel.kind === "category") {
       params = { categoryId: sel.id, page: pg, pageSize: ps }
+      const [ds, direct] = await Promise.all([
+        fetchDatasets(params).catch(() => empty),
+        fetchDirectDatasetIds(sel.id).catch(() => [] as number[]),
+      ])
+      setDirectIds(new Set(direct))
+      setDatasets(ds)
+      return
     } else {
       if (taxId == null) { setDatasets(empty); return }
       params = { taxonomyId: taxId, uncategorized: true, page: pg, pageSize: ps }
@@ -145,14 +170,29 @@ export default function TaxonomiesPage() {
   const refresh = async () => { if (taxId != null) await loadTree(taxId); await loadDatasets(selected, page, pageSize) }
 
   // ---- taxonomy ----
-  const handleTaxCreate = async () => {
+  const currentTax = taxonomies.find((t) => t.id === taxId) ?? null
+  const openCreateTax = () => setTaxDialog({ open: true, mode: "create", name: "", description: "" })
+  const openEditTax = () => {
+    if (!currentTax) return
+    setTaxDialog({ open: true, mode: "edit", name: currentTax.name, description: currentTax.description ?? "" })
+  }
+  const handleTaxSave = async () => {
     if (!taxDialog.name.trim()) return
+    const description = taxDialog.description.trim()
     try {
-      const t = await createTaxonomy({ name: taxDialog.name.trim() })
-      setTaxDialog({ open: false, name: "" })
-      await loadTaxonomies(); setTaxId(t.id)
-      toast.success("분류체계를 생성했습니다.")
-    } catch (e) { toast.error(e instanceof Error ? e.message : "생성 실패") }
+      if (taxDialog.mode === "create") {
+        const t = await createTaxonomy({ name: taxDialog.name.trim(), description: description || undefined })
+        setTaxDialog((d) => ({ ...d, open: false }))
+        await loadTaxonomies(); setTaxId(t.id)
+        toast.success("분류체계를 생성했습니다.")
+      } else if (taxId != null) {
+        // 설명을 비우면 null 로 저장(설명 삭제)
+        await updateTaxonomy(taxId, { name: taxDialog.name.trim(), description: description || null })
+        setTaxDialog((d) => ({ ...d, open: false }))
+        await loadTaxonomies(); await loadTree(taxId)
+        toast.success("분류체계를 수정했습니다.")
+      }
+    } catch (e) { notifyError(e, "분류체계를 저장하지 못했습니다.") }
   }
   const handleTaxDelete = async () => {
     if (taxId == null) return
@@ -161,7 +201,7 @@ export default function TaxonomiesPage() {
       toast.success("분류체계를 삭제했습니다.")
       setTaxId(null); setTree(null); selectNode(null)
       await loadTaxonomies()
-    } catch (e) { toast.error(e instanceof Error ? e.message : "삭제 실패(하위 분류 존재?)") }
+    } catch (e) { notifyError(e, "분류체계를 삭제하지 못했습니다. 하위 분류가 남아 있는지 확인하세요.") }
   }
 
   // ---- category ----
@@ -177,11 +217,11 @@ export default function TaxonomiesPage() {
       }
       setCatDialog((d) => ({ ...d, open: false }))
       await refresh()
-    } catch (e) { toast.error(e instanceof Error ? e.message : "저장 실패") }
+    } catch (e) { notifyError(e, "분류를 저장하지 못했습니다.") }
   }
   const handleCatDelete = async (id: number) => {
     try { await deleteCategory(id); if (selected?.kind === "category" && selected.id === id) selectNode(null); await refresh() }
-    catch (e) { toast.error(e instanceof Error ? e.message : "삭제 실패(하위 분류 존재?)") }
+    catch (e) { notifyError(e, "분류를 삭제하지 못했습니다. 하위 분류가 남아 있는지 확인하세요.") }
   }
 
   // ---- mapping ----
@@ -202,15 +242,15 @@ export default function TaxonomiesPage() {
     if (selected?.kind !== "category" || mapSelected.size === 0) return
     try {
       await Promise.all([...mapSelected].map((id) => addDatasetCategory(id, selected.id)))
-      toast.success(`${mapSelected.size}개 매핑 추가`)
+      toast.success(`데이터셋 ${mapSelected.size}개를 매핑했습니다.`)
       setMapOpen(false)
       await refresh()
-    } catch (e) { toast.error(e instanceof Error ? e.message : "매핑 실패") }
+    } catch (e) { notifyError(e, "데이터셋을 분류에 매핑하지 못했습니다.") }
   }
   const unmapDataset = async (datasetId: number) => {
     if (selected?.kind !== "category") return
-    try { await removeDatasetCategory(datasetId, selected.id); toast.success("매핑 제거"); await refresh() }
-    catch (e) { toast.error(e instanceof Error ? e.message : "제거 실패") }
+    try { await removeDatasetCategory(datasetId, selected.id); toast.success("매핑을 제거했습니다."); await refresh() }
+    catch (e) { notifyError(e, "매핑을 제거하지 못했습니다.") }
   }
 
   // ---- tree render ----
@@ -245,7 +285,7 @@ export default function TaxonomiesPage() {
       // 변경된 순서를 sort_order(0,1,2...) 로 영속화
       await Promise.all(ids.map((id, idx) => updateCategory(id, { sort_order: idx })))
       await refresh()
-    } catch (e) { toast.error(e instanceof Error ? e.message : "순서 변경 실패") }
+    } catch (e) { notifyError(e, "분류 순서를 바꾸지 못했습니다.") }
   }
 
   const renderCat = (c: TreeCategory, depth: number) => {
@@ -256,12 +296,12 @@ export default function TaxonomiesPage() {
     return (
       <div key={c.id}>
         <ContextMenu>
-          <ContextMenuTrigger asChild>
+          <ContextMenuTrigger asChild disabled={!canEdit}>
             <div
               className={rowCls(active) + (isDragging ? " opacity-40" : "")}
               style={{ paddingLeft: depth * 16 + 6, boxShadow: indicating === "before" ? "inset 0 2px 0 0 var(--primary)" : indicating === "after" ? "inset 0 -2px 0 0 var(--primary)" : undefined }}
               onClick={() => selectNode({ kind: "category", id: c.id })}
-              draggable
+              draggable={canEdit}
               onDragStart={(e) => { e.stopPropagation(); setDragInfo({ id: c.id, parentId: c.parent_id }); e.dataTransfer.effectAllowed = "move" }}
               onDragEnd={() => { setDragInfo(null); setDropTarget(null) }}
               onDragOver={(e) => {
@@ -290,7 +330,7 @@ export default function TaxonomiesPage() {
             <ContextMenuItem onClick={() => openCreateCat(c.id)}>하위 분류 추가</ContextMenuItem>
             <ContextMenuItem onClick={() => openEditCat(c)}>이름 변경</ContextMenuItem>
             <ContextMenuSeparator />
-            <ContextMenuItem variant="destructive" onClick={() => handleCatDelete(c.id)}>삭제</ContextMenuItem>
+            <ContextMenuItem variant="destructive" onClick={() => setCatDeleteTarget(c)}>삭제</ContextMenuItem>
           </ContextMenuContent>
         </ContextMenu>
         {open && c.children.map((ch) => renderCat(ch, depth + 1))}
@@ -309,8 +349,10 @@ export default function TaxonomiesPage() {
               {taxonomies.map((t) => <SelectItem key={t.id} value={String(t.id)} className="text-sm">{t.name}</SelectItem>)}
             </SelectContent>
           </Select>
-          <Button size="sm" variant="outline" onClick={() => setTaxDialog({ open: true, name: "" })}><Plus className="mr-1 h-4 w-4" /> 분류체계 추가</Button>
-          {taxId != null && <Button size="sm" variant="outline" className="text-destructive" onClick={handleTaxDelete}><Minus className="mr-1 h-4 w-4" /> 분류체계 삭제</Button>}
+          {canEdit && <Button size="sm" variant="outline" onClick={openCreateTax}><Plus className="mr-1 h-4 w-4" /> 분류체계 추가</Button>}
+          {canEdit && currentTax && <Button size="sm" variant="outline" onClick={openEditTax}><Pencil className="mr-1 h-4 w-4" /> 분류체계 수정</Button>}
+          {canEdit && taxId != null && <Button size="sm" variant="outline" className="text-destructive" onClick={() => setTaxDeleteOpen(true)}><Minus className="mr-1 h-4 w-4" /> 분류체계 삭제</Button>}
+          {currentTax?.description && <span className="truncate text-sm text-muted-foreground" title={currentTax.description}>{currentTax.description}</span>}
         </div>
 
         <div className="flex flex-1 gap-1 min-h-0">
@@ -322,7 +364,7 @@ export default function TaxonomiesPage() {
               <div className="flex flex-col gap-0.5">
                 {/* 루트 "카테고리" — 우클릭으로 최상위 분류 추가 */}
                 <ContextMenu>
-                  <ContextMenuTrigger asChild>
+                  <ContextMenuTrigger asChild disabled={!canEdit}>
                     <div className={rowCls(false)} style={{ paddingLeft: 6 }} onClick={() => setRootOpen((o) => !o)}>
                       <button type="button" className="shrink-0 text-muted-foreground" onClick={(e) => { e.stopPropagation(); setRootOpen((o) => !o) }}>
                         {rootOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
@@ -339,7 +381,7 @@ export default function TaxonomiesPage() {
                   <>
                     {tree.categories.length === 0 && (
                       <p className="py-2 text-center text-xs text-muted-foreground" style={{ paddingLeft: 22 }}>
-                        분류가 없습니다. &quot;카테고리&quot; 우클릭 → 분류 추가
+                        {canEdit ? <>분류가 없습니다. &quot;카테고리&quot; 우클릭 → 분류 추가</> : "분류가 없습니다."}
                       </p>
                     )}
                     {tree.categories.map((c) => renderCat(c, 1))}
@@ -377,14 +419,15 @@ export default function TaxonomiesPage() {
                       : "데이터셋"}{" "}
                   ({datasets.total})
                 </h2>
-                {selected?.kind === "category" && (
+                {canEdit && selected?.kind === "category" && (
                   <Button size="sm" onClick={openMap}><Plus className="mr-1 h-4 w-4" /> 데이터셋 매핑</Button>
                 )}
               </div>
               {/* 데이터셋 메뉴와 동일한 그리드를 그대로 재사용. 분류 선택 시 행 끝에 "제거"(매핑 해제, 확인 후). */}
               <DatasetsGrid
                 data={datasets.items}
-                onRemove={selected?.kind === "category" ? (id) => setRemoveTarget(id) : undefined}
+                onRemove={canEdit && selected?.kind === "category" ? (id) => setRemoveTarget(id) : undefined}
+                canRemove={(row) => directIds.has(row.id)}
               />
               {/* 페더레이션 탐색과 동일한 페이지네이션(서버 페이지). 데이터가 있으면 표시. */}
               {datasets.total > 0 && (() => {
@@ -405,18 +448,22 @@ export default function TaxonomiesPage() {
         </div>
       </div>
 
-      {/* 분류체계 생성 */}
+      {/* 분류체계 생성/수정 */}
       <Dialog open={taxDialog.open} onOpenChange={(o) => setTaxDialog((d) => ({ ...d, open: o }))}>
         <DialogContent className="max-w-sm">
-          <DialogHeader><DialogTitle>분류체계 추가</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{taxDialog.mode === "create" ? "분류체계 추가" : "분류체계 수정"}</DialogTitle></DialogHeader>
           <div className="grid gap-4 py-2">
             <div className="grid gap-1.5">
               <Label className="text-sm">이름 <span className="text-destructive">*</span></Label>
-              <Input value={taxDialog.name} onChange={(e) => setTaxDialog((d) => ({ ...d, name: e.target.value }))} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleTaxCreate() } }} autoFocus placeholder="예: 업무 도메인" className="h-9 text-sm" />
+              <Input value={taxDialog.name} onChange={(e) => setTaxDialog((d) => ({ ...d, name: e.target.value }))} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleTaxSave() } }} autoFocus placeholder="예: 업무 도메인" className="h-9 text-sm" />
+            </div>
+            <div className="grid gap-1.5">
+              <Label className="text-sm">설명</Label>
+              <Input value={taxDialog.description} onChange={(e) => setTaxDialog((d) => ({ ...d, description: e.target.value }))} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleTaxSave() } }} placeholder="분류체계의 용도·기준" className="h-9 text-sm" />
             </div>
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setTaxDialog((d) => ({ ...d, open: false }))}>취소</Button>
-              <Button onClick={handleTaxCreate} disabled={!taxDialog.name.trim()}>생성</Button>
+              <Button onClick={handleTaxSave} disabled={!taxDialog.name.trim()}>{taxDialog.mode === "create" ? "생성" : "저장"}</Button>
             </div>
           </div>
         </DialogContent>
@@ -464,6 +511,64 @@ export default function TaxonomiesPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* 분류 삭제 확인 — 매핑된 데이터셋이 있으면 매핑도 함께 해제됨을 알린다 */}
+      <AlertDialog open={catDeleteTarget != null} onOpenChange={(o) => { if (!o) setCatDeleteTarget(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>분류를 삭제할까요?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {catDeleteTarget && (() => {
+                const c = catDeleteTarget
+                let msg = `"${c.name}" 분류를 삭제합니다.`
+                if (c.children.length > 0) msg += ` 하위 분류 ${c.children.length}개가 있어 삭제되지 않습니다. 하위 분류를 먼저 정리하세요.`
+                else if (c.dataset_count > 0) msg += ` 이 분류에 매핑된 데이터셋 ${c.dataset_count}개의 매핑도 함께 해제됩니다(데이터셋 자체는 삭제되지 않음).`
+                return msg
+              })()}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>취소</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={async () => {
+                if (catDeleteTarget != null) await handleCatDelete(catDeleteTarget.id)
+                setCatDeleteTarget(null)
+              }}
+            >
+              삭제
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* 분류체계 삭제 확인 */}
+      <AlertDialog open={taxDeleteOpen} onOpenChange={setTaxDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>분류체계를 삭제할까요?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {(() => {
+                let msg = `"${currentTax?.name ?? "이 분류체계"}" 분류체계를 삭제합니다.`
+                // 서버 409 메시지("하위 분류 N개")와 같은 기준 — 모든 단계의 분류 수
+                const n = countCategories(tree?.categories ?? [])
+                if (n > 0) msg += ` 분류 ${n}개가 있어 삭제되지 않습니다. 분류를 먼저 정리하세요.`
+                return msg
+              })()}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>취소</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={async () => {
+                await handleTaxDelete()
+                setTaxDeleteOpen(false)
+              }}
+            >
+              삭제
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* 매핑 제거 확인 */}
       <AlertDialog open={removeTarget != null} onOpenChange={(o) => { if (!o) setRemoveTarget(null) }}>

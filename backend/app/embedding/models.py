@@ -3,7 +3,7 @@
 
 활성 임베딩 제공자가 생성한 벡터 임베딩을 저장한다.
 - ``DatasetEmbedding``: 데이터셋 1:1 (FK CASCADE).
-- ``EntityEmbedding``: 용어집/AI Agent/API 등 비-데이터셋 엔티티용 다형 테이블.
+- ``EntityEmbedding``: 용어집/AI Agent/API/MCP 서버 등 비-데이터셋 엔티티용 다형 테이블.
 """
 
 import logging
@@ -22,6 +22,10 @@ except ImportError:
     logger.warning("pgvector 가 설치되어 있지 않습니다 — 임베딩 테이블/기능이 비활성화됩니다.")
     Vector = None
 
+# pgvector 컬럼 차원(고정). 다른 차원의 모델로 바꾸려면 컬럼·인덱스 마이그레이션이 필요하므로
+# 설정 저장/연결 테스트에서 이 값과 다른 차원을 거부한다.
+VECTOR_DIMENSION = 384
+
 
 class DatasetEmbedding(Base):
     """카탈로그 데이터셋 시맨틱 검색용 벡터 임베딩."""
@@ -36,13 +40,13 @@ class DatasetEmbedding(Base):
         unique=True,
     )
     # pgvector 컬럼 — 차원은 테이블 생성 시점에 설정
-    embedding = Column(Vector(384) if Vector else Text, nullable=False)
+    embedding = Column(Vector(VECTOR_DIMENSION) if Vector else Text, nullable=False)
     # 임베딩된 원본 텍스트 (변경 감지용)
     source_text = Column(Text, nullable=False)
     # 출처(provenance) 추적
     model_name = Column(String(200), nullable=False)
     provider = Column(String(50), nullable=False)
-    dimension = Column(Integer, nullable=False, default=384)
+    dimension = Column(Integer, nullable=False, default=VECTOR_DIMENSION)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -50,7 +54,7 @@ class DatasetEmbedding(Base):
 class EntityEmbedding(Base):
     """비-데이터셋 카탈로그 엔티티의 시맨틱 검색용 임베딩 (다형).
 
-    ``entity_type``: glossary_term / ai_agent / api.
+    ``entity_type``: glossary_term / ai_agent / api / mcp_server (``app.embedding.service.ENTITY_TYPES``).
     엔티티별로 FK 대상이 달라 DB CASCADE 를 걸 수 없으므로, 행 삭제는
     각 서비스의 delete 경로에서 ``delete_entity_embedding`` 으로 명시 수행한다.
     """
@@ -61,12 +65,12 @@ class EntityEmbedding(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     entity_type = Column(String(30), nullable=False)
     entity_id = Column(Integer, nullable=False)
-    embedding = Column(Vector(384) if Vector else Text, nullable=False)
+    embedding = Column(Vector(VECTOR_DIMENSION) if Vector else Text, nullable=False)
     # 임베딩된 원본 텍스트 (변경 감지용)
     source_text = Column(Text, nullable=False)
     # 출처(provenance) 추적
     model_name = Column(String(200), nullable=False)
     provider = Column(String(50), nullable=False)
-    dimension = Column(Integer, nullable=False, default=384)
+    dimension = Column(Integer, nullable=False, default=VECTOR_DIMENSION)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

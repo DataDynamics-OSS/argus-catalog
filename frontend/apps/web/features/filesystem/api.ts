@@ -17,6 +17,16 @@ async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json()
 }
 
+/** 로그인이 필요한 파일 API 를 읽어 blob: 주소로 돌려준다(보기용). 다 쓴 뒤 URL.revokeObjectURL 로 해제한다. */
+export async function fetchBlobUrl(url: string): Promise<string> {
+  const res = await authFetch(url)
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(body.detail || `파일을 불러오지 못했습니다 (HTTP ${res.status})`)
+  }
+  return URL.createObjectURL(await res.blob())
+}
+
 /** Convert server folder response to UI type. */
 function toFolder(f: {
   key: string
@@ -131,7 +141,18 @@ export function createFilesystemDataSource(rootSub?: string): FilesystemDataSour
     },
 
     async getDownloadUrl(path: string): Promise<string> {
+      // /download 는 인증이 필요하다. 호출부는 이 URL 을 토큰 없는 fetch()·<img src> 로
+      // 쓰므로 여기서 authFetch 로 받아 blob: URL 로 돌려준다(보기용).
       const params = withRootSub(new URLSearchParams({ path }), rootSub)
+      params.set("inline", "true")
+      return fetchBlobUrl(`${API_BASE}/download?${params}`)
+    },
+
+    async getDirectDownloadUrl(path: string): Promise<string> {
+      // 짧은 토큰을 받아 링크로 내려받는다 — 큰 파일도 브라우저가 바로 저장(메모리에 올리지 않음)
+      const params = withRootSub(new URLSearchParams({ path }), rootSub)
+      const { token } = await apiFetch<{ token: string }>(`${API_BASE}/download-link?${params}`, { method: "POST" })
+      params.set("token", token)
       return `${API_BASE}/download?${params}`
     },
 
@@ -199,9 +220,16 @@ export function createS3DataSource(): FilesystemDataSource {
     },
 
     async getDownloadUrl(path: string): Promise<string> {
+      // 보기용 — 서버가 저장소에서 읽어 흘려보낸다. presigned URL 은 저장소 주소(예: http://minio:9000)가
+      // 브라우저에서 닿지 않으면 열리지 않으므로 쓰지 않는다.
+      return fetchBlobUrl(`${S3_BROWSE_BASE}/file?${new URLSearchParams({ path })}`)
+    },
+
+    async getDirectDownloadUrl(path: string): Promise<string> {
       const params = new URLSearchParams({ path })
-      const data = await apiFetch<{ url: string }>(`${S3_BROWSE_BASE}/download?${params}`)
-      return data.url
+      const { token } = await apiFetch<{ token: string }>(`${S3_BROWSE_BASE}/download-link?${params}`, { method: "POST" })
+      params.set("token", token)
+      return `${S3_BROWSE_BASE}/file?${params}`
     },
 
     async renamePath(): Promise<void> {

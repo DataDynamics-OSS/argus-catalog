@@ -11,6 +11,7 @@ import {
   ChevronRight,
   ClipboardCheck,
   Copy,
+  FileCode2,
   History,
   Layers,
   Loader2,
@@ -25,7 +26,7 @@ import {
   Wrench,
   X,
 } from "lucide-react"
-import { toast } from "sonner"
+import { errorMessage, notifyError, toast } from "@/lib/notify"
 import type { EditorProps, OnMount } from "@monaco-editor/react"
 
 import { Badge } from "@workspace/ui/components/badge"
@@ -68,17 +69,16 @@ import {
 } from "@workspace/ui/components/tooltip"
 import { cn } from "@workspace/ui/lib/utils"
 
+import { useAuth } from "@/features/auth"
 import { fetchUsers } from "@/features/users/api"
 import { type User } from "@/features/users/data/schema"
 
 import {
   addAIAgentEval,
   addAIAgentLineage,
-  addAIAgentMcpServer,
   addAIAgentTool,
   addAIAgentVersion,
   deleteAIAgentLineage,
-  deleteAIAgentMcpServer,
   deleteAIAgentTool,
   fetchAIAgentCard,
   fetchAIAgentDetail,
@@ -96,8 +96,11 @@ import {
   type AIAgentMetering,
   type AIAgentPolicyBundle,
 } from "../api"
-import { AGENT_STATUS_VARIANTS } from "../data/schema"
+import { AGENT_STATUS_VARIANTS, COMPLETENESS_LABEL, OWNER_STATE_HINT, OWNER_STATE_LABEL } from "../data/schema"
+import { AgentMcpCard } from "./ai-agents-mcp-card"
 import { useAIAgents } from "./ai-agents-provider"
+import { AIAgentsManifestDialog } from "./ai-agents-manifest-dialog"
+import { MONACO_FONT_SIZE } from "@/lib/monaco"
 
 function StringList({ items }: { items: string[] | null }) {
   if (!items || items.length === 0) return <span className="text-muted-foreground">-</span>
@@ -165,7 +168,7 @@ const JSON_VIEWER_OPTIONS: NonNullable<EditorProps["options"]> = {
   wordWrap: "on",
   lineNumbers: "off",
   folding: false,
-  fontSize: 13,
+  fontSize: MONACO_FONT_SIZE,
   fontFamily: "D2Coding, Menlo, Consolas, monospace",
   renderLineHighlight: "none",
   overviewRulerLanes: 0,
@@ -197,7 +200,7 @@ function JsonViewer({ value }: { value: unknown }) {
       toast.success("JSON 을 클립보드에 복사했습니다.")
       setTimeout(() => setCopied(false), 2000)
     } catch {
-      toast.error("클립보드 복사에 실패했습니다.")
+      toast.error("클립보드에 복사하지 못했습니다.")
     }
   }
 
@@ -722,6 +725,7 @@ function MetaTable({ groups }: { groups: { title: string; rows: MetaTableRow[] }
 
 export function AIAgentsDetail({ agentName }: { agentName: string }) {
   const { setSelectedAgentName, setDeleteTargetName, setOpen } = useAIAgents()
+  const { user } = useAuth()
   const [agent, setAgent] = useState<AIAgentDetail | null>(null)
   const [evals, setEvals] = useState<AIAgentEval[]>([])
   const [metering, setMetering] = useState<AIAgentMetering | null>(null)
@@ -732,6 +736,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
   const [error, setError] = useState<string | null>(null)
   // 활성 탭(제어형) — 카드 탭의 "개요에서 편집" 바로가기용
   const [activeTab, setActiveTab] = useState("overview")
+  const [manifestOpen, setManifestOpen] = useState(false)
   // owner_email 로 사용자 레코드를 조회해 소유자 이름·소속·부서를 표시한다.
   const [ownerUser, setOwnerUser] = useState<User | null>(null)
   // 개요 탭 편집 모드 / 저장 중 / 편집 draft
@@ -756,8 +761,16 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
   const [savingGov, setSavingGov] = useState(false)
   const [govDraft, setGovDraft] = useState<GovDraft>(EMPTY_GOV)
 
+  // 상세를 다시 읽을 때 정책 번들·에이전트 카드도 함께 — 도구·MCP·거버넌스·상태 변경이 '집행(연동)'·'에이전트 카드' 탭에 바로 보이도록
   const reloadDetail = useCallback(async () => {
-    setAgent(await fetchAIAgentDetail(agentName))
+    const [d, p, c] = await Promise.all([
+      fetchAIAgentDetail(agentName),
+      fetchAIAgentPolicy(agentName),
+      fetchAIAgentCard(agentName),
+    ])
+    setAgent(d)
+    setPolicy(p)
+    setCard(c)
   }, [agentName])
 
   const reloadEvals = useCallback(async () => {
@@ -777,7 +790,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
       await reloadStatusHistory()
       toast.success(`상태를 '${STATUS_LABEL[next] ?? next}'(으)로 변경했습니다.`)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "상태 변경에 실패했습니다.")
+      notifyError(e, "AI 에이전트 상태를 바꾸지 못했습니다.")
     }
   }
 
@@ -844,7 +857,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
       setEditingOverview(false)
       toast.success("개요를 저장했습니다.")
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "저장에 실패했습니다.")
+      notifyError(e, "개요를 저장하지 못했습니다.")
     } finally {
       setSavingOverview(false)
     }
@@ -892,7 +905,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
       setEditingCap(false)
       toast.success("기능·I/O를 저장했습니다.")
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "저장에 실패했습니다.")
+      notifyError(e, "기능·I/O를 저장하지 못했습니다.")
     } finally {
       setSavingCap(false)
     }
@@ -924,7 +937,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
       setEditingRag(false)
       toast.success("RAG 설정/네트워크를 저장했습니다.")
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "저장에 실패했습니다.")
+      notifyError(e, "RAG 설정/네트워크를 저장하지 못했습니다.")
     } finally {
       setSavingRag(false)
     }
@@ -975,7 +988,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
       setEditingGov(false)
       toast.success("거버넌스를 저장했습니다.")
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "저장에 실패했습니다.")
+      notifyError(e, "거버넌스를 저장하지 못했습니다.")
     } finally {
       setSavingGov(false)
     }
@@ -1002,7 +1015,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
         setHookEvents(h)
         setStatusHistory(sh)
       })
-      .catch((err) => active && setError(err instanceof Error ? err.message : "조회 실패"))
+      .catch((err) => active && setError(errorMessage(err) ?? "AI 에이전트 정보를 불러오지 못했습니다."))
     return () => {
       active = false
     }
@@ -1046,6 +1059,13 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
     return <p className="p-4 text-muted-foreground">불러오는 중...</p>
   }
 
+  // 수정·삭제·하위 항목 변경은 관리자·등록자·소유자(소유자 이메일 = 로그인 이메일)만 — 서버와 같은 기준.
+  const canEdit = !!user && (
+    user.is_admin
+    || (!!agent.created_by && agent.created_by === user.username)
+    || (!!agent.owner_email && !!user.email && agent.owner_email.toLowerCase() === user.email.toLowerCase())
+  )
+
   return (
     <div className="flex flex-col gap-4">
       {/* Header */}
@@ -1061,6 +1081,8 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
           </Button>
           <div className="flex items-center gap-2">
             <h2 className="text-xl font-semibold">{agent.display_name || agent.name}</h2>
+            {/* 상태 변경은 수정 권한이 있을 때만. 차단(blocked) 설정·해제는 관리자만 — 서버와 같은 기준. */}
+            {canEdit && (user?.is_admin || agent.status !== "blocked") ? (
             <Select value={agent.status} onValueChange={changeStatus}>
               <SelectTrigger
                 className={cn(
@@ -1073,10 +1095,22 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
               </SelectTrigger>
               <SelectContent>
                 {STATUS_ORDER.map((s) => (
-                  <SelectItem key={s} value={s}>{STATUS_LABEL[s] ?? s}</SelectItem>
+                  <SelectItem key={s} value={s} disabled={s === "blocked" && !user?.is_admin}>
+                    {STATUS_LABEL[s] ?? s}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
+            ) : (
+              <Badge
+                className={cn(
+                  "border-0 px-2 py-1 text-xs font-medium shadow-none",
+                  AGENT_STATUS_VARIANTS[agent.status] ?? AGENT_STATUS_VARIANTS.draft,
+                )}
+              >
+                {STATUS_LABEL[agent.status] ?? agent.status}
+              </Badge>
+            )}
             <Badge variant="outline" className="text-xs font-medium">
               {agent.version}
             </Badge>
@@ -1089,17 +1123,65 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
             <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{agent.description}</p>
           )}
         </div>
-        <Button
-          variant="destructive"
-          size="sm"
-          onClick={() => {
-            setDeleteTargetName(agent.name)
-            setOpen("delete")
-          }}
-        >
-          <Trash2 className="mr-1 h-4 w-4" /> 삭제
-        </Button>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => setManifestOpen(true)}>
+            <FileCode2 className="mr-1 h-4 w-4" /> 정의 파일 보기
+          </Button>
+          {canEdit && (
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={() => {
+              setDeleteTargetName(agent.name)
+              setOpen("delete")
+            }}
+          >
+            <Trash2 className="mr-1 h-4 w-4" /> 삭제
+          </Button>
+          )}
+        </div>
       </div>
+      <AIAgentsManifestDialog agentName={agent.name} open={manifestOpen} onOpenChange={setManifestOpen} />
+
+      {agent.managed_by === "manifest" && (
+        <div className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900 dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-200">
+          <span className="font-medium">정의 파일로 관리됩니다</span>
+          {agent.source_ref && <span className="ml-1 font-mono text-xs">({agent.source_ref})</span>}
+          . 화면에서 고친 값은 다음 반영 때 정의 파일 기준으로 되돌아갑니다. 바꾸려면 정의 파일을 고쳐 반영하세요.
+          {agent.last_applied_at && (
+            <span className="mt-0.5 block text-xs opacity-80">
+              마지막 반영 {new Date(agent.last_applied_at).toLocaleString("ko-KR")}
+              {agent.last_applied_by && ` · ${agent.last_applied_by}`}
+            </span>
+          )}
+        </div>
+      )}
+      {agent.managed_by === "discovered" && (
+        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+          <span className="font-medium">실행 기록에서 발견되어 등록된 에이전트입니다.</span> 부서·분류·설명 등을 채우고,
+          &lsquo;정의 파일 보기&rsquo;로 내려받아 정의 파일로 관리하는 것을 권장합니다.
+        </div>
+      )}
+
+      {((agent.owner_state && agent.owner_state !== "ok") || (agent.missing_fields?.length ?? 0) > 0) && (
+        <div className="rounded-md border px-3 py-2 text-sm">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            {agent.completeness != null && (
+              <span className="font-medium">정보 완성도 {agent.completeness}점</span>
+            )}
+            {agent.owner_state && agent.owner_state !== "ok" && (
+              <span className="text-amber-700 dark:text-amber-400" title={OWNER_STATE_HINT[agent.owner_state]}>
+                책임자 확인 필요 — {OWNER_STATE_LABEL[agent.owner_state] ?? agent.owner_state}
+              </span>
+            )}
+          </div>
+          {(agent.missing_fields?.length ?? 0) > 0 && (
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              채우면 좋은 항목: {agent.missing_fields!.map((k) => COMPLETENESS_LABEL[k] ?? k).join(", ")}
+            </p>
+          )}
+        </div>
+      )}
 
       <Separator />
 
@@ -1176,9 +1258,11 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                   </Button>
                 </>
               ) : (
+                canEdit && (
                 <Button size="sm" variant="outline" onClick={startEditOverview}>
                   <Pencil className="mr-1 h-4 w-4" /> 편집
                 </Button>
+                )
               )}
             </div>
           </div>
@@ -1417,9 +1501,11 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                   </Button>
                 </>
               ) : (
+                canEdit && (
                 <Button size="sm" variant="outline" onClick={startEditCap}>
                   <Pencil className="mr-1 h-4 w-4" /> 편집
                 </Button>
+                )
               )}
             </div>
           </div>
@@ -1509,7 +1595,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
             <CardHeader>
               <div className="flex items-center justify-between gap-2">
                 <CardTitle className="text-sm">도구 ({agent.tools.length}) <SourceBadge source="input" className="ml-1 align-middle" /></CardTitle>
-                <AddToolDialog agentName={agent.name} onAdded={reloadDetail} />
+                {canEdit && <AddToolDialog agentName={agent.name} onAdded={reloadDetail} />}
               </div>
             </CardHeader>
             <CardContent className="space-y-2">
@@ -1575,6 +1661,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                               {hasSchema ? `${paramCount}개 항목` : "-"}
                             </TableCell>
                             <TableCell className="align-top">
+                              {canEdit && (
                               <Button
                                 variant="ghost"
                                 size="icon"
@@ -1586,6 +1673,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                               >
                                 <Trash2 className="h-4 w-4" />
                               </Button>
+                              )}
                             </TableCell>
                           </TableRow>
                           {open && hasSchema && (
@@ -1605,48 +1693,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
               </Table>
             </CardContent>
           </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-sm">MCP 서버 ({agent.mcp_servers.length}) <SourceBadge source="input" className="ml-1 align-middle" /></CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>이름</TableHead>
-                    <TableHead>URL</TableHead>
-                    <TableHead>인증</TableHead>
-                    <TableHead className="w-10" />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {agent.mcp_servers.map((m) => (
-                    <TableRow key={m.id}>
-                      <TableCell className="font-medium">{m.name}</TableCell>
-                      <TableCell className="font-mono text-xs text-muted-foreground break-all">{m.url || "-"}</TableCell>
-                      <TableCell>
-                        {m.auth_method ? <Badge variant="outline">{m.auth_method}</Badge> : "-"}
-                      </TableCell>
-                      <TableCell>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7"
-                          onClick={async () => {
-                            await deleteAIAgentMcpServer(agent.name, m.id)
-                            await reloadDetail()
-                          }}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                  <AddMcpRow agentName={agent.name} onAdded={reloadDetail} />
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
+          <AgentMcpCard agentName={agent.name} items={agent.mcp_servers} onChanged={reloadDetail} canEdit={canEdit} />
           <Card>
             <CardHeader>
               <div className="flex items-center justify-between gap-2">
@@ -1661,9 +1708,11 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                       </Button>
                     </>
                   ) : (
+                    canEdit && (
                     <Button size="sm" variant="outline" onClick={startEditRag}>
                       <Pencil className="mr-1 h-4 w-4" /> 편집
                     </Button>
+                    )
                   )}
                 </div>
               </div>
@@ -1710,9 +1759,11 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                   </Button>
                 </>
               ) : (
+                canEdit && (
                 <Button size="sm" variant="outline" onClick={startEditGov}>
                   <Pencil className="mr-1 h-4 w-4" /> 편집
                 </Button>
+                )
               )}
             </div>
           </div>
@@ -1934,6 +1985,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                   )}
                 </TableBody>
               </Table>
+              {canEdit && (
               <AddEvalForm
                 agentName={agent.name}
                 onAdded={async () => {
@@ -1941,6 +1993,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                   await reloadDetail()
                 }}
               />
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -1982,6 +2035,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                         </TableCell>
                         <TableCell className="font-mono text-xs break-all">{l.target_ref}</TableCell>
                         <TableCell>
+                          {canEdit && (
                           <Button
                             variant="ghost"
                             size="icon"
@@ -1993,13 +2047,14 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>
+                          )}
                         </TableCell>
                       </TableRow>
                     ))
                   )}
                 </TableBody>
               </Table>
-              <AddLineageForm agentName={agent.name} onAdded={reloadDetail} />
+              {canEdit && <AddLineageForm agentName={agent.name} onAdded={reloadDetail} />}
             </CardContent>
           </Card>
         </TabsContent>
@@ -2044,7 +2099,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                   )}
                 </TableBody>
               </Table>
-              <AddVersionForm agentName={agent.name} onAdded={reloadDetail} />
+              {canEdit && <AddVersionForm agentName={agent.name} onAdded={reloadDetail} />}
             </CardContent>
           </Card>
           <Card>
@@ -2058,12 +2113,14 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                     <TableHead>변경</TableHead>
                     <TableHead className="w-48">일시</TableHead>
                     <TableHead>변경자</TableHead>
+                    {/* 사유 — 정의 파일 정리("정의 파일에서 제외됨")·일괄 변경 등 화면 밖에서 바뀐 이유 */}
+                    <TableHead>사유</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {statusHistory.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={3} className="text-center text-muted-foreground">
+                      <TableCell colSpan={4} className="text-center text-muted-foreground">
                         상태 변경 이력 없음
                       </TableCell>
                     </TableRow>
@@ -2085,6 +2142,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                           {new Date(h.changed_at).toLocaleString()}
                         </TableCell>
                         <TableCell className="text-xs text-muted-foreground">{h.changed_by || "-"}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground">{h.note || "-"}</TableCell>
                       </TableRow>
                     ))
                   )}
@@ -2103,9 +2161,11 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
               접근 URL·프로토콜·인증·제공자·노출 스킬을 담아, 다른 에이전트가 이를 읽고 자동으로 발견·연동할 수 있게 합니다.
               아래 값은 개요·도구 탭의 정보를 그대로 가져와 자동 구성한 읽기 전용 미리보기입니다.
             </p>
+            {canEdit && (
             <Button size="sm" variant="outline" className="shrink-0" onClick={() => setActiveTab("overview")}>
               <Pencil className="mr-1 h-4 w-4" /> 개요에서 편집
             </Button>
+            )}
           </div>
           {!card ? (
             <p className="text-sm text-muted-foreground">에이전트 카드를 불러오는 중...</p>
@@ -2250,7 +2310,7 @@ function AddToolDialog({ agentName, onAdded }: { agentName: string; onAdded: () 
       setOpen(false)
       await onAdded()
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "도구 등록 실패")
+      setErr(errorMessage(e) ?? "도구를 등록하지 못했습니다.")
     } finally {
       setBusy(false)
     }
@@ -2323,46 +2383,6 @@ function AddToolDialog({ agentName, onAdded }: { agentName: string; onAdded: () 
   )
 }
 
-// MCP 추가 입력 — 표의 이름/URL/인증 컬럼에 정렬되도록 TableRow 로 렌더.
-function AddMcpRow({ agentName, onAdded }: { agentName: string; onAdded: () => Promise<void> }) {
-  const [name, setName] = useState("")
-  const [url, setUrl] = useState("")
-  const [auth, setAuth] = useState("")
-  const [busy, setBusy] = useState(false)
-  const submit = async () => {
-    setBusy(true)
-    try {
-      await addAIAgentMcpServer(agentName, {
-        name: name.trim(),
-        url: url.trim() || undefined,
-        auth_method: auth.trim() || undefined,
-      })
-      setName(""); setUrl(""); setAuth("")
-      await onAdded()
-    } finally {
-      setBusy(false)
-    }
-  }
-  return (
-    <TableRow className="hover:bg-transparent">
-      <TableCell className="align-middle">
-        <Input placeholder="MCP 이름" value={name} onChange={(e) => setName(e.target.value)} className="h-8" />
-      </TableCell>
-      <TableCell className="align-middle">
-        <Input placeholder="URL" value={url} onChange={(e) => setUrl(e.target.value)} className="h-8" />
-      </TableCell>
-      <TableCell className="align-middle">
-        <ComboInput value={auth} onChange={setAuth} options={OPT_AUTH} placeholder="인증 직접 입력" />
-      </TableCell>
-      <TableCell className="align-middle">
-        <Button size="icon" className="h-7 w-7" disabled={busy || !name.trim()} onClick={submit}>
-          <Plus className="h-4 w-4" />
-        </Button>
-      </TableCell>
-    </TableRow>
-  )
-}
-
 function AddLineageForm({
   agentName,
   onAdded,
@@ -2415,6 +2435,8 @@ function AddLineageForm({
             })
             setTargetRef("")
             await onAdded()
+          } catch (e) {
+            notifyError(e, "리니지를 추가하지 못했습니다.")
           } finally {
             setBusy(false)
           }
@@ -2467,7 +2489,8 @@ function AddVersionForm({
               setChangelog("")
               await onAdded()
             } catch (e) {
-              setErr(e instanceof Error ? e.message : "버전 생성 실패")
+              setErr(errorMessage(e) ?? "버전을 생성하지 못했습니다.")
+              notifyError(e, "버전을 생성하지 못했습니다.")
             } finally {
               setBusy(false)
             }
@@ -2528,6 +2551,8 @@ function AddEvalForm({ agentName, onAdded }: { agentName: string; onAdded: () =>
             setMetricKey("")
             setMetricValue("")
             await onAdded()
+          } catch (e) {
+            notifyError(e, "평가를 등록하지 못했습니다.")
           } finally {
             setBusy(false)
           }

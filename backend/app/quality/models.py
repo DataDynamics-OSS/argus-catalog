@@ -19,19 +19,20 @@ class DataProfile(Base):
 
 
 class QualityRule(Base):
-    """품질 검사 규칙 정의. 데이터셋에 대해 NOT_NULL, UNIQUE, MIN/MAX_VALUE, ROW_COUNT, FRESHNESS, ACCEPTED_VALUES, REGEX 를 지원한다."""
+    """품질 검사 규칙 정의. 지원 유형은 schemas.SUPPORTED_CHECK_TYPES — NOT_NULL, UNIQUE, MIN/MAX_VALUE,
+    ROW_COUNT, FRESHNESS, ACCEPTED_VALUES, REGEX, CUSTOM_SQL, CUSTOM_PYTHON(뒤의 4종은 품질 배치 전용 평가)."""
 
     __tablename__ = "catalog_quality_rule"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     dataset_id = Column(Integer, ForeignKey("catalog_datasets.id", ondelete="CASCADE"), nullable=False)
     rule_name = Column(String(255), nullable=False)
-    check_type = Column(String(50), nullable=False)       # NOT_NULL, UNIQUE, MIN_VALUE, MAX_VALUE, ACCEPTED_VALUES, REGEX, ROW_COUNT, FRESHNESS, CUSTOM_SQL
+    check_type = Column(String(50), nullable=False)       # NOT_NULL, UNIQUE, MIN_VALUE, MAX_VALUE, ACCEPTED_VALUES, REGEX, ROW_COUNT, FRESHNESS, CUSTOM_SQL, CUSTOM_PYTHON
     column_name = Column(String(256))                      # 테이블 단위 검사면 NULL
-    expected_value = Column(Text)                          # JSON: 기대값 또는 설정
-    threshold = Column(Numeric(5, 2), default=100.00)      # 통과 임계값 %
+    expected_value = Column(Text)                          # 기대값 문자열 — 유형별 해석(숫자·시간·쉼표 구분 허용 값·정규식·SQL, CUSTOM_PYTHON 만 JSON 설정)
+    threshold = Column(Numeric(5, 2), default=100.00)      # 통과 임계값 % (NOT_NULL·UNIQUE 만 사용)
     severity = Column(String(16), nullable=False, default="WARNING")
-    is_active = Column(String(5), nullable=False, default="true")
+    is_active = Column(String(5), nullable=False, default="true")   # "true"/"false" 문자열
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -44,7 +45,7 @@ class QualityResult(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     rule_id = Column(Integer, ForeignKey("catalog_quality_rule.id", ondelete="CASCADE"), nullable=False)
     dataset_id = Column(Integer, ForeignKey("catalog_datasets.id", ondelete="CASCADE"), nullable=False)
-    passed = Column(String(5), nullable=False)
+    passed = Column(String(5), nullable=False)                      # "true"/"false" 문자열
     actual_value = Column(Text)
     detail = Column(Text)
     failed_samples = Column(Text)  # 위반 행 샘플 JSON 배열 (배치 반입 시 최대 5행)
@@ -52,7 +53,10 @@ class QualityResult(Base):
 
 
 class QualityScore(Base):
-    """데이터셋의 집계 품질 점수. 특정 시점에 대해 score = passed/total * 100."""
+    """데이터셋의 집계 품질 점수. score = passed/total × 100 (total 은 평가·이어받은 결과 수, 미평가 제외).
+
+    warning_rules 는 현재 항상 0 으로 기록된다(service._record_score).
+    """
 
     __tablename__ = "catalog_quality_score"
 

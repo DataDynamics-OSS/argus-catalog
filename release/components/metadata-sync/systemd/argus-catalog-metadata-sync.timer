@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Argus Catalog metadata sync periodically
+
+[Timer]
+# 매시 정각 (변경: systemctl edit argus-catalog-metadata-sync.timer)
+OnCalendar=hourly
+RandomizedDelaySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

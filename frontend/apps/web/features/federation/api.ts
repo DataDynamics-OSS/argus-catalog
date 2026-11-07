@@ -99,6 +99,9 @@ export type FederationSyncRun = {
   phase: string
   phase_done: number
   phase_total: number
+  // 전체 동기화(prune 포함) 여부 / 다음 증분 기준 시각(성공 실행만 기록)
+  is_full: boolean
+  watermark: string | null
   error: string | null
   started_at: string
   finished_at: string | null
@@ -203,16 +206,14 @@ export type FederatedDatasetDetail = {
   source_base_url?: string | null
   // 소비자(허브) 표시 선택 — null=전부 표시. (노출자 노출 ∩ 이 선택)만 렌더.
   display_fields?: string[] | null
+  // 노출자(peer) 노출 항목 — null/없음=알 수 없음(화면은 샘플·리니지 탭을 그대로 보인다)
+  peer_exposed?: string[] | null
   metadata?: FederatedDatasetMetadata
-  // 프론트에서 오류 표시용으로 채우는 필드(백엔드 응답엔 없음)
-  _error?: string
 }
 
-async function jsonOrThrow<T>(res: Response, action: string): Promise<T> {
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.detail || `${action} 실패: ${res.status}`)
-  }
+// 실패 시 공용 throwOnError 로 백엔드 detail 을 노출한다(422 배열 detail 도 사람이 읽는 문장으로 변환).
+async function jsonOrThrow<T>(res: Response, fallback: string): Promise<T> {
+  if (!res.ok) await throwOnError(res, fallback)
   return res.json()
 }
 
@@ -221,7 +222,7 @@ async function jsonOrThrow<T>(res: Response, action: string): Promise<T> {
 // ---------------------------------------------------------------------------
 
 export async function listInstances(): Promise<FederatedInstance[]> {
-  return jsonOrThrow(await authFetch(`${BASE}/instances`), "인스턴스 조회")
+  return jsonOrThrow(await authFetch(`${BASE}/instances`), "인스턴스 목록을 불러오지 못했습니다.")
 }
 
 export async function createInstance(
@@ -232,7 +233,7 @@ export async function createInstance(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   })
-  return jsonOrThrow(res, "인스턴스 등록")
+  return jsonOrThrow(res, "인스턴스를 등록하지 못했습니다.")
 }
 
 export async function updateInstance(
@@ -244,19 +245,19 @@ export async function updateInstance(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   })
-  return jsonOrThrow(res, "인스턴스 수정")
+  return jsonOrThrow(res, "인스턴스를 수정하지 못했습니다.")
 }
 
 export async function deleteInstance(id: number): Promise<void> {
   const res = await authFetch(`${BASE}/instances/${id}`, { method: "DELETE" })
   if (!res.ok && res.status !== 204)
-    await throwOnError(res, "인스턴스 삭제 실패")
+    await throwOnError(res, "인스턴스를 삭제하지 못했습니다.")
 }
 
 export async function checkHealth(id: number): Promise<InstanceHealth> {
   return jsonOrThrow(
     await authFetch(`${BASE}/instances/${id}/health`),
-    "상태 점검"
+    "인스턴스 상태를 점검하지 못했습니다."
   )
 }
 
@@ -267,7 +268,7 @@ export async function harvestInstance(
   const res = await authFetch(`${BASE}/instances/${id}/harvest?full=${full}`, {
     method: "POST",
   })
-  return jsonOrThrow(res, "가져오기")
+  return jsonOrThrow(res, "원격 카탈로그를 가져오지 못했습니다.")
 }
 
 export async function listSyncRuns(
@@ -276,7 +277,7 @@ export async function listSyncRuns(
 ): Promise<FederationSyncRun[]> {
   return jsonOrThrow(
     await authFetch(`${BASE}/instances/${id}/sync-runs?limit=${limit}`),
-    "동기화 이력 조회"
+    "동기화 이력을 불러오지 못했습니다."
   )
 }
 
@@ -291,7 +292,7 @@ export async function federatedSearch(
   const params = new URLSearchParams({ q })
   if (opts?.limit) params.set("limit", String(opts.limit))
   if (opts?.includeLocal === false) params.set("include_local", "false")
-  return jsonOrThrow(await authFetch(`${BASE}/search?${params}`), "연합 검색")
+  return jsonOrThrow(await authFetch(`${BASE}/search?${params}`), "연합 검색 결과를 불러오지 못했습니다.")
 }
 
 export async function datasetDetail(
@@ -300,7 +301,7 @@ export async function datasetDetail(
   const params = new URLSearchParams({ urn })
   return jsonOrThrow(
     await authFetch(`${BASE}/datasets/detail?${params}`),
-    "상세 조회"
+    "원격 데이터셋 상세를 불러오지 못했습니다."
   )
 }
 
@@ -315,7 +316,7 @@ export async function importDataset(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ federated_urn: federatedUrn }),
   })
-  return jsonOrThrow(res, "로컬로 가져오기")
+  return jsonOrThrow(res, "데이터셋을 로컬로 가져오지 못했습니다.")
 }
 
 export async function datasetSample(
@@ -325,7 +326,7 @@ export async function datasetSample(
   const params = new URLSearchParams({ urn, limit: String(limit) })
   return jsonOrThrow(
     await authFetch(`${BASE}/datasets/sample?${params}`),
-    "샘플 조회"
+    "샘플 데이터를 불러오지 못했습니다."
   )
 }
 
@@ -336,7 +337,7 @@ export async function datasetLineage(
   const params = new URLSearchParams({ urn, depth: String(depth) })
   return jsonOrThrow(
     await authFetch(`${BASE}/datasets/lineage?${params}`),
-    "리니지 조회"
+    "리니지를 불러오지 못했습니다."
   )
 }
 
@@ -384,7 +385,7 @@ export async function browseInstanceDatasets(
   const qs = params.toString()
   return jsonOrThrow(
     await authFetch(`${BASE}/instances/${id}/datasets${qs ? `?${qs}` : ""}`),
-    "데이터셋 탐색"
+    "원격 데이터셋 목록을 불러오지 못했습니다."
   )
 }
 
@@ -419,7 +420,7 @@ export type FederationStats = {
 }
 
 export async function fetchStats(): Promise<FederationStats> {
-  return jsonOrThrow(await authFetch(`${BASE}/stats`), "관측 지표 조회")
+  return jsonOrThrow(await authFetch(`${BASE}/stats`), "관측 지표를 불러오지 못했습니다.")
 }
 
 // ---------------------------------------------------------------------------
@@ -427,7 +428,7 @@ export async function fetchStats(): Promise<FederationStats> {
 // ---------------------------------------------------------------------------
 
 export async function getExportPolicy(): Promise<ExportPolicy> {
-  return jsonOrThrow(await authFetch(`${BASE}/export-policy`), "노출 정책 조회")
+  return jsonOrThrow(await authFetch(`${BASE}/export-policy`), "노출 정책을 불러오지 못했습니다.")
 }
 
 export async function updateExportPolicy(exposed: string[]): Promise<ExportPolicy> {
@@ -436,7 +437,7 @@ export async function updateExportPolicy(exposed: string[]): Promise<ExportPolic
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ exposed }),
   })
-  return jsonOrThrow(res, "노출 정책 저장")
+  return jsonOrThrow(res, "노출 정책을 저장하지 못했습니다.")
 }
 
 /** 등록 전 peer 의 노출 항목 사전 조회. */
@@ -449,7 +450,7 @@ export async function probeCapabilities(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ base_url, auth_token: auth_token || null }),
   })
-  return jsonOrThrow(res, "노출 항목 조회")
+  return jsonOrThrow(res, "노출 항목을 불러오지 못했습니다.")
 }
 
 /** 등록된 peer 의 노출 항목 조회(수정 다이얼로그용). */
@@ -458,6 +459,6 @@ export async function instanceCapabilities(
 ): Promise<CapabilitiesResponse> {
   return jsonOrThrow(
     await authFetch(`${BASE}/instances/${id}/capabilities`),
-    "노출 항목 조회"
+    "노출 항목을 불러오지 못했습니다."
   )
 }

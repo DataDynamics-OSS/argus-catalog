@@ -1,5 +1,6 @@
 "use client"
 
+import { errorMessage, notifyError } from "@/lib/notify"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { AlertTriangle, RefreshCw, Upload } from "lucide-react"
 
@@ -33,17 +34,32 @@ type LocalFilesystemBrowserProps = {
   dataSource: FilesystemDataSource
   /** Optional CSS class for the root container. */
   className?: string
+  /** 읽기 전용 — 업로드·폴더 생성·삭제·이름 변경을 숨긴다 (관리자라도). */
+  readOnly?: boolean
+  /** 최상위 경로가 비어 있을 때 표 대신 보여 줄 안내. */
+  emptyState?: React.ReactNode
+  /** 이 경로 위로는 이동할 수 없다(일반 사용자가 보는 모델 폴더 등). 없으면 "/" 까지. */
+  rootPath?: string
+}
+
+/** fetch 의 네트워크 오류("Failed to fetch")는 사용자에게 뜻이 통하는 문구로 바꾼다. */
+function downloadErrorMessage(err: unknown): string {
+  if (err instanceof TypeError) return "서버 또는 저장소에 연결하지 못했습니다."
+  return errorMessage(err) ?? "알 수 없는 오류"
 }
 
 export function LocalFilesystemBrowser({
   initialPath = "/",
   dataSource,
   className,
+  readOnly = false,
+  emptyState,
+  rootPath,
 }: LocalFilesystemBrowserProps) {
   // 파일 변경 작업(업로드/생성/삭제/이름변경)은 관리자만 — MinIO 사용자 연동이
   // 없어 스토리지 단 권한을 못 거는 대신, 파일 브라우저 진입점을 admin 으로 통제.
   const { user } = useAuth()
-  const canManage = !!user?.is_admin
+  const canManage = !readOnly && !!user?.is_admin
   // --- Navigation state ---
   const [currentPath, setCurrentPath] = useState(initialPath)
   const currentPathRef = useRef(currentPath)
@@ -104,10 +120,10 @@ export function LocalFilesystemBrowser({
         // 화면 경고 배너로 안내하고 빈 목록을 보여준다. 의도된 처리라 warn 으로
         // 둔다 (console.error 면 Next dev 오버레이가 가로채 빨간 에러 화면을 띄움).
         console.warn("Failed to list directory", { targetPath, err })
-        const raw = err instanceof Error ? err.message : String(err)
+        const raw = errorMessage(err) ?? String(err)
         const friendly = /connect|endpoint|ECONN|fetch failed|network|9000/i.test(raw)
           ? "스토리지에 연결할 수 없습니다. 오브젝트 스토리지(MinIO)가 실행 중인지, 설정 > 오브젝트 스토리지를 확인하세요."
-          : `목록을 불러오지 못했습니다: ${raw}`
+          : raw
         setLoadError(friendly)
         setFolders([])
         setFiles([])
@@ -197,6 +213,9 @@ export function LocalFilesystemBrowser({
       await dataSource.createFolder(newPath)
       setCreateFolderOpen(false)
       await fetchData(currentPath)
+    } catch (err) {
+      console.warn("Failed to create folder", { currentPath, folderName, err })
+      notifyError(err, "폴더를 만들지 못했습니다.")
     } finally {
       setDialogLoading(false)
     }
@@ -208,6 +227,9 @@ export function LocalFilesystemBrowser({
       await dataSource.uploadFiles(currentPath, uploadedFiles)
       setUploadOpen(false)
       await fetchData(currentPath)
+    } catch (err) {
+      console.warn("Failed to upload files", { currentPath, err })
+      notifyError(err, "파일을 업로드하지 못했습니다.")
     } finally {
       setDialogLoading(false)
     }
@@ -220,29 +242,54 @@ export function LocalFilesystemBrowser({
       setDeleteOpen(false)
       setSelectedKeys(new Set())
       await fetchData(currentPath)
+    } catch (err) {
+      // 예: 등록된 모델의 파일은 서버가 409 로 거부 — 사유를 그대로 보여준다
+      console.warn("Failed to delete paths", { err })
+      notifyError(err, "선택한 항목을 삭제하지 못했습니다.")
     } finally {
       setDialogLoading(false)
     }
   }
 
-  async function downloadFile(path: string) {
-    const url = await dataSource.getDownloadUrl(path)
-    const response = await fetch(url)
-    const blob = await response.blob()
-    const octetBlob = new Blob([blob], { type: "application/octet-stream" })
-    const blobUrl = URL.createObjectURL(octetBlob)
+  /** 링크를 눌러 저장하게 한다(같은 출처 주소라 download 속성의 파일 이름이 적용된다). */
+  function clickLink(href: string, name: string) {
     const a = document.createElement("a")
-    a.href = blobUrl
-    a.download = path.split("/").filter(Boolean).pop() ?? "download"
+    a.href = href
+    a.download = name
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
-    URL.revokeObjectURL(blobUrl)
+  }
+
+  /** 파일 하나를 내려받는다. 실패하면 사유를 알림으로 보여 주고 false 를 돌려준다. */
+  async function downloadFile(path: string): Promise<boolean> {
+    const name = path.split("/").filter(Boolean).pop() ?? "download"
+    try {
+      if (dataSource.getDirectDownloadUrl) {
+        // 서버가 흘려보내는 주소를 브라우저가 바로 저장 — 큰 파일도 메모리에 올리지 않는다
+        clickLink(await dataSource.getDirectDownloadUrl(path), name)
+      } else {
+        const url = await dataSource.getDownloadUrl(path)
+        const res = await fetch(url)
+        if (!res.ok) throw new Error(`파일을 받지 못했습니다 (HTTP ${res.status})`)
+        const blobUrl = URL.createObjectURL(new Blob([await res.blob()], { type: "application/octet-stream" }))
+        if (url.startsWith("blob:")) URL.revokeObjectURL(url)
+        clickLink(blobUrl, name)
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 1000)
+      }
+      return true
+    } catch (err) {
+      console.warn("Failed to download file", { path, err })
+      notifyError(downloadErrorMessage(err), `'${name}' 파일을 내려받지 못했습니다.`)
+      return false
+    }
   }
 
   async function handleDownload() {
     const filePaths = selectedRealPaths().filter((k) => !k.endsWith("/"))
-    for (const path of filePaths) {
+    for (const [i, path] of filePaths.entries()) {
+      // 여러 파일을 한 번에 누르면 브라우저가 연속 다운로드를 막을 수 있어 조금씩 띄운다
+      if (i > 0) await new Promise((r) => setTimeout(r, 400))
       await downloadFile(path)
     }
   }
@@ -299,7 +346,12 @@ export function LocalFilesystemBrowser({
 
       await dataSource.renamePath(oldPath.replace(/\/$/, ""), newPath.replace(/\/$/, ""))
       setRenameOpen(false)
+      // 예전 경로가 선택에 남으면 이어지는 삭제가 없어진 경로까지 보낸다("폴더 2개") — 선택을 비운다
+      setSelectedKeys(new Set())
       await fetchData(currentPathRef.current)
+    } catch (err) {
+      console.warn("Failed to rename path", { err })
+      notifyError(err, "이름을 바꾸지 못했습니다.")
     } finally {
       setDialogLoading(false)
     }
@@ -312,6 +364,9 @@ export function LocalFilesystemBrowser({
       setContextDeleteOpen(false)
       setSelectedKeys(new Set())
       await fetchData(currentPathRef.current)
+    } catch (err) {
+      console.warn("Failed to delete paths", { err })
+      notifyError(err, "선택한 항목을 삭제하지 못했습니다.")
     } finally {
       setDialogLoading(false)
     }
@@ -319,6 +374,7 @@ export function LocalFilesystemBrowser({
 
   // --- Drag-and-drop upload with progress ---
   function handleDragOver(e: React.DragEvent) {
+    if (!canManage) return
     e.preventDefault()
     e.stopPropagation()
     setIsDragOver(true)
@@ -333,6 +389,7 @@ export function LocalFilesystemBrowser({
   }
 
   async function handleDrop(e: React.DragEvent) {
+    if (!canManage) return
     e.preventDefault()
     e.stopPropagation()
     setIsDragOver(false)
@@ -385,7 +442,7 @@ export function LocalFilesystemBrowser({
               ? {
                   ...item,
                   status: "error",
-                  error: err instanceof Error ? err.message : "Upload failed",
+                  error: errorMessage(err) ?? "업로드하지 못했습니다.",
                 }
               : item,
           ),
@@ -426,6 +483,7 @@ export function LocalFilesystemBrowser({
         {/* Breadcrumb */}
         <BrowserBreadcrumb
           currentPath={currentPath}
+          rootPath={rootPath}
           onNavigate={(p) => {
             setNavigationHistory([])
             setCurrentPath(p)
@@ -481,7 +539,7 @@ export function LocalFilesystemBrowser({
           <div className="flex items-start gap-2.5 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm dark:border-amber-700 dark:bg-amber-950/40">
             <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" />
             <div className="flex-1">
-              <p className="font-medium text-amber-900 dark:text-amber-200">불러오기 실패</p>
+              <p className="font-medium text-amber-900 dark:text-amber-200">목록을 불러오지 못했습니다.</p>
               <p className="mt-0.5 text-amber-800 dark:text-amber-300">{loadError}</p>
             </div>
             <button
@@ -494,7 +552,10 @@ export function LocalFilesystemBrowser({
           </div>
         )}
 
-        {/* Table */}
+        {/* Table — 최상위가 비어 있으면 호출 측 안내를 대신 보여 준다 */}
+        {emptyState && !isLoading && !loadError && !searchValue && currentPath === "/" && folders.length + files.length === 0 ? (
+          <div className="rounded-lg border border-dashed px-6 py-12">{emptyState}</div>
+        ) : (
         <BrowserTable
           currentPath={currentPath}
           entries={entries}
@@ -509,6 +570,7 @@ export function LocalFilesystemBrowser({
           onSortChange={setSort}
           isLoading={isLoading}
         />
+        )}
 
         {/* Status bar */}
         <div className="flex items-center justify-between text-sm text-muted-foreground px-1">

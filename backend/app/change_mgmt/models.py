@@ -121,7 +121,8 @@ class Consumer(Base):
 class ChangeReferrer(Base):
     """변경 요청 참조자(CC) — 결재권 없이 통지만 받는 대상.
 
-    결재선(ApprovalStep)과 분리. 참조자 추가 시 이메일(우선)·Slack/Mattermost 로 통지한다.
+    결재선(ApprovalStep)과 분리. CR 생성 시 통지하며, 실제 발송 채널은 참조자별 ``channel`` 이
+    아니라 전역 설정(change_notify_channel, 기본 EMAIL)을 따른다(``service.notify_referrers``).
     """
 
     __tablename__ = "argus_change_referrer"

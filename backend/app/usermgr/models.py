@@ -57,8 +57,9 @@ class ArgusUserPreference(Base):
 class ArgusUser(Base):
     """사용자 테이블. 정체성·자격 증명·상태를 저장.
 
-    로컬 인증 모드에서만 사용된다. Keycloak 모드에서는 이 테이블에 행이
-    없으며, 사용자 정보는 Keycloak 의 JWT claim 에서 얻는다.
+    로컬 인증 모드의 계정 원천이다. Keycloak 모드에서도 로그인 때 JIT 로 행이 만들어지고
+    (``service.upsert_external_user`` — password_hash 는 ``(external/keycloak)`` placeholder)
+    프로필·역할은 토큰 claim 으로 덮어쓴다. 이 경우 status(비활성화)·전화번호만 로컬에서 관리한다.
 
     컬럼:
         - ``id``: auto-increment PK
@@ -66,8 +67,11 @@ class ArgusUser(Base):
         - ``email``: 이메일 (UNIQUE)
         - ``first_name`` / ``last_name``
         - ``phone_number``: 연락처(선택)
-        - ``password_hash``: SHA-256 해시(평문 저장 금지)
+        - ``password_hash``: ``pbkdf2_sha256$반복수$salt$hash`` (예전 계정은 SHA-256 16진, 로그인 때 재해시).
+          평문 저장 금지
         - ``status``: ``"active"`` / ``"inactive"``
+        - ``organization`` / ``department``: 소속·부서
+        - ``must_change_password`` / ``last_login_at`` / ``failed_login_count`` / ``locked_until``
         - ``role_id``: ``argus_roles.id`` 참조 외래키
         - ``created_at`` / ``updated_at``
     """
@@ -88,5 +92,10 @@ class ArgusUser(Base):
     # 생년월일이라 반드시 변경시킨다). 비밀번호 변경 성공 시 False 로 해제된다.
     must_change_password = Column(Boolean, nullable=False, default=False, server_default="false")
     role_id = Column(Integer, ForeignKey("argus_roles.id"), nullable=False)
+    # 마지막 로그인 성공 시각(로컬·Keycloak 공통). 로그인 실패 연속 횟수와 잠금 해제 시각 —
+    # 로컬 로그인에서 비밀번호를 연속으로 틀리면 잠근다(app.auth.router, usermgr.service.LOGIN_*).
+    last_login_at = Column(DateTime(timezone=True))
+    failed_login_count = Column(Integer, nullable=False, default=0, server_default="0")
+    locked_until = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

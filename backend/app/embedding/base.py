@@ -7,6 +7,10 @@
 
 from abc import ABC, abstractmethod
 
+# 기본 임베딩 모델 — 한글 메타데이터(설명·용어)를 다루므로 다국어(한국어+영어) 모델을 기본으로 한다.
+# 384차원이라 pgvector 컬럼(vector(384))과 그대로 맞는다. 에어갭이면 모델 경로로 바꿔 지정.
+DEFAULT_EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
+
 
 class EmbeddingProvider(ABC):
     """플러그형 임베딩 제공자 인터페이스."""

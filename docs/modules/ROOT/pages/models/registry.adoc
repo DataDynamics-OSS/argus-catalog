@@ -1,54 +1,140 @@
 = 모델 레지스트리
+:toc: macro
+:toclevels: 2
 
-Unity Catalog OSS 와 호환되는 모델 레지스트리입니다. 별도의 도구 없이도 평소 쓰던
+**MLflow 모델** 메뉴는 Unity Catalog OSS 와 호환되는 모델 레지스트리입니다. 별도의 도구 없이도 평소 쓰던
 MLflow 클라이언트만으로 모델을 등록하고, 조회하고, 다시 불러올 수 있습니다.
 
-// TODO: screenshot - MLflow Models 목록 페이지
-image::models-registry/list.png[모델 목록, 800]
+이 문서는 처음 사용하는 분을 기준으로 순서대로 설명합니다. **고급 사용자** 상자와 맨 끝 부록은 처음에는 건너뛰어도 됩니다.
 
-== 진입 경로
+image::models-registry/list.png[MLflow 모델 목록, 900]
 
-좌측 사이드바의 *Model Catalog → MLflow Models* (`/dashboard/models`) 로 들어갑니다.
+toc::[]
 
-== MLflow 연동
+== 시작하기 전에
 
-먼저 알아 둘 점은, 별도의 Tracking 서버를 띄울 필요가 없다는 것입니다. Argus Catalog
-자체를 Model Registry 로 지정하면 됩니다.
+=== 이런 일을 할 수 있습니다
 
+* **모델 등록** — MLflow 클라이언트로 학습한 모델을 기록하면 레지스트리에 새 모델 · 새 버전이 생깁니다.
+* **모델 불러오기** — `models:/이름/버전` 으로 등록한 모델을 다시 로드합니다.
+* **목록 · 상세 보기** — 이름 · 상태 · 프레임워크로 찾고, 버전 · 성능 · 리니지 · 사용법 · 활동을 봅니다.
+* **모델 카드** — 용도 · 성능 · 제약사항 같은 거버넌스 정보를 정리합니다.
+* **파일 보기 · 내려받기** — 모델 버전의 파일을 확인합니다.
+* **삭제 · 복원** — 모델을 목록에서 숨기거나 되살립니다.
+
+전체적으로는 모델을 등록하면 버전이 만들어지고, 그 버전에 배포 단계(Stage)를
+부여한 뒤 모델 카드로 거버넌스 정보를 정리하는 흐름을 따릅니다.
+
+.모델 등록부터 거버넌스까지
+image::diagrams/models-registry-01.png[모델 등록부터 거버넌스까지,role="diagram"]
+
+=== 먼저 알아 둘 용어
+
+[cols="1,4",options="header"]
+|===
+| 용어 | 뜻
+
+| 3-part 이름
+| `catalog.schema.model` 형식의 모델 이름입니다. 예: `argus.ml.iris_classifier`. 자세한 규칙은 <<_모델_이름_3_part>> 를 보세요.
+
+| 버전
+| 같은 이름으로 모델을 기록할 때마다 v1, v2 … 처럼 하나씩 늘어납니다.
+
+| 스테이지
+| 버전의 배포 단계(스테이지 없음 · 스테이징 · 운영 · 보관)입니다. xref:models/stage-metrics.adoc[Stage · 성능 · 리니지] 에서 다룹니다.
+
+| 모델 카드
+| 모델의 용도 · 성능 · 제약사항 등 거버넌스 정보를 적는 곳입니다.
+|===
+
+=== 메뉴 위치
+
+[cols="1,2,3",options="header"]
+|===
+| 메뉴 | 주소 | 용도
+
+| AI 카탈로그 → MLflow 모델 | `/dashboard/models` | *대시보드* 탭(요약 숫자), *모델* 탭(목록)
+| 모델 상세 | `/dashboard/models/<이름>` | 개요 · 버전 · 성능 · 리니지 · 사용법 · 활동
+| AI 카탈로그 → MLflow 모델 파일 | — | 서버 디스크 전체 탐색 (관리자)
+|===
+
+*대시보드* 탭은 모델 수 · 운영 중인 모델 수 · 최근 30일 다운로드 · *주의 필요*(등록 대기 + 실패 버전 수)를 보여 줍니다.
+
+=== 누가 무엇을 할 수 있나요
+
+화면과 API 모두 로그인해야 쓸 수 있고, 권한 관리에서 *MLflow 모델* 메뉴가 열려 있어야 합니다.
+
+[cols="2,3",options="header"]
+|===
+| 작업 | 할 수 있는 사람
+
+| 목록 · 상세 조회
+| 로그인한 사용자
+| 새 모델 등록
+| *MLflow 모델 등록* 기능 권한이 있는 사용자(기본은 모든 역할 허용)
+| 버전 추가 · 확정 · 삭제, 모델 정보 · 모델 카드 · 메트릭 · 리니지 · 스테이지 변경, 모델 삭제
+| 관리자, 모델을 등록한 사람, 소유자
+| 운영(Production) 으로 올리거나 내리기
+| 위 권한에 더해 *운영(Production) 단계 변경* 기능 권한 (xref:models/stage-metrics.adoc[Stage · 성능 · 리니지] 참고)
+| 모델 · 버전 파일 보기 · 내려받기 (상세의 *파일 보기* · 버전의 *파일*)
+| 로그인한 사용자 — 그 모델 폴더 안만 (읽기 전용)
+| 삭제된 모델 보기 · 복원 · 영구 삭제, *MLflow 모델 파일* 메뉴(서버 디스크 전체 탐색 · 파일 변경)
+| 관리자만
+|===
+
+권한이 없는 사용자에게는 편집 버튼과 스테이지 선택 상자가 보이지 않고, "…은(는) 모델 소유자 또는 관리자만 변경할 수 있습니다." 안내가 나옵니다.
+
+[[_mlflow_연동]]
+== 모델 등록하기 (MLflow 연동)
+
+별도의 Tracking 서버 없이 Argus Catalog 자체를 Model Registry 로 지정합니다.
+
+. MLflow 를 설치하고 로그인 토큰을 받아 `MLFLOW_UC_OSS_TOKEN` 환경 변수에 넣습니다. 레지스트리 API 는 로그인 토큰이 필요합니다.
++
+[source,bash]
+----
+pip install "mlflow>=3" scikit-learn
+
+export MLFLOW_UC_OSS_TOKEN=$(curl -s -X POST "http://<catalog-server>:4600/api/v1/auth/login" \
+  -H "Content-Type: application/json" \
+  -d '{"username": "<사용자>", "password": "<비밀번호>"}' \
+  | python -c 'import sys, json; print(json.load(sys.stdin)["access_token"])')
+----
+. 레지스트리 주소를 카탈로그로 지정하고, `registered_model_name` 에 3-part 이름을 주어 모델을 기록합니다.
++
 [source,python]
 ----
 import mlflow
+from sklearn.ensemble import RandomForestClassifier
 
 mlflow.set_registry_uri("uc:http://<catalog-server>:4600")
 
-# 학습
-from sklearn.ensemble import RandomForestClassifier
 model = RandomForestClassifier(n_estimators=100).fit(X, y)
 
-# 등록 — 한 줄
-mlflow.sklearn.log_model(
-    model, "model",
-    registered_model_name="argus.ml.iris_classifier",
-)
+with mlflow.start_run():
+    mlflow.sklearn.log_model(model, "model", registered_model_name="argus.ml.iris_classifier")   # 등록
 
-# 로딩
-loaded = mlflow.pyfunc.load_model("models:/argus.ml.iris_classifier/1")
+loaded = mlflow.pyfunc.load_model("models:/argus.ml.iris_classifier/1")                       # 로딩
 ----
+. **AI 카탈로그 → MLflow 모델** 목록에서 새 모델을 확인합니다.
 
-시작하기 전에 다음 패키지를 설치해 둡니다.
+`registered_model_name` 으로 기록하면 모델이 없을 때 새로 만들고 v1 을 등록하며, 같은 이름으로 다시 기록하면
+새 버전이 생깁니다. 로컬 로그인 토큰은 8시간 동안 유효하므로 배치 작업은 실행 직전에 토큰을 받습니다.
 
-[source,bash]
-----
-pip install "mlflow[skinny]>=3.0"
-pip install "mlflow-unity-catalog>=0.1.0"
-----
+목록이 비어 있을 때 나오는 *등록 방법 보기* 를 누르면 지금 접속한 주소로 채운 같은 예시를 볼 수 있습니다.
 
-== 모델 이름 (3-part)
+image::models-registry/register-guide.png[MLflow 모델 등록 방법 안내, 900]
 
-모델 이름을 지을 때 한 가지 규칙이 있습니다. UC 플러그인은 *3-part name*
-(`catalog.schema.model`) 형식을 요구합니다.
+NOTE: 화면에는 모델 등록 · 설명 수정 기능이 없습니다. 등록은 MLflow 클라이언트(또는 `POST /api/v1/models`), 수정은 `PATCH /api/v1/models/{이름}` 으로 합니다.
 
-[cols="1,1"]
+MLflow 클라이언트가 서버와 같은 파일시스템을 볼 수 없는 환경이라면 xref:models/import.adoc[모델 반입] 의 SDK 를 씁니다(아래 고급 상자 참고).
+
+[[_모델_이름_3_part]]
+=== 모델 이름 (3-part)
+
+UC 플러그인은 *3-part name* (`catalog.schema.model`) 형식을 요구합니다.
+
+[cols="1,1",options="header"]
 |===
 | 올바른 예 | 의미
 
@@ -57,14 +143,15 @@ pip install "mlflow-unity-catalog>=0.1.0"
 | `datateam.fraud.detector_v2` | catalog=datateam, schema=fraud, model=detector_v2
 |===
 
-반면 `iris_classifier` 나 `ml.iris_classifier` 처럼 형식이 맞지 않으면 ValueError 가
-발생합니다.
+`iris_classifier` 나 `ml.iris_classifier` 처럼 형식이 맞지 않으면 클라이언트에서 ValueError 가 발생합니다.
+이름은 OCI 모델과 MLflow 모델을 통틀어 하나만 쓸 수 있습니다.
 
-== 지원 프레임워크
+[[_지원_프레임워크]]
+=== 지원 프레임워크
 
 MLflow flavor 가 지원하는 프레임워크라면 거의 그대로 사용할 수 있습니다.
 
-[cols="1,2,2"]
+[cols="1,2,2",options="header"]
 |===
 | 프레임워크 | Flavor | 예시
 
@@ -79,46 +166,158 @@ MLflow flavor 가 지원하는 프레임워크라면 거의 그대로 사용할 
 | 커스텀 | `mlflow.pyfunc` | `mlflow.pyfunc.log_model(...)`
 |===
 
-== 아티팩트 저장 경로
-
-[cols="1,3"]
+[[_아티팩트_저장_경로]]
+[TIP]
+.고급 사용자 — 아티팩트 저장 경로
+====
+[cols="1,3",options="header"]
 |===
-| 저장 방식 | 위치
+| 등록 방식 | 위치
 
-| 로컬 (`storage_type=local`)
-| `{data_dir}/model-artifacts/{model}/versions/{N}/`
-| S3 / MinIO (`storage_type=s3`)
-| `s3://{bucket}/{model}/v{N}/`
+| MLflow 클라이언트로 기록
+| 서버 디스크 `{data_dir}/model-artifacts/{model}/versions/{N}/`
+| SDK 반입(`import-hf` · `import-local`) · 업로드 API
+| 오브젝트 저장소 `s3://model-artifacts/{model}/v{N}/` (확정 시 OCI manifest 생성)
 |===
 
-S3 저장은 xref:models/oci-hub.adoc[OCI Model Hub] 와 통합되어 있어, 같은 객체를
-OCI Manifest 형태로 조회하고 배포할 수 있습니다.
+MLflow 클라이언트는 서버가 알려 준 저장 경로(`file://…`)에 아티팩트를 직접 씁니다. 따라서 클라이언트가
+서버와 같은 파일시스템을 볼 수 있어야 합니다. 그렇지 않은 환경에서는 xref:models/import.adoc[모델 반입] 의 SDK 를 씁니다.
+====
 
-== 모델 카드
+[[_목록_화면]]
+== 모델 찾기 (목록 화면)
 
-// TODO: screenshot - 모델 카드 편집 (Markdown 에디터)
-//image::models-registry/card.png[모델 카드, 800]
+**AI 카탈로그 → MLflow 모델** 의 *모델* 탭에서 다음 도구로 모델을 찾습니다.
 
-모델 카드는 모델의 거버넌스 정보를 한 화면에 모아 정리해 주는 공간입니다.
+* *모델 이름 검색* — 이름 부분 일치. Enter 를 치거나 입력을 멈추면 검색합니다.
+* *상태* — 최신 버전의 상태(준비됨 · 등록 중 · 등록 실패)로 좁힙니다.
+* *프레임워크* — MLflow flavor(sklearn, pytorch 등)로 좁힙니다.
+* *운영 버전* 열 — 운영(Production) 스테이지인 버전 번호를 보여 줍니다.
+* *삭제된 모델* (관리자) — 아래 <<_모델_삭제와_복원>> 을 봅니다.
 
-[cols="1,3"]
+필터를 건 채 페이지를 넘기거나 페이지 크기를 바꿔도 조건이 유지됩니다.
+
+[[_모델_상세와_모델_카드]]
+== 모델 상세와 모델 카드
+
+목록에서 모델을 누르면 상세(`/dashboard/models/<이름>`)가 열립니다. 탭은 *개요 · 버전 · 성능 · 리니지 · 사용법 · 활동* 입니다.
+버전 · 성능 · 리니지는 xref:models/stage-metrics.adoc[Stage · 성능 · 리니지] 에서, 사용법 탭은 로드 · 예측 코드를, 활동 탭은 다운로드 통계를 보여 줍니다.
+
+개요 탭의 *모델 카드* 는 거버넌스 정보를 정리하는 곳입니다.
+
+. 개요 탭에서 *편집*(비어 있으면 *모델 카드 작성*)을 누릅니다. 편집 권한이 있어야 보입니다.
+. 아래 필드를 채우고 저장합니다.
+
+[cols="1,3",options="header"]
 |===
 | 필드 | 내용
 
-| Purpose | 비즈니스 목적
-| Performance | 정량 지표 (AUC, F1 등)
-| Limitations | 알려진 제한 · 편향
-| Training Data | 학습 데이터 출처 · 기간 · 규모
-| Framework | 사용 프레임워크 · 버전
-| License | 사용 허가 범위
-| Contact | 담당자 이메일
+| 용도 | 비즈니스 목적
+| 성능 | 정량 지표 (AUC, F1 등)
+| 제약사항 | 알려진 한계 · 편향
+| 학습 데이터 | 학습 데이터 출처 · 기간 · 규모
+| 프레임워크 | 사용 프레임워크 · 버전 (비우면 감지한 값)
+| 라이선스 | 사용 허가 범위
+| 연락처 | 담당자 이메일
 |===
 
-== 목록 화면 필터
+[[_버전_상태]]
+== 버전 상태 확인하기
 
-모델이 많아지면 원하는 것을 찾기가 번거로워집니다. 이때는 모델 목록 화면 상단에서
-다음 필터를 활용하면 됩니다.
+*버전* 탭에서 각 버전의 상태를 봅니다.
 
-* *search* — 이름 부분 일치
-* *status* — 최신 버전의 Status
-* *python_version* / *sklearn_version* — 파싱된 메타데이터 기준
+[cols="1,3",options="header"]
+|===
+| 상태 | 의미
+
+| 준비됨 (`READY`) | 등록이 끝난 버전입니다. 화면에는 배지를 따로 표시하지 않습니다.
+| 등록 중 (`PENDING_REGISTRATION`) | 버전은 만들어졌지만 아직 확정되지 않았습니다(파일 업로드 중).
+| 등록 실패 (`FAILED_REGISTRATION`) | 등록이 실패로 끝났습니다. 빨간 배지와 함께 사유가 표시됩니다.
+|===
+
+*등록 실패* 는 다음과 같은 경우에 생깁니다.
+
+* MLflow 클라이언트가 업로드 실패를 보고했을 때
+* SDK 반입(`import-hf` · `import-local`) 도중 저장소에 연결할 수 없는 등 오류가 났을 때 — 사유에 "오브젝트 스토리지에 연결할 수 없습니다…" 가 남습니다.
+* 등록 중인 버전이 있는 모델을 삭제했을 때 — 사유 "Model deleted during registration"
+
+실패한 버전은 다시 확정할 수 없습니다(409). 대시보드의 *주의 필요* 카드에 집계되므로, 원인을 해결한 뒤 그 버전을 삭제하고 다시 등록합니다.
+버전 파일이 저장 위치에 없으면 "파일 없음" 표시와 함께 내려받거나 로드할 수 없다는 안내가 나옵니다.
+
+image::models-registry/failed-version.png[저장소 장애로 등록 실패한 v2, 900]
+
+[[_버전_삭제]]
+=== 버전 삭제
+
+버전 삭제는 화면에 없고 API `DELETE /api/v1/models/{이름}/versions/{버전}` (편집 권한자)으로 합니다.
+그 버전의 기록과 함께 서버 디스크의 `versions/{N}` 폴더와 저장소의 `{모델}/v{N}/` 파일도 지워집니다.
+저장소에 연결할 수 없어 파일을 못 지워도 기록 삭제는 그대로 진행됩니다.
+
+== 모델 파일 보기 · 내려받기
+
+. 모델 상세의 *파일 보기* 를 누르거나, 버전 탭에서 그 버전의 *파일* 을 누릅니다.
+. 일반 사용자에게는 그 폴더에 고정된 읽기 전용 창이 열립니다. 파일을 보거나 내려받거나 속성을 확인합니다.
+
+관리자는 같은 버튼을 누르면 전체 파일 화면 *AI 카탈로그 → MLflow 모델 파일* 로 이동합니다.
+
+[TIP]
+.고급 사용자 — MLflow 모델 파일 화면 (관리자)
+====
+서버 디스크 전체 탐색과 업로드 · 삭제 · 이름 변경은 관리자 전용입니다. 등록된 모델의 폴더는 이 화면에서도
+지우거나 옮길 수 없습니다(409) — 버전 삭제나 모델 영구 삭제를 씁니다. 소프트 삭제된 모델의 파일은 관리자만 봅니다.
+====
+
+[[_모델_삭제와_복원]]
+== 모델 삭제와 복원
+
+. 목록에서 지울 모델의 행을 선택합니다.
+. *N개 삭제* 버튼을 누릅니다. 편집 권한이 없는 모델이 섞여 있으면 버튼이 꺼지고 이유가 툴팁으로 보입니다.
+. 대화상자에서 삭제 방식을 확인하고 실행합니다.
+
+[cols="1,3",options="header"]
+|===
+| 방식 | 동작
+
+| 삭제 (기본)
+| 목록 · 통계에서 숨깁니다(소프트 삭제). 버전과 아티팩트 파일은 남고, 등록 중이던 버전은 실패로 마감됩니다. 같은 이름으로 새로 등록할 수 없습니다.
+| 복원 (관리자)
+| *삭제된 모델* 에서 선택해 *복원* 하면 다시 목록에 나타납니다.
+| 영구 삭제 (관리자)
+| 삭제 대화상자의 *영구 삭제 (관리자)* 를 체크하거나 *삭제된 모델* 에서 *영구 삭제* 를 고른 뒤, 확인란에 `DELETE MODELS` 를 입력해야 실행됩니다. DB 기록 · 아티팩트 파일(디스크 · 저장소) · 다운로드 기록을 모두 지우며 되돌릴 수 없습니다.
+|===
+
+image::models-registry/delete-dialog.png[모델 삭제 대화상자 — 목록에서 숨기기, 450]
+
+image::models-registry/deleted-models.png[관리자의 삭제된 모델 보기, 900]
+
+== 자주 묻는 질문
+
+*Q. 모델을 기록할 때 `UNAUTHENTICATED: 인증이 필요합니다.` 오류가 납니다.* +
+A. `MLFLOW_UC_OSS_TOKEN` 에 토큰이 없거나 만료되었습니다. 로컬 로그인 토큰은 8시간 동안 유효하므로 실행 직전에 다시 받으세요.
+
+*Q. 클라이언트에서 ValueError 가 납니다.* +
+A. 모델 이름이 3-part(`catalog.schema.model`) 형식이 아닙니다. <<_모델_이름_3_part>> 를 보세요.
+
+*Q. 버전이 '등록 실패' 로 남았습니다.* +
+A. 빨간 배지의 사유를 확인하고 원인(예: 저장소 연결)을 해결한 뒤, 그 버전을 삭제하고 다시 등록하세요. 실패한 버전은 다시 확정할 수 없습니다.
+
+*Q. 지운 모델과 같은 이름으로 다시 등록할 수 없습니다.* +
+A. 소프트 삭제된 모델의 이름은 계속 사용 중으로 남습니다. 관리자에게 복원이나 영구 삭제를 요청하세요.
+
+*Q. 편집 버튼이나 스테이지 선택 상자가 보이지 않습니다.* +
+A. 관리자, 모델을 등록한 사람, 소유자만 변경할 수 있습니다.
+
+== 부록: REST API
+
+[cols="1,3",options="header"]
+|===
+| 동작 | API
+
+| 목록 조회 | `GET /api/v1/models?search=&status=&flavor=&page=&page_size=` (`page_size` 최대 100, `deleted=true` 는 관리자만)
+| 등록 | `POST /api/v1/models`
+| 수정 | `PATCH /api/v1/models/{이름}`
+| 버전 삭제 | `DELETE /api/v1/models/{이름}/versions/{버전}`
+| 소프트 삭제 | `DELETE /api/v1/models/{이름}`
+| 복원 | `POST /api/v1/models/{이름}/restore`
+| 영구 삭제 | `POST /api/v1/models/hard-delete` (`{"names": [...]}`)
+|===

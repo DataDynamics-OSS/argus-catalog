@@ -28,6 +28,9 @@ import {
   useUserNames,
 } from "@/features/change-mgmt/labels"
 import { useAuth } from "@/features/auth"
+import { usePermissions } from "@/features/permissions/use-permissions"
+import { usePrompt } from "@/components/confirm-provider"
+import { errorMessage, notifyError } from "@/lib/notify"
 
 function fmtDateTime(s?: string | null): string {
   if (!s) return "—"
@@ -56,6 +59,9 @@ function isOverdue(due?: string | null): boolean {
 export default function MyApprovalsPage() {
   const router = useRouter()
   const { user } = useAuth()
+  const askInput = usePrompt()
+  // 기능 권한 changes.approve — 서버도 같은 키로 403
+  const canApprove = usePermissions().isFeatureAllowed("changes.approve")
   const me = user?.username
   const { approverLabel } = useUserNames()
 
@@ -70,7 +76,7 @@ export default function MyApprovalsPage() {
     try {
       setItems(await listMyInbox())
     } catch (e) {
-      setError(e instanceof Error ? e.message : "결재 인박스 조회 실패")
+      setError(errorMessage(e) ?? "결재 인박스를 불러오지 못했습니다.")
     } finally {
       setLoading(false)
     }
@@ -86,7 +92,15 @@ export default function MyApprovalsPage() {
   const onDecide = async (cr: ChangeRequest, decision: "APPROVED" | "REJECTED") => {
     let comment: string | undefined
     if (decision === "REJECTED") {
-      const reason = window.prompt("반려 사유를 입력하세요 (선택):")
+      const reason = await askInput({
+        title: "반려",
+        label: "반려 사유 (선택)",
+        placeholder: "요청자에게 전달할 반려 사유를 입력하세요.",
+        multiline: true,
+        confirmText: "반려",
+        destructive: true,
+        maxLength: 1000,
+      })
       if (reason === null) return // 취소
       comment = reason.trim() || undefined
     }
@@ -97,7 +111,7 @@ export default function MyApprovalsPage() {
       await new Promise((r) => setTimeout(r, 600))
       await reload()
     } catch (e) {
-      alert(e instanceof Error ? e.message : "결재 처리 실패")
+      notifyError(e, "결재를 처리하지 못했습니다.")
     } finally {
       setBusyId(null)
     }
@@ -163,22 +177,26 @@ export default function MyApprovalsPage() {
                   </button>
 
                   <div className="flex shrink-0 gap-1">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={busy}
-                      onClick={() => onDecide(cr, "APPROVED")}
-                    >
-                      <CheckCircle2 className="mr-1 h-4 w-4" /> 승인
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      disabled={busy}
-                      onClick={() => onDecide(cr, "REJECTED")}
-                    >
-                      반려
-                    </Button>
+                    {canApprove && (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={busy}
+                          onClick={() => onDecide(cr, "APPROVED")}
+                        >
+                          <CheckCircle2 className="mr-1 h-4 w-4" /> 승인
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          disabled={busy}
+                          onClick={() => onDecide(cr, "REJECTED")}
+                        >
+                          반려
+                        </Button>
+                      </>
+                    )}
                   </div>
                 </div>
               )

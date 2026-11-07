@@ -19,6 +19,7 @@ import {
   updateObjectStorageConfig,
   type InitStep,
 } from "./api"
+import { errorMessage, notifyError, notifySuccess, toast } from "@/lib/notify"
 
 function StepIcon({ status }: { status: string }) {
   if (status === "ok") return <CheckCircle2 className="h-4 w-4 text-blue-500" />
@@ -56,7 +57,6 @@ export function OciModelRegistrySettings() {
   const [showSecretKey, setShowSecretKey] = useState(false)
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
-  const [statusMessage, setStatusMessage] = useState<{ type: "success" | "error"; text: string } | null>(null)
   const [testResult, setTestResult] = useState<{ type: "success" | "error"; text: string } | null>(null)
 
   // Initialize dialog
@@ -77,7 +77,7 @@ export function OciModelRegistrySettings() {
       setBucket(config.bucket)
       setPresignedUrlExpiry(String(config.presigned_url_expiry))
     } catch (err) {
-      setError(err instanceof Error ? err.message : "설정을 불러오지 못했습니다.")
+      setError(errorMessage(err) ?? "설정을 불러오지 못했습니다.")
     } finally {
       setLoading(false)
     }
@@ -86,11 +86,6 @@ export function OciModelRegistrySettings() {
   useEffect(() => {
     loadConfig()
   }, [loadConfig])
-
-  function showStatus(type: "success" | "error", text: string) {
-    setStatusMessage({ type, text })
-    setTimeout(() => setStatusMessage(null), 3000)
-  }
 
   const canSave = endpoint.trim().length > 0
 
@@ -106,10 +101,10 @@ export function OciModelRegistrySettings() {
         bucket,
         presigned_url_expiry: parseInt(presignedUrlExpiry) || 3600,
       })
-      showStatus("success", "오브젝트 스토리지 설정을 저장했습니다.")
+      notifySuccess("오브젝트 스토리지 설정을 저장했습니다.")
       await loadConfig()
     } catch (err) {
-      showStatus("error", err instanceof Error ? err.message : "저장에 실패했습니다.")
+      notifyError(err, "오브젝트 스토리지 설정을 저장하지 못했습니다.")
     } finally {
       setSaving(false)
     }
@@ -125,7 +120,7 @@ export function OciModelRegistrySettings() {
         text: result.message,
       })
     } catch (err) {
-      setTestResult({ type: "error", text: err instanceof Error ? err.message : "테스트에 실패했습니다." })
+      setTestResult({ type: "error", text: errorMessage(err) ?? "연결을 테스트하지 못했습니다." })
     } finally {
       setTesting(false)
     }
@@ -138,7 +133,7 @@ export function OciModelRegistrySettings() {
     if (!secretKey.trim()) missing.push("Secret Key")
     if (!bucket.trim()) missing.push("버킷")
     if (missing.length > 0) {
-      showStatus("error", `필수 항목이 비어 있습니다: ${missing.join(", ")}`)
+      toast.error("필수 항목이 비어 있습니다.", { description: missing.join(", ") })
       return
     }
     setInitSteps([])
@@ -154,7 +149,7 @@ export function OciModelRegistrySettings() {
       )
       setInitSteps(result.steps)
     } catch (e) {
-      setInitSteps([{ step: "초기화", status: "error", message: e instanceof Error ? e.message : "실패" }])
+      setInitSteps([{ step: "초기화", status: "error", message: errorMessage(e) ?? "오브젝트 스토리지를 초기화하지 못했습니다." }])
     } finally {
       setInitRunning(false)
     }
@@ -185,18 +180,6 @@ export function OciModelRegistrySettings() {
 
   return (
     <div className="space-y-6 max-w-2xl">
-      {statusMessage && (
-        <div
-          className={`flex items-center gap-2 rounded-md px-4 py-2 text-sm ${
-            statusMessage.type === "success"
-              ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-              : "bg-red-50 text-red-700 border border-red-200"
-          }`}
-        >
-          {statusMessage.type === "success" ? <Check className="h-4 w-4" /> : <X className="h-4 w-4" />}
-          {statusMessage.text}
-        </div>
-      )}
 
       <Card>
         <CardHeader>
@@ -204,7 +187,7 @@ export function OciModelRegistrySettings() {
             <div>
               <CardTitle>오브젝트 스토리지 (MinIO / S3)</CardTitle>
               <CardDescription>
-                OCI 모델 레지스트리가 사용할 S3 호환 오브젝트 스토리지 연결 설정입니다.
+                MLflow 모델·OCI 모델 레지스트리의 파일(아티팩트)을 저장하는 S3 호환 오브젝트 스토리지 연결 설정입니다.
               </CardDescription>
             </div>
             <div className="flex gap-2">
@@ -226,7 +209,7 @@ export function OciModelRegistrySettings() {
         <CardContent>
           {testResult && (
             <div
-              className={`mb-4 flex items-center gap-2 rounded-md px-4 py-2 text-sm ${
+              className={`mb-4 flex items-center gap-2 rounded-md px-3 py-2 text-sm ${
                 testResult.type === "success"
                   ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
                   : "bg-red-50 text-red-700 border border-red-200"

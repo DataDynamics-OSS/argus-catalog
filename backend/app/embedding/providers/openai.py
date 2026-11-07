@@ -34,10 +34,16 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
         self._model_id = model_id
         self._base_url = base_url.rstrip("/")
         self._client = httpx.AsyncClient(timeout=30.0)
+        # 알 수 없는 모델은 1536 으로 가정(호출 전에는 실제 차원을 알 수 없음)
         self._dim = _DIM_MAP.get(model_id, 1536)
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
-        """OpenAI API 로 텍스트를 임베딩. 배치 처리는 내부에서 처리한다."""
+        """OpenAI API 로 텍스트를 임베딩. 배치 전체를 요청 1회로 보낸다.
+
+        HTTP 오류 응답이면 ``httpx.HTTPStatusError`` 를 그대로 올린다(호출 측에서 처리).
+        """
+        # API 키는 Authorization 헤더로만 보내고 로그에는 남기지 않는다
+        logger.debug("OpenAI 임베딩 요청: model=%s count=%d", self._model_id, len(texts))
         resp = await self._client.post(
             f"{self._base_url}/embeddings",
             headers={"Authorization": f"Bearer {self._api_key}"},

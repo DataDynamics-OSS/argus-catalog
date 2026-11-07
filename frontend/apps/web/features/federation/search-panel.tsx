@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import {
   AlertTriangle,
   GitBranch,
@@ -30,6 +30,8 @@ import {
   type FederatedLineageGraph,
   type FederatedSearchHit,
 } from "./api"
+import { errorMessage } from "@/lib/notify"
+import { markdownToPlain } from "@/features/search/excerpt"
 
 /** 페더레이션 데이터셋 상세 전체화면 경로. */
 export function federatedDetailHref(federatedUrn: string): string {
@@ -68,9 +70,17 @@ function toFederatedUrn(hit: FederatedSearchHit): string {
   return hit.urn
 }
 
-export function FederationSearchPanel() {
+export function FederationSearchPanel({
+  initialQuery = "",
+  onQueryCommit,
+}: {
+  /** URL(?q=)에서 복원한 검색어 — 있으면 마운트 시 자동 검색 */
+  initialQuery?: string
+  /** 검색 실행 시 호출 — 상위가 URL 에 검색어를 보관 */
+  onQueryCommit?: (q: string) => void
+} = {}) {
   const router = useRouter()
-  const [query, setQuery] = useState("")
+  const [query, setQuery] = useState(initialQuery)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [results, setResults] = useState<FederatedSearchHit[]>([])
@@ -80,29 +90,61 @@ export function FederationSearchPanel() {
   } | null>(null)
 
   // 리니지 다이얼로그
+  const [lineageOpen, setLineageOpen] = useState(false)
   const [lineage, setLineage] = useState<FederatedLineageGraph | null>(null)
+  const [lineageLoading, setLineageLoading] = useState(false)
+  const [lineageError, setLineageError] = useState<string | null>(null)
   const [lineageRoot, setLineageRoot] = useState<string>("")
 
-  const runSearch = useCallback(async () => {
-    const q = query.trim()
-    if (!q) return
-    setLoading(true)
-    setError(null)
-    try {
-      const resp = await federatedSearch(q, { limit: 30 })
-      setResults(resp.items)
-      setMeta({
-        queried: resp.instances_queried,
-        failed: resp.instances_failed,
-      })
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-      setResults([])
-      setMeta(null)
-    } finally {
-      setLoading(false)
-    }
-  }, [query])
+  // 요청 세대 — 늦게 도착한 이전 요청의 응답이 최신 결과를 덮어쓰지 않도록
+  const searchReq = useRef(0)
+  const lineageReq = useRef(0)
+  // 마지막으로 실행한 검색어 — URL 의 q 가 바뀐 경우(뒤로/앞으로)에만 재검색
+  const lastRun = useRef<string | null>(null)
+
+  const execSearch = useCallback(
+    async (raw: string) => {
+      const q = raw.trim()
+      if (!q) return
+      const req = ++searchReq.current
+      lastRun.current = q
+      onQueryCommit?.(q)
+      setLoading(true)
+      setError(null)
+      try {
+        const resp = await federatedSearch(q, { limit: 30 })
+        if (req !== searchReq.current) return
+        setResults(resp.items)
+        setMeta({
+          queried: resp.instances_queried,
+          failed: resp.instances_failed,
+        })
+      } catch (e) {
+        if (req !== searchReq.current) return
+        setError(errorMessage(e) ?? String(e))
+        setResults([])
+        setMeta(null)
+      } finally {
+        if (req === searchReq.current) setLoading(false)
+      }
+    },
+    [onQueryCommit]
+  )
+
+  const runSearch = useCallback(() => {
+    if (loading) return
+    void execSearch(query)
+  }, [execSearch, loading, query])
+
+  // URL 에서 온 검색어로 자동 검색(마운트·뒤로 가기). 직접 실행한 검색어와 같으면 생략.
+  useEffect(() => {
+    const q = initialQuery.trim()
+    if (!q || q === lastRun.current) return
+    setQuery(q)
+    void execSearch(q)
+    // execSearch 는 onQueryCommit(매 렌더 새 함수)에 의존 — q 변화에만 반응한다
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialQuery])
 
   const openDetail = useCallback(
     (hit: FederatedSearchHit) => {
@@ -111,14 +153,22 @@ export function FederationSearchPanel() {
     [router]
   )
 
+  // 다이얼로그를 즉시 열고 내부에 로딩·오류를 표시한다.
   const openLineage = useCallback(async (hit: FederatedSearchHit) => {
+    const req = ++lineageReq.current
     setLineageRoot(hit.name)
     setLineage(null)
+    setLineageError(null)
+    setLineageLoading(true)
+    setLineageOpen(true)
     try {
       const g = await datasetLineage(toFederatedUrn(hit), 2)
-      setLineage(g)
+      if (req === lineageReq.current) setLineage(g)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      if (req === lineageReq.current)
+        setLineageError(errorMessage(e) ?? String(e))
+    } finally {
+      if (req === lineageReq.current) setLineageLoading(false)
     }
   }, [])
 
@@ -163,7 +213,10 @@ export function FederationSearchPanel() {
 
       <div className="flex flex-col gap-2 overflow-auto">
         {results.map((hit) => (
-          <Card key={`${hit.source_instance_key ?? "local"}:${hit.urn}`}>
+          <Card
+            key={`${hit.source_instance_key ?? "local"}:${hit.urn}`}
+            className="py-0"
+          >
             <CardContent className="flex items-start gap-3 p-3">
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
@@ -184,9 +237,10 @@ export function FederationSearchPanel() {
                   {hit.datasource_type && <span> · {hit.datasource_type}</span>}
                   {hit.origin && <span> · {hit.origin}</span>}
                 </div>
+                {/* 설명은 마크다운(## 개요, **굵게**) — 기호가 보이지 않게 평문으로 */}
                 {hit.description && (
                   <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
-                    {hit.description}
+                    {markdownToPlain(hit.description)}
                   </p>
                 )}
                 <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
@@ -223,8 +277,11 @@ export function FederationSearchPanel() {
 
       {/* 리니지 */}
       <Dialog
-        open={lineage !== null}
-        onOpenChange={(o) => !o && setLineage(null)}
+        open={lineageOpen}
+        onOpenChange={(o) => {
+          setLineageOpen(o)
+          if (!o) lineageReq.current++ // 닫은 뒤 도착한 응답 무시
+        }}
       >
         <DialogContent className="max-h-[80vh] max-w-3xl overflow-auto">
           <DialogHeader>
@@ -233,7 +290,17 @@ export function FederationSearchPanel() {
               로컬·미러 리니지를 URN 매칭으로 합친 데이터 흐름입니다.
             </DialogDescription>
           </DialogHeader>
-          {lineage && <LineageBody graph={lineage} />}
+          {lineageLoading ? (
+            <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> 리니지를 불러오는 중...
+            </div>
+          ) : lineageError ? (
+            <div className="flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              <AlertTriangle className="h-4 w-4 shrink-0" /> {lineageError}
+            </div>
+          ) : (
+            lineage && <LineageBody graph={lineage} />
+          )}
         </DialogContent>
       </Dialog>
     </div>

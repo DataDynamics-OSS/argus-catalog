@@ -5,6 +5,12 @@
 서버 기동 시 코어가 자동으로 발견·등록하며 경로는 `/api/v1/<...>` 가 됩니다. 화면에서
 호출할 데이터 API 를 이렇게 만들어 보겠습니다.
 
+전체적으로는 서버가 기동할 때 코어 로더가 플러그인 라우터를 등록하고, 이후 요청이
+코어 라우터를 거쳐 플러그인 핸들러로 전달됩니다.
+
+.백엔드 플러그인 로딩과 요청 처리
+image::diagrams/plugin-backend-01.png[백엔드 플러그인 로딩과 요청 처리,role="diagram"]
+
 == 위치
 
 기존 `extensions/` 컨벤션을 그대로 따릅니다.
@@ -28,21 +34,28 @@ extensions/argus-plugin-<고객사>/
 | 속성 | 필수 | 의미
 
 | `router` | 필수 | FastAPI `APIRouter`
-| `prefix` | 선택 | 라우터 등록 prefix. 미지정 시 `/api/v1`
+| `prefix` | 선택 | 라우터 등록 prefix. 미지정·`None`·빈 문자열이면 `/api/v1`
 |===
 
 == 3단계로 추가하기
 
 라우터를 만들고, export 하고, entry point 로 선언하는 세 단계면 됩니다.
 
-=== 1. 라우터 작성 (`router.py`)
+=== 라우터 작성 (`router.py`)
 
 [source,python]
 ----
 # SPDX-License-Identifier: Apache-2.0
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
-router = APIRouter(prefix="/acme", tags=["acme-plugin"])
+from app.core.auth import get_current_user
+
+# 라우터 전체에 코어와 같은 인증(현재 사용자 가드)을 건다.
+router = APIRouter(
+    prefix="/acme",
+    tags=["acme-plugin"],
+    dependencies=[Depends(get_current_user)],
+)
 
 
 @router.get("/billing/summary")
@@ -53,7 +66,7 @@ def billing_summary() -> dict:
 
 코어가 `/api/v1` prefix 로 등록하므로 최종 경로는 `/api/v1/acme/billing/summary` 입니다.
 
-=== 2. `plugin` 객체 export (`__init__.py`)
+=== `plugin` 객체 export (`__init__.py`)
 
 [source,python]
 ----
@@ -64,13 +77,13 @@ from .router import router
 plugin = SimpleNamespace(router=router)
 ----
 
-=== 3. entry point 선언 (`pyproject.toml`)
+=== entry point 선언 (`pyproject.toml`)
 
 [source,toml]
 ----
 [project]
 name = "argus-plugin-acme"
-version = "0.1.0"
+version = "0.5.0"
 requires-python = ">=3.11"
 dependencies = ["fastapi>=0.100"]
 
@@ -82,67 +95,34 @@ acme = "argus_plugin_acme:plugin"
 where = ["src"]
 ----
 
-== 설치 & 활성화
+== 인증
 
-=== 설치
-
-플러그인은 고객사 이미지/환경에만 설치합니다.
-
-[source,bash]
-----
-pip install -e extensions/argus-plugin-acme   # 개발
-# 또는 빌드한 wheel 을 고객 이미지에 포함
-----
-
-=== 활성화 제어 (`plugins.enabled`)
-
-`config.yml` 의 `plugins.enabled` 로 어떤 플러그인을 켤지 제어합니다.
+플러그인 엔드포인트도 코어와 동일한 인증 의존성을 사용해야 합니다. 플러그인은 코어
+프로세스 안에서 로드되므로 코어의 의존성을 그대로 import 해 쓸 수 있습니다.
 
 [cols="1,3"]
 |===
-| 값 | 동작
+| 의존성 | 용도
 
-| (미설정 / 빈 목록) | 설치되어 *발견된 플러그인을 모두* 로드
-| `acme,beta` | 이름이 목록에 *포함된 것만* 로드(나머지는 건너뜀)
+| `app.core.auth.get_current_user` | 로그인 사용자만 허용 — 라우터 `dependencies` 에 걸어 기본값으로 사용
+| `app.core.auth.require_admin` | 관리자 전용 엔드포인트
+| `app.permissions.router.require_feature("<key>")` | 권한 매트릭스의 기능 권한으로 통제
 |===
 
-[source,yaml]
-----
-plugins:
-  enabled: acme        # 쉼표 구분. 비워두면 설치된 전부 로드
-----
-
-[NOTE]
-`enabled` 는 *발견된 것 중 무엇을 켤지* 의 필터입니다. 애초에 설치하지 않은 플러그인은
-어떤 값을 줘도 로드되지 않습니다.
-
-== 실패 격리 & 우선순위
-
-플러그인이 코어를 방해하지 않도록, 로더는 다음과 같이 동작합니다.
-
-* 한 플러그인의 로드/등록 실패는 *서버 기동과 다른 플러그인* 에 영향을 주지 않습니다(로그만 남깁니다).
-* 플러그인 라우터는 코어 라우터 *등록 뒤* 에 붙습니다 → 경로가 충돌하면 코어가 우선합니다.
-* `router` 속성이 없는 entry point 는 경고 로그를 남기고 건너뜁니다.
-
-== 인증
-
-플러그인 엔드포인트도 코어와 동일한 인증 의존성을 사용해야 합니다. 코어의 인증
-의존성(현재 사용자/관리자 가드)을 라우트에 주입해 보호합니다. 사내망 전제가 아니라면
-인증 없는 엔드포인트를 노출하지 않도록 주의하세요.
+프론트 메뉴를 숨기는 것만으로는 접근을 막을 수 없습니다. 실제 보호는 반드시 API 에서
+이뤄져야 하며, 인증 없는 엔드포인트를 노출하지 않도록 주의하세요.
 
 == 검증
 
-마지막으로 다음 명령으로 라우터가 정상 등록됐는지 확인합니다.
+개발 중에는 다음 명령으로 구문 오류부터 확인합니다.
 
 [source,bash]
 ----
-# 구문/임포트
 python -m py_compile extensions/argus-plugin-acme/src/argus_plugin_acme/*.py
-
-# 기동 후 등록 확인
-curl -s localhost:4600/api/v1/acme/billing/summary
-# 서버 로그: "플러그인 'acme' 등록 완료 (prefix=/api/v1)"
 ----
+
+설치·활성화 방법은 xref:plugin/configuration.adoc[플러그인 설정·배포] 에서, 기동 후 등록
+확인과 로그 해석은 xref:plugin/usage.adoc[플러그인 사용·운영] 에서 다룹니다.
 
 == 예시
 

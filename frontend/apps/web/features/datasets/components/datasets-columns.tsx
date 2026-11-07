@@ -13,25 +13,19 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
+import { useAuth } from "@/features/auth"
+import { canManageDataset } from "../permissions"
 import { type DatasetSummary } from "../data/schema"
 import { useDatasets } from "./datasets-provider"
 
-/**
- * URN 의 가운데 path 부분만 추출한다.
- * URN 은 ``{datasource_id}.{path}.{ENV}.dataset`` 형태이며 path 의 segment 수는
- * datasource 별로 다르다 (PG: db.schema.table, MySQL/Hive: db.table, Iceberg: 가변).
- * 끝에서 두 토큰(ENV, "dataset") 과 맨 앞 datasource_id 만 떼어내고 나머지를 ``.`` 로
- * 다시 합쳐 그대로 노출. 매칭 안 되면 안전하게 원문 URN 을 반환.
- */
-export function pathFromUrn(urn: string | null | undefined): string {
-  if (!urn) return ""
-  const parts = urn.split(".")
-  if (parts.length < 4) return urn
-  return parts.slice(1, -2).join(".")
-}
+// URN path 추출은 avro.ts 로 옮김 — 기존 import 호환용 재노출
+export { pathFromUrn } from "../avro"
 
 function RowActions({ row }: { row: DatasetSummary }) {
   const { setOpen, setCurrentRow } = useDatasets()
+  const { user } = useAuth()
+  // 삭제는 서버와 같은 기준(생성자 또는 관리자)일 때만 노출
+  const canDelete = canManageDataset(user, row.created_by)
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -47,16 +41,20 @@ function RowActions({ row }: { row: DatasetSummary }) {
         <DropdownMenuItem asChild>
           <Link href={`/dashboard/datasets/${row.id}`}>상세 보기</Link>
         </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem
-          onSelect={() => {
-            setCurrentRow(row)
-            setOpen("delete")
-          }}
-          className="text-destructive focus:text-destructive"
-        >
-          삭제
-        </DropdownMenuItem>
+        {canDelete && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onSelect={() => {
+                setCurrentRow(row)
+                setOpen("delete")
+              }}
+              className="text-destructive focus:text-destructive"
+            >
+              삭제
+            </DropdownMenuItem>
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   )

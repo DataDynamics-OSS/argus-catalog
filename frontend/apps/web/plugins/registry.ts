@@ -11,11 +11,9 @@ import type { LucideIcon } from "lucide-react"
 import type { MenuGroup } from "@/types/menu"
 import type { ArgusPlugin } from "./types"
 
-import { acmePlugin } from "./acme"
-
 /** 활성 플러그인 목록. 고객사 플러그인을 여기에 추가한다. */
 const plugins: ArgusPlugin[] = [
-  acmePlugin, // 예시 플러그인 — 실제 OSS 빌드에서는 이 줄을 제거하면 된다.
+  // 예: acmePlugin (plugins/acme/ 예시 참고)
 ]
 
 /** 사이드바에 병합할 플러그인 메뉴 그룹들. */

@@ -16,14 +16,21 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+# import(로컬 승격) 전용 데이터소스 이름 — importer._IMPORT_DS_NAME 과 동일해야 한다.
+# (importer → drilldown → registry 순환 import 를 피하려고 여기서 상수로 둔다)
+IMPORT_DATASOURCE_NAME = "Federation Imports"
+
 
 def dataset_visibility_conditions() -> list:
     """노출 가능 데이터셋을 거르는 SQLAlchemy 조건 목록.
 
     조건은 ``Dataset`` 과 ``Datasource`` 컬럼을 참조하므로, 호출하는 SELECT 는 둘을
     모두 FROM 에 포함(join)해야 한다.
+
+    정책 설정과 무관하게, peer 에서 가져온(import) 데이터셋("Federation Imports"
+    데이터소스)은 항상 제외한다 — 상호 등록 시 받은 사본을 되돌려 주는 에코 방지.
     """
-    conds = []
+    conds = [Datasource.name != IMPORT_DATASOURCE_NAME]
     if settings.federation_export_exclude_pii:
         # contains_pii 는 "true"/"false" 문자열. NULL 은 노출 허용.
         conds.append(or_(Dataset.contains_pii.is_(None), Dataset.contains_pii != "true"))
@@ -48,17 +55,19 @@ def has_visibility_policy() -> bool:
 async def exportable_dataset_ids(
     session: AsyncSession, candidate_ids: list[int],
 ) -> set[int]:
-    """후보 id 중 visibility 정책을 통과하는 것만 반환한다."""
+    """후보 id 중 visibility 정책을 통과하는 것만 반환한다(import 사본은 항상 제외)."""
     if not candidate_ids:
         return set()
     conds = dataset_visibility_conditions()
-    if not conds:
-        return set(candidate_ids)
     rows = (await session.execute(
         select(Dataset.id)
         .join(Datasource, Dataset.datasource_id == Datasource.id)
         .where(Dataset.id.in_(candidate_ids), *conds)
     )).all()
+    logger.debug(
+        "export visibility 필터: candidates=%d allowed=%d policy=%s",
+        len(candidate_ids), len(rows), has_visibility_policy(),
+    )
     return {r[0] for r in rows}
 
 

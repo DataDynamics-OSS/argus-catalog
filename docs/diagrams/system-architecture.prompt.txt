@@ -1,0 +1,29 @@
+Argus Catalog 상세 아키텍처 — built-in image_gen
+
+Content references: old website architecture, current manual index, production deployment,
+AI service, extensions overview and Source Analyzer documentation.
+Style references: diagrams/install-production-01.png and diagrams/index-01.png.
+
+Generation prompt:
+Use case: infographic-diagram. Create a completely redrawn, polished Korean technical manual architecture image for Argus Catalog. Landscape 3:2, high resolution, extremely clean crisp readable Korean typography, large diagram filling the canvas, white margin. Image 1 is the OLD content/layout reference to replace, not a style to copy. Images 2 and 3 are the CURRENT visual style references: pale icy-blue and lavender panels, white rounded cards, navy type, thin electric-blue and violet top borders, simple monoline icons, precise connector arrows. Match that flat vector-like style; NO green or orange bands, NO 3D logos, NO photorealism, NO decorative texture.
+
+Title exactly "Argus Catalog 상세 아키텍처". Small eyebrow "ARGUS CATALOG / SYSTEM ARCHITECTURE". Clearly structured layered architecture, not a generic flowchart. All text should be accurate, Korean where specified, generously spaced and readable. Use the following carefully curated current architecture, which supersedes outdated content in image 1.
+
+TOP BAND: "클라이언트". Three equal cards with line icons: "Python SDK" subtitle "외부 시스템 연동"; "웹 UI · Next.js" subtitle "탐색 · 검색 · 관리"; "argus-model CLI" subtitle "모델 등록 · 반입 · 전송". From these cards a single labeled blue REST API connection bus goes downward to central catalog server.
+
+CENTER LARGE LIGHT BLUE PANEL: header "Catalog Server · FastAPI :4600". Six white module cards in a tidy 3 by 2 grid: "데이터 카탈로그" subtitle "스키마 · 리니지 · 품질"; "AI Agent · MCP" subtitle "정의 · 배포 · 정책"; "API 카탈로그" subtitle "스펙 · 버전 · 관측"; "ML 모델 레지스트리" subtitle "MLflow · OCI"; "데이터 거버넌스" subtitle "표준 · 용어 · 변경 관리"; "검색 · AI 메타데이터" subtitle "키워드 · 벡터 · 생성".
+Alongside this main panel a narrower LAVENDER PANEL "선택 연동" with three compact cards: "AI 서비스 :8930" subtitle "assistant · enrich"; "LLM / 임베딩 제공자" subtitle "로컬 또는 외부 모델"; "Keycloak" subtitle "OIDC · SSO". A dashed violet link connects optional integration panel to the server; within panel AI service connects to providers. These are optional side services, not database stores.
+
+NEXT BAND "저장소와 변경 관리". Four clearly distinct cards: "PostgreSQL + pgvector" subtitle "메타데이터 · 검색 벡터"; "S3 / MinIO" subtitle "모델 아티팩트"; "Temporal" subtitle "변경 관리 워크플로"; "변경 관리 워커" subtitle "결재 · 통지 · 스키마 적용". Server has blue connections to PostgreSQL, S3 and Temporal. Worker connects to Temporal and PostgreSQL, using neat connectors with dedicated gutters. Never imply S3 stores metadata or Temporal stores model artifacts.
+
+BOTTOM BAND "수집 · 분석 · 동기화 확장". Three organized groups, with small native line icons:
+(A) "쿼리 수집" and a readable subline "Hive · Impala · Trino · StarRocks" -> "Query Service :4620" with subtitle "쿼리 저장 · 리니지 · 관계" -> clearly routed to PostgreSQL above, label "저장 / 배치".
+(B) "Metadata Sync · LDAP User Sync" with subtitle "메타데이터 · 사용자 동기화" -> route upward to Catalog Server API, label "REST API". This must not be labeled as the query collector destination.
+(C) "Source Analyzer" with subtitle "Java · Python 정적 분석" -> small document icon labeled "분석 결과 파일". No automatic arrow from source analyzer into the DB/API: it outputs reports.
+Use subtle section boundaries and align everything; avoid crossing labels with arrows. Group-level connectors are fine to keep it clean. Compact legend at bottom: blue line "주요 연결", violet dashed line "선택 연동". No additional invented components, no edition claims, no numeric table counts, no misspellings, no tiny footnotes. This is one production-ready architecture diagram for a manual.
+
+Final connector correction prompt:
+Edit this architecture diagram with ONLY two precise connector repairs. Preserve every panel, icon, title, Korean/English text, colors, spacing and all other arrows exactly as they are.
+1. The upward blue arrow labeled "REST API" above "Metadata Sync · LDAP User Sync" currently terminates in empty space under the storage band. This is incorrect. Replace it with a clear continuous routed blue arrow from the TOP of the Metadata Sync card to the RIGHT EDGE of the large "Catalog Server · FastAPI :4600" panel. Route it through the white vertical gutter between the core and optional panels, x approximately 1128, entering the server near its lower right corner. It may go right horizontally in the gap above bottom extension cards before going up. Where it crosses the worker-to-PostgreSQL horizontal wire, draw a small bridge/jump and do not join the two circuits. The REST API label must unambiguously sit on this connector. Arrowhead at the actual server panel border, not at Temporal or worker or database.
+2. The upward connector labeled "저장 / 배치" from "Query Service :4620" must clearly terminate at the bottom edge of "PostgreSQL + pgvector", not in empty space or the worker bus. Draw a continuous line up to the PostgreSQL card, with a bridge at the horizontal worker bus if necessary. One directed arrow from Query Service toward PostgreSQL is enough.
+This is only connector clarification. Do not add or remove any text/cards, do not rename components. Keep the professional crisp vector-like style.

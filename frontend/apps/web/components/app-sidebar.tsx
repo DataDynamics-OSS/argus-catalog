@@ -13,6 +13,7 @@ import {
 import { Separator } from "@workspace/ui/components/separator"
 import { AppSidebarNav } from "@/components/app-sidebar-nav"
 import { Logo } from "@/components/logo"
+import { SidebarCollapseButton } from "@/components/sidebar-collapse-button"
 import { SidebarUser } from "@/components/sidebar-user" // Added for SSO AUTH
 import { getMenu } from "@/lib/menu"
 
@@ -22,19 +23,22 @@ export async function AppSidebar() {
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader>
-        <SidebarMenu>
+        {/* relative — 펼침 상태의 접기 버튼(‹)이 브랜드 행 오른쪽에 absolute 로 붙는다 */}
+        <SidebarMenu className="relative">
           <SidebarMenuItem>
-            <SidebarMenuButton size="lg" asChild>
+            <SidebarMenuButton size="lg" asChild className="pr-6 group-data-[collapsible=icon]:pr-0">
               <Link href="/dashboard">
                 <div className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground group-data-[collapsible=icon]:flex">
                   <Logo className="size-5" />
                 </div>
-                <span className="truncate text-lg font-bold group-data-[collapsible=icon]:hidden">
+                <span className="truncate text-base font-bold group-data-[collapsible=icon]:hidden">
                   Argus Catalog
                 </span>
               </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
+          {/* 사이드바 접기/펼치기 — 펼침: 브랜드 옆 ‹, 접힘: 로고 아래 › */}
+          <SidebarCollapseButton />
         </SidebarMenu>
       </SidebarHeader>
 

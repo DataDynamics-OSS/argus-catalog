@@ -69,6 +69,8 @@ function clearTokens() {
   sessionStorage.removeItem(TOKEN_KEY)
 }
 
+const ACCOUNT_RECHECK_MS = 60_000
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<UserInfo | null>(null)
   const [accessToken, setAccessToken] = useState<string | null>(null)
@@ -163,6 +165,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     }
   }, [scheduleRefresh])
+
+  // 계정 상태 재확인 — 관리자가 비활성화·삭제·역할 변경·비밀번호 재설정을 하면 서버는 이미 받은
+  // 토큰도 바로 거부하거나(401) 새 역할로 처리한다. 화면도 따라가도록 탭으로 돌아올 때와 1분마다
+  // /auth/me 를 다시 읽는다. 401 이면 세션을 끝내고(AuthGuard 가 로그인으로), 아니면 역할 등을 갱신.
+  useEffect(() => {
+    if (!user) return
+    let stopped = false
+    async function recheck() {
+      const stored = loadTokens()
+      if (!stored || stopped) return
+      try {
+        const info = await fetchMe(stored.access_token)
+        if (!stopped) setUser((prev) => (prev && JSON.stringify(prev) === JSON.stringify(info) ? prev : info))
+      } catch (e) {
+        if (!stopped && (e as { status?: number })?.status === 401) {
+          clearTokens()
+          setUser(null)
+          setAccessToken(null)
+        }
+      }
+    }
+    const onVisible = () => { if (document.visibilityState === "visible") recheck() }
+    document.addEventListener("visibilitychange", onVisible)
+    const timer = setInterval(recheck, ACCOUNT_RECHECK_MS)
+    return () => {
+      stopped = true
+      document.removeEventListener("visibilitychange", onVisible)
+      clearInterval(timer)
+    }
+  }, [user])
 
   // 토큰 쌍으로 세션을 확립한다(저장 → 사용자 조회 → 상태반영 → 자동갱신 예약).
   // 로그인과 비밀번호 변경 후 토큰 교체에서 공통으로 사용한다.

@@ -13,6 +13,7 @@ import { AgGridReact } from "ag-grid-react"
 import { AllCommunityModule, ModuleRegistry, type ColDef } from "ag-grid-community"
 import { Plus, Trash2 } from "lucide-react"
 import { Button } from "@workspace/ui/components/button"
+import { applyKeyFlags } from "../schema-key-flags"
 
 ModuleRegistry.registerModules([AllCommunityModule])
 
@@ -184,18 +185,12 @@ export function SchemaEditGrid({ fields, onChange, dataTypeOptions = [] }: Schem
   const onCellValueChanged = useCallback(() => {
     const api = gridRef.current?.api
     if (!api) return
-    const updated: EditableField[] = []
+    const current: EditableField[] = []
     api.forEachNode((node) => {
-      if (node.data) {
-        const row = { ...node.data }
-        // Auto-compute: Index = PK || Unique
-        row.is_indexed = (row.is_primary_key === "true" || row.is_unique === "true") ? "true" : "false"
-        // PK implies Unique
-        if (row.is_primary_key === "true") row.is_unique = "true"
-        updated.push(row)
-      }
+      if (node.data) current.push(node.data)
     })
-    onChange(updated)
+    // 단일 PK 면 고유, PK·고유면 인덱스 (복합 PK 컬럼은 고유로 채우지 않음)
+    onChange(applyKeyFlags(current))
     // Refresh Index column to reflect computed value
     setTimeout(() => api.refreshCells({ columns: ["is_indexed", "is_unique"] }), 0)
   }, [onChange])

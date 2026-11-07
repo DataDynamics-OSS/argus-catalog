@@ -18,6 +18,7 @@ import {
 } from "@workspace/ui/components/card"
 import { useAuth } from "@/features/auth"
 import { changePassword } from "@/features/auth/api"
+import { errorMessage } from "@/lib/notify"
 
 // 새 비밀번호 정책: 8자 이상, 소문자 1개 이상, 숫자 1개 이상(관리자 재설정 다이얼로그와 동일).
 function validateNewPassword(pw: string): string | null {
@@ -74,7 +75,7 @@ export default function ChangePasswordRequiredPage() {
       await applyTokens(tokens) // 게이트 해제된 새 토큰으로 교체
       router.replace("/dashboard")
     } catch (err) {
-      setError(err instanceof Error ? err.message : "비밀번호 변경에 실패했습니다.")
+      setError(errorMessage(err) ?? "비밀번호를 변경하지 못했습니다.")
     } finally {
       setLoading(false)
     }

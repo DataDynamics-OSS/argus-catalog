@@ -71,12 +71,19 @@ export async function authFetch(
 
 /**
  * 실패 응답(res.ok=false)에서 백엔드 친절 메시지(`detail`)를 추출해 throw 한다.
- * detail 이 없으면 ``${fallback}: ${status}`` 로 폴백.
+ * detail 이 없으면 ``${fallback} (HTTP ${status})`` 로 폴백.
  *
- * 사용: ``if (!res.ok) await throwOnError(res, "데이터셋 수정 실패")``
+ * 사용: ``if (!res.ok) await throwOnError(res, "데이터셋을 수정하지 못했습니다.")``
+ * fallback 문구 규칙: "<대상>을(를) <동작>하지 못했습니다." (명사형 "○○ 실패" 금지 — lib/notify.ts 참고)
  * 검증/권한/차단(409·422·403 등) 시 사용자에게 숫자 상태 대신 백엔드 메시지를 노출한다.
  */
 export async function throwOnError(res: Response, fallback: string): Promise<never> {
-  const body = (await res.json().catch(() => ({}))) as { detail?: string }
-  throw new Error(body.detail || `${fallback}: ${res.status}`)
+  const body = (await res.json().catch(() => ({}))) as {
+    detail?: string | { msg?: string; loc?: (string | number)[] }[]
+  }
+  // FastAPI 422 는 detail 이 [{loc, msg}] 배열 — 사람이 읽을 메시지로 바꾼다
+  const detail = Array.isArray(body.detail)
+    ? body.detail.map((d) => (d.msg ?? "").replace(/^Value error, /, "")).filter(Boolean).join(" / ")
+    : body.detail
+  throw new Error(detail || `${fallback} (HTTP ${res.status})`)
 }

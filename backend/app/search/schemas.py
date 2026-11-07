@@ -23,8 +23,8 @@ class SemanticSearchResponse(BaseModel):
 
 
 class EntitySearchResult(BaseModel):
-    """비-데이터셋 엔티티(용어집/AI Agent/API) 검색 결과."""
-    entity_type: str = Field(..., description="'glossary_term', 'ai_agent', or 'api'")
+    """비-데이터셋 엔티티(용어집/AI Agent/API/MCP 서버) 검색 결과."""
+    entity_type: str = Field(..., description="'glossary_term', 'ai_agent', 'api', or 'mcp_server'")
     id: int
     name: str
     display_name: str | None = None
@@ -35,7 +35,7 @@ class EntitySearchResult(BaseModel):
 
 
 class UnifiedSearchResponse(BaseModel):
-    """데이터셋 + 용어집 + AI Agent + API 통합 검색 응답."""
+    """데이터셋 + 용어집 + AI Agent + API + MCP 서버 통합 검색 응답."""
     query: str
     provider: str | None = None
     model: str | None = None
@@ -43,4 +43,5 @@ class UnifiedSearchResponse(BaseModel):
     glossary_terms: list[EntitySearchResult]
     ai_agents: list[EntitySearchResult]
     apis: list[EntitySearchResult]
+    mcp_servers: list[EntitySearchResult] = []
     total: int

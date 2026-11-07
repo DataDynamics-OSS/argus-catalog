@@ -38,10 +38,14 @@ async def semantic_search(
     threshold: float = Query(0.3, ge=0.0, le=1.0, description="Min cosine similarity"),
     session: AsyncSession = Depends(get_session),
 ):
-    """벡터 유사도를 이용해 데이터셋 전체를 시맨틱 검색한다."""
+    """벡터 유사도를 이용해 데이터셋 전체를 시맨틱 검색한다.
+
+    임베딩 제공자가 없으면 503(키워드 폴백 없음 — 폴백이 필요하면 /hybrid 사용).
+    """
     logger.info("GET /catalog/search/semantic: q='%s', limit=%d", q, limit)
     provider = await get_provider()
     if provider is None:
+        logger.warning("시맨틱 검색 불가 — 임베딩 제공자 미구성")
         raise HTTPException(
             status_code=503,
             detail="임베딩 제공자가 구성되지 않았습니다. 설정 > 임베딩에서 활성화하세요.",
@@ -53,6 +57,7 @@ async def semantic_search(
         logger.error("시맨틱 검색 실패: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
+    # 결과마다 요약을 개별 조회한다 — 그 사이 삭제된 데이터셋(None)은 건너뜀
     items = []
     for ds_id, score in results:
         summary = await service._build_dataset_summary(session, ds_id)
@@ -114,7 +119,7 @@ async def unified_search(
     threshold: float = Query(0.3, ge=0.0, le=1.0),
     session: AsyncSession = Depends(get_session),
 ):
-    """통합 하이브리드 검색 — 데이터셋 + 용어집 + AI Agent + API.
+    """통합 하이브리드 검색 — 데이터셋 + 용어집 + AI Agent + API + MCP 서버.
 
     데이터셋은 기존 hybrid_search, 나머지는 다형 임베딩 테이블 기반.
     임베딩 미구성 시 키워드 검색으로 폴백한다.
@@ -149,8 +154,7 @@ async def unified_search(
                 ))
 
     provider = await get_provider()
-    total = (len(datasets) + len(grouped["glossary_term"])
-             + len(grouped["ai_agent"]) + len(grouped["api"]))
+    total = len(datasets) + sum(len(v) for v in grouped.values())
     return UnifiedSearchResponse(
         query=q,
         provider=provider.provider_name() if provider else None,
@@ -159,6 +163,7 @@ async def unified_search(
         glossary_terms=grouped["glossary_term"],
         ai_agents=grouped["ai_agent"],
         apis=grouped["api"],
+        mcp_servers=grouped["mcp_server"],
         total=total,
     )
 
@@ -170,25 +175,32 @@ async def unified_search(
 @router.get("/embeddings/stats")
 async def get_embedding_stats(session: AsyncSession = Depends(get_session)):
     """임베딩 커버리지 통계를 조회한다."""
+    logger.debug("GET /catalog/search/embeddings/stats")
     return await embedding_service.get_embedding_stats(session)
 
 
 @router.post("/embeddings/backfill")
 async def backfill_embeddings(_guard: AdminUser, session: AsyncSession = Depends(get_session)):
-    """모든 데이터셋 + 엔티티(용어집/AI Agent/API)를 재임베딩한다. 대규모 카탈로그에서는 시간이 걸릴 수 있다."""
+    """모든 데이터셋 + 엔티티(용어집/AI Agent/API/MCP 서버)를 재임베딩한다(관리자 전용).
+
+    요청 안에서 동기 실행되므로 대규모 카탈로그에서는 시간이 걸릴 수 있다. 제공자가 없으면 503.
+    """
     logger.info("POST /catalog/search/embeddings/backfill")
     provider = await get_provider()
     if provider is None:
+        logger.warning("임베딩 백필 거부 — 임베딩 제공자 미구성")
         raise HTTPException(status_code=503, detail="임베딩 제공자가 구성되지 않았습니다.")
 
     result = await embedding_service.embed_all_datasets(session)
     result["entities"] = await embedding_service.embed_all_entities(session)
+    logger.info("임베딩 백필 완료: provider=%s", provider.provider_name())
     return result
 
 
 @router.delete("/embeddings")
 async def clear_embeddings(_guard: AdminUser, session: AsyncSession = Depends(get_session)):
-    """모든 임베딩을 삭제한다(예: 제공자 전환 전)."""
+    """모든 임베딩을 삭제한다(예: 제공자 전환 전, 관리자 전용)."""
     logger.info("DELETE /catalog/search/embeddings")
     count = await embedding_service.clear_all_embeddings(session)
+    logger.info("임베딩 전체 삭제 완료: deleted=%s", count)
     return {"deleted": count}

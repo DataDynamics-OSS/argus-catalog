@@ -98,7 +98,7 @@ INSERT INTO catalog_glossary_terms (name, description, term_type)
 VALUES
     ('반도체', '반도체 제조 도메인 비즈니스 용어', 'CATEGORY'),
     ('물류',   '물류·SCM 도메인 비즈니스 용어',     'CATEGORY')
-ON CONFLICT (name) DO NOTHING;
+ON CONFLICT (term_type, name) DO NOTHING;
 
 -- 반도체 용어
 INSERT INTO catalog_glossary_terms (name, description, parent_id, term_type)
@@ -118,7 +118,7 @@ FROM (VALUES
     ('패키징',        '가공이 끝난 다이를 외부 환경에서 보호하고 기판과 연결 가능하게 만드는 후공정.')
 ) AS t(name, description)
 JOIN catalog_glossary_terms p ON p.name = '반도체' AND p.term_type = 'CATEGORY'
-ON CONFLICT (name) DO NOTHING;
+ON CONFLICT (term_type, name) DO NOTHING;
 
 -- 물류 용어
 INSERT INTO catalog_glossary_terms (name, description, parent_id, term_type)
@@ -138,7 +138,7 @@ FROM (VALUES
     ('운송장',        '화물 운송 계약의 증빙 문서. 운송장 번호로 배송 추적의 기본 키 역할을 한다.')
 ) AS t(name, description)
 JOIN catalog_glossary_terms p ON p.name = '물류' AND p.term_type = 'CATEGORY'
-ON CONFLICT (name) DO NOTHING;
+ON CONFLICT (term_type, name) DO NOTHING;
 
 -- ---------------------------------------------------------------------------
 -- 4. 데이터 표준 (거버넌스 > 데이터 표준)

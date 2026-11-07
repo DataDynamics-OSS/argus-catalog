@@ -17,6 +17,7 @@ import {
   bulkGenerate, fetchAIStats, fetchLLMConfig, testLLM, updateLLMConfig,
   type AIStats,
 } from "./api"
+import { errorMessage, notifyError, notifySuccess } from "@/lib/notify"
 
 const PROVIDER_MODELS: Record<string, { label: string; models: { id: string; label: string }[] }> = {
   openai: {
@@ -106,18 +107,17 @@ export function LLMSettings() {
 
   const handleSave = async () => {
     setSaving(true)
-    setMessage(null)
     try {
       await updateLLMConfig({
         enabled, provider, model, api_key: apiKey, api_url: apiUrl,
         temperature, max_tokens: maxTokens,
         auto_generate_on_sync: autoGenerateOnSync, language,
       })
-      setMessage({ type: "success", text: "LLM 설정을 저장했습니다." })
+      notifySuccess("LLM 설정을 저장했습니다.")
       const st = await fetchAIStats().catch(() => null)
       setStats(st)
     } catch (e) {
-      setMessage({ type: "error", text: e instanceof Error ? e.message : "저장에 실패했습니다." })
+      notifyError(e, "LLM 설정을 저장하지 못했습니다.")
     } finally {
       setSaving(false)
     }
@@ -134,7 +134,7 @@ export function LLMSettings() {
       })
       setMessage({ type: result.success ? "success" : "error", text: result.message })
     } catch (e) {
-      setMessage({ type: "error", text: e instanceof Error ? e.message : "연결 테스트에 실패했습니다." })
+      setMessage({ type: "error", text: errorMessage(e) ?? "연결을 테스트하지 못했습니다." })
     } finally {
       setTesting(false)
     }
@@ -142,21 +142,19 @@ export function LLMSettings() {
 
   const handleBulkGenerate = async (types: string[]) => {
     setGenerating(true)
-    setMessage(null)
     try {
       const result = await bulkGenerate({
         generation_types: types,
         apply: true,
         empty_only: true,
       })
-      setMessage({
-        type: "success",
-        text: `일괄 생성 완료: ${result.processed}건 처리, ${result.errors}건 오류 (총 ${result.total}건)`,
+      notifySuccess("AI 메타데이터를 일괄 생성했습니다.", {
+        description: `${result.processed}건 처리, ${result.errors}건 오류 (총 ${result.total}건)`,
       })
       const st = await fetchAIStats().catch(() => null)
       setStats(st)
     } catch (e) {
-      setMessage({ type: "error", text: e instanceof Error ? e.message : "일괄 생성에 실패했습니다." })
+      notifyError(e, "AI 메타데이터를 일괄 생성하지 못했습니다.")
     } finally {
       setGenerating(false)
     }

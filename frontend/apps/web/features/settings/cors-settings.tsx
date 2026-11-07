@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
-import { Check, Loader2, Save, X } from "lucide-react"
+import { Loader2, Save, X } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@workspace/ui/components/card"
@@ -9,20 +9,22 @@ import { Label } from "@workspace/ui/components/label"
 import { Textarea } from "@workspace/ui/components/textarea"
 
 import { fetchCorsConfig, updateCorsConfig } from "./api"
+import { notifyError, notifySuccess } from "@/lib/notify"
 
 export function CorsSettings() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [origins, setOrigins] = useState("*")
 
   const loadConfig = useCallback(async () => {
     try {
       setLoading(true)
+      setLoadError(null)
       const cfg = await fetchCorsConfig()
       setOrigins(cfg.origins)
     } catch {
-      setMessage({ type: "error", text: "CORS 설정을 불러오지 못했습니다." })
+      setLoadError("CORS 설정을 불러오지 못했습니다.")
     } finally {
       setLoading(false)
     }
@@ -32,12 +34,11 @@ export function CorsSettings() {
 
   const handleSave = async () => {
     setSaving(true)
-    setMessage(null)
     try {
       await updateCorsConfig({ origins })
-      setMessage({ type: "success", text: "CORS 설정을 저장했습니다. 다음 요청부터 적용됩니다." })
+      notifySuccess("CORS 설정을 저장했습니다.", { description: "다음 요청부터 적용됩니다." })
     } catch (e) {
-      setMessage({ type: "error", text: e instanceof Error ? e.message : "저장에 실패했습니다." })
+      notifyError(e, "CORS 설정을 저장하지 못했습니다.")
     } finally {
       setSaving(false)
     }
@@ -49,12 +50,10 @@ export function CorsSettings() {
 
   return (
     <div className="space-y-4 max-w-2xl">
-      {message && (
-        <div className={`flex items-center gap-2 rounded-md px-3 py-2 text-sm ${
-          message.type === "success" ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-red-50 text-red-700 border border-red-200"
-        }`}>
-          {message.type === "success" ? <Check className="h-4 w-4" /> : <X className="h-4 w-4" />}
-          {message.text}
+      {loadError && (
+        <div className="flex items-center gap-2 rounded-md px-3 py-2 text-sm bg-red-50 text-red-700 border border-red-200">
+          <X className="h-4 w-4" />
+          {loadError}
         </div>
       )}
 

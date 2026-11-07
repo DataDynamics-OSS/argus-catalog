@@ -9,16 +9,17 @@ MLflow 가 UC 호환 API (``/api/2.1/unity-catalog/``) 로 모델을 등록하�
   - ``catalog_registered_models`` : 모델 메타데이터 + ``max_version_number`` 카운터
   - ``catalog_model_versions``    : 버전별 아티팩트와 상태 라이프사이클
   - ``catalog_models``            : MLflow 산출 메타데이터(predict_fn, sklearn_version 등)
-  - ``model_download_logs``       : 다운로드 이벤트 로그
-  - ``model_metrics`` / ``model_cards`` / ``model_dataset_lineages``
+  - ``catalog_model_download_log``: 다운로드 이벤트 로그
+  - ``catalog_model_metrics`` / ``catalog_model_card`` / ``catalog_model_dataset_lineage``
 
 상태 라이프사이클:
   ``PENDING_REGISTRATION`` → ``READY`` (성공) 또는 ``FAILED_REGISTRATION`` (실패)
 
 이름 규칙:
-  MLflow 가 요구하는 3-part 이름: ``{catalog}.{schema}.{model_name}``
+  MLflow(UC 호환 API)가 쓰는 3-part 이름: ``{catalog}.{schema}.{model_name}``
   예) ``argus.ml.iris_classifier``
-  이 전체 이름이 ``name`` 컬럼에 그대로 저장된다.
+  이 전체 이름이 ``name`` 컬럼에 그대로 저장된다. ``/api/v1/models`` 로 직접 등록할 때는
+  3-part 가 강제되지 않는다(문자 규칙만 ``schemas.validate_model_name`` 으로 검증).
 """
 
 from sqlalchemy import (
@@ -42,8 +43,8 @@ class RegisteredModel(Base):
 
     각 모델은 고유한 3-part 이름(catalog.schema.model_name)을 가지며, 이는
     MLflow 통합의 기본 조회 키 역할을 한다. ``max_version_number`` 필드는
-    지금까지 생성된 최대 버전 번호를 추적하며 새 버전 등록 시 원자적으로
-    증가한다.
+    지금까지 생성된 최대 버전 번호를 추적하며 새 버전 등록 시 1 증가한다
+    (ORM 읽기-수정-쓰기라 DB 수준의 원자적 증가는 아니다).
 
     소프트 삭제: status='deleted' 로 설정하면 참조 무결성을 유지한 채
     목록에서만 모델을 숨긴다.
@@ -56,7 +57,7 @@ class RegisteredModel(Base):
     name = Column(String(255), nullable=False, unique=True)
     # URN: {name}.{ENV}.model (예: "argus.ml.iris_classifier.PROD.model")
     urn = Column(String(500), nullable=False, unique=True)
-    # 데이터 데이터소스와의 선택적 연결 (nullable — ML 모델은 데이터소스에 속하지 않을 수 있음)
+    # 데이터소스와의 선택적 연결 (nullable — ML 모델은 데이터소스에 속하지 않을 수 있음)
     datasource_id = Column(Integer, ForeignKey("catalog_datasources.id", ondelete="SET NULL"),
                          nullable=True)
     description = Column(Text)
@@ -115,7 +116,7 @@ class ModelVersion(Base):
     status = Column(String(30), nullable=False, default="PENDING_REGISTRATION")
     # 사람이 읽을 수 있는 실패 사유 (예: "Model deleted during registration")
     status_message = Column(Text)
-    # 버전별 아티팩트 경로 (file:///.../{name}/versions/{ver}/)
+    # 버전별 아티팩트 경로 — 로컬은 file:///.../{name}/versions/{ver}, 오브젝트 스토리지는 s3://{bucket}/{name}/v{ver}/
     storage_location = Column(String(1000))
     # 확정 시점에 집계된 아티팩트 파일 수
     artifact_count = Column(Integer, default=0)
@@ -223,6 +224,9 @@ class CatalogModel(Base):
     sklearn_version = Column(String(20))
     mlflow_version = Column(String(20))
     mlflow_model_id = Column(String(100))
+    # 대표 flavor (python_function 제외 첫 flavor — sklearn, pytorch, xgboost, prophet ...) 와 그 버전
+    flavor = Column(String(50))
+    flavor_version = Column(String(50))
     model_size_bytes = Column(BigInteger)
     utc_time_created = Column(String(50))
     # utc_time_created 를 서버 로컬 timezone 으로 변환한 값

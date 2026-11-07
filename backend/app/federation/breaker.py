@@ -18,17 +18,22 @@ logger = logging.getLogger(__name__)
 
 
 class _BreakerState:
-    __slots__ = ("failures", "open_until")
+    """peer 1곳의 breaker 상태 — 연속 실패 수, 회로 재개(open 해제) 시각, half-open 프로브 시작 시각."""
+
+    __slots__ = ("failures", "open_until", "probe_started")
 
     def __init__(self) -> None:
         self.failures: int = 0
         self.open_until: float = 0.0
+        # half-open 프로브 진행 시작 시각(0=진행 중인 프로브 없음)
+        self.probe_started: float = 0.0
 
 
 _states: dict[str, _BreakerState] = {}
 
 
 def _state(key: str) -> _BreakerState:
+    """key 의 상태를 반환하고, 없으면 새로 만들어 등록한다."""
     st = _states.get(key)
     if st is None:
         st = _BreakerState()
@@ -42,9 +47,17 @@ def is_open(key: str, now: float | None = None) -> bool:
     if st is None:
         return False
     now = time.monotonic() if now is None else now
-    if st.open_until and now < st.open_until:
+    if not st.open_until:
+        return False
+    if now < st.open_until:
         return True
-    # cooldown 경과 → half-open(다음 호출을 1회 허용)
+    # cooldown 경과 → half-open: 프로브 1건만 통과시키고 결과가 나올 때까지 나머지는 차단.
+    # 프로브가 취소·유실돼 결과가 기록되지 않아도 cooldown 이 지나면 새 프로브를 허용한다.
+    cooldown = settings.federation_breaker_cooldown_seconds
+    if st.probe_started and now - st.probe_started < cooldown:
+        return True
+    st.probe_started = now
+    logger.debug("circuit breaker HALF-OPEN: 프로브 1건 허용 key=%s", key)
     return False
 
 
@@ -57,6 +70,7 @@ def record_success(key: str) -> None:
             logger.info("circuit breaker CLOSED [%s]: peer 호출 복구됨", key)
         st.failures = 0
         st.open_until = 0.0
+        st.probe_started = 0.0
 
 
 def record_failure(key: str, now: float | None = None) -> None:
@@ -64,6 +78,8 @@ def record_failure(key: str, now: float | None = None) -> None:
     st = _state(key)
     now = time.monotonic() if now is None else now
     st.failures += 1
+    st.probe_started = 0.0
+    logger.debug("peer 호출 실패 집계: key=%s failures=%d", key, st.failures)
     if st.failures >= settings.federation_breaker_threshold:
         st.open_until = now + settings.federation_breaker_cooldown_seconds
         logger.warning(
@@ -95,6 +111,19 @@ def snapshot(now: float | None = None) -> dict[str, dict]:
             "reopen_in_sec": max(0, int(st.open_until - now)) if is_open_now else 0,
         }
     return out
+
+
+def is_peer_fault(exc: BaseException) -> bool:
+    """breaker 실패로 셀 예외인지 — peer 장애(연결·타임아웃·5xx·429)만 센다.
+
+    404(샘플 없음 등)·401/403 같은 4xx 는 peer 가 정상 응답한 것이므로 회로를 열지 않는다.
+    """
+    import httpx
+
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        return code >= 500 or code == 429
+    return True
 
 
 class CircuitOpenError(Exception):

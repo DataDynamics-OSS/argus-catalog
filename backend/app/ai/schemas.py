@@ -16,7 +16,7 @@ class GenerateRequest(BaseModel):
 
 
 class BulkGenerateRequest(BaseModel):
-    """Request body for bulk generation."""
+    """일괄 생성 요청 바디 — generation_types 는 description / columns / tags / pii 중 선택."""
     generation_types: list[str] = Field(
         default=["description"],
         description="Types to generate: description, columns, tags, pii",
@@ -28,7 +28,7 @@ class BulkGenerateRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Response schemas
+# 응답 스키마
 # ---------------------------------------------------------------------------
 
 class ColumnDescriptionResult(BaseModel):
@@ -122,6 +122,10 @@ class SuggestionItem(BaseModel):
     provider: str
     model: str
     created_at: str | None = None
+    # 적용하면 바뀔 대상의 지금 값 — 화면에서 제안값과 나란히 비교한다.
+    # 설명·요약·컬럼 설명은 평문, 태그는 현재 태그 이름 JSON 배열, PII 는
+    # 제안에 나온 컬럼별 현재 pii_type JSON 배열([{"name", "pii_type"}]). 없으면 None.
+    current_text: str | None = None
 
 
 class ApplyRejectResponse(BaseModel):

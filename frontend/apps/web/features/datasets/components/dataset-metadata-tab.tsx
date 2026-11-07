@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import { Loader2, Save, X } from "lucide-react"
-import { toast } from "sonner"
+import { notifyError, toast } from "@/lib/notify"
 
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
@@ -210,11 +210,14 @@ export function DatasetMetadataTab({
   dataset,
   onSaved,
   extraGroup,
+  canEdit = true,
 }: {
   dataset: DatasetDetail
   onSaved: (updated: DatasetDetail) => void
   /** 표 맨 앞에 추가로 렌더할 그룹(예: 분류·소유 — 태그/소유자/용어집 인라인 편집). */
   extraGroup?: MetaGroup
+  /** 편집 가능 여부 — 데이터셋 소유자 또는 관리자(서버 PUT 과 같은 기준). false 면 읽기 전용(입력 비활성, 저장 버튼 없음). */
+  canEdit?: boolean
 }) {
   const [form, setForm] = useState<FormState>(() => initForm(dataset))
   const [saving, setSaving] = useState(false)
@@ -263,7 +266,7 @@ export function DatasetMetadataTab({
       onSaved(updated)
       toast.success("메타데이터를 저장했습니다.")
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "저장에 실패했습니다.")
+      notifyError(e, "메타데이터를 저장하지 못했습니다.")
     } finally {
       setSaving(false)
     }
@@ -450,6 +453,8 @@ export function DatasetMetadataTab({
 
   return (
     <div className="space-y-4">
+      {/* 읽기 전용이면 fieldset disabled 로 입력·선택 상자를 모두 비활성화 (분류·소유 컨트롤은 page 에서 이미 숨김) */}
+      <fieldset disabled={!canEdit} className="contents">
       <div className="overflow-hidden rounded-md border">
         <table className="w-full border-collapse text-sm">
           <thead>
@@ -478,11 +483,14 @@ export function DatasetMetadataTab({
           </tbody>
         </table>
       </div>
+      </fieldset>
 
-      <Button onClick={handleSave} disabled={saving}>
-        {saving ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Save className="h-4 w-4 mr-1" />}
-        저장
-      </Button>
+      {canEdit && (
+        <Button onClick={handleSave} disabled={saving}>
+          {saving ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Save className="h-4 w-4 mr-1" />}
+          저장
+        </Button>
+      )}
     </div>
   )
 }

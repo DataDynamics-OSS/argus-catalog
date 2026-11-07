@@ -193,6 +193,7 @@ SAMPLES: dict[str, dict[str, list[str | None]]] = {
 
 
 def main() -> int:
+    """SAMPLES 의 데이터셋별 parquet 를 기록한다 — 성공 0, 디렉터리 생성 권한 없음 1."""
     parser = argparse.ArgumentParser(description="Sakila 샘플 parquet 시드 생성")
     parser.add_argument("--data-dir", type=Path, default=None,
                         help="데이터 디렉터리 (기본: app settings 의 data_dir)")

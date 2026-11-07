@@ -1,16 +1,19 @@
 {
   "name": "argus-catalog-manual",
-  "version": "0.1.1",
+  "version": "0.5.0",
   "description": "Argus Catalog — Antora-based user manual (HTML + PDF).",
   "private": true,
   "scripts": {
     "build": "antora antora-playbook.yml",
     "build:fresh": "antora --fetch antora-playbook.yml",
+    "diagrams": "node tools/render-diagrams.mjs",
     "preview": "npm run build && npx http-server build/site -o -p 8888",
     "clean": "rm -rf build .antora-cache"
   },
   "devDependencies": {
     "@antora/cli": "3.1.14",
-    "@antora/site-generator": "3.1.14"
+    "@antora/site-generator": "3.1.14",
+    "@viz-js/viz": "3.17.0",
+    "sharp": "0.34.5"
   }
 }

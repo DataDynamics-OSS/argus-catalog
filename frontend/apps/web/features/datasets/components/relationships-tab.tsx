@@ -18,8 +18,9 @@ import {
   TableRow,
 } from "@workspace/ui/components/table"
 import { Database, ArrowRight, Link2, Network } from "lucide-react"
-import { authFetch } from "@/features/auth/auth-fetch"
+import { authFetch, throwOnError } from "@/features/auth/auth-fetch"
 import { RelationshipGraph } from "./relationship-graph"
+import { errorMessage } from "@/lib/notify"
 
 const BASE = "/api/v1/catalog"
 
@@ -99,13 +100,14 @@ export function RelationshipsTab({ datasetId }: { datasetId: number }) {
   const loadRelationships = useCallback(async () => {
     try {
       setLoading(true)
+      setError(null)
       const resp = await authFetch(`${BASE}/datasets/${datasetId}/relationships`)
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+      if (!resp.ok) await throwOnError(resp, "관계 정보를 불러오지 못했습니다.")
       const json = await resp.json()
       setData(json)
     } catch (e: unknown) {
       console.error("Failed to load relationships", { datasetId, err: e })
-      setError(e instanceof Error ? e.message : "관계 정보를 불러오지 못했습니다")
+      setError(errorMessage(e) ?? "관계 정보를 불러오지 못했습니다.")
     } finally {
       setLoading(false)
     }
@@ -171,7 +173,7 @@ export function RelationshipsTab({ datasetId }: { datasetId: number }) {
             관계 그래프
           </CardTitle>
           <p className="text-xs text-muted-foreground">
-            이 데이터셋을 중심으로 함께 조인되는 데이터셋의 관계망(2홉)입니다.
+            이 데이터셋을 중심으로 함께 조인되는 데이터셋의 관계망입니다. 왼쪽 위에서 1~3홉 범위를 고를 수 있습니다(기본 1홉).
           </p>
         </CardHeader>
         <CardContent className="p-0">

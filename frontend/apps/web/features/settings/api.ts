@@ -14,7 +14,7 @@ export type ObjectStorageConfig = {
 
 export async function fetchObjectStorageConfig(): Promise<ObjectStorageConfig> {
   const res = await authFetch(`${BASE}/object-storage`)
-  if (!res.ok) throw new Error(`설정 조회 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`오브젝트 스토리지 설정을 불러오지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 
@@ -26,7 +26,7 @@ export async function updateObjectStorageConfig(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(config),
   })
-  if (!res.ok) await throwOnError(res, "설정 수정 실패")
+  if (!res.ok) await throwOnError(res, "오브젝트 스토리지 설정을 수정하지 못했습니다.")
 }
 
 export type InitStep = {
@@ -43,7 +43,7 @@ export async function initializeObjectStorage(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ endpoint, access_key: accessKey, secret_key: secretKey, region, bucket }),
   })
-  if (!res.ok) await throwOnError(res, "초기화 실패")
+  if (!res.ok) await throwOnError(res, "오브젝트 스토리지를 초기화하지 못했습니다.")
   return res.json()
 }
 
@@ -65,7 +65,7 @@ export async function testObjectStorage(
       bucket,
     }),
   })
-  if (!res.ok) throw new Error(`테스트 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`오브젝트 스토리지 연결을 테스트하지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 
@@ -86,7 +86,7 @@ export type EmbeddingConfig = {
 
 export async function fetchEmbeddingConfig(): Promise<EmbeddingConfig> {
   const res = await authFetch(`${BASE}/embedding`)
-  if (!res.ok) throw new Error(`임베딩 설정 조회 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`임베딩 설정을 불러오지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 
@@ -96,7 +96,7 @@ export async function updateEmbeddingConfig(config: EmbeddingConfig): Promise<vo
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(config),
   })
-  if (!res.ok) await throwOnError(res, "임베딩 설정 수정 실패")
+  if (!res.ok) await throwOnError(res, "임베딩 설정을 수정하지 못했습니다.")
 }
 
 export async function testEmbedding(
@@ -107,7 +107,7 @@ export async function testEmbedding(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(config),
   })
-  if (!res.ok) throw new Error(`테스트 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`임베딩 연결을 테스트하지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 
@@ -119,6 +119,7 @@ export type EmbeddingStats = {
     glossary_term: number
     ai_agent: number
     api: number
+    mcp_server?: number
   }
   provider: string | null
   model: string | null
@@ -127,7 +128,7 @@ export type EmbeddingStats = {
 
 export async function fetchEmbeddingStats(): Promise<EmbeddingStats> {
   const res = await authFetch("/api/v1/catalog/search/embeddings/stats")
-  if (!res.ok) throw new Error(`통계 조회 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`임베딩 통계를 불러오지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 
@@ -135,13 +136,13 @@ export async function backfillEmbeddings(): Promise<{
   total: number; embedded: number; skipped: number; errors: number
 }> {
   const res = await authFetch("/api/v1/catalog/search/embeddings/backfill", { method: "POST" })
-  if (!res.ok) await throwOnError(res, "백필 실패")
+  if (!res.ok) await throwOnError(res, "임베딩을 백필하지 못했습니다.")
   return res.json()
 }
 
 export async function clearEmbeddings(): Promise<{ deleted: number }> {
   const res = await authFetch("/api/v1/catalog/search/embeddings", { method: "DELETE" })
-  if (!res.ok) await throwOnError(res, "초기화 실패")
+  if (!res.ok) await throwOnError(res, "임베딩을 초기화하지 못했습니다.")
   return res.json()
 }
 
@@ -154,14 +155,14 @@ export async function recomputeRelationships(reset = true): Promise<{
   unresolved_tables: string[]
 }> {
   const res = await authFetch(`/api/v1/catalog/relationships/recompute?reset=${reset}`, { method: "POST" })
-  if (!res.ok) await throwOnError(res, "재계산 실패")
+  if (!res.ok) await throwOnError(res, "관계를 재계산하지 못했습니다.")
   return res.json()
 }
 
 // 쿼리 lineage 의 dataset_id 백필 — 테이블명→데이터셋 해석(리니지 그래프 노출용).
 export async function resolveLineage(): Promise<{ resolved: number; remaining_unresolved: number }> {
   const res = await authFetch("/api/v1/catalog/lineage/resolve", { method: "POST" })
-  if (!res.ok) await throwOnError(res, "lineage 해석 실패")
+  if (!res.ok) await throwOnError(res, "lineage를 해석하지 못했습니다.")
   return res.json()
 }
 
@@ -183,24 +184,33 @@ export type AuthConfig = {
 
 export async function fetchAuthConfig(): Promise<AuthConfig> {
   const res = await authFetch(`${BASE}/auth`)
-  if (!res.ok) throw new Error(`인증 설정 조회 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`인증 설정을 불러오지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 
 export async function fetchAuthSecret(): Promise<string> {
   const res = await authFetch(`${BASE}/auth/secret`)
-  if (!res.ok) throw new Error(`시크릿 조회 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`시크릿을 불러오지 못했습니다. (HTTP ${res.status})`)
   const data = await res.json()
   return data.client_secret
 }
 
-export async function updateAuthConfig(config: AuthConfig): Promise<void> {
+/** 저장하면 현재 로그인이 끊기는 인증 설정 변경 — 사용자 확인 후 confirm=true 로 다시 저장한다. */
+export class AuthChangeConfirmError extends Error {}
+
+export async function updateAuthConfig(config: AuthConfig, confirm = false): Promise<void> {
   const res = await authFetch(`${BASE}/auth`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(config),
+    body: JSON.stringify({ ...config, confirm }),
   })
-  if (!res.ok) await throwOnError(res, "인증 설정 수정 실패")
+  if (res.status === 409) {
+    const body = (await res.json().catch(() => ({}))) as { detail?: { code?: string; message?: string } }
+    if (body.detail?.code === "confirm_required") {
+      throw new AuthChangeConfirmError(body.detail.message ?? "저장하면 다시 로그인해야 합니다.")
+    }
+  }
+  if (!res.ok) await throwOnError(res, "인증 설정을 수정하지 못했습니다.")
 }
 
 export type KeycloakInitRequest = {
@@ -221,7 +231,7 @@ export async function initializeKeycloak(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
   })
-  if (!res.ok) await throwOnError(res, "초기화 실패")
+  if (!res.ok) await throwOnError(res, "Keycloak을 초기화하지 못했습니다.")
   return res.json()
 }
 
@@ -233,7 +243,7 @@ export async function testAuthConnection(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(config),
   })
-  if (!res.ok) throw new Error(`테스트 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`인증 서버 연결을 테스트하지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 
@@ -248,7 +258,7 @@ export type CorsConfig = {
 
 export async function fetchCorsConfig(): Promise<CorsConfig> {
   const res = await authFetch(`${BASE}/cors`)
-  if (!res.ok) throw new Error(`CORS 설정 조회 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`CORS 설정을 불러오지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 
@@ -258,7 +268,7 @@ export async function updateCorsConfig(config: CorsConfig): Promise<void> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(config),
   })
-  if (!res.ok) await throwOnError(res, "CORS 설정 수정 실패")
+  if (!res.ok) await throwOnError(res, "CORS 설정을 수정하지 못했습니다.")
 }
 
 
@@ -280,7 +290,7 @@ export type LLMConfig = {
 
 export async function fetchLLMConfig(): Promise<LLMConfig> {
   const res = await authFetch(`${BASE}/llm`)
-  if (!res.ok) throw new Error(`LLM 설정 조회 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`LLM 설정을 불러오지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 
@@ -290,7 +300,7 @@ export async function updateLLMConfig(config: LLMConfig): Promise<void> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(config),
   })
-  if (!res.ok) await throwOnError(res, "LLM 설정 수정 실패")
+  if (!res.ok) await throwOnError(res, "LLM 설정을 수정하지 못했습니다.")
 }
 
 export async function testLLM(
@@ -301,7 +311,7 @@ export async function testLLM(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(config),
   })
-  if (!res.ok) throw new Error(`테스트 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`LLM 연결을 테스트하지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 
@@ -323,7 +333,7 @@ export type AIStats = {
 
 export async function fetchAIStats(): Promise<AIStats> {
   const res = await authFetch("/api/v1/ai/stats")
-  if (!res.ok) throw new Error(`AI 통계 조회 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`AI 통계를 불러오지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 
@@ -347,7 +357,7 @@ export async function bulkGenerate(req: BulkGenerateRequest): Promise<BulkGenera
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
   })
-  if (!res.ok) await throwOnError(res, "일괄 생성 실패")
+  if (!res.ok) await throwOnError(res, "AI 메타데이터를 일괄 생성하지 못했습니다.")
   return res.json()
 }
 
@@ -362,7 +372,7 @@ export type AssistantConfig = {
 
 export async function fetchAssistantConfig(): Promise<AssistantConfig> {
   const res = await authFetch(`${BASE}/assistant`)
-  if (!res.ok) throw new Error(`어시스턴트 설정 조회 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`어시스턴트 설정을 불러오지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 
@@ -372,7 +382,7 @@ export async function updateAssistantConfig(config: AssistantConfig): Promise<vo
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(config),
   })
-  if (!res.ok) await throwOnError(res, "어시스턴트 설정 수정 실패")
+  if (!res.ok) await throwOnError(res, "어시스턴트 설정을 수정하지 못했습니다.")
 }
 
 export async function testAssistant(
@@ -383,7 +393,7 @@ export async function testAssistant(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(config),
   })
-  if (!res.ok) throw new Error(`연결 테스트 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`어시스턴트 연결을 테스트하지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 
@@ -408,7 +418,7 @@ export type MailConfig = {
 
 export async function fetchMailConfig(): Promise<MailConfig> {
   const res = await authFetch(`${BASE}/mail`)
-  if (!res.ok) throw new Error(`메일 설정 조회 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`메일 설정을 불러오지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 
@@ -418,7 +428,7 @@ export async function updateMailConfig(config: MailConfig): Promise<void> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(config),
   })
-  if (!res.ok) await throwOnError(res, "메일 설정 수정 실패")
+  if (!res.ok) await throwOnError(res, "메일 설정을 수정하지 못했습니다.")
 }
 
 export async function testMail(req: {
@@ -431,7 +441,7 @@ export async function testMail(req: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
   })
-  if (!res.ok) throw new Error(`테스트 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`테스트 메일을 보내지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 
@@ -456,7 +466,7 @@ export type NotifyConfig = {
 
 export async function fetchNotifyConfig(): Promise<NotifyConfig> {
   const res = await authFetch(`${BASE}/notify`)
-  if (!res.ok) throw new Error(`알림 설정 조회 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`알림 설정을 불러오지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 
@@ -466,7 +476,7 @@ export async function updateNotifyConfig(config: NotifyConfig): Promise<void> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(config),
   })
-  if (!res.ok) await throwOnError(res, "알림 설정 수정 실패")
+  if (!res.ok) await throwOnError(res, "알림 설정을 수정하지 못했습니다.")
 }
 
 export async function testNotify(req: { text?: string }): Promise<{ success: boolean; message: string }> {
@@ -475,7 +485,7 @@ export async function testNotify(req: { text?: string }): Promise<{ success: boo
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
   })
-  if (!res.ok) throw new Error(`테스트 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`테스트 알림을 보내지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 
@@ -487,7 +497,7 @@ export type ChangeMgmtConfig = {
 
 export async function fetchChangeMgmtConfig(): Promise<ChangeMgmtConfig> {
   const res = await authFetch(`${BASE}/change`)
-  if (!res.ok) throw new Error(`변경관리 설정 조회 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`변경관리 설정을 불러오지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 
@@ -497,6 +507,29 @@ export async function updateChangeMgmtConfig(config: ChangeMgmtConfig): Promise<
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(config),
   })
-  if (!res.ok) await throwOnError(res, "변경관리 설정 수정 실패")
+  if (!res.ok) await throwOnError(res, "변경관리 설정을 수정하지 못했습니다.")
 }
 
+
+// ---------------------------------------------------------------------------
+// 카탈로그 정책 — 일반 사용자의 데이터셋 직접 등록 허용 (기본 꺼짐)
+// ---------------------------------------------------------------------------
+
+export type CatalogPolicyConfig = {
+  dataset_create_by_users: boolean
+}
+
+export async function fetchCatalogPolicyConfig(): Promise<CatalogPolicyConfig> {
+  const res = await authFetch(`${BASE}/catalog`)
+  if (!res.ok) throw new Error(`데이터셋 등록 설정을 불러오지 못했습니다. (HTTP ${res.status})`)
+  return res.json()
+}
+
+export async function updateCatalogPolicyConfig(config: CatalogPolicyConfig): Promise<void> {
+  const res = await authFetch(`${BASE}/catalog`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(config),
+  })
+  if (!res.ok) await throwOnError(res, "데이터셋 등록 설정을 저장하지 못했습니다.")
+}

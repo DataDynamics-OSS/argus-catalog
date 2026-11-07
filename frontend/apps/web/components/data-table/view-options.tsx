@@ -32,7 +32,7 @@ export function DataTableViewOptions<TData>({
           보기
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-[150px]">
+      <DropdownMenuContent align="end" className="min-w-[150px]">
         <DropdownMenuLabel>컬럼 표시</DropdownMenuLabel>
         <DropdownMenuSeparator />
         {table

@@ -45,7 +45,7 @@ export async function login(
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
-    throw new Error(err.detail || "로그인 실패")
+    throw new Error(err.detail || "로그인하지 못했습니다.")
   }
   return res.json()
 }
@@ -59,7 +59,7 @@ export async function refreshToken(
     body: JSON.stringify({ refresh_token }),
   })
   if (!res.ok) {
-    throw new Error("토큰 갱신 실패")
+    throw new Error("토큰을 갱신하지 못했습니다.")
   }
   return res.json()
 }
@@ -69,7 +69,8 @@ export async function fetchMe(accessToken: string): Promise<UserInfo> {
     headers: { Authorization: `Bearer ${accessToken}` },
   })
   if (!res.ok) {
-    throw new Error("사용자 정보 조회 실패")
+    // status 를 실어 호출 측이 401(세션 무효 — 비활성화·삭제·비밀번호 재설정)을 구분하게 한다
+    throw Object.assign(new Error("사용자 정보를 불러오지 못했습니다."), { status: res.status })
   }
   return res.json()
 }
@@ -96,7 +97,7 @@ export async function changePassword(
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
-    throw new Error(err.detail || "비밀번호 변경 실패")
+    throw new Error(err.detail || "비밀번호를 변경하지 못했습니다.")
   }
   return res.json()
 }
@@ -114,7 +115,7 @@ export type AuthType = "local" | "keycloak"
 export async function fetchAuthType(): Promise<AuthType> {
   const res = await fetch(`${BASE}/type`)
   if (!res.ok) {
-    throw new Error("인증 방식 조회 실패")
+    throw new Error("인증 방식을 불러오지 못했습니다.")
   }
   const data = (await res.json()) as { auth_type: AuthType }
   return data.auth_type
@@ -133,7 +134,7 @@ export async function updateAvatar(
     body: JSON.stringify({ avatar_preset_id: avatarPresetId }),
   })
   if (!res.ok) {
-    throw new Error("아바타 업데이트 실패")
+    throw new Error("아바타를 변경하지 못했습니다.")
   }
   return res.json()
 }

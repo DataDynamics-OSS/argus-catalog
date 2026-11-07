@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """LoRA fine-tuning script for Argus Catalog metadata generation model.
 
+메타데이터 생성 모델용 LoRA 미세조정 스크립트 — ``export_training_data.py`` 가 만든 ChatML JSONL 로
+Qwen2.5-7B-Instruct 위에 LoRA 어댑터를 학습해 ``--output-dir`` 에 저장한다(오프라인 실행용).
+
 Trains a LoRA adapter on Qwen2.5-7B-Instruct using catalog metadata
 training data (ChatML format JSONL).
 
@@ -21,6 +24,7 @@ from trl import SFTConfig, SFTTrainer
 
 
 def main():
+    """인자 파싱 → 토크나이저·모델 로드 → LoRA 적용 → 데이터 로드 → 학습·저장·평가."""
     parser = argparse.ArgumentParser(description="LoRA fine-tuning for catalog metadata")
     parser.add_argument(
         "--base-model", default="Qwen/Qwen2.5-7B-Instruct",
@@ -61,7 +65,7 @@ def main():
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "right"
 
-    # ── 2. Load model (FP16, no quantization needed with 120GB VRAM) ──
+    # ── 2. Load model (BF16, no quantization needed with 120GB VRAM) ──
     print("[2/5] Loading model...")
     model = AutoModelForCausalLM.from_pretrained(
         args.base_model,
@@ -97,6 +101,7 @@ def main():
     print(f"  Eval:  {len(dataset['eval'])} samples")
 
     def format_chat(example):
+        # messages(ChatML) → 모델 chat template 을 적용한 단일 학습 텍스트
         text = tokenizer.apply_chat_template(
             example["messages"],
             tokenize=False,

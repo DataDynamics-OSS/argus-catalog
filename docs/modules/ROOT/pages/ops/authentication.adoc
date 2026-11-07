@@ -1,145 +1,203 @@
 = 인증
+:toc: macro
+:toclevels: 2
 
-Argus Catalog 는 두 가지 인증 모드를 지원합니다. 운영 환경에서는 *Keycloak SSO* 를 쓰고,
-스탠드얼론·개발 환경에서는 *Local JWT* 를 사용합니다. 환경에 맞는 모드를 골라 쓰면 됩니다.
+**인증**은 누가 Argus Catalog 에 들어올 수 있는지 정하는 기능입니다. 기본은 카탈로그가 직접 계정을 관리하는 **Local JWT** 방식이고,
+회사 SSO 를 쓰려면 **Keycloak** 방식으로 바꿀 수 있습니다.
 
-// TODO: screenshot - 로그인 화면 (Keycloak 모드 / Local 모드 차이)
-image::ops-authentication/login.png[로그인 화면, 600]
+이 문서는 처음 사용하는 분을 기준으로 로그인 → 비밀번호 변경 → 로그아웃 → (관리자) 인증 방식 바꾸기 순서로 설명합니다.
+**고급 사용자** 상자와 xref:ops/authentication-advanced.adoc[인증 — 고급 설정] 페이지는 몰라도 사용에 지장이 없는 심화 내용입니다.
 
-== 인증 모드
+toc::[]
 
-두 모드는 다음과 같이 나뉩니다.
+== 시작하기 전에
 
-[cols="1,3"]
+=== 이런 일을 할 수 있습니다
+
+* **로그인·로그아웃** — 사용자명과 비밀번호로 들어오고 나갑니다.
+* **비밀번호 바꾸기** — 처음 로그인할 때 받은 비밀번호를 내 비밀번호로 바꿉니다.
+* **인증 방식 고르기**(관리자) — Local JWT 와 Keycloak SSO 중 하나를 고르며, 바꾸면 바로 적용됩니다.
+* **Keycloak 한 번에 준비하기**(관리자) — 설정 화면의 **초기화** 버튼으로 Realm·Client·역할을 자동으로 만듭니다.
+
+=== 먼저 알아 둘 용어
+
+[cols="1,3",options="header"]
 |===
-| 모드 | 설명
+| 용어 | 뜻
 
-| Keycloak (권장)
-| OpenID Connect (OIDC) 기반 SSO 입니다. Keycloak 이 JWT 발급·검증·세션 관리를 맡고, 사내 LDAP / AD 와 연동할 수 있습니다.
 | Local JWT
-| 로컬 사용자 DB 와 HS256 JWT 를 씁니다. 별도 IdP 없이 단독으로 운영하므로 개발 환경이나 단일 사용자 환경에 적합합니다.
+| 카탈로그가 사용자 DB 로 직접 로그인을 처리하는 방식입니다. 별도 인증 서버가 필요 없어 스탠드얼론·개발 환경에 맞습니다. 인증 방식(`auth.type`)의 **기본값**입니다. 사용자 관리·역할·로그인 실패 잠금(5회 실패 시 15분)을 갖춥니다.
+| Keycloak (권장)
+| OpenID Connect (OIDC) 기반 SSO 입니다. Keycloak 이 토큰 발급·검증·세션을 맡고, 사내 LDAP / AD 와 연동할 수 있습니다. 운영 환경에 권장합니다.
+| 토큰
+| 로그인하면 받는 출입증입니다. 브라우저 탭에 저장되며, 탭을 닫으면 사라집니다.
 |===
 
-전환은 xref:ops/settings.adoc#_auth[설정 → Auth] 에서 하며, 변경하면 즉시 적용됩니다.
+=== 메뉴 위치
 
-== 시스템 구성 (Keycloak 모드)
-
-Keycloak 모드에서는 인증 서버와 카탈로그 서버가 서로 토큰을 주고받으며, 각자 별도의 데이터베이스를 사용합니다. 전체 구성은 다음과 같습니다.
-
-----
-┌─────────────────┐    OIDC / JWT     ┌──────────────────────┐
-│  Keycloak       │ ←───────────────→ │  argus-catalog-      │
-│  (Port 8180)    │   토큰 발급 / 검증│  server (Port 4600)  │
-└────────┬────────┘                   └───────────┬──────────┘
-         │                                        │
-         │ PostgreSQL (keycloak DB)               │ PostgreSQL (argus_catalog DB)
-         ▼                                        ▼
-┌─────────────────┐                   ┌──────────────────────┐
-│  PostgreSQL     │                   │  argus-catalog-ui    │
-│  (Port 5432)    │                   │  (Port 3000)         │
-└─────────────────┘                   └──────────────────────┘
-----
-
-image::ops-authentication/keycloak.png[Keycloak 설정, 800]
-
-
-== 로그인 흐름
-
-로그인부터 로그아웃까지 토큰이 어떻게 오가는지 순서대로 따라가 보겠습니다.
-
-. 사용자가 `/` 에 접속하면, 미인증 상태일 때 `/login` 으로 리디렉션됩니다.
-. 사용자명 / 비밀번호를 입력하면 `POST /api/v1/auth/login` 이 호출되고, Keycloak 이 Access / Refresh JWT 를 발급합니다.
-. 발급된 토큰은 브라우저 `sessionStorage` (`argus_tokens` 키) 에 저장됩니다.
-. 이후 모든 API 호출에는 `authFetch()` 가 `Authorization: Bearer <token>` 헤더를 자동으로 붙여 줍니다.
-. Access 토큰은 만료 60 초 전에 자동으로 `/api/v1/auth/refresh` 를 호출해 갱신됩니다.
-. 401 응답이 오면 클라이언트가 자동으로 `/login` 으로 리디렉션합니다.
-. 로그아웃하면 Keycloak 의 Refresh 토큰이 무효화되고 sessionStorage 도 초기화됩니다.
-
-== 토큰 / 세션 정책
-
-[cols="1,3"]
+[cols="1,2,3",options="header"]
 |===
-| 항목 | 값 (Keycloak 기본)
+| 메뉴 | 주소 | 용도
 
-| Access Token 수명
-| 1 시간 (Local JWT 모드 기본: 8 시간)
-| Refresh Token Idle Timeout
-| 30 분
-| Refresh Token Max Lifespan
-| 10 시간
-| 토큰 저장
-| 브라우저 `sessionStorage` (탭 종료 시 무효화)
-| JWKS 캐시
-| 서버 메모리, TTL 1 시간
-| Brute Force 보호
-| Keycloak 측 활성화
+| 로그인 화면 | `/login` | 로그인. 로그인하지 않은 채 접속하면 자동으로 이동합니다.
+| 관리 → 설정 → 인증 | `/dashboard/settings` | 인증 방식 고르기, Keycloak 연결·초기화 (관리자)
 |===
 
-== 역할 (Realm Roles)
+=== 누가 무엇을 할 수 있나요
 
-기본으로 제공되는 시스템 역할은 다음 3 종입니다.
+기본 역할은 다음 3 종입니다. 관리자를 뺀 두 역할이 쓸 수 있는 메뉴와 기능은
+xref:ops/permissions.adoc[권한 관리] 에서 정합니다(자세한 설명은 xref:ops/users.adoc#_역할[사용자 관리 → 역할]).
 
-[cols="1,3,1"]
+[cols="1,3,1",options="header"]
 |===
-| 역할 | 권한 범위 | 기본 부여
+| 역할 | 권한 범위 | 기본 부여 (Keycloak)
 
 | `argus-admin`
-| 전체 권한 — 사용자 · 설정 · 모든 객체 CRUD
+| 모든 메뉴와 기능을 씁니다. 관리 메뉴(사용자 관리 · 설정 · 권한 관리)는 관리자만 씁니다.
 | 수동
 
 | `argus-superuser`
-| 관리 권한 — 사용자 관리 제외 거의 모든 작업
+| 권한 관리에서 허용한 메뉴와 기능을 씁니다.
 | 수동
 
 | `argus-user`
-| 읽기 + 본인이 소유한 데이터셋 / 모델의 수정
-| 자동 (default-roles-argus)
+| 권한 관리에서 허용한 메뉴와 기능을 쓰며, 본인이 만든 데이터셋 · 모델 · AI Agent 등은 수정할 수 있습니다.
+| default role 로 지정했을 때 자동 (default-roles-argus)
 |===
 
-`argus-*` 역할이 *하나도 없는* 사용자는 로그인이 거부됩니다 (403 Forbidden).
+`argus-*` 역할이 **하나도 없는** 사용자는 로그인이 거부됩니다 (403 Forbidden).
 
-== OIDC 엔드포인트
+[[_1_로그인하기]]
+== 로그인하기
 
-Keycloak 이 노출하는 표준 OIDC 엔드포인트는 다음과 같습니다.
+. 카탈로그 주소(`/`)에 접속합니다. 로그인하지 않았다면 로그인 화면(`/login`)으로 이동합니다.
+. **사용자명**과 **비밀번호**를 입력하고 **로그인** 을 누릅니다.
+. 로그인되면 대시보드가 열립니다.
 
-[cols="1,3"]
+image::ops-authentication/login.png[로그인 화면, 600]
+
+* 로그인 상태는 **브라우저 탭**에 보관됩니다. 탭을 닫으면 다시 로그인해야 합니다.
+* 쓰는 동안에는 로그인이 자동으로 연장됩니다. 로그인이 끊기면 로그인 화면으로 돌아갑니다.
+* Local JWT 방식에서 비밀번호를 5회 틀리면 계정이 15분 동안 잠깁니다.
+
+[TIP]
+.고급 사용자 — 로그인 흐름과 토큰 정책
+====
+. 로그인하면 `POST /api/v1/auth/login` 이 호출되고 Access / Refresh JWT 가 발급됩니다(Keycloak 모드는 Keycloak 이, Local JWT 모드는 카탈로그 서버가 발급).
+. 토큰은 브라우저 `sessionStorage` (`argus_tokens` 키) 에 저장됩니다.
+. 이후 모든 API 호출에는 `authFetch()` 가 `Authorization: Bearer <token>` 헤더를 자동으로 붙입니다.
+. Access 토큰은 만료 60 초 전에 `/api/v1/auth/refresh` 로 자동 갱신됩니다.
+. 401 응답이 오면 클라이언트가 자동으로 `/login` 으로 리디렉션합니다.
+
+[cols="1,3",options="header"]
 |===
-| 용도 | URL
+| 항목 | 값 (Keycloak 기본)
 
-| Token | `\{server\}/realms/\{realm\}/protocol/openid-connect/token`
-| Authorization | `\{server\}/realms/\{realm\}/protocol/openid-connect/auth`
-| UserInfo | `\{server\}/realms/\{realm\}/protocol/openid-connect/userinfo`
-| JWKS | `\{server\}/realms/\{realm\}/protocol/openid-connect/certs`
-| Logout | `\{server\}/realms/\{realm\}/protocol/openid-connect/logout`
-| Well-Known | `\{server\}/realms/\{realm\}/.well-known/openid-configuration`
+| Access Token 수명 | 1 시간 (Local JWT 모드 기본: 8 시간)
+| Refresh Token Idle Timeout | 30 분
+| Refresh Token Max Lifespan | 10 시간
+| 토큰 저장 | 브라우저 `sessionStorage` (탭 종료 시 무효화)
+| JWKS 캐시 | 서버 메모리, TTL 1 시간
+| Brute Force 보호 | Keycloak 측 활성화
 |===
 
-기본값은 server = `http://localhost:8180`, realm = `argus` 입니다.
+토큰이 오가는 순서 그림은 xref:ops/authentication-advanced.adoc#_로그인_흐름[인증 — 고급 설정 → 로그인 흐름] 을 참고하세요.
+====
 
-== 서버 인증 API
+[[_2_처음_로그인할_때_비밀번호_바꾸기]]
+== 처음 로그인할 때 비밀번호 바꾸기
 
-[cols="1,3,1"]
+설치 직후의 `admin` 처럼 **첫 로그인 때 비밀번호 변경이 필요한 계정**은 로그인하면 **비밀번호 변경 필요** 화면이 먼저 나옵니다.
+
+. **현재 비밀번호**를 입력합니다.
+. **새 비밀번호**와 **새 비밀번호 확인**을 입력합니다. 8자 이상이고 소문자와 숫자를 하나 이상 넣어야 하며, 현재 비밀번호와 달라야 합니다.
+. **비밀번호 변경** 을 누릅니다.
+
+NOTE: 비밀번호를 바꾸기 전까지는 `/auth/me` · `/auth/change-password` 등 일부 경로 말고는 API 를 쓸 수 없습니다. 화면에서 먼저 비밀번호를 바꾸세요.
+
+== 로그아웃
+
+로그아웃하면 브라우저에 보관된 로그인 정보가 지워집니다. Keycloak 방식에서는 Keycloak 의 Refresh 토큰도 함께 무효화됩니다.
+
+== 인증 방식 바꾸기 (관리자)
+
+**관리 → 설정 → 인증**(xref:ops/settings.adoc#_auth[설정 → Auth])에서 **인증 방식**을 고르고 **저장** 합니다. 변경하면 서버를 재시작하지 않아도 즉시 적용됩니다.
+
+image::ops-authentication/keycloak.png[Keycloak 설정, 800]
+
+[[_keycloak_으로_바꾸기_자동_설정_권장]]
+=== Keycloak 으로 바꾸기 — 자동 설정 (권장)
+
+Keycloak 서버가 이미 떠 있다면 화면에서 한 번에 준비할 수 있습니다. Keycloak 을 아직 띄우지 않았다면
+xref:ops/authentication-advanced.adoc#_keycloak_설치[인증 — 고급 설정 → Keycloak 설치] 를 먼저 보세요.
+
+. **인증 방식**을 **Keycloak OIDC (SSO)** 로 고릅니다.
+. **서버 URL**, **Realm**, **Client ID**, **Client Secret** 을 확인합니다.
+. **관리자 사용자명** · **관리자 비밀번호**에 Keycloak 관리자 계정을 입력합니다. 이 값은 초기화 때만 쓰고 저장하지 않습니다.
+. **초기화** 를 누릅니다. 다음 작업이 자동으로 수행되며, 이미 있는 항목은 건너뜁니다.
++
+* Realm `argus` 생성
+* Client `argus-client` 생성 (Confidential, Direct Access Grants 만 활성 — Standard Flow · Service Accounts 는 끄고 redirect URI · Web Origins 는 비움)
+* Client Secret 을 입력값으로 맞춤 (비워 두면 새로 만들어 인증 설정에 저장)
+* Realm Role 3종 (`argus-admin`, `argus-superuser`, `argus-user`) 생성
+. **연결 테스트** 로 확인한 뒤 **저장** 합니다.
+
+NOTE: 초기화는 default role 을 지정하지 않습니다. 신규 사용자가 `argus-user` 를 자동으로 받게 하려면
+xref:ops/authentication-advanced.adoc#_default_role_지정[Default Role 지정] 을 따로 해 주세요.
+
+=== Keycloak 을 직접 설정하려면
+
+자동 설정 대신 Keycloak Admin 콘솔에서 Realm·Client·역할·사용자를 손으로 만들 수도 있습니다.
+단계별 절차와 서버 설정 파일(`config.yml`) 예시는 xref:ops/authentication-advanced.adoc#_keycloak_수동_설정[인증 — 고급 설정 → Keycloak 수동 설정] 에 있습니다.
+
+== 자주 묻는 질문
+
+[qanda]
+"사용자명 또는 비밀번호가 올바르지 않습니다." 라고 나옵니다.::
+  비밀번호가 틀렸습니다(Keycloak 의 `Invalid user credentials`). Keycloak 방식이면 관리자가 *Users → 사용자 → Credentials → Set password* 로 다시 설정합니다.
+
+"Argus 역할이 할당되지 않았습니다. 접근 권한이 필요하면 관리자에게 문의하십시오." 라고 나옵니다.::
+  사용자에게 `argus-*` Realm Role 이 없습니다. 관리자가 Keycloak 의 *Users → 사용자 → Role mapping* 에서 역할을 추가합니다.
+
+"인증 서버(Keycloak) 설정 오류로 로그인할 수 없습니다(invalid_client). 관리자에게 문의하세요." 라고 나옵니다.::
+  `argus-client` 가 없거나 Client Secret 이 맞지 않습니다(Keycloak 의 `invalid_client` 등). 관리자가 *Clients → argus-client → Credentials* 를 확인합니다.
+
+"Keycloak 계정 설정(필수 작업)이 끝나지 않았습니다. Keycloak 계정 화면에서 완료하거나 관리자에게 문의하세요." 라고 나옵니다.::
+  사용자 이메일이 비었거나 *Required actions* 가 남아 있습니다(Keycloak 의 `Account is not fully set up`). 관리자가 Email 을 넣고 *Email verified* 를 ON 으로 한 뒤 Required actions 를 지웁니다.
+
+Keycloak 의 *Assign role* 화면에 Realm role 이 보이지 않습니다.::
+  필터가 *Filter by clients* 로 되어 있습니다. *Filter by realm roles* 로 바꾸세요.
+
+로그인 화면이 아닌 다른 API 가 막힙니다.::
+  첫 로그인 비밀번호 변경이 남아 있습니다. <<_처음_로그인할_때_비밀번호_바꾸기>> 를 먼저 하세요.
+
+== 부록: REST API
+
+[cols="1,3,1",options="header"]
 |===
 | Method | Path | 인증 필요
 
 | POST | `/api/v1/auth/login` | No
 | POST | `/api/v1/auth/refresh` | No
-| GET | `/api/v1/auth/me` | Yes
 | POST | `/api/v1/auth/logout` | No
+| GET | `/api/v1/auth/type` — 현재 인증 방식(local / keycloak) | No
+| GET | `/api/v1/auth/me` | Yes
+| PUT | `/api/v1/auth/me` — 내 프로필 수정 (로컬 인증 모드만) | Yes
+| PUT | `/api/v1/auth/me/avatar` — 아바타 변경 | Yes
+| POST | `/api/v1/auth/change-password` — 비밀번호 변경 (새 토큰 발급) | Yes
 |===
-
-호출 예시는 다음과 같습니다.
 
 [source,bash]
 ----
-# 로그인
-curl -s -X POST http://<server>:4600/api/v1/auth/login \
+# 로그인 — 응답의 access_token 을 TOKEN 변수에 담습니다
+TOKEN=$(curl -s -X POST http://<server>:4600/api/v1/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"admin"}'
+  -d '{"username":"<사용자명>","password":"<비밀번호>"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 
 # 현재 사용자 정보
 curl -s http://<server>:4600/api/v1/auth/me \
-  -H "Authorization: Bearer <access_token>"
+  -H "Authorization: Bearer $TOKEN"
 
 # 토큰 갱신
 curl -s -X POST http://<server>:4600/api/v1/auth/refresh \
@@ -147,189 +205,4 @@ curl -s -X POST http://<server>:4600/api/v1/auth/refresh \
   -d '{"refresh_token":"<refresh_token>"}'
 ----
 
-== Keycloak 설치
-
-Docker 만 있으면 Keycloak 을 빠르게 띄울 수 있습니다.
-
-[source,bash]
-----
-docker run -d --name argus-keycloak \
-  -p 8180:8080 \
-  -e KC_BOOTSTRAP_ADMIN_USERNAME=admin \
-  -e KC_BOOTSTRAP_ADMIN_PASSWORD=admin \
-  quay.io/keycloak/keycloak:26.1 start-dev
-----
-
-기본 구성은 다음과 같습니다.
-
-[cols="1,3"]
-|===
-| 항목 | 기본값
-
-| Image | `quay.io/keycloak/keycloak:26.1`
-| Admin Console | `http://localhost:8180/admin`
-| Admin 계정 | `admin` / `admin`
-| Realm | `argus`
-| 모드 | `start-dev` (개발용 — 프로덕션은 `start` + DB 분리)
-|===
-
-PostgreSQL 을 함께 쓴다면 `keycloak` 이라는 별도 DB 를 만들고, `pg_hba.conf` 에 컨테이너
-네트워크의 접근을 허용해 줍니다.
-
-----
-host    all    argus    172.16.0.0/12    md5
-----
-
-== Keycloak 자동 설정 (권장)
-
-번거로운 셋업을 손으로 하지 않아도 됩니다. UI 의 *Settings → Auth → Initialize* 버튼을 누르면 다음 작업을 자동으로 수행합니다.
-
-* Realm `argus` 생성
-* Client `argus-client` 생성 (Confidential, Standard Flow · Direct Access Grants 활성)
-* Realm Role 3종 (`argus-admin`, `argus-superuser`, `argus-user`) 생성
-* `argus-user` 를 default role 로 부여
-
-== Keycloak 수동 설정
-
-자동 설정 대신 직접 구성하고 싶다면, Admin 콘솔 (`http://<keycloak>:8180/admin`) 에서 다음 단계대로 셋업합니다.
-
-=== 1. Realm 생성
-
-. 좌측 상단 realm 드롭다운 (master) → *Create realm*
-. *Realm name*: `argus` / *Enabled*: ON → *Create*
-
-=== 2. Client 생성
-
-. *Clients → Create client*
-. Client ID: `argus-client`, *Client authentication*: ON (Confidential)
-. Next → *Standard flow* / *Direct access grants* / *Service accounts roles* 모두 ON
-. Next → *Valid redirect URIs*: `http://<ui>:3000/*`, `http://<server>:4600/*`
-. *Web origins*: `http://<ui>:3000`, `http://<server>:4600`, `+`
-. Save → *Credentials* 탭에서 Client Secret 확인 / `argus-client-secret` 으로 설정
-
-=== 3. Realm Roles 생성
-
-*Realm roles → Create role* 에서 다음 3개를 생성합니다.
-
-[cols="1,2"]
-|===
-| 역할 | 설명
-
-| `argus-admin` | Argus Administrator
-| `argus-superuser` | Argus Super User
-| `argus-user` | Argus User
-|===
-
-=== 4. Default Role 지정
-
-신규 사용자가 자동으로 `argus-user` 를 받도록 설정합니다.
-
-. *Realm roles → default-roles-argus → Associated roles → Assign role*
-. 필터를 *Filter by realm roles* 로 변경 → `argus-user` 선택 → Assign
-
-=== 5. 사용자 생성
-
-. *Users → Create user*
-. Username, Email 필수. *Email verified*: ON
-. Create → *Credentials* 탭 → *Set password* → *Temporary*: OFF → Save
-
-=== 6. 역할 부여
-
-. *Users → \{user\} → Role mapping → Assign role*
-. 필터를 *Filter by realm roles* 로 변경 → 원하는 역할 선택 → Assign
-
-[TIP]
-====
-default role 로 `argus-user` 가 이미 자동 부여돼 있으므로, `argus-admin` /
-`argus-superuser` 만 수동으로 부여하면 됩니다.
-====
-
-== 서버 설정
-
-서버 쪽 인증 설정은 `config.yml` 에 다음과 같이 적습니다.
-
-[source,yaml]
-----
-auth:
-  type: keycloak
-  keycloak:
-    server_url: http://localhost:8180
-    realm: argus
-    client_id: argus-client
-    client_secret: argus-client-secret
-    admin_role: argus-admin
-    superuser_role: argus-superuser
-    user_role: argus-user
-----
-
-같은 내용을 `config.properties` 형식으로 쓰면 다음과 같습니다.
-
-[source,properties]
-----
-auth.type=keycloak
-auth.keycloak.server_url=http://localhost:8180
-auth.keycloak.realm=argus
-auth.keycloak.client_id=argus-client
-auth.keycloak.client_secret=argus-client-secret
-auth.keycloak.admin_role=argus-admin
-auth.keycloak.superuser_role=argus-superuser
-auth.keycloak.user_role=argus-user
-----
-
-UI 의 *Settings → Auth* 에서도 같은 항목을 런타임에 변경할 수 있어, 서버를 재시작할 필요가 없습니다.
-
-== 트러블슈팅
-
-로그인이 막힐 때 자주 마주치는 증상과 해결 방법을 정리했습니다.
-
-[cols="1,2,2"]
-|===
-| 증상 | 원인 | 해결
-
-| `Invalid client or Invalid client credentials`
-| `argus-client` 미존재 또는 Client Secret 불일치
-| Clients → argus-client → Credentials 확인
-
-| `Account is not fully set up`
-| 사용자 이메일 미입력 또는 *Required actions* 보류
-| Email + Email verified ON 후 Required actions 제거
-
-| `Invalid user credentials`
-| 비밀번호 오류
-| Users → 사용자 → Credentials → Set password 재설정
-
-| `No Argus role assigned`
-| 사용자에게 `argus-*` Realm Role 부여 안 됨
-| Users → 사용자 → Role mapping 에서 역할 추가
-
-| Realm role 이 *Assign role* 화면에 안 보임
-| 필터가 *Filter by clients* 로 돼 있음
-| *Filter by realm roles* 로 변경
-|===
-
-== Keycloak Admin API
-
-관리자 토큰을 발급받으면 사용자 / 역할 / 그룹을 스크립트로 관리할 수 있습니다.
-
-[source,bash]
-----
-# 관리자 토큰
-TOKEN=$(curl -s -X POST "http://<keycloak>:8180/realms/master/protocol/openid-connect/token" \
-  -d "username=admin&password=admin&grant_type=password&client_id=admin-cli" \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
-
-# 사용자 목록
-curl -s "http://<keycloak>:8180/admin/realms/argus/users" \
-  -H "Authorization: Bearer $TOKEN"
-
-# 사용자 생성
-curl -s -X POST "http://<keycloak>:8180/admin/realms/argus/users" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "username": "newuser",
-    "email": "newuser@example.com",
-    "enabled": true,
-    "credentials": [{"type": "password", "value": "password123", "temporary": false}]
-  }'
-----
+Keycloak 의 OIDC 엔드포인트와 Admin API 는 xref:ops/authentication-advanced.adoc[인증 — 고급 설정] 을 참고하세요.

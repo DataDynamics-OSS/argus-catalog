@@ -4,7 +4,7 @@
 주요 테이블:
 - argus_alert_rule: 알림 규칙 정의 (감시 대상 + 트리거 조건 + 알림 설정)
 - argus_lineage_alert: 스키마 변경 영향 분석 결과 알림
-- argus_alert_notification: 알림 전달 기록 (IN_APP, WEBHOOK, EMAIL)
+- argus_alert_notification: 알림 전달 기록 (채널: IN_APP, WEBHOOK — EMAIL 은 미지원)
 """
 
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, func
@@ -30,7 +30,9 @@ class AlertRule(Base):
     - SCHEMA_CHANGE: 특정 변경 유형(DROP/MODIFY/ADD) 필터
     - COLUMN_WATCH: 특정 컬럼만 감시
     - MAPPING_BROKEN: 컬럼 매핑된 컬럼이 변경될 때만 발동
-    - SYNC_STALE: N시간 이상 sync 안 됨
+    - QUALITY_FAILED: 품질 검증 실패 (trigger_config: {"min_severity": "WARNING"})
+    - MCP_POLICY_DRIFT / MCP_SECURITY_WARNING: MCP 배포 finding (scope ALL 또는 DATASOURCE)
+      trigger_config: {"min_severity": "high", "environments": ["PROD"], "kinds": [...]}
     """
 
     __tablename__ = "argus_alert_rule"
@@ -40,7 +42,7 @@ class AlertRule(Base):
     description = Column(Text)                                  # 규칙 설명
     scope_type = Column(String(32), nullable=False)             # 감시 범위: DATASET, TAG, LINEAGE, DATASOURCE, ALL
     scope_id = Column(Integer)                                  # 범위 대상 ID (ALL이면 NULL)
-    trigger_type = Column(String(64), nullable=False)           # 트리거 유형: ANY, SCHEMA_CHANGE, COLUMN_WATCH, MAPPING_BROKEN, SYNC_STALE, QUALITY_FAILED
+    trigger_type = Column(String(64), nullable=False)           # 트리거 유형: ANY, SCHEMA_CHANGE, COLUMN_WATCH, MAPPING_BROKEN, QUALITY_FAILED, MCP_*
     trigger_config = Column(Text, default="{}")                 # 트리거 조건 상세 (JSON)
     severity_override = Column(String(16))                      # 심각도 강제 지정 (NULL이면 자동 판정)
     channels = Column(String(200), nullable=False, default="IN_APP")  # 알림 채널 (콤마 구분)
@@ -65,11 +67,14 @@ class LineageAlert(Base):
     __tablename__ = "argus_lineage_alert"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    alert_type = Column(String(32), nullable=False)             # SCHEMA_CHANGE, LINEAGE_BROKEN, SYNC_FAILED, QUALITY_FAILED
+    alert_type = Column(String(32), nullable=False)             # SCHEMA_CHANGE, QUALITY_FAILED, MCP_POLICY_DRIFT, MCP_SECURITY_WARNING
     severity = Column(String(16), nullable=False)               # INFO, WARNING, BREAKING
+    # 데이터셋 알림이면 채워진다. 데이터셋이 아닌 엔터티(MCP 배포 등) 알림은 NULL + entity_type/entity_ref
     source_dataset_id = Column(
-        Integer, ForeignKey("catalog_datasets.id", ondelete="CASCADE"), nullable=False
+        Integer, ForeignKey("catalog_datasets.id", ondelete="CASCADE"), nullable=True
     )
+    entity_type = Column(String(50))                            # 예: mcp_deployment
+    entity_ref = Column(String(500))                            # 엔터티 식별자 (배포 이름 등)
     affected_dataset_id = Column(
         Integer, ForeignKey("catalog_datasets.id", ondelete="CASCADE")
     )
@@ -88,7 +93,11 @@ class LineageAlert(Base):
 
 
 class AlertNotification(Base):
-    """알림 전달 기록."""
+    """알림 전달 기록.
+
+    IN_APP 은 수신자별 1행(status=SENT), WEBHOOK 은 규칙당 1행(recipient=호스트,
+    status=SENT/FAILED)으로 남는다.
+    """
 
     __tablename__ = "argus_alert_notification"
 

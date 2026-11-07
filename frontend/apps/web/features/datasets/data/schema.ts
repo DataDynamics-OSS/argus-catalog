@@ -94,6 +94,8 @@ export const datasetSummarySchema = z.object({
   tag_count: z.number(),
   owner_count: z.number(),
   schema_field_count: z.number(),
+  // 생성자(소유자) — 행 ⋮ "삭제" 노출 판단용
+  created_by: z.string().nullable().optional(),
   created_at: z.coerce.date(),
   updated_at: z.coerce.date(),
 })

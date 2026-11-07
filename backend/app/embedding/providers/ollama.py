@@ -29,7 +29,11 @@ class OllamaEmbeddingProvider(EmbeddingProvider):
         self._dim: int | None = None
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
-        """Ollama API 로 텍스트를 임베딩 (텍스트당 요청 1회)."""
+        """Ollama API 로 텍스트를 임베딩 (텍스트당 요청 1회).
+
+        HTTP 오류 응답이면 ``httpx.HTTPStatusError`` 를 그대로 올린다(호출 측에서 처리).
+        """
+        logger.debug("Ollama 임베딩 요청: model=%s count=%d", self._model_id, len(texts))
         results = []
         for text in texts:
             resp = await self._client.post(
@@ -45,6 +49,7 @@ class OllamaEmbeddingProvider(EmbeddingProvider):
         return results
 
     def dimension(self) -> int:
+        # 첫 embed 호출 전에는 차원을 모르므로 기본 모델(all-minilm)의 384 를 돌려준다
         return self._dim or 384
 
     def model_name(self) -> str:

@@ -11,8 +11,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import time
 
 from temporalio.client import Client
 
@@ -25,17 +27,29 @@ TASK_QUEUE = os.getenv("TEMPORAL_TASK_QUEUE", settings.temporal_task_queue)
 
 _client: Client | None = None
 
+# 지연 재연결 — 백엔드가 Temporal 없이 기동된 뒤 Temporal 이 올라오면 다음 요청에서 연결한다.
+# 요청마다 연결을 시도해 응답이 늘어지지 않도록 간격·시간 제한을 둔다.
+RECONNECT_INTERVAL_SECONDS = 10.0
+CONNECT_TIMEOUT_SECONDS = 5.0
+_last_attempt: float | None = None
+_connect_lock = asyncio.Lock()
+
 
 def _target() -> str:
+    """Temporal 서버 주소 — TEMPORAL_TARGET 환경변수 우선, 없으면 settings."""
     return os.getenv("TEMPORAL_TARGET", settings.temporal_target)
 
 
 def _namespace() -> str:
+    """Temporal 네임스페이스 — TEMPORAL_NAMESPACE 환경변수 우선, 없으면 settings."""
     return os.getenv("TEMPORAL_NAMESPACE", settings.temporal_namespace)
 
 
 async def connect() -> Client:
-    """Temporal 서버 연결을 초기화하고 클라이언트를 반환."""
+    """Temporal 서버 연결을 초기화하고 클라이언트를 반환(이미 연결돼 있으면 재사용).
+
+    연결 실패 시 예외가 그대로 전파된다.
+    """
     global _client
     if _client is not None:
         return _client
@@ -44,10 +58,39 @@ async def connect() -> Client:
     namespace = _namespace()
     logger.info("Temporal 연결 중: target=%s namespace=%s", target, namespace)
     _client = await Client.connect(target, namespace=namespace)
+    logger.info("Temporal 연결 완료: target=%s namespace=%s", target, namespace)
     return _client
 
 
+async def ensure_connected() -> bool:
+    """연결돼 있으면 True. 아니면 (temporal.enabled 이고 마지막 시도 후 간격이 지났을 때) 다시 연결해 본다.
+
+    예전에는 기동 시 한 번만 연결해, Temporal 없이 기동되면 백엔드를 재시작할 때까지 503 이었다.
+    """
+    global _last_attempt
+    if is_connected():
+        return True
+    if not settings.temporal_enabled:
+        return False
+    async with _connect_lock:
+        if is_connected():
+            return True
+        now = time.monotonic()
+        if _last_attempt is not None and now - _last_attempt < RECONNECT_INTERVAL_SECONDS:
+            logger.debug("Temporal 재연결 대기 중(간격 제한): %.1fs 경과", now - _last_attempt)
+            return False
+        _last_attempt = now
+        try:
+            await asyncio.wait_for(connect(), timeout=CONNECT_TIMEOUT_SECONDS)
+            logger.info("Temporal 재연결 성공")
+        except Exception as e:  # noqa: BLE001 — 미가용이면 다음 간격에 다시 시도
+            logger.warning("Temporal 재연결 실패: %s", e)
+            return False
+    return is_connected()
+
+
 def get_client() -> Client:
+    """초기화된 클라이언트를 반환한다. 미연결이면 RuntimeError."""
     if _client is None:
         raise RuntimeError("Temporal client not initialized. Call connect() first.")
     return _client

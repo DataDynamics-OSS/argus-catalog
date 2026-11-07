@@ -1,116 +1,437 @@
 = 검색
+:toc: macro
+:toclevels: 2
 
-검색은 키워드와 시맨틱을 함께 쓰는 *하이브리드* 방식으로 동작합니다. 데이터셋의
-이름·설명·플랫폼·태그·소유자를 벡터로 임베딩해 두기 때문에, 단어가 정확히 일치하지
-않아도 의미가 비슷한 데이터셋까지 찾아 줍니다.
+**통합 검색**은 검색어 하나로 **데이터셋 · 용어집 · AI Agent · API · MCP 서버**를 한꺼번에 찾아 줍니다.
+글자가 그대로 들어간 항목을 찾는 **키워드 검색**과, 뜻이 비슷한 항목을 찾는 **시맨틱(의미) 검색**을 함께 쓰는
+**하이브리드** 방식이라, `비디오 빌리기` 처럼 이름 · 설명에 없는 표현으로도 `대여` · `재고` 관련 데이터를 찾을 수 있습니다.
 
-// TODO: screenshot - 검색 결과 페이지 (점수 · 매치 타입 표시)
-image::ops-search/results.png[검색 결과, 800]
+이 문서는 처음 사용하는 분을 기준으로 검색 → 결과 읽기 → 이동 순서로 설명하고, 끝에서 관리자가 시맨틱 검색을 켜는 방법을 다룹니다.
+**고급 사용자** 상자는 몰라도 사용에 지장이 없는 심화 내용입니다.
 
-== 진입 경로
+toc::[]
 
-검색은 두 곳에서 시작할 수 있습니다.
+== 시작하기 전에
 
-* *전역 헤더 검색바* — 어느 화면에서나 곧바로 검색할 수 있습니다.
-* *Search 페이지* (`/dashboard/search`) — 결과 페이지로 바로 들어갑니다.
+=== 이런 일을 할 수 있습니다
 
-== 검색 방식
+* **어디서나 검색** — 상단 헤더 검색창에 검색어를 넣고 Enter 를 누릅니다.
+* **뜻으로 찾기** — 이름에 없는 표현으로도 비슷한 뜻의 데이터를 찾습니다(시맨틱 검색이 켜져 있을 때).
+* **한 화면에서 여러 종류 보기** — 데이터셋 · 용어집 · AI Agent · API · MCP 서버 결과가 그룹별로 나옵니다.
+* **바로 이동** — 결과 행을 누르면 그 항목의 상세 화면으로 갑니다.
+* **결과 공유** — 결과 화면 주소를 보내면 같은 검색 결과를 열 수 있습니다.
 
-[cols="1,2,3"]
+=== 먼저 알아 둘 용어
+
+[cols="1,3",options="header"]
 |===
-| 방식 | 쿼리 예 | 동작
+| 용어 | 뜻
 
-| 키워드 | `customer` | 이름·설명·URN 의 부분 일치 (`ILIKE`)
-| 시맨틱 | `고객 구매 이력` | 의미가 유사한 `fact_purchases`, `order_history` 까지 매칭
-| 하이브리드 | `customer purchase` | 키워드 + 시맨틱 점수의 가중 결합 (기본 30% / 70%)
-|===
-
-임베딩이 꺼져 있거나 아직 설정되지 않았다면, 자동으로 키워드 검색으로 폴백됩니다.
-
-== 임베딩 프로바이더
-
-시맨틱 검색을 하려면 텍스트를 벡터로 바꿔 줄 *임베딩 프로바이더* 가 필요합니다. 다음
-세 가지 중 하나를 고르면 됩니다.
-
-[cols="1,2,1,1,1"]
-|===
-| 프로바이더 | 기본 모델 | 차원 | 한국어 | Air-gapped
-
-| Local (sentence-transformers) | `all-MiniLM-L6-v2` | 384 | △ | O
-| OpenAI | `text-embedding-3-small` | 1536 | O | X
-| Ollama (로컬 호스팅) | `nomic-embed-text` | 768 | O | O
+| 키워드 검색
+| 검색어가 글자 그대로 들어간 항목을 찾습니다. 항상 동작합니다.
+| 시맨틱 검색
+| 검색어와 **뜻이 비슷한** 항목을 찾습니다. 관리자가 xref:ops/embedding.adoc[임베딩] 을 켜야 동작하며, 꺼져 있으면 자동으로 키워드 검색만 합니다.
+| 하이브리드
+| 키워드와 시맨틱 결과를 합쳐 점수 순으로 보여 주는 방식입니다.
 |===
 
-한국어가 중요하다면 Local 의 `paraphrase-multilingual-MiniLM-L12-v2` 나 Ollama 의
-`nomic-embed-text` 를 권장합니다.
+=== 메뉴 위치
 
-설정 위치는 xref:ops/settings.adoc#_embedding[설정 → Embedding] 입니다.
+[cols="1,2,3",options="header"]
+|===
+| 메뉴 | 주소 | 용도
 
-== 임베딩 저장 (pgvector)
+| 상단 헤더 검색창 | (모든 화면) | 검색어 입력
+| 검색 결과 | `/dashboard/search?q=<검색어>` | 그룹별 결과 보기
+| 관리 → 설정 → AI → 임베딩 | `/dashboard/settings?tab=embedding` | 시맨틱 검색 켜기·끄기 (관리자)
+|===
 
-생성된 벡터는 PostgreSQL `catalog_dataset_embeddings` 테이블에 저장됩니다. 이때
-pgvector 확장과 IVFFlat 인덱스 (코사인 유사도) 를 사용합니다.
+=== 누가 무엇을 할 수 있나요
 
-임베딩 소스 텍스트::
-----
-{name} | {description} | {qualified_name} | {platform_name} | {platform_type} | {tags...} | {owners...}
-----
+[cols="1,3",options="header"]
+|===
+| 작업 | 할 수 있는 사람
 
-데이터셋을 만들거나 수정하면 임베딩이 비동기로 자동 생성됩니다. 이미 있던 기존
-데이터셋은 *Settings → Embedding* 의 *Backfill* 버튼을 누르거나 다음 API 로 한꺼번에
-임베딩할 수 있습니다.
+| 통합 검색
+| 로그인한 사용자 누구나. 검색 API(`/api/v1/catalog/search/*`)도 로그인 토큰이 있어야 합니다.
+| 검색 결과에서 상세 화면으로 이동
+| 이동할 메뉴(데이터셋 · 용어집 · AI Agent · API · MCP Server)가 열려 있는 사용자
+| 임베딩 켜기 · 모델 변경 · 백필 · 삭제
+| 관리자만 (**관리 → 설정 → AI → 임베딩**)
+|===
+
+== 검색하기
+
+. 어느 화면에서나 상단 헤더의 검색창(**이름·설명·의미로 데이터셋 검색...**)을 누릅니다.
+. 검색어를 적고 Enter 를 누릅니다.
+. **검색 결과** 화면(`/dashboard/search?q=<검색어>`)이 열립니다.
+
+image::ops-search/header-search.png[헤더 검색창에 검색어 입력, 900]
+
+* 검색창 오른쪽의 보라색 뇌 아이콘에 마우스를 올리면 "하이브리드 검색 (키워드 + 의미 기반)" 안내가 보입니다.
+* 검색어는 500자까지 입력할 수 있습니다. 공백만 적고 Enter 를 누르면 이동하지 않습니다.
+* 결과 화면에서도 헤더 검색창에 현재 검색어가 남아 있어, 고쳐서 바로 다시 검색할 수 있습니다.
+* 결과 화면 주소를 공유하면 같은 검색 결과를 열 수 있습니다. 검색어(`q`) 없이 주소만 열면 이전 화면으로 돌아갑니다.
+
+NOTE: 헤더 검색창은 화면 폭이 768px 이상일 때만 보입니다. 좁은 화면에서는 창을 넓히거나 주소창에 `/dashboard/search?q=<검색어>` 를 직접 입력하세요.
+
+== 검색 결과 읽기
+
+image::ops-search/results-full.png[검색 결과 — 데이터셋 · 용어집 · AI Agent · API 그룹, 900]
+
+=== 상단 요약
+
+결과 위에 `"<검색어>" 검색 결과 N건` 과 검색 방식을 알려 주는 배지가 보입니다. N 은 모든 그룹의 결과 수를 합친 값입니다.
+
+[cols="1,3",options="header"]
+|===
+| 배지 | 뜻
+
+| `local/paraphrase-multilingual-MiniLM-L12-v2` 처럼 **제공자/모델**
+| 임베딩이 켜져 있어 키워드와 시맨틱을 함께 쓰는 하이브리드 검색을 했습니다.
+| **키워드 검색만 (임베딩 비활성)**
+| 임베딩이 꺼져 있어 키워드 검색만 했습니다.
+|===
+
+=== 결과 그룹
+
+결과는 **데이터셋 / 용어집 / AI Agent / API / MCP 서버** 순서의 그룹으로 나뉘고, 그룹 제목 옆 괄호에 건수가 붙습니다.
+결과가 없는 그룹은 표시되지 않습니다. 데이터셋은 최대 50건, 나머지 그룹은 그룹마다 점수가 높은 순으로 최대 5건까지 보여 줍니다.
+
+**데이터셋** 그룹은 표로 보입니다.
+
+[cols="1,3",options="header"]
+|===
+| 열 | 내용
+
+| 데이터셋
+| 물리명(예: `sakila.rental`) 옆에 작은 글씨로 논리명(예: `대여`)이 붙습니다. 둘째 줄에는 데이터셋 **요약**이 보이고, 요약이 없으면 **설명**의 앞부분을 서식 기호 없이 평문으로 보여 줍니다.
+| 데이터 소스
+| 데이터셋이 속한 데이터 소스 이름입니다.
+| 환경
+| `DEV` · `PROD` 같은 환경입니다.
+| 필드
+| 스키마 컬럼 수입니다. xref:catalog/datasets.adoc[데이터셋] 목록의 **필드** 열과 같습니다.
+| 태그
+| 붙은 태그 수입니다.
+| 매칭
+| 이 결과가 어떤 경로로 찾아졌는지(`keyword` · `semantic` · `hybrid`)입니다.
+| 점수
+| 연관도를 백분율로 표시합니다. 결과는 점수가 높은 순으로 정렬됩니다.
+|===
+
+**용어집 · AI Agent · API · MCP 서버** 그룹은 행마다 표시명(없으면 이름)과 설명을 보여 주고, 오른쪽에 항목 성격을 알려 주는
+배지(분류 · 프로토콜 · 플랫폼 · 상태 — 예: `core` · `REST` · `published`, `data-platform` · `kafka` · `active`)와 매칭 · 점수가 붙습니다.
+
+image::ops-search/results-keyword.png[데이터셋 행 — 물리명 · 논리명 · 요약, 키워드 매칭, 900]
+
+NOTE: 검색 결과 화면은 검색어가 들어간 부분을 따로 강조(하이라이트)하지 않습니다. 둘째 줄은 항상 요약(없으면 설명 앞부분)이므로,
+시맨틱 결과처럼 검색어가 글자 그대로 들어 있지 않은 행도 무엇에 관한 데이터인지 바로 알 수 있습니다.
+
+=== 매칭 배지와 점수
+
+[cols="1,1,3",options="header"]
+|===
+| 매칭 | 배지 색 | 뜻
+
+| `hybrid`
+| 보라
+| 키워드와 시맨틱 모두에 걸렸습니다. 가장 확실한 결과입니다.
+| `semantic`
+| 파랑
+| 글자는 일치하지 않지만 뜻이 비슷합니다.
+| `keyword`
+| 회색
+| 글자만 일치했습니다. 임베딩이 꺼져 있으면 모든 결과가 `keyword` · 100% 입니다.
+|===
+
+점수 표시는 80% 이상 초록, 60% 이상 파랑, 40% 이상 주황, 그 아래는 회색으로 칠해집니다.
+
+image::ops-search/results-hybrid.png[하이브리드 검색 — hybrid · semantic · keyword 결과와 점수, 900]
+
+위 화면은 `customer` 로 검색한 결과입니다. 이름에 customer 가 들어 있고 뜻도 가까운 `shop.customers` 는 `hybrid`,
+이름에는 없지만 고객과 관련된 `shop.orders` 는 `semantic`, 설명에 글자만 들어 있는 `sakila.rental` 은 `keyword` 로 표시됩니다.
+
+[TIP]
+.고급 사용자 — 점수 계산 방식
+====
+.키워드·시맨틱 하이브리드 검색
+image::diagrams/ops-search-01.png[키워드·시맨틱 하이브리드 검색,role="diagram"]
+
+[cols="1,3",options="header"]
+|===
+| 매칭 | 점수
+
+| `hybrid` | 0.7 × 의미 유사도 + 0.3
+| `semantic` | 0.7 × 의미 유사도
+| `keyword` | 임베딩이 켜져 있으면 30%, 꺼져 있으면 100%
+|===
+
+임계값 · 가중치는 <<_search_api>> 처럼 API 로 조정할 수 있습니다.
+====
+
+== 결과에서 이동하기
+
+행을 누르면 해당 항목의 화면으로 이동합니다.
+
+[cols="1,3",options="header"]
+|===
+| 그룹 | 이동하는 곳
+
+| 데이터셋
+| 데이터셋 상세 (`/dashboard/datasets/<id>`)
+| 용어집
+| 용어집 화면에서 그 용어(또는 분류)가 선택된 상태 (`/dashboard/glossary?term=<id>`)
+| AI Agent
+| 에이전트 상세 (`/dashboard/ai-agents?agent=<이름>`)
+| API
+| API 상세 (`/dashboard/apis?api=<이름>`)
+| MCP 서버
+| MCP 서버 상세 (`/dashboard/mcp-servers?server=<이름>`)
+|===
+
+image::ops-search/goto-glossary.png[용어집 결과를 눌러 이동 — 해당 분류가 선택됨, 900]
+
+image::ops-search/goto-agent.png[AI Agent 결과를 눌러 이동 — 에이전트 상세, 900]
+
+MCP 서버는 이름 · 설명뿐 아니라 대상 플랫폼(예: `kafka`)과 서버가 제공하는 도구 이름(예: `peek_messages`)으로도 찾을 수 있습니다.
+
+image::ops-search/mcp-group.png[kafka 검색 — MCP 서버 그룹과 분류 · 플랫폼 · 상태 배지, 900]
+
+== 무엇이 검색되나요
+
+=== 키워드 검색 대상
+
+키워드 검색은 아래 항목에서 검색어가 **포함된** 항목을 대소문자 구분 없이 찾습니다.
+
+[cols="1,3,2",options="header"]
+|===
+| 그룹 | 검색하는 항목 | 제외
+
+| 데이터셋
+| 이름, 논리명(표시 이름), 요약, 설명, URN, 정규화된 이름(qualified name)
+| 삭제됨(removed) 상태
+| 용어집
+| 이름, 설명
+| —
+| AI Agent
+| 이름, 표시명, 설명
+| —
+| API
+| 이름, 표시명, 설명
+| —
+| MCP 서버
+| 이름, 표시명, 설명, 대상 플랫폼, 도구 이름 · 설명
+| 폐기(retired) 상태
+|===
+
+* 검색어의 `%` · `_` 는 와일드카드가 아니라 글자 그대로 찾습니다. `_` 로 검색하면 이름 · 설명에 밑줄이 들어 있는 항목만 나옵니다.
+* 컬럼 이름은 키워드 검색 대상이 아닙니다. 컬럼 이름으로 찾으려면 시맨틱 검색을 켜면 됩니다(데이터셋 임베딩에 컬럼 목록이 들어갑니다).
+* AI Agent · API 는 상태와 관계없이 검색됩니다. 오른쪽 상태 배지(예: `deprecated`)로 구분합니다.
+
+=== 시맨틱 검색
+
+임베딩이 켜져 있으면 검색어와 뜻이 비슷한 항목을 찾습니다. 유사도가 임계값(기본 0.3) 이상인 항목만 결과에 들어갑니다.
+
+기본 모델 `paraphrase-multilingual-MiniLM-L12-v2` 는 한국어와 영어를 함께 이해하는 다국어 모델이라,
+한글 설명만 있는 데이터도 영어나 다른 표현으로 찾을 수 있습니다. 아래는 `비디오 빌리기` 로 검색한 결과로,
+어느 항목에도 이 글자가 없지만 영화 · 재고 데이터셋과 반납 · 영화 대여 용어가 `semantic` 으로 나옵니다.
+
+image::ops-search/korean-semantic.png[한글 의미 검색 — 비디오 빌리기, 900]
+
+[TIP]
+.고급 사용자 — 임베딩하는 텍스트
+====
+검색어를 벡터로 바꿔, 미리 임베딩해 둔 항목과 코사인 유사도를 비교합니다. 항목마다 임베딩하는 텍스트는 다음과 같습니다.
+
+[cols="1,3",options="header"]
+|===
+| 대상 | 임베딩하는 텍스트
+
+| 데이터셋
+| `이름 \| 요약 \| 설명 \| 정규화된 이름 \| 데이터 소스 이름 \| 데이터 소스 유형 \| schema: 컬럼명 타입 -- 컬럼 설명; ...`
+| 용어집 · AI Agent · API · MCP 서버
+| 이름 · 표시명 · 설명 등 항목별 대표 정보
+|===
+
+태그와 소유자는 의미 신호가 약해 임베딩에 넣지 않습니다.
+====
+
+=== 임베딩이 꺼져 있을 때
+
+임베딩이 꺼져 있으면 오류 없이 키워드 검색만 합니다. 결과 위에 **키워드 검색만 (임베딩 비활성)** 배지가 붙고,
+모든 결과가 `keyword` · 100% 로 표시됩니다. 이때는 글자가 일치하지 않는 `movie` 같은 검색어로는 결과가 나오지 않습니다.
+
+image::ops-search/keyword-only.png[임베딩 비활성 — 키워드 검색만, 900]
+
+[[_시맨틱_검색_켜기_관리자]]
+== 시맨틱 검색 켜기 (관리자)
+
+시맨틱 검색은 **관리 → 설정 → AI → 임베딩** (`/dashboard/settings?tab=embedding`) 에서 켭니다.
+설정 항목 전체는 xref:ops/settings.adoc#_embedding[설정 → 임베딩], 운영 절차는 xref:ops/embedding.adoc[임베딩 운영] 을 참고하세요.
+
+. **시맨틱 검색 활성화** 스위치를 켭니다.
+. **제공자**와 **모델**을 고릅니다. 기본값은 `Local (sentence-transformers)` 와 `multilingual-MiniLM-L12-v2 (Korean+English, 470MB) — 기본` 입니다.
+. **연결 테스트** 로 모델이 동작하는지 확인합니다. 처음에는 모델 내려받기 때문에 수십 초 걸릴 수 있습니다. 연결 테스트는 설정을 저장하지 않습니다.
+. **저장** 을 누르면 "임베딩 설정을 저장했습니다." 알림과 함께 **임베딩 상태** 카드에 제공자 · 모델이 표시됩니다.
+. **임베딩 관리** 카드의 **전체 데이터셋 백필** 을 누릅니다. 데이터셋과 용어집 · AI Agent · API · MCP 서버가 모두 임베딩되고,
+  `N건 임베딩, S건 건너뜀, E건 오류 (총 T건)` 알림이 뜹니다.
+. **임베딩 상태** 카드에서 **커버리지**가 100% 인지 확인합니다.
+
+image::ops-search/model-options.png[임베딩 모델 선택 — 384차원 모델, 다국어 모델이 기본, 900]
+
+image::ops-search/backfill.png[백필 완료 — 커버리지 100%, 제공자 · 모델 표시, 900]
+
+=== 새 데이터를 바로 검색되게 하기
+
+**쓰기 시 자동 임베딩**을 켜고 저장하면, 데이터셋 · 용어 · AI Agent · API · MCP 서버를 만들거나 고칠 때 몇 초 안에
+자동으로 임베딩되어 백필 없이 바로 시맨틱 검색에 걸립니다. 끄면 새 데이터는 다음 백필 때 임베딩됩니다
+(대량 동기화 때 모델 계산 부하를 피하려고 기본은 꺼져 있습니다). 항목을 지우면 그 임베딩도 함께 지워집니다.
+
+image::ops-search/auto-embedded-term.png[자동 임베딩 — 방금 만든 용어가 백필 없이 바로 검색됨, 900]
+
+=== 모델 바꾸기
+
+모델이 다르면 같은 384차원이라도 벡터를 서로 비교할 수 없습니다. 모델을 바꿨다면 **저장** 한 뒤 반드시 **전체 데이터셋 백필**을 다시 실행하세요.
+백필은 원문 · 제공자 · 모델이 모두 같은 항목만 건너뛰므로, 모델을 바꾼 뒤에는 모든 항목을 새 모델로 다시 임베딩합니다
+("0건 건너뜀"). 같은 모델로 다시 백필하면 바뀐 항목만 임베딩합니다.
+
+[cols="1,1,3",options="header"]
+|===
+| 제공자 | 선택할 수 있는 모델 | 비고
+
+| Local (sentence-transformers)
+| `paraphrase-multilingual-MiniLM-L12-v2` (기본, 한국어+영어, 약 470MB), `all-MiniLM-L6-v2` (영어, 약 80MB), `bge-small-en-v1.5` (영어, 약 130MB)
+| 서버가 처음 쓸 때 모델을 내려받아 캐시합니다. 에어갭 환경은 xref:ops/embedding-advanced.adoc#_에어갭_배포[임베딩 — 고급 설정] 참고.
+| Ollama (Local API)
+| `all-minilm` (384차원)
+| 별도 Ollama 서버가 필요합니다.
+| OpenAI API
+| 선택 불가
+| 제공 모델이 384차원이 아니어서 현재 지원하지 않습니다.
+|===
+
+벡터 저장 컬럼은 **384차원 고정**입니다. 384차원이 아닌 모델은 화면에서 **(미지원)** 으로 표시되어 고를 수 없고, API 로 저장해도 거부(422)됩니다.
+
+=== 시맨틱 검색 끄기 · 임베딩 비우기
+
+* **시맨틱 검색 활성화**를 끄고 저장하면 재시작 없이 바로 키워드 검색으로 돌아갑니다. 이미 만든 임베딩은 남아 있어, 다시 켜면 그대로 씁니다.
+* **모든 임베딩 삭제**는 확인 창("모든 임베딩을 삭제할까요? 다시 사용하려면 백필을 실행해야 합니다.")을 거쳐 데이터셋과 엔티티 임베딩을 모두 지웁니다.
+  삭제 뒤에도 검색은 오류 없이 동작하지만, 다시 백필하기 전까지는 키워드로 일치하는 결과만 나옵니다.
+
+[TIP]
+.고급 사용자 — 임베딩 저장 (pgvector)
+====
+벡터는 PostgreSQL 의 pgvector 확장으로 저장합니다. 데이터셋은 `catalog_dataset_embeddings`, 용어집 · AI Agent · API · MCP 서버는
+`catalog_entity_embeddings` 테이블에 들어가며, 코사인 유사도 인덱스를 사용합니다. 각 행에는 원문(`source_text`)과 제공자 · 모델 이름이 함께 저장됩니다.
+임베딩 현황 조회 API 는 <<_search_api>> 를 보세요.
+====
+
+== 자주 묻는 질문
+
+[qanda]
+결과가 없다고 나옵니다.::
+  일치하는 항목이 없으면 `"<검색어>" 와 일치하는 결과가 없습니다.` 안내가 보입니다. 검색어를 바꿔 보세요.
+  임베딩이 꺼져 있으면 글자가 일치하는 항목만 나오므로, 관리자에게 시맨틱 검색을 켜 달라고 요청할 수도 있습니다.
++
+image::ops-search/no-results.png[결과 없음 안내, 900]
+
+`통합 검색 결과를 불러오지 못했습니다. (HTTP 422)` 라는 빨간 안내가 나옵니다.::
+  검색 자체가 실패한 경우입니다(예: 주소창에 500자를 넘는 검색어를 직접 넣은 경우). 검색어를 줄이거나 잠시 뒤 다시 시도하세요.
+
+결과를 필터로 좁히거나 검색 방식(키워드/시맨틱)을 고를 수 있나요?::
+  검색 결과 화면에는 별도의 필터나 검색 방식 전환이 없습니다. 검색 방식은 관리자의 임베딩 설정으로 정해지고,
+  결과를 좁히려면 검색어를 더 구체적으로 고쳐 다시 검색합니다. 데이터 소스 · 환경 · 태그로 걸러 보려면 xref:catalog/datasets.adoc[데이터셋] 목록의 필터를,
+  업무 기준 트리로 찾으려면 xref:catalog/taxonomies.adoc[분류 체계] 를 쓰세요.
+
+헤더에 검색창이 보이지 않습니다.::
+  화면 폭이 768px 보다 좁습니다. 창을 넓히거나 주소창에 `/dashboard/search?q=<검색어>` 를 직접 입력하세요.
+
+컬럼 이름으로 검색해도 안 나옵니다.::
+  컬럼 이름은 키워드 검색 대상이 아닙니다. 시맨틱 검색이 켜져 있어야 컬럼 이름으로 찾을 수 있습니다.
+
+영어 전용 모델로 바꾼 뒤 한글 검색 결과가 줄었습니다.::
+  영어 전용 모델은 한글 설명과의 유사도가 낮게 나와 기본 임계값(0.3)을 넘지 못하는 경우가 많습니다. 설명이 한글 위주라면 기본 다국어 모델을 쓰세요.
+
+[[_search_api]]
+== 부록: REST API
+
+검색 API 는 로그인 토큰(`Authorization: Bearer <토큰>`)이 있어야 하며, 없으면 401 을 돌려줍니다.
+
+[cols="2,3",options="header"]
+|===
+| API | 용도
+
+| `GET /api/v1/catalog/search/unified?q=...`
+| 화면과 같은 통합 검색입니다. 데이터셋과 4개 엔티티 그룹을 함께 돌려줍니다. 임베딩이 꺼져 있으면 키워드로 폴백합니다.
+| `GET /api/v1/catalog/search/hybrid?q=...`
+| 데이터셋만 하이브리드로 검색합니다. 가중치를 조정할 수 있습니다. 임베딩이 꺼져 있으면 키워드로 폴백합니다.
+| `GET /api/v1/catalog/search/semantic?q=...`
+| 데이터셋만 시맨틱으로 검색합니다. 임베딩이 꺼져 있으면 503 을 돌려줍니다.
+|===
+
+[cols="1,1,1,3",options="header"]
+|===
+| 파라미터 | 기본값 | 범위 | 설명
+
+| `q` | (필수) | 1~500자 | 검색어입니다.
+| `limit` | 20 | 1~100 | 데이터셋 최대 결과 수입니다. 화면은 50 으로 요청합니다.
+| `entity_limit` | 5 | 1~50 | `unified` 전용. 엔티티 그룹마다 최대 결과 수입니다.
+| `threshold` | 0.3 | 0~1 | 시맨틱 최소 유사도입니다. 결과가 너무 적으면 낮추고, 엉뚱한 결과가 많으면 높입니다.
+| `keyword_weight` | 0.3 | 0~1 | `hybrid` 전용. 키워드 일치에 주는 가중치입니다.
+| `semantic_weight` | 0.7 | 0~1 | `hybrid` 전용. 의미 유사도에 주는 가중치입니다.
+|===
+
+범위를 벗어난 값을 보내면 422 를 돌려줍니다.
 
 [source,bash]
 ----
-POST /api/v1/catalog/search/embeddings/backfill
-GET  /api/v1/catalog/search/embeddings/stats
+CATALOG=http://<server>:4600
+
+# 로그인해 토큰 받기 (한 번)
+TOKEN=$(curl -s -X POST "$CATALOG/api/v1/auth/login" \
+  -H "Content-Type: application/json" \
+  -d '{"username":"<사용자명>","password":"<비밀번호>"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+# 통합 검색
+curl -s "$CATALOG/api/v1/catalog/search/unified?q=%EB%8C%80%EC%97%AC&limit=50&entity_limit=5" \
+  -H "Authorization: Bearer $TOKEN"
+
+# 임계값을 낮춰 시맨틱 결과를 더 많이
+curl -s "$CATALOG/api/v1/catalog/search/semantic?q=movie&threshold=0.2&limit=10" \
+  -H "Authorization: Bearer $TOKEN"
 ----
 
-stats 응답을 보면 *임베딩 커버리지* 가 어느 정도인지 확인할 수 있습니다.
+=== 임베딩 현황 API
+
+[source,bash]
+----
+GET  /api/v1/catalog/search/embeddings/stats      # 로그인 사용자
+POST /api/v1/catalog/search/embeddings/backfill   # 관리자
+DELETE /api/v1/catalog/search/embeddings          # 관리자
+----
 
 [source,json]
 ----
 {
-  "total_datasets": 135,
-  "embedded_datasets": 120,
-  "coverage_pct": 88.9,
+  "total_datasets": 21,
+  "embedded_datasets": 21,
+  "coverage_pct": 100.0,
+  "embedded_entities": {"glossary_term": 37, "ai_agent": 3, "api": 21, "mcp_server": 10},
   "provider": "local",
-  "model": "all-MiniLM-L6-v2",
+  "model": "paraphrase-multilingual-MiniLM-L12-v2",
   "dimension": 384
 }
 ----
 
-== 결과 화면
+`total_datasets` 와 `embedded_datasets` 는 모두 삭제됨(removed) 데이터셋을 빼고 셉니다. 임베딩이 꺼져 있으면 `provider` · `model` 은 `null` 입니다.
 
-검색 결과의 각 행에는 다음 정보가 표시됩니다.
+== 관련 항목
 
-* *이름 · 플랫폼 · 환경 · 설명 (요약)*
-* *score* — 0~1 범위의 점수입니다. 높을수록 잘 맞는 결과입니다.
-* *match_type* — `keyword` / `semantic` / `hybrid` 중 하나입니다.
-* *태그 / 소유자 카운트*
-
-행을 클릭하면 xref:catalog/datasets.adoc[데이터셋 상세] 로 이동합니다.
-
-== 임계값과 가중치
-
-검색 동작은 URL 파라미터로 세밀하게 조정할 수 있습니다 (API 및 일부 UI 토글).
-
-[cols="1,1,3"]
-|===
-| 파라미터 | 기본값 | 설명
-
-| `threshold` | 0.3 | 시맨틱 최소 유사도입니다. 결과가 너무 적으면 0.1 까지 낮출 수 있습니다.
-| `keyword_weight` | 0.3 | 하이브리드에서 키워드에 주는 가중치입니다.
-| `semantic_weight` | 0.7 | 하이브리드에서 시맨틱에 주는 가중치입니다.
-| `limit` | 20 | 최대 결과 수입니다 (1~100).
-|===
-
-== 프로바이더 전환
-
-프로바이더를 바꾸면 벡터 공간 자체가 달라지므로 기존 임베딩과는 호환되지 않습니다.
-그래서 다음 순서로 전체를 다시 임베딩해야 합니다.
-
-. *Settings → Embedding* 에서 새 프로바이더를 저장합니다.
-. *Embeddings → Reset* 으로 기존 임베딩을 삭제합니다.
-. *Backfill* 로 전체를 다시 임베딩합니다.
-. 차원이 다르면 (예: 384 → 1536) DBA 가 `ALTER TABLE catalog_dataset_embeddings ALTER COLUMN embedding TYPE vector(1536)` 를 실행한 뒤 backfill 합니다.
+* xref:ops/embedding.adoc[임베딩 운영] — 임베딩 켜기, 백필, 모델 바꾸기입니다.
+* xref:ops/embedding-advanced.adoc[임베딩 — 고급 설정] — pgvector 설치, 제공자별 설정, 에어갭 배포입니다.
+* xref:ops/settings.adoc#_embedding[설정 → 임베딩] — 임베딩 설정 화면입니다.
+* xref:catalog/datasets.adoc[데이터셋] — 목록 화면의 필터와 상세 화면입니다.
+* xref:catalog/taxonomies.adoc[분류 체계] — 업무 기준 트리로 데이터셋을 찾습니다.
+* xref:federation/browse-search.adoc[탐색·통합 검색·리니지] — 페더레이션된 다른 카탈로그까지 함께 찾습니다.

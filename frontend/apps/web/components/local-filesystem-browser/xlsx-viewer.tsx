@@ -3,6 +3,8 @@
 import { useCallback, useState } from "react"
 import { Loader2 } from "lucide-react"
 
+import { notifyError } from "@/lib/notify"
+
 import { Label } from "@workspace/ui/components/label"
 import {
   Select,
@@ -49,6 +51,7 @@ export function XlsxViewer({ data: initialData, entryKey, previewFile }: XlsxVie
         setData(result)
       } catch (err) {
         console.error("Failed to switch sheet:", err)
+        notifyError(err, `'${sheetName}' 시트를 불러오지 못했습니다.`)
       } finally {
         setIsLoadingSheet(false)
       }

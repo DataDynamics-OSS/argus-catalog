@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
@@ -23,30 +23,45 @@ logger = logging.getLogger(__name__)
 async def resolve_lineage_for_dataset(
     session: AsyncSession, dataset_id: int, qualified_name: str | None,
 ) -> int:
-    """새/변경된 데이터셋의 qualified_name 과 매칭되는 lineage 행의 dataset_id 를 채운다(증분)."""
+    """새/변경된 데이터셋의 qualified_name 과 매칭되는 lineage 행의 dataset_id 를 채운다(증분).
+
+    이미 채워진 행은 건드리지 않는다(first-wins). 채운 행이 있을 때만 커밋하며,
+    채운 행 수(source·target 합계)를 반환한다.
+    """
     if not qualified_name:
         return 0
     q = qualified_name.lower()
+    # 매칭 후보: qualified_name 자체 + 각 '.' 뒤의 접미사(예: a.b.c → a.b.c, b.c, c).
+    # "q 가 '.테이블명' 으로 끝남" 과 같은 의미를 LIKE 없이 IN 비교로 표현한다 —
+    # LIKE 는 테이블명의 '_'·'%' 를 와일드카드로 오해석하고, '||' 는 MariaDB 에서 OR 라서 쓰지 않는다.
+    candidates = sorted({q, *(q[i + 1:] for i, ch in enumerate(q) if ch == "." and q[i + 1:])})
     total = 0
     for name_col, id_col in (("source_table", "source_dataset_id"),
                              ("target_table", "target_dataset_id")):
-        res = await session.execute(text(f"""
+        # 컬럼명은 위 고정 튜플에서만 오므로 f-string 삽입이 안전하다. 매칭 값은 바인딩 파라미터.
+        stmt = text(f"""
             UPDATE argus_query_lineage
             SET {id_col} = :did
             WHERE {id_col} IS NULL
-              AND (lower({name_col}) = :q OR :q LIKE '%.' || lower({name_col}))
-        """), {"did": dataset_id, "q": q})
+              AND lower({name_col}) IN :cands
+        """).bindparams(bindparam("cands", expanding=True))
+        res = await session.execute(stmt, {"did": dataset_id, "cands": candidates})
         total += res.rowcount or 0
     if total:
         await session.commit()
+        logger.debug("리니지 dataset_id 채움: dataset_id=%d rows=%d", dataset_id, total)
     return total
 
 
 async def resolve_all_query_lineage(session: AsyncSession) -> dict:
-    """전체 백필 — 모든 데이터셋 기준으로 NULL dataset_id 인 lineage 행을 해석한다."""
+    """전체 백필 — 모든 데이터셋 기준으로 NULL dataset_id 인 lineage 행을 해석한다.
+
+    반환: ``{"resolved": 채운 행 수, "remaining_unresolved": source/target 중 하나라도 NULL 인 행 수}``.
+    """
     rows = (await session.execute(text(
         "SELECT id, qualified_name FROM catalog_datasets WHERE qualified_name IS NOT NULL"
     ))).fetchall()
+    logger.info("쿼리 리니지 해석 시작: datasets=%d", len(rows))
     resolved = 0
     for r in rows:
         resolved += await resolve_lineage_for_dataset(session, r[0], r[1])

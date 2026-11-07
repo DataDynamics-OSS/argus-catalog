@@ -1,143 +1,297 @@
-= OCI Model Hub
+= OCI 모델 허브
+:toc: macro
+:toclevels: 2
 
-OCI Model Hub 는 HuggingFace 와 비슷한 느낌의 모델 브라우저에, S3/MinIO 기반의
+OCI 모델 허브는 HuggingFace 와 비슷한 느낌의 모델 브라우저에, S3/MinIO 기반의
 OCI Manifest 모델 저장소를 더한 공간입니다. 사용하는 프레임워크와 상관없이 모델을
-올려 두고, 검색하고, 배포할 수 있습니다.
+올려 두고, 검색하고, 내려받을 수 있습니다.
 
-// TODO: screenshot - OCI Hub 메인 (카드 그리드)
-image::models-oci-hub/hub.png[OCI Model Hub, 800]
+이 문서는 처음 사용하는 분을 기준으로 순서대로 설명합니다. **고급 사용자** 상자와 맨 끝 부록은 처음에는 건너뛰어도 됩니다.
 
-== 진입 경로
+image::models-oci-hub/model-list.png[OCI 모델 허브 — 모델 카드 목록, 900]
 
-좌측 사이드바의 *Model Catalog → OCI Model Hub* (`/dashboard/oci-hub`) 로 들어갑니다.
-관리자라면 *OCI Files* 메뉴를 통해 S3 객체 단위의 파일 브라우저에도 접근할 수 있습니다.
+toc::[]
 
-== 모델 브라우저
+== 시작하기 전에
 
-// TODO: screenshot - 카드뷰 + 필터 (태스크 / 프레임워크 / 라이선스)
-image::models-oci-hub/browse.png[모델 브라우저, 800]
+=== 이런 일을 할 수 있습니다
 
-* *카드 뷰* — 모델당 한 장씩 보여 줍니다. 다운로드 수 · 태그 · README 요약이 함께 나타납니다.
-* *필터* — Task (`text-classification`, `image-classification` 등), 프레임워크, 라이선스로 걸러냅니다.
-* *검색* — 이름 부분 일치로 찾습니다.
+* **모델 찾기** — 이름 · 설명으로 검색하고 태스크 · 프레임워크 · 상태로 좁힙니다.
+* **모델 살펴보기** — README, 버전, 파일, 리니지, 사용법 예시를 봅니다.
+* **모델 등록** — 빈 모델을 직접 만들거나 HuggingFace 에서 가져옵니다.
+* **파일 올리기 · 내려받기** — CLI · SDK 로 모델 파일을 올리고 받습니다.
+* **버전 · 모델 삭제** — 필요 없는 버전이나 모델을 지웁니다.
 
-카드를 클릭하면 모델 상세로 이동하며, README 본문, 파일 목록, OCI Manifest 를 확인할 수 있습니다.
+=== 먼저 알아 둘 용어
 
-== S3 저장 구조
+[cols="1,4",options="header"]
+|===
+| 용어 | 뜻
+
+| 모델 상태
+| 초안 · 검토 · 승인 · 운영 · 사용 중단 · 보관 중 하나입니다. *승인* · *운영* 은 관리자만 지정합니다.
+
+| 확정(finalize)
+| 파일을 다 올린 뒤 버전을 마무리하는 단계입니다. 이때 OCI manifest 와 다이제스트가 만들어집니다.
+
+| OCI manifest
+| 버전의 파일 목록과 SHA256 다이제스트를 담은 표준 형식 파일입니다. 무결성 확인에 씁니다.
+|===
+
+=== 메뉴 위치
+
+[cols="1,2,3",options="header"]
+|===
+| 메뉴 | 주소 | 용도
+
+| AI 카탈로그 → OCI 모델 허브 | `/dashboard/oci-hub` | *대시보드* 탭(모델 수 · 승인·운영 모델 수 · 누적 다운로드 · 저장 용량), *모델* 탭(목록)
+| 모델 상세 | `/dashboard/oci-hub/<이름>` | 개요 · 버전 · 파일 · 리니지 · 사용법 · 활동
+| AI 카탈로그 → OCI 모델 파일 | — | 저장소 전체 탐색 (관리자)
+|===
+
+=== 누가 무엇을 할 수 있나요
+
+화면과 API 모두 로그인해야 쓸 수 있고, 권한 관리에서 *OCI 모델 허브* 메뉴가 열려 있어야 합니다.
+모델별로 할 수 있는 일은 다음과 같습니다.
+
+[cols="2,3",options="header"]
+|===
+| 작업 | 할 수 있는 사람
+
+| 목록 · 상세 · 파일 탭 조회, 내려받기
+| 로그인한 사용자
+| 새 모델 직접 등록 (*모델 추가 → 직접 등록*)
+| *OCI 모델 등록* 기능 권한이 있는 사용자(기본은 모든 역할 허용)
+| 수정 · README · 태그 · 리니지, 새 버전 올리기, 버전 삭제, 모델 삭제
+| 관리자, 모델을 만든 사람, 소유자
+| 상태를 *승인* · *운영* 으로 지정
+| 관리자만 — 일반 사용자가 이 상태로 만들거나 바꾸면 거부(403)됩니다.
+| HuggingFace 에서 가져오기
+| 관리자만
+| *OCI 모델 파일* 메뉴(저장소 전체 탐색)
+| 관리자만 — 일반 사용자는 모델 상세의 *파일* 탭에서 그 모델의 파일만 봅니다.
+|===
+
+권한이 없는 사용자에게는 수정 · 삭제 버튼이 보이지 않습니다.
+
+[[_모델_목록]]
+== 모델 찾기
+
+*모델* 탭에서 다음 도구로 모델을 찾습니다.
+
+* *검색* — 이름 · 표시 이름 · 설명으로 찾습니다(한글 가능). 입력을 멈추거나 Enter 를 치면 검색합니다.
+* *필터* — *태스크*, *프레임워크*, *상태*(초안 · 검토 · 승인 · 운영 · 사용 중단 · 보관)로 좁힙니다. 후보는 등록된 모델에서 자동으로 모입니다.
+* *카드 보기 / 목록 보기* — 오른쪽 위 아이콘으로 바꿉니다.
+* *초기화* — 검색어와 필터를 모두 지웁니다.
+
+검색어 · 필터 · 페이지 · 보기 방식은 주소(`?tab=models&q=…&task=…&view=list`)에 남으므로,
+상세에 들어갔다가 *모델 목록으로* 를 누르면 같은 조건으로 돌아옵니다.
+
+[[_모델_상세]]
+== 모델 살펴보기
+
+카드를 누르면 상세(`/dashboard/oci-hub/<이름>`)로 이동합니다. 탭은 다음과 같습니다.
+
+[cols="1,3",options="header"]
+|===
+| 탭 | 내용
+
+| 개요 | README 와 모델 정보 · 최신 버전 · 출처 · 태그 카드. 편집 권한이 있으면 *README 수정* 으로 Markdown 을 고칩니다.
+| 버전 | 버전별 상태 · 파일 수 · 크기 · 다이제스트, *파일 보기* · *manifest* · *삭제* 버튼
+| 파일 | *버전 선택* 으로 고른 버전의 파일 목록. 텍스트 파일은 *미리보기*, 모든 파일은 *다운로드*
+| 리니지 | 이 모델의 출처(MLflow 모델 · 데이터셋 등)와의 연결
+| 사용법 | 이 모델 · 최신 버전으로 채운 CLI · SDK · REST 예시
+| 활동 | 누적 다운로드 · 최근 수정 · 게시된 버전 카드와 댓글
+|===
+
+[[_oci_버전_상태]]
+=== 버전 상태
+
+*버전* 탭에서 각 버전의 상태를 봅니다.
+
+[cols="1,3",options="header"]
+|===
+| 상태 | 의미
+
+| 준비됨 | 확정(finalize)이 끝나 manifest 와 다이제스트가 있는 버전입니다.
+| 가져오는 중 | HuggingFace 가져오기가 진행 중입니다. 화면이 자동으로 갱신됩니다.
+| 실패 | 가져오기 도중 실패했습니다(예: 저장소 연결 오류). *다이제스트 / 오류* 칸에 빨간 글씨로 사유가 나옵니다.
+|===
+
+image::models-oci-hub/versions.png[버전 탭 — 가져오는 중 · 실패 · 준비됨 버전과 행별 삭제 버튼, 900]
+
+[[_모델_등록]]
+== 모델 등록하기
+
+*모델* 탭 오른쪽 위 *모델 추가 ▼* 에서 방법을 고릅니다.
+
+* *직접 등록* — 이름 · 설명 · 태스크 등을 적어 빈 모델을 만듭니다. 파일은 CLI 의 `push` 나 업로드 API 로 올립니다(<<_cli_python_sdk>>).
+  일반 사용자는 상태를 초안 · 검토 등으로만 고를 수 있고, 대화상자에 "승인·운영 상태는 관리자만 지정할 수 있습니다." 가 표시됩니다.
+* *HuggingFace 에서 가져오기* (관리자) — 아래 절을 봅니다.
+
+이름은 OCI 모델과 MLflow 모델을 통틀어 하나만 쓸 수 있습니다. 같은 이름이 있으면 409 로 거부됩니다.
+관리자가 버전을 확정하면 *초안* 모델이 *승인* 으로 올라가고, 소유자가 확정하면 상태는 그대로입니다.
+
+[[_huggingface_에서_가져오기]]
+=== HuggingFace 에서 가져오기 (관리자)
+
+. *모델 추가 ▼ → HuggingFace 에서 가져오기* 를 누릅니다.
+. *HuggingFace URL 또는 모델 ID* 에 `prajjwal1/bert-tiny` 처럼 적습니다.
+. 필요하면 *허브에 저장할 이름* 을 적고 *가져오기* 를 누릅니다.
+. 버전 탭의 상태가 *가져오는 중* 에서 *준비됨* 으로 바뀌는지 확인합니다.
+
+image::models-oci-hub/hf-import.png[HuggingFace 에서 가져오기 대화상자, 500]
+
+*허브에 저장할 이름* 을 비우면 ID 의 `/` 를 `-` 로 바꾼 이름(`prajjwal1-bert-tiny`)을 쓰고,
+같은 이름의 모델이 있으면 다음 버전으로 추가됩니다.
+
+서버가 백그라운드로 받아 저장하므로 창을 닫아도 계속 진행됩니다.
+없는 저장소(404) · 틀린 revision(400) · 접근 권한이 필요한 비공개 저장소(400)는 바로 거부되고 모델이 만들어지지 않습니다.
+끝나면 `config.json` 의 아키텍처 정보와 README 가 채워지고 OCI manifest 가 만들어집니다.
+
+[[_cli_python_sdk]]
+== 파일 올리기 · 내려받기 (CLI · Python SDK)
+
+`argus-catalog-sdk` 의 `argus-model` CLI 와 `ModelClient` 로 올리고 내려받습니다. 서버 API 는 조회까지
+모두 로그인이 필요하므로 자격 증명을 함께 줍니다.
+
+. SDK 를 설치하고 서버 주소와 자격 증명을 지정합니다.
++
+[source,bash]
+----
+pip install argus-catalog-sdk   # 폐쇄망은 릴리스의 argus-catalog-sdk RPM 또는 동봉 wheel
+
+export ARGUS_SERVER=http://catalog:4600
+export ARGUS_USERNAME=mjkim ARGUS_PASSWORD='********'   # 또는 ARGUS_TOKEN=<액세스 토큰>
+----
+. 필요한 명령을 실행합니다.
++
+[source,bash]
+----
+argus-model push ./my-model my-model --description "사내 분류 모델"   # 새 모델이면 만들고, 있으면 다음 버전
+argus-model oci-list --search my-model
+argus-model pull my-model 1 ./out
+argus-model oci-import-hf prajjwal1/bert-tiny --name my-bert-tiny      # 관리자
+argus-model oci-delete my-model                                        # 이름을 다시 입력해 확인
+----
+
+`--server`, `--username`/`--password`, `--token` 옵션은 각각 `ARGUS_SERVER`, `ARGUS_USERNAME`/`ARGUS_PASSWORD`,
+`ARGUS_TOKEN` 환경 변수로 대신할 수 있습니다. 에어갭 반입과 전체 명령은 xref:models/import.adoc[모델 반입] 과
+xref:appendix/sdk.adoc[SDK · argus-model CLI] 를 참고하세요.
+
+다운로드 주소를 발급할 때마다 모델의 다운로드 수가 1 늘어나며, 활동 탭과 대시보드에 반영됩니다.
+
+[TIP]
+.고급 사용자 — Python SDK
+====
+[source,python]
+----
+from argus_catalog_sdk import ModelClient
+
+with ModelClient("http://catalog:4600", username="mjkim", password="...") as c:   # 또는 token="..."
+    r = c.push("./my-model", "my-model")
+    c.pull("my-model", r["version"], "./out")
+    c.oci_import_huggingface("prajjwal1/bert-tiny", name="my-bert-tiny")          # 관리자
+----
+====
+
+[[_저장_구조와_oci_manifest]]
+[TIP]
+.고급 사용자 — 저장 구조와 OCI Manifest
+====
+모델 파일은 오브젝트 저장소(MinIO/S3)의 `model-artifacts` 버킷에 버전별로 저장됩니다.
 
 ----
-model-artifacts/                    ← MinIO 또는 S3 버킷
+model-artifacts/
   {model_name}/
     v{version}/
-      model.pkl                     ← 모델 가중치
-      config.json                   ← 설정
-      tokenizer.json                ← 토크나이저 (HF)
-      MLmodel                       ← MLflow 메타데이터 (해당 시)
-      conda.yaml / requirements.txt
-      manifest.json                 ← finalize 시 자동 생성
+      config.json · model.onnx · tokenizer.json ...   ← 올린 파일 (하위 폴더 유지)
+      manifest.json                                    ← 확정(finalize) 때 자동 생성
 ----
 
-== OCI Manifest
-
-finalize 시점에 OCI Image Manifest 스펙에 맞춰 `manifest.json` 이 생성됩니다.
+확정할 때 OCI Image Manifest 형식의 `manifest.json` 이 만들어집니다. 파일마다 하나의 레이어가 되고,
+SHA256 다이제스트로 식별되어 무결성 확인에 쓸 수 있습니다. 버전 탭의 *manifest* 로 내용을 볼 수 있습니다.
 
 [source,json]
 ----
 {
   "schemaVersion": 2,
   "mediaType": "application/vnd.oci.image.manifest.v1+json",
-  "config": {
-    "mediaType": "application/vnd.argus.model.config.v1+json",
-    "digest": "sha256:abc123...",
-    "size": 512
-  },
+  "config": { "mediaType": "application/vnd.argus.model.config.v1+json", "digest": "sha256:…", "size": 512 },
   "layers": [
-    {
-      "mediaType": "application/vnd.argus.model.weights",
-      "digest": "sha256:def456...",
-      "size": 177230,
-      "annotations": {
-        "org.opencontainers.image.title": "model.pkl"
-      }
-    }
+    { "mediaType": "application/vnd.argus.model.weights.onnx", "digest": "sha256:…", "size": 177230,
+      "annotations": { "org.opencontainers.image.title": "model.onnx" } }
   ],
   "annotations": {
-    "ai.argus.model.name": "argus.ml.iris_classifier",
+    "ai.argus.model.name": "it-onnx-rec",
     "ai.argus.model.version": "1",
-    "ai.argus.model.source": "huggingface:bert-base-uncased"
+    "ai.argus.model.source": "huggingface:prajjwal1/bert-tiny"
   }
 }
 ----
+====
 
-모든 파일은 SHA256 digest 로 식별됩니다(content-addressable). 이 digest 는 무결성
-검증과 중복 제거에 사용됩니다.
+== 버전 · 모델 삭제하기
 
-== 업로드 / 다운로드
+[[_oci_버전_삭제]]
+=== 버전 삭제
 
-용량이 큰 파일은 *Presigned URL* 방식을 써서 서버를 거치지 않고 S3 와 직접 주고받습니다.
+. 버전 탭에서 지울 버전 행의 *작업* 칸 끝 *삭제* 를 누릅니다. 편집 권한이 있어야 보입니다.
+. 확인 대화상자의 안내를 읽고 삭제합니다. 준비된 버전은 "저장소 파일(N개, 크기)도 함께 삭제되며 되돌릴 수 없습니다",
+  실패한 버전은 "저장소에 남은 파일도 함께 삭제되며…" 라고 알려 줍니다.
 
-[cols="1,3"]
+image::models-oci-hub/version-delete-confirm.png[버전 삭제 확인 대화상자, 900]
+
+* 삭제하면 그 버전의 기록과 저장소의 `{모델}/v{N}/` 파일이 지워지고, 모델의 버전 수 · 전체 크기가 남은 준비된 버전 기준으로 다시 계산됩니다.
+* *가져오는 중* 인 버전의 *삭제* 는 비활성이며, 버튼에 마우스를 올리면 "가져오는 중인 버전은 끝난 뒤 삭제할 수 있습니다." 가 보입니다.
+
+[[_모델_삭제]]
+=== 모델 삭제
+
+. 상세 화면 오른쪽 위 *삭제* 를 누릅니다.
+. 확인란에 모델 이름을 그대로 입력하면 *삭제* 버튼이 켜집니다. 누르면 삭제됩니다.
+
+모델 정보 · 버전 · 태그 · 리니지와 저장소의 모델 파일, 다운로드 기록이 모두 지워지며 되돌릴 수 없습니다.
+가져오는 중인 버전이 있으면 삭제할 수 없습니다.
+
+NOTE: 저장소 장애 중에 모델을 삭제하면 DB 기록은 지워지지만 저장소 파일은 남습니다. 복구 후 *OCI 모델 파일* 에 남은 폴더가 보이면 관리자가 저장소에서 직접 정리해야 합니다.
+
+[[_문제_해결]]
+== 자주 묻는 질문
+
+*Q. 파일 화면에 노란 배너 "목록을 불러오지 못했습니다." 가 뜨거나 파일 탭에 빨간 오류 문구가 나옵니다. API 는 503 "오브젝트 스토리지에 연결할 수 없습니다. MinIO 실행 여부와 설정을 확인하세요." 입니다.* +
+A. 오브젝트 저장소(MinIO)가 실행 중인지, *설정* 의 저장소 주소가 맞는지 확인합니다. 복구한 뒤 *다시 시도* 를 누르면 목록이 다시 보입니다. 연결 재시도 때문에 오류는 몇 초 뒤에 나타날 수 있습니다.
+
+image::models-oci-hub/storage-outage-banner.png[저장소 연결 실패 배너와 다시 시도 버튼, 900]
+
+*Q. 버전이 '실패' 로 남았습니다.* +
+A. 가져오기 도중 저장소 연결 등이 끊긴 경우입니다. 사유를 확인하고 그 버전을 삭제한 뒤 다시 가져옵니다.
+
+*Q. 401 "인증이 필요합니다." 가 나옵니다.* +
+A. 토큰 없이 API 를 호출했습니다. CLI · SDK 에 자격 증명이나 토큰을 줍니다.
+
+*Q. 403 "'approved' 상태 지정은 관리자만 할 수 있습니다." 가 나옵니다.* +
+A. 승인 · 운영 상태는 관리자에게 요청합니다.
+
+*Q. 모델을 만들 때 409 로 거부됩니다.* +
+A. 같은 이름의 모델이 이미 있습니다. 이름은 OCI 모델과 MLflow 모델을 통틀어 하나만 쓸 수 있습니다.
+
+[[_업로드_다운로드_api]]
+== 부록: REST API
+
+보통은 CLI · SDK 를 쓰고, 직접 연동할 때만 API 를 호출합니다. 모든 요청에
+`Authorization: Bearer <토큰>` 이 필요합니다. 올리기 · 확정은 모델의 편집 권한자만 할 수 있습니다.
+
+[cols="1,3",options="header"]
 |===
-| 동작 | 흐름
+| 동작 | API
 
+| 목록 조회 | `GET /api/v1/oci-models?search=&task=&framework=&language=&status=&page=&page_size=` (`page_size` 최대 50, 화면에 없는 `language` 필터도 받음)
 | 작은 파일 업로드 | `POST /api/v1/model-store/{name}/versions/{ver}/upload` (multipart)
-| 큰 파일 업로드 | `POST .../upload-url` 로 Presigned PUT URL 발급 → 클라이언트가 S3 에 직접 PUT
-| 단일 파일 다운로드 | `GET .../download-url?filename=X` → Presigned GET URL
-| 일괄 다운로드 | `GET .../download-urls` → 모든 파일의 URL 목록
+| 큰 파일 업로드 | `POST .../upload-url` 로 Presigned PUT URL 을 받아 저장소에 직접 PUT
+| 확정 | `POST /api/v1/oci-models/{name}/versions/{ver}/finalize` — 파일이 없으면 400
+| 파일 하나 내려받기 | `GET .../download-url?filename=X` → Presigned GET URL
+| 버전 전체 내려받기 | `GET .../download-urls` → 모든 파일의 URL 목록
+| 버전 삭제 | `DELETE /api/v1/oci-models/{name}/versions/{version}` — 가져오는 중이면 409, 없으면 404
+| 모델 삭제 | `DELETE /api/v1/oci-models/{name}` — 가져오는 중인 버전이 있으면 409
 |===
-
-== HuggingFace 임포트
-
-// TODO: screenshot - HF 임포트 다이얼로그
-image::models-oci-hub/hf-import.png[HuggingFace 임포트, 800]
-
-온라인 환경이라면 HuggingFace Hub 의 모델을 명령 한 번으로 가져올 수 있습니다.
-
-[source,bash]
-----
-# CLI
-argus-model import-hf bert-base-uncased argus.ml.bert --server http://catalog:4600
-
-# Python SDK
-from argus_catalog_sdk import ModelClient
-client = ModelClient("http://catalog:4600")
-client.import_huggingface("bert-base-uncased", "argus.ml.bert")
-----
-
-이때 서버는 내부적으로 다음 작업을 차례대로 수행합니다.
-
-. `huggingface_hub.snapshot_download()` 로 임시 다운로드합니다.
-. S3 의 `{model}/v{N}/` 하위에 모든 파일을 업로드합니다.
-. `config.json` 에서 `model_type`, `architectures` 등을 추출합니다.
-. OCI manifest 를 생성해 저장합니다.
-. DB 에 메타데이터를 기록합니다.
-
-== Airgap 임포트
-
-// TODO: screenshot - airgap 임포트 절차 (다이어그램 또는 단계 카드)
-image::models-oci-hub/airgap-import.png[Airgap 임포트, 800]
-
-인터넷이 막힌 폐쇄망에서는 다음 2 단계로 진행합니다.
-
-. *온라인 환경* — 모델을 다운로드한 뒤 USB 나 파일로 전송합니다.
-+
-[source,bash]
-----
-argus-model import-hf bert-base-uncased argus.ml.bert --server http://online-catalog:4600
-argus-model pull argus.ml.bert 1 /usb/bert-export/
-----
-
-. *Airgap 환경* — 서버가 접근할 수 있는 경로에 파일을 옮긴 다음 import 합니다.
-+
-[source,bash]
-----
-argus-model import-local /data/transferred/bert argus.ml.bert \
-  --server http://airgap-catalog:4600
-----
-
-그러면 서버가 로컬 디렉토리를 스캔해 S3 에 업로드하고, manifest 를 생성합니다.
-
-== 다운로드 추적
-
-`/api/v1/oci-models/{name}` 의 *download_count* 와 다운로드 로그는 자동으로 누적됩니다.
-모델 상세 화면에서 시간대별 다운로드 추이를 확인할 수 있습니다.

@@ -95,6 +95,8 @@ export type SuggestionItem = {
   provider: string
   model: string
   created_at: string | null
+  /** 적용하면 바뀔 대상의 지금 값 — 태그·PII 는 JSON 문자열 (features/datasets/ai-suggestions.ts 참고) */
+  current_text?: string | null
 }
 
 // ---------------------------------------------------------------------------
@@ -110,7 +112,7 @@ export async function generateDescription(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
   })
-  if (!res.ok) await throwOnError(res, "설명 생성 실패")
+  if (!res.ok) await throwOnError(res, "AI 설명을 생성하지 못했습니다.")
   return res.json()
 }
 
@@ -123,7 +125,7 @@ export async function generateSummary(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
   })
-  if (!res.ok) await throwOnError(res, "요약 생성 실패")
+  if (!res.ok) await throwOnError(res, "AI 요약을 생성하지 못했습니다.")
   return res.json()
 }
 
@@ -136,7 +138,7 @@ export async function generateColumns(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
   })
-  if (!res.ok) await throwOnError(res, "컬럼 생성 실패")
+  if (!res.ok) await throwOnError(res, "컬럼 설명을 생성하지 못했습니다.")
   return res.json()
 }
 
@@ -149,7 +151,7 @@ export async function suggestTags(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
   })
-  if (!res.ok) throw new Error(`태그 추천 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`태그를 추천하지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 
@@ -162,7 +164,7 @@ export async function detectPII(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
   })
-  if (!res.ok) throw new Error(`PII 탐지 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`PII를 탐지하지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 
@@ -175,13 +177,13 @@ export async function generateAll(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
   })
-  if (!res.ok) await throwOnError(res, "일괄 생성 실패")
+  if (!res.ok) await throwOnError(res, "AI 메타데이터를 일괄 생성하지 못했습니다.")
   return res.json()
 }
 
 export async function getSuggestions(datasetId: number): Promise<SuggestionItem[]> {
   const res = await authFetch(`${BASE}/datasets/${datasetId}/suggestions`)
-  if (!res.ok) throw new Error(`추천 조회 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`AI 제안을 불러오지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 
@@ -189,7 +191,7 @@ export async function applySuggestion(
   suggestionId: number,
 ): Promise<{ id: number; applied: boolean }> {
   const res = await authFetch(`${BASE}/suggestions/${suggestionId}/apply`, { method: "POST" })
-  if (!res.ok) await throwOnError(res, "추천 적용 실패")
+  if (!res.ok) await throwOnError(res, "AI 제안을 적용하지 못했습니다.")
   return res.json()
 }
 
@@ -201,7 +203,7 @@ export async function applySuggestions(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ suggestion_ids: suggestionIds }),
   })
-  if (!res.ok) await throwOnError(res, "제안 일괄 적용 실패")
+  if (!res.ok) await throwOnError(res, "AI 제안을 일괄 적용하지 못했습니다.")
   return res.json()
 }
 
@@ -209,7 +211,7 @@ export async function rejectSuggestion(
   suggestionId: number,
 ): Promise<{ id: number; rejected: boolean }> {
   const res = await authFetch(`${BASE}/suggestions/${suggestionId}/reject`, { method: "POST" })
-  if (!res.ok) await throwOnError(res, "추천 거부 실패")
+  if (!res.ok) await throwOnError(res, "AI 제안을 거절하지 못했습니다.")
   return res.json()
 }
 
@@ -222,7 +224,7 @@ export type AiStatus = {
 /** LLM(AI 메타데이터 생성) 활성화 상태 — AI 메뉴 활성/비활성 판단용. */
 export async function fetchAiStatus(): Promise<AiStatus> {
   const res = await authFetch(`${BASE}/status`)
-  if (!res.ok) throw new Error(`AI 상태 조회 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`AI 상태를 불러오지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 

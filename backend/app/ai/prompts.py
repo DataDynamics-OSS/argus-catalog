@@ -29,14 +29,14 @@ def _build_glossary_section(glossary: list[dict] | None, columns: list[dict]) ->
     if not glossary:
         return ""
 
-    # 컬럼명에서 모든 토큰 수집 (_ 로 분할하고 소문자화)
+    # 컬럼명에서 모든 토큰 수집 (대문자화하고 '-' 를 '_' 로 바꾼 뒤 '_' 로 분할)
     col_tokens = set()
     for c in columns:
         for token in c["field_path"].upper().replace("-", "_").split("_"):
             if token:
                 col_tokens.add(token)
 
-    # 컬럼 토큰과 일치하는 항목으로 용어집 필터링
+    # 컬럼 토큰과 일치하는 항목으로 용어집 필터링 (약어도 대문자화해 대소문자 무시 비교)
     relevant = [g for g in glossary if g["abbr"].upper() in col_tokens]
 
     if not relevant:
@@ -75,7 +75,11 @@ def _build_lineage_section(lineage: dict[str, list[str]] | None) -> str:
 def _build_fewshot_section(
     examples: list[dict] | None, generation_type: str,
 ) -> str:
-    """이전에 승인된 생성 결과로부터 few-shot 예시 섹션을 구성."""
+    """이전에 승인된 생성 결과로부터 few-shot 예시 섹션을 구성.
+
+    최대 3개 예시만 사용하고 각 텍스트는 200자로 자른다.
+    generation_type 인자는 현재 사용하지 않는다(호출 측 호환용).
+    """
     if not examples:
         return ""
 
@@ -109,7 +113,11 @@ def build_dataset_description_prompt(
     lineage: dict[str, list[str]] | None = None,
     fewshot_examples: list[dict] | None = None,
 ) -> str:
-    """테이블 설명 생성용 프롬프트를 구성."""
+    """테이블 설명 생성용 프롬프트를 구성.
+
+    컬럼은 최대 50개, DDL 은 2000자, 샘플 행은 5개까지만 넣어 토큰을 제한한다.
+    LLM 응답 형식은 {"description": ..., "confidence": ...} JSON 이다.
+    """
     col_lines = []
     for c in columns[:50]:  # 최대 50개 컬럼으로 제한
         parts = [c["field_path"], f"({c['field_type']})"]
@@ -219,7 +227,11 @@ def build_column_descriptions_prompt(
     lineage: dict[str, list[str]] | None = None,
     fewshot_examples: list[dict] | None = None,
 ) -> str:
-    """컬럼 설명을 일괄 생성하는 프롬프트를 구성."""
+    """컬럼 설명을 일괄 생성하는 프롬프트를 구성.
+
+    컬럼은 최대 80개, 샘플 값은 컬럼 30개 × 값 5개까지만 넣는다.
+    LLM 응답 형식은 {"columns": [{"name", "description", "confidence"}, ...]} JSON 이다.
+    """
     col_lines = []
     for i, c in enumerate(columns[:80], 1):  # 최대 80개 컬럼으로 제한
         parts = [f"{i}. {c['field_path']} ({c['field_type']}"]
@@ -276,7 +288,11 @@ def build_tag_suggestion_prompt(
     glossary: list[dict] | None = None,
     lineage: dict[str, list[str]] | None = None,
 ) -> str:
-    """데이터셋에 대한 태그 제안용 프롬프트를 구성."""
+    """데이터셋에 대한 태그 제안용 프롬프트를 구성.
+
+    기존 카탈로그 태그를 우선 쓰도록 유도하고, 응답은
+    {"tags": [기존 태그명...], "new_tags": [{"name", "description"}...]} JSON 이다.
+    """
     col_names = [c["field_path"] for c in columns[:50]]
 
     prompt = f"""Suggest relevant classification tags for this database table.
@@ -309,7 +325,11 @@ def build_pii_detection_prompt(
     glossary: list[dict] | None = None,
     language: str = "ko",
 ) -> str:
-    """PII 컬럼 탐지용 프롬프트를 구성."""
+    """PII 컬럼 탐지용 프롬프트를 구성.
+
+    pii_type 은 영문 enum 그대로 두고 reason 만 지정 언어로 쓰게 한다.
+    응답은 {"pii_columns": [{"name", "pii_type", "confidence", "reason"}...]} JSON 이다.
+    """
     col_lines = []
     for c in columns[:80]:
         col_lines.append(f"  {c['field_path']} ({c['field_type']})")

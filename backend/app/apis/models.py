@@ -11,6 +11,7 @@
   - ``catalog_api_endpoints``         : 엔드포인트(메서드/경로/요청·응답 스키마/보안)
   - ``catalog_api_servers``           : 서버/환경(base URL)
   - ``catalog_api_security_schemes``  : 인증 스킴(apiKey/oauth2/http/mutualTLS…)
+  - ``catalog_api_credentials``       : Try-it 호출용 자격증명(시크릿 Fernet 암호화)
   - ``catalog_api_status_history``    : 상태 변경 이력(자동 기록)
   - ``catalog_api_alerts``            : 스펙 Breaking 변경 알림(자동 생성)
   - ``catalog_api_lineage``           : provides/consumes 리니지(관계 엣지)
@@ -23,6 +24,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -57,7 +59,7 @@ class CatalogApi(Base):
     spec_format = Column(String(20))
     # 기본 base URL (대표 서버)
     base_url = Column(String(1000))
-    # 사용자가 Base URL 을 수동 지정했는지(true 면 스펙 업로드가 덮어쓰지 않음)
+    # 사용자가 Base URL 을 수동 지정했는지(true 면 스펙 업로드가 덮어쓰지 않음). 'true'/'false' 문자열
     base_url_overridden = Column(String(5), default="false")
     # 계약/스키마 문서(비REST 프로토콜의 SDL/WSDL/.proto/AsyncAPI 등) — 원문/URL
     contract_text = Column(Text)
@@ -153,7 +155,7 @@ class CatalogApiCredential(Base):
     label = Column(String(200), nullable=False)
     # apiKey / bearer / basic / oauth2
     type = Column(String(30), nullable=False)
-    secret = Column(Text, nullable=False)  # 암호화된 JSON(values)
+    secret = Column(Text, nullable=False)  # 암호화된 JSON(values) — app.apis.crypto 로 암복호화
     created_by = Column(String(200))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -227,6 +229,8 @@ class CatalogApiInvocation(Base):
     """
 
     __tablename__ = "catalog_api_invocations"
+    # 관측 탭 집계(API·기간 조건) 용 — DDL 의 ix_catalog_api_invocations_api_created 와 동일
+    __table_args__ = (Index("ix_catalog_api_invocations_api_created", "api_id", "created_at"),)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     api_id = Column(Integer, ForeignKey("catalog_apis.id", ondelete="CASCADE"), nullable=False, index=True)

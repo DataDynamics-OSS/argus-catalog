@@ -31,7 +31,7 @@ type BrowserToolbarProps = {
   viewDisabled: boolean
   onRefresh: () => void
   isLoading: boolean
-  /** admin 만 업로드/생성/삭제/이름변경 — false 면 해당 버튼 비활성 */
+  /** 업로드/생성/삭제/이름변경 가능 여부 — false 면 해당 버튼을 숨긴다 */
   canManage?: boolean
 }
 
@@ -116,11 +116,12 @@ export function BrowserToolbar({
 
       <div className="flex items-center gap-1.5">
         {/* Upload / Download */}
-        <Button variant="outline" size="sm" onClick={onUpload} disabled={!canManage}
-          title={canManage ? undefined : "관리자만 업로드할 수 있습니다"} className="h-8 gap-1.5">
-          <Upload className="h-4 w-4" />
-          업로드
-        </Button>
+        {canManage && (
+          <Button variant="outline" size="sm" onClick={onUpload} className="h-8 gap-1.5">
+            <Upload className="h-4 w-4" />
+            업로드
+          </Button>
+        )}
         <Button
           variant="outline"
           size="sm"
@@ -132,36 +133,31 @@ export function BrowserToolbar({
           다운로드
         </Button>
 
-        <ToolbarSeparator />
+        {canManage && (
+          <>
+            <ToolbarSeparator />
 
-        {/* Create / Delete / Rename */}
-        <Button variant="outline" size="sm" onClick={onCreateFolder} disabled={!canManage}
-          title={canManage ? undefined : "관리자만 폴더를 생성할 수 있습니다"} className="h-8 gap-1.5">
-          <FolderPlus className="h-4 w-4" />
-          생성
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onDelete}
-          disabled={selectedCount === 0 || !canManage}
-          title={canManage ? undefined : "관리자만 삭제할 수 있습니다"}
-          className="h-8 gap-1.5"
-        >
-          <Trash2 className="h-4 w-4" />
-          삭제
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onRename}
-          disabled={selectedCount !== 1 || !canManage}
-          title={canManage ? undefined : "관리자만 이름을 변경할 수 있습니다"}
-          className="h-8 gap-1.5"
-        >
-          <Pencil className="h-4 w-4" />
-          이름 변경
-        </Button>
+            {/* Create / Delete / Rename */}
+            <Button variant="outline" size="sm" onClick={onCreateFolder} className="h-8 gap-1.5">
+              <FolderPlus className="h-4 w-4" />
+              생성
+            </Button>
+            <Button
+              variant="outline" size="sm" onClick={onDelete}
+              disabled={selectedCount === 0} className="h-8 gap-1.5"
+            >
+              <Trash2 className="h-4 w-4" />
+              삭제
+            </Button>
+            <Button
+              variant="outline" size="sm" onClick={onRename}
+              disabled={selectedCount !== 1} className="h-8 gap-1.5"
+            >
+              <Pencil className="h-4 w-4" />
+              이름 변경
+            </Button>
+          </>
+        )}
 
         <ToolbarSeparator />
 

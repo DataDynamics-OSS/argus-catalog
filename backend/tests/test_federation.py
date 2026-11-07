@@ -63,7 +63,23 @@ async def _run() -> None:
         assert len(listed) == 1
 
         inst = await service.get_instance(db, created.id)
-        assert inst is not None and inst.auth_token == "secret-xyz"
+        # 토큰은 암호문으로 저장되고(평문 미보관), 호출 시 복호화된다.
+        from app.federation import token_store
+        assert inst is not None and inst.auth_token != "secret-xyz"
+        assert token_store.is_sealed(inst.auth_token)
+        assert token_store.unseal(inst.auth_token) == "secret-xyz"
+        from app.federation.client import _headers
+        assert _headers(inst)["Authorization"] == "Bearer secret-xyz"
+        # base_url 은 정규화(끝 슬래시 제거)되고 http(s) 외 스킴은 거부된다.
+        assert inst.base_url == "https://catalog.payments.internal"
+        for bad in ("file:///etc/passwd", "catalog.internal", "https://u:p@x.internal"):
+            try:
+                s.FederatedInstanceCreate(instance_key="k", name="n", base_url=bad)
+                raise AssertionError(f"expected ValidationError for {bad}")
+            except ValueError:
+                pass
+        # 레거시 평문 저장값도 그대로 동작(하위 호환)
+        assert token_store.unseal("legacy-plain") == "legacy-plain"
 
         updated = await service.update_instance(
             db, inst, s.FederatedInstanceUpdate(status="PAUSED"),

@@ -2,7 +2,9 @@
 """
 카탈로그 서버용 데이터 소스 메타데이터 시드 데이터.
 
-각 데이터 소스 키는 catalog_datasources.name 과 일치한다. 값은 다음을 포함한다:
+각 키는 데이터 소스 유형(catalog_datasources.type, 예: "hive", "mysql")과 일치한다.
+``service._seed_metadata_for`` 가 유형으로 이 표를 찾아 데이터 소스별 메타데이터 테이블에
+ordinal(목록 순서)과 함께 시드한다. 값은 다음을 포함한다(is_default·is_required 는 "true"/"false" 문자열):
 - data_types: (type_name, type_category, description) 목록
 - table_types: (type_name, display_name, description, is_default) 목록
 - storage_formats: (format_name, display_name, description, is_default) 목록

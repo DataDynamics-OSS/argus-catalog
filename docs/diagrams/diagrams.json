@@ -1,0 +1,5389 @@
+[
+  {
+    "id": "ai-ai-service-01",
+    "page": "ai/ai-service.adoc",
+    "title": "AI 서비스와 카탈로그 서버의 연결",
+    "kind": "flow",
+    "direction": "TB",
+    "nodes": [
+      {
+        "id": "U",
+        "label": "사용자 브라우저",
+        "shape": "card"
+      },
+      {
+        "id": "S",
+        "label": "카탈로그 서버 :4600",
+        "shape": "card"
+      },
+      {
+        "id": "A",
+        "label": "assistant :8930",
+        "shape": "card"
+      },
+      {
+        "id": "E",
+        "label": "enrich\n배치 · 워커",
+        "shape": "card"
+      },
+      {
+        "id": "L",
+        "label": "LLM\nollama · vLLM · OpenAI",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "U",
+        "to": "S",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "S",
+        "to": "A",
+        "label": "채팅 프록시",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "A",
+        "to": "S",
+        "label": "도구 호출",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "E",
+        "to": "S",
+        "label": "읽기 · 제안 반입",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "A",
+        "to": "L",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "E",
+        "to": "L",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": [
+      {
+        "id": "AIS",
+        "label": "AI 서비스 (argus-catalog-ai-service)",
+        "nodes": [
+          "A",
+          "E"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "ai-assistant-01",
+    "page": "ai/assistant.adoc",
+    "title": "AI 어시스턴트 요청과 응답",
+    "kind": "sequence",
+    "participants": [
+      {
+        "id": "U",
+        "label": "사용자"
+      },
+      {
+        "id": "S",
+        "label": "Catalog Server"
+      },
+      {
+        "id": "A",
+        "label": "AI 서비스 (assistant)"
+      },
+      {
+        "id": "T",
+        "label": "도구"
+      }
+    ],
+    "events": [
+      {
+        "type": "message",
+        "from": "U",
+        "to": "S",
+        "label": "질문",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "S",
+        "to": "A",
+        "label": "프록시 (사용자 토큰 전달)",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "A",
+        "to": "T",
+        "label": "도구 호출 (검색/조회)",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "T",
+        "to": "A",
+        "label": "실데이터",
+        "response": true
+      },
+      {
+        "type": "message",
+        "from": "A",
+        "to": "S",
+        "label": "답변 종합",
+        "response": true
+      },
+      {
+        "type": "message",
+        "from": "S",
+        "to": "U",
+        "label": "SSE 스트리밍 응답",
+        "response": true
+      }
+    ]
+  },
+  {
+    "id": "ai-fine-tuning-01",
+    "page": "ai/fine-tuning.adoc",
+    "title": "프롬프트 강화부터 운영 피드백까지",
+    "kind": "flow",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "S1",
+        "label": "Stage 1\n프롬프트 강화",
+        "shape": "card"
+      },
+      {
+        "id": "S2",
+        "label": "Stage 2\nFine-tuning",
+        "shape": "card"
+      },
+      {
+        "id": "S3",
+        "label": "Stage 3\n운영",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "S1",
+        "to": "S2",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "S2",
+        "to": "S3",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "S3",
+        "to": "S2",
+        "label": "applied=True 누적",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "ai-fine-tuning-02",
+    "page": "ai/fine-tuning.adoc",
+    "title": "생성 결과 검수와 학습 데이터 누적",
+    "kind": "flow",
+    "direction": "TD",
+    "nodes": [
+      {
+        "id": "A",
+        "label": "describe 호출",
+        "shape": "card"
+      },
+      {
+        "id": "B",
+        "label": "컨텍스트 로드\n스키마·용어사전·리니지·Few-shot",
+        "shape": "card"
+      },
+      {
+        "id": "C",
+        "label": "프롬프트 빌드 → 모델 호출",
+        "shape": "card"
+      },
+      {
+        "id": "D",
+        "label": "생성 로그 저장\napplied=false",
+        "shape": "card"
+      },
+      {
+        "id": "E",
+        "label": "사용자 검수",
+        "shape": "decision"
+      },
+      {
+        "id": "F",
+        "label": "applied=true 마킹",
+        "shape": "card"
+      },
+      {
+        "id": "G",
+        "label": "다음 학습 데이터로 누적",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "A",
+        "to": "B",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "B",
+        "to": "C",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "C",
+        "to": "D",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "D",
+        "to": "E",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "E",
+        "to": "F",
+        "label": "적용",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "E",
+        "to": "D",
+        "label": "Reject",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "F",
+        "to": "G",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "ai-metadata-generation-advanced-01",
+    "page": "ai/metadata-generation-advanced.adoc",
+    "title": "AI 메타데이터 생성과 사용자 검수",
+    "kind": "sequence",
+    "participants": [
+      {
+        "id": "U",
+        "label": "사용자"
+      },
+      {
+        "id": "S",
+        "label": "카탈로그 서버 (AI 모듈)"
+      },
+      {
+        "id": "L",
+        "label": "LLM Provider"
+      }
+    ],
+    "events": [
+      {
+        "type": "message",
+        "from": "U",
+        "to": "S",
+        "label": "대상 선택 · 생성 요청",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "S",
+        "to": "S",
+        "label": "프롬프트 구성 (스키마 · 샘플)",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "S",
+        "to": "L",
+        "label": "LLM 호출",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "L",
+        "to": "S",
+        "label": "생성 결과",
+        "response": true
+      },
+      {
+        "type": "message",
+        "from": "S",
+        "to": "U",
+        "label": "미리보기 (검수)",
+        "response": true
+      },
+      {
+        "type": "message",
+        "from": "U",
+        "to": "S",
+        "label": "적용 (반영)",
+        "response": false
+      }
+    ]
+  },
+  {
+    "id": "appendix-api-01",
+    "page": "appendix/api.adoc",
+    "title": "External API 조회와 캐시",
+    "kind": "sequence",
+    "participants": [
+      {
+        "id": "C",
+        "label": "외부 클라이언트"
+      },
+      {
+        "id": "A",
+        "label": "External API"
+      },
+      {
+        "id": "K",
+        "label": "캐시"
+      },
+      {
+        "id": "D",
+        "label": "Catalog DB"
+      }
+    ],
+    "events": [
+      {
+        "type": "message",
+        "from": "C",
+        "to": "A",
+        "label": "토큰 + URN/ID 조회",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "A",
+        "to": "K",
+        "label": "캐시 확인",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "K",
+        "to": "A",
+        "label": "HIT 시 즉시 반환",
+        "response": true
+      },
+      {
+        "type": "message",
+        "from": "A",
+        "to": "D",
+        "label": "MISS 시 DB 조회",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "D",
+        "to": "A",
+        "label": "메타데이터 / Avro",
+        "response": true
+      },
+      {
+        "type": "message",
+        "from": "A",
+        "to": "C",
+        "label": "JSON 응답",
+        "response": true
+      }
+    ]
+  },
+  {
+    "id": "appendix-sdk-01",
+    "page": "appendix/sdk.adoc",
+    "title": "온라인 모델을 에어갭으로 반입",
+    "kind": "flow",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "HF",
+        "label": "HuggingFace",
+        "shape": "card"
+      },
+      {
+        "id": "ON",
+        "label": "온라인 카탈로그",
+        "shape": "card"
+      },
+      {
+        "id": "F",
+        "label": "파일 (USB · 전송)",
+        "shape": "card"
+      },
+      {
+        "id": "AIR",
+        "label": "에어갭 카탈로그",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "HF",
+        "to": "ON",
+        "label": "oci-import-hf",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "ON",
+        "to": "F",
+        "label": "pull",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "F",
+        "to": "AIR",
+        "label": "push",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "F",
+        "to": "AIR",
+        "label": "서버로 복사 후 import-local",
+        "dashed": true,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "catalog-dashboard-01",
+    "page": "catalog/dashboard.adoc",
+    "title": "대시보드 요약 카드와 탐색 흐름",
+    "kind": "flow",
+    "direction": "TB",
+    "nodes": [
+      {
+        "id": "C",
+        "label": "요약 카드 6개\n데이터셋 · 데이터 소스 · 태그 · 용어집 · 소유자 · 동기화 완료",
+        "shape": "card"
+      },
+      {
+        "id": "R1",
+        "label": "분포 차트\n데이터 소스 유형 · 환경 · 상위 데이터 소스",
+        "shape": "card"
+      },
+      {
+        "id": "R2",
+        "label": "신규 데이터셋 추이\n24시간 · 7일 · 30일",
+        "shape": "card"
+      },
+      {
+        "id": "R3",
+        "label": "스키마 필드 수 · 태그 수 상위 데이터셋",
+        "shape": "card"
+      },
+      {
+        "id": "T",
+        "label": "최근 데이터셋 표 → 데이터셋 상세",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "C",
+        "to": "R1",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "R1",
+        "to": "R2",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "R2",
+        "to": "R3",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "R3",
+        "to": "T",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "catalog-datasets-01",
+    "page": "catalog/datasets.adoc",
+    "title": "데이터셋 등록과 메타데이터 보강",
+    "kind": "flow",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "S",
+        "label": "데이터 소스 동기화",
+        "shape": "card"
+      },
+      {
+        "id": "D",
+        "label": "데이터셋",
+        "shape": "card"
+      },
+      {
+        "id": "M",
+        "label": "화면에서 직접 추가",
+        "shape": "card"
+      },
+      {
+        "id": "MD",
+        "label": "메타데이터\n소유자 · 태그 · 용어집",
+        "shape": "card"
+      },
+      {
+        "id": "SC",
+        "label": "스키마 · 변경 이력",
+        "shape": "card"
+      },
+      {
+        "id": "L",
+        "label": "리니지 · 관계 · ER 다이어그램",
+        "shape": "card"
+      },
+      {
+        "id": "Q",
+        "label": "품질 · 표준 용어",
+        "shape": "card"
+      },
+      {
+        "id": "C",
+        "label": "샘플 · 댓글 · 변경 요청",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "S",
+        "to": "D",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "M",
+        "to": "D",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "D",
+        "to": "MD",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "D",
+        "to": "SC",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "D",
+        "to": "L",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "D",
+        "to": "Q",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "D",
+        "to": "C",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "catalog-lineage-01",
+    "page": "catalog/lineage.adoc",
+    "title": "리니지·관계·ER 다이어그램의 수집 경로",
+    "kind": "flow",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "Q",
+        "label": "쿼리 로그\n(Extension)",
+        "shape": "card"
+      },
+      {
+        "id": "L",
+        "label": "리니지 그래프",
+        "shape": "card"
+      },
+      {
+        "id": "U",
+        "label": "화면 · API 등록",
+        "shape": "card"
+      },
+      {
+        "id": "J",
+        "label": "JOIN 분석\n(Relationship Analyzer)",
+        "shape": "card"
+      },
+      {
+        "id": "R",
+        "label": "관계",
+        "shape": "card"
+      },
+      {
+        "id": "D",
+        "label": "DDL 외래 키",
+        "shape": "card"
+      },
+      {
+        "id": "E",
+        "label": "ER 다이어그램",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "Q",
+        "to": "L",
+        "label": "자동 집계",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "U",
+        "to": "L",
+        "label": "수동 · 파이프라인",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "J",
+        "to": "R",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "D",
+        "to": "E",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "L",
+        "to": "E",
+        "label": "DDL 이 없을 때 추정",
+        "dashed": true,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "catalog-lineage-02",
+    "page": "catalog/lineage.adoc",
+    "title": "컬럼 변환과 매핑 관계",
+    "kind": "flow",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "A",
+        "label": "orders.order_id",
+        "shape": "card"
+      },
+      {
+        "id": "B",
+        "label": "order_summary.order_id",
+        "shape": "card"
+      },
+      {
+        "id": "C",
+        "label": "orders.amount",
+        "shape": "card"
+      },
+      {
+        "id": "D",
+        "label": "order_summary.total",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "A",
+        "to": "B",
+        "label": "DIRECT",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "C",
+        "to": "D",
+        "label": "EXPRESSION\nSUM(amount)",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "catalog-platforms-01",
+    "page": "catalog/platforms.adoc",
+    "title": "조직·시스템·데이터 소스의 계층",
+    "kind": "flow",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "O",
+        "label": "조직\n(하위 조직 포함)",
+        "shape": "card"
+      },
+      {
+        "id": "S",
+        "label": "시스템\n업무 시스템",
+        "shape": "card"
+      },
+      {
+        "id": "D",
+        "label": "데이터 소스\n연결 설정",
+        "shape": "card"
+      },
+      {
+        "id": "T",
+        "label": "데이터셋\n스키마 · DDL · 샘플",
+        "shape": "card"
+      },
+      {
+        "id": "Q",
+        "label": "데이터 품질",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "O",
+        "to": "S",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "S",
+        "to": "D",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "D",
+        "to": "T",
+        "label": "메타데이터 동기화",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "D",
+        "to": "Q",
+        "label": "프로파일 · 품질 배치",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "catalog-platforms-02",
+    "page": "catalog/platforms.adoc",
+    "title": "메타데이터 동기화와 데이터셋 갱신",
+    "kind": "flow",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "P",
+        "label": "원본 DB",
+        "shape": "card"
+      },
+      {
+        "id": "E",
+        "label": "메타데이터 추출",
+        "shape": "card"
+      },
+      {
+        "id": "D",
+        "label": "데이터셋 생성 · 갱신",
+        "shape": "card"
+      },
+      {
+        "id": "H",
+        "label": "스키마 변경 이력",
+        "shape": "card"
+      },
+      {
+        "id": "S",
+        "label": "샘플 저장",
+        "shape": "card"
+      },
+      {
+        "id": "L",
+        "label": "AI 설명 · 알림",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "P",
+        "to": "E",
+        "label": "동기화",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "E",
+        "to": "D",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "D",
+        "to": "H",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "D",
+        "to": "S",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "D",
+        "to": "L",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "catalog-quality-01",
+    "page": "catalog/quality.adoc",
+    "title": "프로파일·검증·품질 배치와 알림",
+    "kind": "flow",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "S",
+        "label": "원본 DB",
+        "shape": "card"
+      },
+      {
+        "id": "P",
+        "label": "컬럼 통계 스냅숏",
+        "shape": "card"
+      },
+      {
+        "id": "V",
+        "label": "검증 실행 · 예약 검증",
+        "shape": "card"
+      },
+      {
+        "id": "B",
+        "label": "프로파일 · 결과 반입",
+        "shape": "card"
+      },
+      {
+        "id": "R",
+        "label": "결과 표 · 품질 점수",
+        "shape": "card"
+      },
+      {
+        "id": "D",
+        "label": "데이터셋 품질 상태\nGOOD · WARN · BAD",
+        "shape": "card"
+      },
+      {
+        "id": "A",
+        "label": "알림",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "S",
+        "to": "P",
+        "label": "프로파일",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "P",
+        "to": "V",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "S",
+        "to": "B",
+        "label": "품질 배치 · 전체 데이터",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "B",
+        "to": "V",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "V",
+        "to": "R",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "R",
+        "to": "D",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "R",
+        "to": "A",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "catalog-schema-01",
+    "page": "catalog/schema.adoc",
+    "title": "스키마 편집·변경 이력·Avro 조회",
+    "kind": "flow",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "S",
+        "label": "데이터 소스 동기화",
+        "shape": "card"
+      },
+      {
+        "id": "F",
+        "label": "스키마 (컬럼 목록)",
+        "shape": "card"
+      },
+      {
+        "id": "E",
+        "label": "화면에서 스키마 수정",
+        "shape": "card"
+      },
+      {
+        "id": "H",
+        "label": "변경 이력\n추가 · 삭제 · 변경 스냅샷",
+        "shape": "card"
+      },
+      {
+        "id": "A",
+        "label": "알림 · 영향 분석",
+        "shape": "card"
+      },
+      {
+        "id": "V",
+        "label": "Avro 스키마\n(자동 생성 또는 사용자 편집본)",
+        "shape": "card"
+      },
+      {
+        "id": "X",
+        "label": "외부 조회 API",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "S",
+        "to": "F",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "E",
+        "to": "F",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "F",
+        "to": "H",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "H",
+        "to": "A",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "F",
+        "to": "V",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "V",
+        "to": "X",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "catalog-taxonomies-01",
+    "page": "catalog/taxonomies.adoc",
+    "title": "분류체계와 데이터셋 매핑",
+    "kind": "flow",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "T1",
+        "label": "분류체계\n업무 도메인",
+        "shape": "card"
+      },
+      {
+        "id": "C1",
+        "label": "고객",
+        "shape": "card"
+      },
+      {
+        "id": "C2",
+        "label": "상품",
+        "shape": "card"
+      },
+      {
+        "id": "C3",
+        "label": "운영",
+        "shape": "card"
+      },
+      {
+        "id": "C4",
+        "label": "거래",
+        "shape": "card"
+      },
+      {
+        "id": "C41",
+        "label": "대여",
+        "shape": "card"
+      },
+      {
+        "id": "C42",
+        "label": "결제",
+        "shape": "card"
+      },
+      {
+        "id": "T2",
+        "label": "분류체계\n데이터 유형",
+        "shape": "card"
+      },
+      {
+        "id": "D1",
+        "label": "마스터",
+        "shape": "card"
+      },
+      {
+        "id": "D2",
+        "label": "트랜잭션",
+        "shape": "card"
+      },
+      {
+        "id": "D3",
+        "label": "매핑",
+        "shape": "card"
+      },
+      {
+        "id": "D4",
+        "label": "파생",
+        "shape": "card"
+      },
+      {
+        "id": "DS",
+        "label": "데이터셋\nsakila.rental",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "T1",
+        "to": "C1",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "T1",
+        "to": "C2",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "T1",
+        "to": "C3",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "T1",
+        "to": "C4",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "C4",
+        "to": "C41",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "C4",
+        "to": "C42",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "T2",
+        "to": "D1",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "T2",
+        "to": "D2",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "T2",
+        "to": "D3",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "T2",
+        "to": "D4",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "C41",
+        "to": "DS",
+        "label": "매핑",
+        "dashed": true,
+        "bidirectional": false,
+        "relation": true
+      },
+      {
+        "from": "D2",
+        "to": "DS",
+        "label": "매핑",
+        "dashed": true,
+        "bidirectional": false,
+        "relation": true
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "extensions-hive-01",
+    "page": "extensions/hive.adoc",
+    "title": "Hive 쿼리 실행 이벤트 수집",
+    "kind": "sequence",
+    "participants": [
+      {
+        "id": "H",
+        "label": "HiveServer2"
+      },
+      {
+        "id": "K",
+        "label": "QueryAuditHook"
+      },
+      {
+        "id": "M",
+        "label": "Query Service"
+      }
+    ],
+    "events": [
+      {
+        "type": "message",
+        "from": "H",
+        "to": "K",
+        "label": "PRE_EXEC_HOOK",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "K",
+        "to": "M",
+        "label": "status=RUNNING",
+        "response": false
+      },
+      {
+        "type": "note",
+        "over": [
+          "H"
+        ],
+        "label": "쿼리 실행"
+      },
+      {
+        "type": "alt",
+        "label": "성공"
+      },
+      {
+        "type": "message",
+        "from": "H",
+        "to": "K",
+        "label": "POST_EXEC_HOOK",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "K",
+        "to": "M",
+        "label": "status=SUCCESS",
+        "response": false
+      },
+      {
+        "type": "else",
+        "label": "실패"
+      },
+      {
+        "type": "message",
+        "from": "H",
+        "to": "K",
+        "label": "ON_FAILURE_HOOK",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "K",
+        "to": "M",
+        "label": "status=FAILED",
+        "response": false
+      },
+      {
+        "type": "end"
+      }
+    ]
+  },
+  {
+    "id": "extensions-impala-01",
+    "page": "extensions/impala.adoc",
+    "title": "Impala 쿼리 이벤트 전송",
+    "kind": "sequence",
+    "participants": [
+      {
+        "id": "F",
+        "label": "Frontend.createExecRequest"
+      },
+      {
+        "id": "I",
+        "label": "QueryInterceptor"
+      },
+      {
+        "id": "S",
+        "label": "QuerySender"
+      },
+      {
+        "id": "M",
+        "label": "Query Service"
+      }
+    ],
+    "events": [
+      {
+        "type": "message",
+        "from": "F",
+        "to": "I",
+        "label": "onMethodEnter → onQueryStart",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "F",
+        "to": "I",
+        "label": "onMethodExit → onQueryComplete",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "I",
+        "to": "S",
+        "label": "이벤트 적재 (큐)",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "S",
+        "to": "M",
+        "label": "POST /collector/impala/query (데몬 스레드)",
+        "response": false
+      }
+    ]
+  },
+  {
+    "id": "extensions-index-01",
+    "page": "extensions/index.adoc",
+    "title": "수집·분석·동기화 확장 모듈",
+    "kind": "flow",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "H",
+        "label": "Hive Hook",
+        "shape": "card"
+      },
+      {
+        "id": "I",
+        "label": "Impala Agent",
+        "shape": "card"
+      },
+      {
+        "id": "T",
+        "label": "Trino Listener",
+        "shape": "card"
+      },
+      {
+        "id": "S",
+        "label": "StarRocks Audit",
+        "shape": "card"
+      },
+      {
+        "id": "QS",
+        "label": "Query Service (4620)",
+        "shape": "card"
+      },
+      {
+        "id": "DB",
+        "label": "카탈로그 DB",
+        "shape": "database"
+      },
+      {
+        "id": "RA",
+        "label": "Relationship Analyzer",
+        "shape": "card"
+      },
+      {
+        "id": "SRC",
+        "label": "소스 시스템 (Hive · MySQL · …)",
+        "shape": "card"
+      },
+      {
+        "id": "SYNC",
+        "label": "Metadata Sync",
+        "shape": "card"
+      },
+      {
+        "id": "CAT",
+        "label": "Argus Catalog Server",
+        "shape": "card"
+      },
+      {
+        "id": "LDAP",
+        "label": "LDAP / AD",
+        "shape": "database"
+      },
+      {
+        "id": "LUS",
+        "label": "LDAP User Sync",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "H",
+        "to": "QS",
+        "label": "POST /collector/*/query",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "I",
+        "to": "QS",
+        "label": "POST /collector/*/query",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "T",
+        "to": "QS",
+        "label": "POST /collector/*/query",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "S",
+        "to": "QS",
+        "label": "POST /collector/*/query",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "QS",
+        "to": "DB",
+        "label": "query_history 저장",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "QS",
+        "to": "DB",
+        "label": "배치: 리니지 · 관계",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "RA",
+        "to": "DB",
+        "label": "analyze · rollup",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "SRC",
+        "to": "SYNC",
+        "label": "메타데이터 조회",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "SYNC",
+        "to": "CAT",
+        "label": "REST",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "LDAP",
+        "to": "LUS",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "LUS",
+        "to": "CAT",
+        "label": "REST",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "CAT",
+        "to": "DB",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": true
+      }
+    ],
+    "groups": [
+      {
+        "id": "엔진",
+        "label": "엔진",
+        "nodes": [
+          "H",
+          "I",
+          "T",
+          "S"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "extensions-metadata-sync-01",
+    "page": "extensions/metadata-sync.adoc",
+    "title": "Metadata Sync 수집과 동기화",
+    "kind": "flow",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "SRC",
+        "label": "소스 시스템 (Hive · MySQL · Trino · …)",
+        "shape": "card"
+      },
+      {
+        "id": "SYNC",
+        "label": "Metadata Sync",
+        "shape": "card"
+      },
+      {
+        "id": "CAT",
+        "label": "Argus Catalog Server",
+        "shape": "card"
+      },
+      {
+        "id": "SCHED",
+        "label": "스케줄러",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "SRC",
+        "to": "SYNC",
+        "label": "메타데이터 조회",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "SYNC",
+        "to": "CAT",
+        "label": "REST 동기화",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "SCHED",
+        "to": "SYNC",
+        "label": "주기 실행",
+        "dashed": true,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "extensions-query-service-01",
+    "page": "extensions/query-service.adoc",
+    "title": "쿼리 수집과 리니지·관계 배치",
+    "kind": "flow",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "C",
+        "label": "수집기 (Hive · Impala · Trino · StarRocks)",
+        "shape": "card"
+      },
+      {
+        "id": "API",
+        "label": "수집 API",
+        "shape": "card"
+      },
+      {
+        "id": "QH",
+        "label": "query_history",
+        "shape": "database"
+      },
+      {
+        "id": "SCHED",
+        "label": "내장 스케줄러 (10분)",
+        "shape": "card"
+      },
+      {
+        "id": "B1",
+        "label": "1. write-lineage",
+        "shape": "card"
+      },
+      {
+        "id": "RUN",
+        "label": "POST /batch/run",
+        "shape": "card"
+      },
+      {
+        "id": "L",
+        "label": "argus_query_lineage · argus_column_lineage",
+        "shape": "database"
+      },
+      {
+        "id": "B2",
+        "label": "2. relationship (analyze → rollup)",
+        "shape": "card"
+      },
+      {
+        "id": "R",
+        "label": "catalog_column_relationship",
+        "shape": "database"
+      }
+    ],
+    "edges": [
+      {
+        "from": "C",
+        "to": "API",
+        "label": "POST /collector/*/query",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "API",
+        "to": "QH",
+        "label": "저장만",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "SCHED",
+        "to": "B1",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "RUN",
+        "to": "B1",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "B1",
+        "to": "QH",
+        "label": "워터마크 증분",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "B1",
+        "to": "L",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "B1",
+        "to": "B2",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "B2",
+        "to": "R",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "extensions-relationship-analyzer-01",
+    "page": "extensions/relationship-analyzer.adoc",
+    "title": "관계 관측과 전체 재집계",
+    "kind": "flow",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "QH",
+        "label": "argus_collector_*_query_history",
+        "shape": "database"
+      },
+      {
+        "id": "OB",
+        "label": "relationship_observations",
+        "shape": "database"
+      },
+      {
+        "id": "REL",
+        "label": "catalog_column_relationship",
+        "shape": "database"
+      },
+      {
+        "id": "UI",
+        "label": "데이터셋 상세 · 관계 탭",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "QH",
+        "to": "OB",
+        "label": "analyze (증분 · 멱등)",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "OB",
+        "to": "REL",
+        "label": "rollup (전체 재집계)",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "REL",
+        "to": "UI",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "extensions-starrocks-01",
+    "page": "extensions/starrocks.adoc",
+    "title": "StarRocks 감사 이벤트 전송",
+    "kind": "sequence",
+    "participants": [
+      {
+        "id": "P",
+        "label": "AuditEventProcessor"
+      },
+      {
+        "id": "Q",
+        "label": "QueryAuditPlugin"
+      },
+      {
+        "id": "S",
+        "label": "QuerySender"
+      },
+      {
+        "id": "M",
+        "label": "Query Service"
+      }
+    ],
+    "events": [
+      {
+        "type": "message",
+        "from": "P",
+        "to": "Q",
+        "label": "eventFilter AFTER_QUERY",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "Q",
+        "to": "Q",
+        "label": "exec(AuditEvent)",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "Q",
+        "to": "S",
+        "label": "큐 적재 (cap 10000)",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "S",
+        "to": "M",
+        "label": "POST /collector/starrocks/query",
+        "response": false
+      }
+    ]
+  },
+  {
+    "id": "extensions-trino-01",
+    "page": "extensions/trino.adoc",
+    "title": "Trino 쿼리 완료 이벤트 전송",
+    "kind": "sequence",
+    "participants": [
+      {
+        "id": "E",
+        "label": "Query Engine"
+      },
+      {
+        "id": "L",
+        "label": "QueryAuditListener"
+      },
+      {
+        "id": "S",
+        "label": "QuerySender"
+      },
+      {
+        "id": "M",
+        "label": "Query Service"
+      }
+    ],
+    "events": [
+      {
+        "type": "message",
+        "from": "E",
+        "to": "L",
+        "label": "queryCompleted 이벤트",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "L",
+        "to": "L",
+        "label": "buildPayload (네이티브 IO metadata)",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "L",
+        "to": "S",
+        "label": "페이로드 전달 (async)",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "S",
+        "to": "M",
+        "label": "POST /collector/trino/query",
+        "response": false
+      }
+    ]
+  },
+  {
+    "id": "federation-browse-search-01",
+    "page": "federation/browse-search.adoc",
+    "title": "미러와 LIVE peer 통합 검색",
+    "kind": "sequence",
+    "participants": [
+      {
+        "id": "U",
+        "label": "사용자"
+      },
+      {
+        "id": "H",
+        "label": "허브"
+      },
+      {
+        "id": "M",
+        "label": "미러 DB"
+      },
+      {
+        "id": "L",
+        "label": "LIVE peer"
+      }
+    ],
+    "events": [
+      {
+        "type": "message",
+        "from": "U",
+        "to": "H",
+        "label": "통합 검색어",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "H",
+        "to": "H",
+        "label": "로컬 데이터셋 검색",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "H",
+        "to": "M",
+        "label": "HARVEST·HYBRID 미러 검색",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "M",
+        "to": "H",
+        "label": "미러 결과",
+        "response": true
+      },
+      {
+        "type": "message",
+        "from": "H",
+        "to": "L",
+        "label": "LIVE peer fan-out",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "L",
+        "to": "H",
+        "label": "결과 (실패 시 실패 인스턴스로 보고)",
+        "response": true
+      },
+      {
+        "type": "message",
+        "from": "H",
+        "to": "H",
+        "label": "결과 병합 + 출처 배지",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "H",
+        "to": "U",
+        "label": "통합 결과 목록",
+        "response": true
+      }
+    ]
+  },
+  {
+    "id": "federation-governance-01",
+    "page": "federation/governance.adoc",
+    "title": "외부 공개 메타데이터 필터",
+    "kind": "flow",
+    "direction": "TD",
+    "nodes": [
+      {
+        "id": "R",
+        "label": "peer export 요청",
+        "shape": "card"
+      },
+      {
+        "id": "T",
+        "label": "서비스 토큰 일치?",
+        "shape": "decision"
+      },
+      {
+        "id": "U",
+        "label": "401",
+        "shape": "card"
+      },
+      {
+        "id": "I",
+        "label": "가져온 데이터셋?",
+        "shape": "decision"
+      },
+      {
+        "id": "X",
+        "label": "숨김 · 404",
+        "shape": "card"
+      },
+      {
+        "id": "A",
+        "label": "allowlist 통과?",
+        "shape": "decision"
+      },
+      {
+        "id": "P",
+        "label": "PII·민감도 제외 대상?",
+        "shape": "decision"
+      },
+      {
+        "id": "C",
+        "label": "노출 설정 항목",
+        "shape": "decision"
+      },
+      {
+        "id": "O",
+        "label": "허용된 항목만 노출",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "R",
+        "to": "T",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "T",
+        "to": "U",
+        "label": "아니오",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "T",
+        "to": "I",
+        "label": "예",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "I",
+        "to": "X",
+        "label": "예",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "I",
+        "to": "A",
+        "label": "아니오",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "A",
+        "to": "X",
+        "label": "아니오",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "A",
+        "to": "P",
+        "label": "예",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "P",
+        "to": "X",
+        "label": "예",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "P",
+        "to": "C",
+        "label": "아니오",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "C",
+        "to": "O",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "federation-harvest-01",
+    "page": "federation/harvest.adoc",
+    "title": "증분 수집과 전체 수집",
+    "kind": "flow",
+    "direction": "TD",
+    "nodes": [
+      {
+        "id": "S",
+        "label": "전체 요청이거나\n첫 실행 · 전체 주기 경과?",
+        "shape": "decision"
+      },
+      {
+        "id": "I",
+        "label": "마지막 성공 이후 변경분만",
+        "shape": "card"
+      },
+      {
+        "id": "F",
+        "label": "전량 수집",
+        "shape": "card"
+      },
+      {
+        "id": "IP",
+        "label": "prune 생략 · 미보유 샘플만",
+        "shape": "card"
+      },
+      {
+        "id": "FP",
+        "label": "prune 수행 · 샘플 전량 갱신",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "S",
+        "to": "I",
+        "label": "아니오 · 증분",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "S",
+        "to": "F",
+        "label": "예 · 전체",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "I",
+        "to": "IP",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "F",
+        "to": "FP",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "federation-harvest-02",
+    "page": "federation/harvest.adoc",
+    "title": "메타데이터 수집과 미러 갱신",
+    "kind": "sequence",
+    "participants": [
+      {
+        "id": "H",
+        "label": "허브"
+      },
+      {
+        "id": "P",
+        "label": "peer"
+      },
+      {
+        "id": "M",
+        "label": "미러 DB"
+      }
+    ],
+    "events": [
+      {
+        "type": "message",
+        "from": "H",
+        "to": "P",
+        "label": "export/datasets 요청 (페이지)",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "P",
+        "to": "H",
+        "label": "메타데이터 + 논리명·컬럼 수",
+        "response": true
+      },
+      {
+        "type": "message",
+        "from": "H",
+        "to": "M",
+        "label": "upsert (FETCH)",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "H",
+        "to": "H",
+        "label": "변경분 재임베딩 (EMBED)",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "H",
+        "to": "P",
+        "label": "샘플 요청 (sample 노출 시)",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "P",
+        "to": "H",
+        "label": "샘플 데이터",
+        "response": true
+      },
+      {
+        "type": "message",
+        "from": "H",
+        "to": "M",
+        "label": "샘플 저장 (SAMPLE)",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "H",
+        "to": "P",
+        "label": "리니지 요청",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "H",
+        "to": "M",
+        "label": "prune + 리니지 (FINALIZE)",
+        "response": false
+      }
+    ]
+  },
+  {
+    "id": "federation-import-01",
+    "page": "federation/import.adoc",
+    "title": "원격 자산을 로컬 데이터셋으로 가져오기",
+    "kind": "flow",
+    "direction": "TD",
+    "nodes": [
+      {
+        "id": "A",
+        "label": "peer 드릴다운 · 전체 메타 수집",
+        "shape": "card"
+      },
+      {
+        "id": "B",
+        "label": "Federation Imports 데이터 소스 확보",
+        "shape": "card"
+      },
+      {
+        "id": "C",
+        "label": "스키마·소유자·확장 메타 복사",
+        "shape": "card"
+      },
+      {
+        "id": "D",
+        "label": "샘플을 로컬 parquet 으로 저장",
+        "shape": "card"
+      },
+      {
+        "id": "E",
+        "label": "로컬 임베딩 생성 · 검색 편입",
+        "shape": "card"
+      },
+      {
+        "id": "F",
+        "label": "로컬 1급 데이터셋",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "A",
+        "to": "B",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "B",
+        "to": "C",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "C",
+        "to": "D",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "D",
+        "to": "E",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "E",
+        "to": "F",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "federation-index-01",
+    "page": "federation/index.adoc",
+    "title": "허브·peer·미러의 연결",
+    "kind": "flow",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "Hub",
+        "label": "허브",
+        "shape": "card"
+      },
+      {
+        "id": "P1",
+        "label": "peer A",
+        "shape": "card"
+      },
+      {
+        "id": "P2",
+        "label": "peer B",
+        "shape": "card"
+      },
+      {
+        "id": "M",
+        "label": "미러 - 재임베딩",
+        "shape": "card"
+      },
+      {
+        "id": "S",
+        "label": "통합 검색 · 탐색",
+        "shape": "card"
+      },
+      {
+        "id": "D",
+        "label": "원격 상세",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "Hub",
+        "to": "P1",
+        "label": "export API · 서비스 토큰",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "Hub",
+        "to": "P2",
+        "label": "export API · 서비스 토큰",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "P1",
+        "to": "M",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "P2",
+        "to": "M",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "M",
+        "to": "S",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "P1",
+        "to": "D",
+        "label": "상세 드릴다운",
+        "dashed": true,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "federation-index-02",
+    "page": "federation/index.adoc",
+    "title": "페더레이션 모드별 조회 경로",
+    "kind": "flow",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "L",
+        "label": "LIVE",
+        "shape": "card"
+      },
+      {
+        "id": "LP",
+        "label": "peer 실시간 fan-out",
+        "shape": "card"
+      },
+      {
+        "id": "Ha",
+        "label": "HARVEST",
+        "shape": "card"
+      },
+      {
+        "id": "HM",
+        "label": "로컬 미러",
+        "shape": "card"
+      },
+      {
+        "id": "Hy",
+        "label": "HYBRID",
+        "shape": "card"
+      },
+      {
+        "id": "HyM",
+        "label": "로컬 미러",
+        "shape": "card"
+      },
+      {
+        "id": "HyP",
+        "label": "peer 실시간",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "L",
+        "to": "LP",
+        "label": "검색·상세",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "Ha",
+        "to": "HM",
+        "label": "검색",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "Hy",
+        "to": "HyM",
+        "label": "검색",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "Ha",
+        "to": "HyP",
+        "label": "상세",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "Hy",
+        "to": "HyP",
+        "label": "상세",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "federation-instances-01",
+    "page": "federation/instances.adoc",
+    "title": "인스턴스 등록·점검·삭제",
+    "kind": "state",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "__start",
+        "label": "시작",
+        "shape": "start"
+      },
+      {
+        "id": "ACTIVE",
+        "label": "ACTIVE",
+        "shape": "card"
+      },
+      {
+        "id": "PAUSED",
+        "label": "PAUSED",
+        "shape": "card"
+      },
+      {
+        "id": "__end",
+        "label": "종료",
+        "shape": "end"
+      }
+    ],
+    "edges": [
+      {
+        "from": "__start",
+        "to": "ACTIVE",
+        "label": "등록"
+      },
+      {
+        "from": "ACTIVE",
+        "to": "ACTIVE",
+        "label": "점검 · 가져오기"
+      },
+      {
+        "from": "ACTIVE",
+        "to": "PAUSED",
+        "label": "수정에서 상태 변경"
+      },
+      {
+        "from": "PAUSED",
+        "to": "ACTIVE",
+        "label": "수정에서 상태 변경"
+      },
+      {
+        "from": "ACTIVE",
+        "to": "__end",
+        "label": "삭제"
+      },
+      {
+        "from": "PAUSED",
+        "to": "__end",
+        "label": "삭제"
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "getting-started-01",
+    "page": "getting-started.adoc",
+    "title": "로그인에서 주요 화면으로 이동",
+    "kind": "flow",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "L",
+        "label": "로그인\n/login",
+        "shape": "card"
+      },
+      {
+        "id": "P",
+        "label": "비밀번호 변경 필요",
+        "shape": "card"
+      },
+      {
+        "id": "D",
+        "label": "대시보드\n/dashboard",
+        "shape": "card"
+      },
+      {
+        "id": "S",
+        "label": "사이드바 메뉴",
+        "shape": "card"
+      },
+      {
+        "id": "H",
+        "label": "헤더 — 검색 · 알림",
+        "shape": "card"
+      },
+      {
+        "id": "U",
+        "label": "프로필 버튼\n프로필 · 계정 설정 · 로그아웃",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "L",
+        "to": "P",
+        "label": "최초 로그인 · 비밀번호 변경 대상",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "L",
+        "to": "D",
+        "label": "성공",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "P",
+        "to": "D",
+        "label": "변경 완료",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "D",
+        "to": "S",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "D",
+        "to": "H",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "D",
+        "to": "U",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "getting-started-02",
+    "page": "getting-started.adoc",
+    "title": "카탈로그 첫 사용 순서",
+    "kind": "flow",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "P",
+        "label": "데이터 소스 등록",
+        "shape": "card"
+      },
+      {
+        "id": "S",
+        "label": "메타데이터 동기화",
+        "shape": "card"
+      },
+      {
+        "id": "D",
+        "label": "데이터셋 확인",
+        "shape": "card"
+      },
+      {
+        "id": "T",
+        "label": "태그·용어집 부착",
+        "shape": "card"
+      },
+      {
+        "id": "Q",
+        "label": "검색 확인",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "P",
+        "to": "S",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "S",
+        "to": "D",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "D",
+        "to": "T",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "T",
+        "to": "Q",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "governance-ai-agent-catalog-01",
+    "page": "governance/ai-agent-catalog.adoc",
+    "title": "AI 에이전트 메타데이터와 연결 자산",
+    "kind": "flow",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "A",
+        "label": "AI Agent",
+        "shape": "card"
+      },
+      {
+        "id": "T",
+        "label": "도구 · MCP 연결",
+        "shape": "card"
+      },
+      {
+        "id": "L",
+        "label": "리니지\n데이터셋 · 모델 · API · 에이전트",
+        "shape": "card"
+      },
+      {
+        "id": "V",
+        "label": "버전 · 상태 이력",
+        "shape": "card"
+      },
+      {
+        "id": "E",
+        "label": "평가 → 평판 점수",
+        "shape": "card"
+      },
+      {
+        "id": "G",
+        "label": "거버넌스\nPII · HITL · 예산",
+        "shape": "card"
+      },
+      {
+        "id": "M",
+        "label": "MCP Server 카탈로그 배포",
+        "shape": "card"
+      },
+      {
+        "id": "P",
+        "label": "정책 번들\n(실행 환경이 pull)",
+        "shape": "card"
+      },
+      {
+        "id": "R",
+        "label": "실행 환경",
+        "shape": "card"
+      },
+      {
+        "id": "O",
+        "label": "관측 · 비용",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "A",
+        "to": "T",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "A",
+        "to": "L",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "A",
+        "to": "V",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "A",
+        "to": "E",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "A",
+        "to": "G",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "T",
+        "to": "M",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "G",
+        "to": "P",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "R",
+        "to": "O",
+        "label": "호출 기록 · 훅 이벤트 push",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "P",
+        "to": "R",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "governance-alerts-01",
+    "page": "governance/alerts.adoc",
+    "title": "알림 처리 상태 전이",
+    "kind": "state",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "__start",
+        "label": "시작",
+        "shape": "start"
+      },
+      {
+        "id": "미확인",
+        "label": "미확인",
+        "shape": "card"
+      },
+      {
+        "id": "확인",
+        "label": "확인",
+        "shape": "card"
+      },
+      {
+        "id": "해결",
+        "label": "해결",
+        "shape": "card"
+      },
+      {
+        "id": "무시",
+        "label": "무시",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "__start",
+        "to": "미확인",
+        "label": ""
+      },
+      {
+        "from": "미확인",
+        "to": "확인",
+        "label": ""
+      },
+      {
+        "from": "미확인",
+        "to": "해결",
+        "label": ""
+      },
+      {
+        "from": "미확인",
+        "to": "무시",
+        "label": ""
+      },
+      {
+        "from": "확인",
+        "to": "해결",
+        "label": ""
+      },
+      {
+        "from": "확인",
+        "to": "무시",
+        "label": ""
+      },
+      {
+        "from": "확인",
+        "to": "미확인",
+        "label": "다시 열기"
+      },
+      {
+        "from": "해결",
+        "to": "미확인",
+        "label": "다시 열기"
+      },
+      {
+        "from": "무시",
+        "to": "미확인",
+        "label": "다시 열기"
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "governance-alerts-02",
+    "page": "governance/alerts.adoc",
+    "title": "사건 평가와 알림 발송",
+    "kind": "flow",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "E",
+        "label": "사건 발생\n스키마 변경 · 품질 실패 · MCP finding",
+        "shape": "card"
+      },
+      {
+        "id": "R",
+        "label": "활성 규칙 평가\n범위 → 트리거",
+        "shape": "decision"
+      },
+      {
+        "id": "X",
+        "label": "무시",
+        "shape": "card"
+      },
+      {
+        "id": "S",
+        "label": "심각도 결정\n자동 또는 강제",
+        "shape": "card"
+      },
+      {
+        "id": "A",
+        "label": "알림 생성(미확인)",
+        "shape": "card"
+      },
+      {
+        "id": "IA",
+        "label": "앱 내 — 알림 탭 · 벨",
+        "shape": "card"
+      },
+      {
+        "id": "WH",
+        "label": "Webhook — 사내 메신저",
+        "shape": "card"
+      },
+      {
+        "id": "P",
+        "label": "확인 · 해결 · 무시",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "E",
+        "to": "R",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "R",
+        "to": "X",
+        "label": "맞지 않음",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "R",
+        "to": "S",
+        "label": "맞음",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "S",
+        "to": "A",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "A",
+        "to": "IA",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "A",
+        "to": "WH",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "IA",
+        "to": "P",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "governance-api-catalog-01",
+    "page": "governance/api-catalog.adoc",
+    "title": "API 스펙 등록과 품질 관리",
+    "kind": "flow",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "A",
+        "label": "API 등록\n스펙 또는 수동",
+        "shape": "card"
+      },
+      {
+        "id": "B",
+        "label": "엔드포인트 정리",
+        "shape": "card"
+      },
+      {
+        "id": "C",
+        "label": "문서 보기·Try-it",
+        "shape": "card"
+      },
+      {
+        "id": "D",
+        "label": "관측",
+        "shape": "card"
+      },
+      {
+        "id": "E",
+        "label": "린팅",
+        "shape": "card"
+      },
+      {
+        "id": "F",
+        "label": "새 버전 등록",
+        "shape": "card"
+      },
+      {
+        "id": "G",
+        "label": "버전 비교·Breaking 알림",
+        "shape": "card"
+      },
+      {
+        "id": "H",
+        "label": "리니지 연결",
+        "shape": "card"
+      },
+      {
+        "id": "I",
+        "label": "즐겨찾기",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "A",
+        "to": "B",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "B",
+        "to": "C",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "C",
+        "to": "D",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "A",
+        "to": "E",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "A",
+        "to": "F",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "F",
+        "to": "G",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "A",
+        "to": "H",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "C",
+        "to": "I",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "governance-change-management-01",
+    "page": "governance/change-management.adoc",
+    "title": "변경 요청부터 결재와 적용까지",
+    "kind": "flow",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "A",
+        "label": "변경 요청 작성\n(임시저장)",
+        "shape": "card"
+      },
+      {
+        "id": "B",
+        "label": "결재 상신",
+        "shape": "card"
+      },
+      {
+        "id": "C",
+        "label": "영향 분석\n리니지 · 소비자",
+        "shape": "card"
+      },
+      {
+        "id": "D",
+        "label": "결재선 순차 결재\n내 결재함",
+        "shape": "card"
+      },
+      {
+        "id": "E",
+        "label": "사전 통지 D-7 · D-1\n적용 예정 시각 대기",
+        "shape": "card"
+      },
+      {
+        "id": "F",
+        "label": "스키마 적용\n적용 통지",
+        "shape": "card"
+      },
+      {
+        "id": "R",
+        "label": "반려됨",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "A",
+        "to": "B",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "B",
+        "to": "C",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "C",
+        "to": "D",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "D",
+        "to": "E",
+        "label": "전 단계 승인",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "E",
+        "to": "F",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "D",
+        "to": "R",
+        "label": "반려 · 기한 초과",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "governance-change-management-02",
+    "page": "governance/change-management.adoc",
+    "title": "변경 요청의 상태 전이",
+    "kind": "state",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "__start",
+        "label": "시작",
+        "shape": "start"
+      },
+      {
+        "id": "DRAFT",
+        "label": "DRAFT",
+        "shape": "card"
+      },
+      {
+        "id": "SUBMITTED",
+        "label": "SUBMITTED",
+        "shape": "card"
+      },
+      {
+        "id": "CANCELLED",
+        "label": "CANCELLED",
+        "shape": "card"
+      },
+      {
+        "id": "APPROVING",
+        "label": "APPROVING",
+        "shape": "card"
+      },
+      {
+        "id": "APPROVED",
+        "label": "APPROVED",
+        "shape": "card"
+      },
+      {
+        "id": "REJECTED",
+        "label": "REJECTED",
+        "shape": "card"
+      },
+      {
+        "id": "APPLIED",
+        "label": "APPLIED",
+        "shape": "card"
+      },
+      {
+        "id": "__end",
+        "label": "종료",
+        "shape": "end"
+      }
+    ],
+    "edges": [
+      {
+        "from": "__start",
+        "to": "DRAFT",
+        "label": "생성"
+      },
+      {
+        "from": "DRAFT",
+        "to": "SUBMITTED",
+        "label": "결재 상신"
+      },
+      {
+        "from": "DRAFT",
+        "to": "CANCELLED",
+        "label": "취소"
+      },
+      {
+        "from": "SUBMITTED",
+        "to": "APPROVING",
+        "label": "영향 분석 완료"
+      },
+      {
+        "from": "APPROVING",
+        "to": "APPROVING",
+        "label": "단계 승인 (다음 결재자)"
+      },
+      {
+        "from": "APPROVING",
+        "to": "APPROVED",
+        "label": "마지막 단계 승인"
+      },
+      {
+        "from": "APPROVING",
+        "to": "REJECTED",
+        "label": "반려 · 7일 기한 초과"
+      },
+      {
+        "from": "SUBMITTED",
+        "to": "CANCELLED",
+        "label": "취소"
+      },
+      {
+        "from": "APPROVING",
+        "to": "CANCELLED",
+        "label": "취소"
+      },
+      {
+        "from": "APPROVED",
+        "to": "CANCELLED",
+        "label": "취소 (적용 전)"
+      },
+      {
+        "from": "APPROVED",
+        "to": "APPLIED",
+        "label": "예정 시각 도달 · 스키마 적용"
+      },
+      {
+        "from": "APPLIED",
+        "to": "__end",
+        "label": ""
+      },
+      {
+        "from": "REJECTED",
+        "to": "__end",
+        "label": ""
+      },
+      {
+        "from": "CANCELLED",
+        "to": "__end",
+        "label": ""
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "governance-glossary-01",
+    "page": "governance/glossary.adoc",
+    "title": "용어집 계층과 데이터셋 연결",
+    "kind": "flow",
+    "direction": "TB",
+    "nodes": [
+      {
+        "id": "R",
+        "label": "용어집",
+        "shape": "card"
+      },
+      {
+        "id": "C1",
+        "label": "분류: 고객",
+        "shape": "card"
+      },
+      {
+        "id": "C2",
+        "label": "분류: 물류",
+        "shape": "card"
+      },
+      {
+        "id": "C3",
+        "label": "하위 분류: 고객 식별정보",
+        "shape": "card"
+      },
+      {
+        "id": "T1",
+        "label": "용어: 고객 생애 가치",
+        "shape": "card"
+      },
+      {
+        "id": "T2",
+        "label": "용어: 이탈률",
+        "shape": "card"
+      },
+      {
+        "id": "D",
+        "label": "데이터셋 customer",
+        "shape": "database"
+      }
+    ],
+    "edges": [
+      {
+        "from": "R",
+        "to": "C1",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "R",
+        "to": "C2",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "C1",
+        "to": "C3",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "C1",
+        "to": "T1",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "C1",
+        "to": "T2",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "T1",
+        "to": "D",
+        "label": "연결",
+        "dashed": true,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "governance-mcp-server-catalog-01",
+    "page": "governance/mcp-server-catalog.adoc",
+    "title": "MCP 서버 배포·정책·감사 흐름",
+    "kind": "flow",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "S",
+        "label": "서버 정의\n(kafka-mcp 등)",
+        "shape": "card"
+      },
+      {
+        "id": "D1",
+        "label": "배포 — DEV",
+        "shape": "card"
+      },
+      {
+        "id": "D2",
+        "label": "배포 — PROD",
+        "shape": "card"
+      },
+      {
+        "id": "OB",
+        "label": "관측값\n도구 · 그룹 on/off · 범위 · limits",
+        "shape": "card"
+      },
+      {
+        "id": "AP",
+        "label": "승인 정책\n그룹 승인 · 도구 차단 · 범위 · limits · 버전",
+        "shape": "card"
+      },
+      {
+        "id": "F",
+        "label": "finding",
+        "shape": "card"
+      },
+      {
+        "id": "B",
+        "label": "정책 번들",
+        "shape": "card"
+      },
+      {
+        "id": "MS",
+        "label": "MCP 서버",
+        "shape": "card"
+      },
+      {
+        "id": "AU",
+        "label": "감사 이벤트",
+        "shape": "card"
+      },
+      {
+        "id": "AG",
+        "label": "AI Agent",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "S",
+        "to": "D1",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "S",
+        "to": "D2",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "D2",
+        "to": "OB",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "D2",
+        "to": "AP",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "OB",
+        "to": "F",
+        "label": "비교",
+        "dashed": true,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "AP",
+        "to": "F",
+        "label": "비교",
+        "dashed": true,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "AP",
+        "to": "B",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "B",
+        "to": "MS",
+        "label": "pull (서비스 토큰)",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "MS",
+        "to": "AU",
+        "label": "감사 로그 push",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "AG",
+        "to": "D2",
+        "label": "연결 · 허용 그룹/도구",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "governance-standards-01",
+    "page": "governance/standards.adoc",
+    "title": "표준 사전과 데이터셋 준수율",
+    "kind": "flow",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "D",
+        "label": "표준 사전",
+        "shape": "card"
+      },
+      {
+        "id": "W",
+        "label": "단어",
+        "shape": "card"
+      },
+      {
+        "id": "M",
+        "label": "도메인",
+        "shape": "card"
+      },
+      {
+        "id": "T",
+        "label": "용어",
+        "shape": "card"
+      },
+      {
+        "id": "C",
+        "label": "코드 그룹·값",
+        "shape": "card"
+      },
+      {
+        "id": "X",
+        "label": "데이터셋 컬럼",
+        "shape": "card"
+      },
+      {
+        "id": "R",
+        "label": "준수율",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "D",
+        "to": "W",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "D",
+        "to": "M",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "W",
+        "to": "T",
+        "label": "형태소 분석",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "M",
+        "to": "T",
+        "label": "접미사 단어로 추천",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "D",
+        "to": "C",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "M",
+        "to": "C",
+        "label": "",
+        "dashed": true,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "T",
+        "to": "X",
+        "label": "자동·수동 매핑",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "X",
+        "to": "R",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "index-01",
+    "page": "index.adoc",
+    "title": "데이터·AI 자산과 통합 카탈로그",
+    "kind": "flow",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "S",
+        "label": "데이터 소스\nDB·레이크·스트림",
+        "shape": "card"
+      },
+      {
+        "id": "C",
+        "label": "Argus Catalog",
+        "shape": "card"
+      },
+      {
+        "id": "X",
+        "label": "API · AI Agent\nMCP Server · ML 모델",
+        "shape": "card"
+      },
+      {
+        "id": "D",
+        "label": "데이터 카탈로그",
+        "shape": "card"
+      },
+      {
+        "id": "AG",
+        "label": "AI Agent · MCP Server\n카탈로그",
+        "shape": "card"
+      },
+      {
+        "id": "AP",
+        "label": "API 카탈로그",
+        "shape": "card"
+      },
+      {
+        "id": "M",
+        "label": "ML 모델 레지스트리",
+        "shape": "card"
+      },
+      {
+        "id": "G",
+        "label": "데이터 거버넌스\n표준·용어·태그·변경 관리",
+        "shape": "card"
+      },
+      {
+        "id": "Q",
+        "label": "검색 · AI 메타데이터",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "S",
+        "to": "C",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "X",
+        "to": "C",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "C",
+        "to": "D",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "C",
+        "to": "AG",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "C",
+        "to": "AP",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "C",
+        "to": "M",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "C",
+        "to": "G",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "C",
+        "to": "Q",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "install-docker-01",
+    "page": "install/docker.adoc",
+    "title": "Docker Compose 서비스 연결",
+    "kind": "flow",
+    "direction": "TB",
+    "nodes": [
+      {
+        "id": "User",
+        "label": "사용자 (브라우저)",
+        "shape": "card"
+      },
+      {
+        "id": "UI",
+        "label": "frontend :3000",
+        "shape": "card"
+      },
+      {
+        "id": "API",
+        "label": "backend :4600",
+        "shape": "card"
+      },
+      {
+        "id": "PG",
+        "label": "catalog-postgres (pgvector)",
+        "shape": "card"
+      },
+      {
+        "id": "TMP",
+        "label": "temporal :7233",
+        "shape": "card"
+      },
+      {
+        "id": "WK",
+        "label": "backend-worker (변경 관리 워커)",
+        "shape": "card"
+      },
+      {
+        "id": "TPG",
+        "label": "temporal-postgresql",
+        "shape": "card"
+      },
+      {
+        "id": "TUI",
+        "label": "temporal-ui :8233",
+        "shape": "card"
+      },
+      {
+        "id": "MINIO",
+        "label": "MinIO :9000/9001",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "User",
+        "to": "UI",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "UI",
+        "to": "API",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "API",
+        "to": "PG",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "API",
+        "to": "TMP",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "WK",
+        "to": "TMP",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "WK",
+        "to": "PG",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "TMP",
+        "to": "TPG",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "TUI",
+        "to": "TMP",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "API",
+        "to": "MINIO",
+        "label": "",
+        "dashed": true,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "install-operations-01",
+    "page": "install/operations.adoc",
+    "title": "버전 업그레이드 순서",
+    "kind": "flow",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "A",
+        "label": "새 버전 준비",
+        "shape": "card"
+      },
+      {
+        "id": "B",
+        "label": "DB 백업",
+        "shape": "card"
+      },
+      {
+        "id": "C",
+        "label": "서버 정지 · 패키지 교체",
+        "shape": "card"
+      },
+      {
+        "id": "D",
+        "label": "새 DDL 적용",
+        "shape": "card"
+      },
+      {
+        "id": "E",
+        "label": "서버 기동",
+        "shape": "card"
+      },
+      {
+        "id": "F",
+        "label": "/health version 확인",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "A",
+        "to": "B",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "B",
+        "to": "C",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "C",
+        "to": "D",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "D",
+        "to": "E",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "E",
+        "to": "F",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "install-production-01",
+    "page": "install/production.adoc",
+    "title": "운영 환경의 서비스 구성",
+    "kind": "flow",
+    "direction": "TB",
+    "nodes": [
+      {
+        "id": "Client",
+        "label": "외부 사용자",
+        "shape": "card"
+      },
+      {
+        "id": "RP",
+        "label": "리버스 프록시 (TLS)\nnginx · Traefik",
+        "shape": "card"
+      },
+      {
+        "id": "UI",
+        "label": "웹 UI (frontend)",
+        "shape": "card"
+      },
+      {
+        "id": "API",
+        "label": "argus-catalog-server (backend)",
+        "shape": "card"
+      },
+      {
+        "id": "DB",
+        "label": "관리형 PostgreSQL",
+        "shape": "card"
+      },
+      {
+        "id": "S3",
+        "label": "S3 / MinIO",
+        "shape": "card"
+      },
+      {
+        "id": "TMP",
+        "label": "Temporal",
+        "shape": "card"
+      },
+      {
+        "id": "WK",
+        "label": "변경 관리 워커 (backend-worker)",
+        "shape": "card"
+      },
+      {
+        "id": "IDP",
+        "label": "Keycloak (OIDC, 선택)",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "Client",
+        "to": "RP",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "RP",
+        "to": "UI",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "RP",
+        "to": "API",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "UI",
+        "to": "API",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "API",
+        "to": "DB",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "API",
+        "to": "S3",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "API",
+        "to": "TMP",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "WK",
+        "to": "TMP",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "WK",
+        "to": "DB",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "API",
+        "to": "IDP",
+        "label": "",
+        "dashed": true,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "install-requirements-01",
+    "page": "install/requirements.adoc",
+    "title": "필수 구성과 선택 구성",
+    "kind": "flow",
+    "direction": "TB",
+    "nodes": [
+      {
+        "id": "UI",
+        "label": "argus-catalog-ui",
+        "shape": "card"
+      },
+      {
+        "id": "S",
+        "label": "argus-catalog-server",
+        "shape": "card"
+      },
+      {
+        "id": "DB",
+        "label": "PostgreSQL + pgvector",
+        "shape": "card"
+      },
+      {
+        "id": "OBJ",
+        "label": "MinIO / S3",
+        "shape": "card"
+      },
+      {
+        "id": "TMP",
+        "label": "Temporal (변경 관리)",
+        "shape": "card"
+      },
+      {
+        "id": "W",
+        "label": "변경 관리 워커",
+        "shape": "card"
+      },
+      {
+        "id": "IDP",
+        "label": "Keycloak (OIDC)",
+        "shape": "card"
+      },
+      {
+        "id": "EMB",
+        "label": "Ollama / OpenAI (임베딩·LLM)",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "UI",
+        "to": "S",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "S",
+        "to": "DB",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "S",
+        "to": "OBJ",
+        "label": "",
+        "dashed": true,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "S",
+        "to": "TMP",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "W",
+        "to": "TMP",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "S",
+        "to": "IDP",
+        "label": "",
+        "dashed": true,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "S",
+        "to": "EMB",
+        "label": "",
+        "dashed": true,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "install-setup-01",
+    "page": "install/setup.adoc",
+    "title": "설치와 초기 설정 순서",
+    "kind": "flow",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "A",
+        "label": "1. 사전 준비\nDB · pgvector · Temporal · 옵션",
+        "shape": "card"
+      },
+      {
+        "id": "B",
+        "label": "2. 서버 설치\nbackend · 변경 관리 워커",
+        "shape": "card"
+      },
+      {
+        "id": "C",
+        "label": "3. UI 설치\nfrontend",
+        "shape": "card"
+      },
+      {
+        "id": "D",
+        "label": "4. 초기 설정\n설정 · 데이터 소스",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "A",
+        "to": "B",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "B",
+        "to": "C",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "C",
+        "to": "D",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "models-import-01",
+    "page": "models/import.adoc",
+    "title": "외부 모델의 에어갭 반입",
+    "kind": "flow",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "HF",
+        "label": "HuggingFace",
+        "shape": "card"
+      },
+      {
+        "id": "ON",
+        "label": "온라인 카탈로그",
+        "shape": "card"
+      },
+      {
+        "id": "F",
+        "label": "파일 (USB · 전송)",
+        "shape": "card"
+      },
+      {
+        "id": "AIR",
+        "label": "에어갭 카탈로그",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "HF",
+        "to": "ON",
+        "label": "oci-import-hf",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "ON",
+        "to": "F",
+        "label": "pull",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "F",
+        "to": "AIR",
+        "label": "push",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "F",
+        "to": "AIR",
+        "label": "서버로 복사 후 import-local",
+        "dashed": true,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "models-registry-01",
+    "page": "models/registry.adoc",
+    "title": "모델 등록부터 거버넌스까지",
+    "kind": "flow",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "A",
+        "label": "모델 등록\n(log_model)",
+        "shape": "card"
+      },
+      {
+        "id": "B",
+        "label": "버전 생성\n(v1, v2 ...)",
+        "shape": "card"
+      },
+      {
+        "id": "C",
+        "label": "Stage 부여\n(Staging / Production)",
+        "shape": "card"
+      },
+      {
+        "id": "D",
+        "label": "모델 카드\n(거버넌스 정보)",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "A",
+        "to": "B",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "B",
+        "to": "C",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "C",
+        "to": "D",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "models-stage-metrics-01",
+    "page": "models/stage-metrics.adoc",
+    "title": "모델 Stage 전이",
+    "kind": "flow",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "N",
+        "label": "NONE\n(등록 직후)",
+        "shape": "card"
+      },
+      {
+        "id": "S",
+        "label": "STAGING",
+        "shape": "card"
+      },
+      {
+        "id": "A",
+        "label": "ARCHIVED",
+        "shape": "card"
+      },
+      {
+        "id": "P",
+        "label": "PRODUCTION",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "N",
+        "to": "S",
+        "label": "",
+        "dashed": false,
+        "bidirectional": true,
+        "relation": false
+      },
+      {
+        "from": "S",
+        "to": "A",
+        "label": "",
+        "dashed": false,
+        "bidirectional": true,
+        "relation": false
+      },
+      {
+        "from": "N",
+        "to": "A",
+        "label": "",
+        "dashed": false,
+        "bidirectional": true,
+        "relation": false
+      },
+      {
+        "from": "N",
+        "to": "P",
+        "label": "운영 권한 + 확인",
+        "dashed": false,
+        "bidirectional": true,
+        "relation": false
+      },
+      {
+        "from": "S",
+        "to": "P",
+        "label": "운영 권한 + 확인",
+        "dashed": false,
+        "bidirectional": true,
+        "relation": false
+      },
+      {
+        "from": "A",
+        "to": "P",
+        "label": "운영 권한 + 확인",
+        "dashed": false,
+        "bidirectional": true,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "ops-authentication-advanced-01",
+    "page": "ops/authentication-advanced.adoc",
+    "title": "Keycloak 인증과 토큰 사용",
+    "kind": "sequence",
+    "participants": [
+      {
+        "id": "U",
+        "label": "사용자"
+      },
+      {
+        "id": "UI",
+        "label": "Argus UI"
+      },
+      {
+        "id": "S",
+        "label": "argus-server"
+      },
+      {
+        "id": "K",
+        "label": "Keycloak"
+      }
+    ],
+    "events": [
+      {
+        "type": "message",
+        "from": "U",
+        "to": "UI",
+        "label": "로그인 (ID/PW)",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "UI",
+        "to": "S",
+        "label": "POST /auth/login",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "S",
+        "to": "K",
+        "label": "자격 검증 위임",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "K",
+        "to": "S",
+        "label": "Access / Refresh JWT",
+        "response": true
+      },
+      {
+        "type": "message",
+        "from": "S",
+        "to": "UI",
+        "label": "토큰 반환",
+        "response": true
+      },
+      {
+        "type": "message",
+        "from": "UI",
+        "to": "UI",
+        "label": "sessionStorage 저장",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "UI",
+        "to": "S",
+        "label": "API 호출 (Bearer 토큰)",
+        "response": false
+      },
+      {
+        "type": "note",
+        "over": [
+          "UI",
+          "S"
+        ],
+        "label": "만료 60초 전 자동 refresh"
+      }
+    ]
+  },
+  {
+    "id": "ops-embedding-01",
+    "page": "ops/embedding.adoc",
+    "title": "변경 감지와 임베딩 생성",
+    "kind": "flow",
+    "direction": "TD",
+    "nodes": [
+      {
+        "id": "E1",
+        "label": "데이터셋 변경\n(쓰기 시 자동 임베딩 켠 경우)",
+        "shape": "card"
+      },
+      {
+        "id": "M",
+        "label": "소스 텍스트 결합",
+        "shape": "card"
+      },
+      {
+        "id": "E2",
+        "label": "Backfill\n(배치 일괄)",
+        "shape": "card"
+      },
+      {
+        "id": "C",
+        "label": "source_text 변경됨?",
+        "shape": "decision"
+      },
+      {
+        "id": "SK",
+        "label": "skip (중복 방지)",
+        "shape": "card"
+      },
+      {
+        "id": "P",
+        "label": "임베딩 프로바이더",
+        "shape": "card"
+      },
+      {
+        "id": "V",
+        "label": "벡터 저장\npgvector",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "E1",
+        "to": "M",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "E2",
+        "to": "M",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "M",
+        "to": "C",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "C",
+        "to": "SK",
+        "label": "No",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "C",
+        "to": "P",
+        "label": "Yes",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "P",
+        "to": "V",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "ops-search-01",
+    "page": "ops/search.adoc",
+    "title": "키워드·시맨틱 하이브리드 검색",
+    "kind": "flow",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "Q",
+        "label": "검색어",
+        "shape": "card"
+      },
+      {
+        "id": "K",
+        "label": "키워드 경로\n이름·설명 등 부분 일치",
+        "shape": "card"
+      },
+      {
+        "id": "S",
+        "label": "시맨틱 경로\npgvector 벡터 유사도",
+        "shape": "card"
+      },
+      {
+        "id": "F",
+        "label": "점수 결합",
+        "shape": "card"
+      },
+      {
+        "id": "R",
+        "label": "그룹별 결과\n데이터셋 · 용어집 · AI Agent · API · MCP 서버",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "Q",
+        "to": "K",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "Q",
+        "to": "S",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "K",
+        "to": "F",
+        "label": "가중치 0.3",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "S",
+        "to": "F",
+        "label": "가중치 0.7",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "F",
+        "to": "R",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "ops-users-01",
+    "page": "ops/users.adoc",
+    "title": "사용자 역할별 권한",
+    "kind": "flow",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "U",
+        "label": "사용자",
+        "shape": "card"
+      },
+      {
+        "id": "R",
+        "label": "역할 (argus-*)",
+        "shape": "card"
+      },
+      {
+        "id": "A",
+        "label": "관리자 (argus-admin)\n항상 모든 권한",
+        "shape": "card"
+      },
+      {
+        "id": "S",
+        "label": "슈퍼유저 (argus-superuser)",
+        "shape": "card"
+      },
+      {
+        "id": "N",
+        "label": "사용자 (argus-user)",
+        "shape": "card"
+      },
+      {
+        "id": "P",
+        "label": "권한 관리 매트릭스",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "U",
+        "to": "R",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "R",
+        "to": "A",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "R",
+        "to": "S",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "R",
+        "to": "N",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "S",
+        "to": "P",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "N",
+        "to": "P",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": []
+  },
+  {
+    "id": "plugin-backend-01",
+    "page": "plugin/backend.adoc",
+    "title": "백엔드 플러그인 로딩과 요청 처리",
+    "kind": "sequence",
+    "participants": [
+      {
+        "id": "Pkg",
+        "label": "플러그인 패키지"
+      },
+      {
+        "id": "Loader",
+        "label": "코어 로더"
+      },
+      {
+        "id": "App",
+        "label": "FastAPI 앱"
+      },
+      {
+        "id": "Client",
+        "label": "클라이언트"
+      }
+    ],
+    "events": [
+      {
+        "type": "note",
+        "over": [
+          "Pkg",
+          "App"
+        ],
+        "label": "서버 기동 시"
+      },
+      {
+        "type": "message",
+        "from": "Loader",
+        "to": "Pkg",
+        "label": "entry point 발견",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "Pkg",
+        "to": "Loader",
+        "label": "plugin.router 제공",
+        "response": true
+      },
+      {
+        "type": "message",
+        "from": "Loader",
+        "to": "App",
+        "label": "include_router(prefix=/api/v1)",
+        "response": false
+      },
+      {
+        "type": "note",
+        "over": [
+          "Client",
+          "App"
+        ],
+        "label": "요청 시"
+      },
+      {
+        "type": "message",
+        "from": "Client",
+        "to": "App",
+        "label": "GET /api/v1/acme/billing/summary",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "App",
+        "to": "Pkg",
+        "label": "플러그인 핸들러 호출",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "Pkg",
+        "to": "Client",
+        "label": "응답",
+        "response": true
+      }
+    ]
+  },
+  {
+    "id": "plugin-frontend-01",
+    "page": "plugin/frontend.adoc",
+    "title": "플러그인 메뉴에서 화면 렌더링까지",
+    "kind": "sequence",
+    "participants": [
+      {
+        "id": "U",
+        "label": "사용자"
+      },
+      {
+        "id": "Menu",
+        "label": "사이드바"
+      },
+      {
+        "id": "Host",
+        "label": "호스트 라우트"
+      },
+      {
+        "id": "Reg",
+        "label": "레지스트리"
+      },
+      {
+        "id": "Scr",
+        "label": "화면 컴포넌트"
+      }
+    ],
+    "events": [
+      {
+        "type": "message",
+        "from": "Menu",
+        "to": "Reg",
+        "label": "pluginMenus 병합해 메뉴 표시",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "U",
+        "to": "Menu",
+        "label": "메뉴 클릭",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "Menu",
+        "to": "Host",
+        "label": "/dashboard/x/acme/billing 이동",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "Host",
+        "to": "Reg",
+        "label": "slug 로 화면 조회",
+        "response": false
+      },
+      {
+        "type": "message",
+        "from": "Reg",
+        "to": "Host",
+        "label": "BillingScreen 반환",
+        "response": true
+      },
+      {
+        "type": "message",
+        "from": "Host",
+        "to": "Scr",
+        "label": "렌더",
+        "response": false
+      }
+    ]
+  },
+  {
+    "id": "plugin-index-01",
+    "page": "plugin/index.adoc",
+    "title": "코어와 고객사 플러그인의 연결",
+    "kind": "flow",
+    "direction": "LR",
+    "nodes": [
+      {
+        "id": "BL",
+        "label": "백엔드 로더(plugins.py)",
+        "shape": "card"
+      },
+      {
+        "id": "FH",
+        "label": "프론트 호스트 라우트",
+        "shape": "card"
+      },
+      {
+        "id": "REG",
+        "label": "프론트 레지스트리",
+        "shape": "card"
+      },
+      {
+        "id": "API",
+        "label": "백엔드 API 패키지",
+        "shape": "card"
+      },
+      {
+        "id": "SCR",
+        "label": "프론트 화면",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "API",
+        "to": "BL",
+        "label": "entry point",
+        "dashed": true,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "REG",
+        "to": "SCR",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "FH",
+        "to": "SCR",
+        "label": "slug 조회",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": [
+      {
+        "id": "Core",
+        "label": "코어 (수정 불가)",
+        "nodes": [
+          "BL",
+          "FH",
+          "REG"
+        ]
+      },
+      {
+        "id": "Plugin",
+        "label": "고객사 플러그인",
+        "nodes": [
+          "API",
+          "SCR"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "plugin-reference-01",
+    "page": "plugin/reference.adoc",
+    "title": "백엔드·프론트 확장 지점",
+    "kind": "flow",
+    "direction": "TB",
+    "nodes": [
+      {
+        "id": "L",
+        "label": "로더(plugins.py)",
+        "shape": "card"
+      },
+      {
+        "id": "M",
+        "label": "기동(main.py)",
+        "shape": "card"
+      },
+      {
+        "id": "C",
+        "label": "설정(config.py)",
+        "shape": "card"
+      },
+      {
+        "id": "R",
+        "label": "레지스트리",
+        "shape": "card"
+      },
+      {
+        "id": "H",
+        "label": "호스트 라우트",
+        "shape": "card"
+      },
+      {
+        "id": "Mn",
+        "label": "메뉴 병합",
+        "shape": "card"
+      },
+      {
+        "id": "Ic",
+        "label": "아이콘",
+        "shape": "card"
+      },
+      {
+        "id": "P",
+        "label": "권한 레지스트리",
+        "shape": "card"
+      }
+    ],
+    "edges": [
+      {
+        "from": "R",
+        "to": "H",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "R",
+        "to": "Mn",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "R",
+        "to": "Ic",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "R",
+        "to": "P",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      }
+    ],
+    "groups": [
+      {
+        "id": "BE",
+        "label": "백엔드 seam",
+        "nodes": [
+          "L",
+          "M",
+          "C"
+        ]
+      },
+      {
+        "id": "FE",
+        "label": "프론트 seam",
+        "nodes": [
+          "R",
+          "H",
+          "Mn",
+          "Ic"
+        ]
+      }
+    ]
+  }
+]

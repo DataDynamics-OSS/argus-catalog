@@ -19,13 +19,22 @@ import {
   testEmbedding, updateEmbeddingConfig,
   type EmbeddingStats,
 } from "./api"
+import { useConfirm } from "@/components/confirm-provider"
+import { errorMessage, notifyError, notifySuccess } from "@/lib/notify"
+
+// 백엔드 pgvector 컬럼 차원(vector(384) 고정) — 다른 차원 모델은 저장 시 422 로 거부되므로 선택지를 비활성화한다.
+const SUPPORTED_DIMENSION = 384
+
+// 기본 임베딩 모델 — backend/app/embedding/base.py DEFAULT_EMBEDDING_MODEL 과 같아야 한다.
+export const DEFAULT_EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
 
 const PROVIDER_MODELS: Record<string, { label: string; models: { id: string; label: string; dim: number }[] }> = {
   local: {
     label: "Local (sentence-transformers)",
     models: [
+      // 첫 항목이 기본 모델(백엔드 DEFAULT_EMBEDDING_MODEL) — 한글 메타데이터용 다국어
+      { id: DEFAULT_EMBEDDING_MODEL, label: "multilingual-MiniLM-L12-v2 (Korean+English, 470MB) — 기본", dim: 384 },
       { id: "all-MiniLM-L6-v2", label: "all-MiniLM-L6-v2 (English, 80MB)", dim: 384 },
-      { id: "paraphrase-multilingual-MiniLM-L12-v2", label: "multilingual-MiniLM-L12-v2 (Korean+English, 470MB)", dim: 384 },
       { id: "bge-small-en-v1.5", label: "bge-small-en-v1.5 (English, 130MB)", dim: 384 },
     ],
   },
@@ -53,11 +62,12 @@ export function EmbeddingSettings() {
   const [testing, setTesting] = useState(false)
   const [backfilling, setBackfilling] = useState(false)
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null)
+  const askConfirm = useConfirm()
 
   const [enabled, setEnabled] = useState(false)
   const [autoOnWrite, setAutoOnWrite] = useState(false)
   const [provider, setProvider] = useState("local")
-  const [model, setModel] = useState("all-MiniLM-L6-v2")
+  const [model, setModel] = useState(DEFAULT_EMBEDDING_MODEL)
   const [apiKey, setApiKey] = useState("")
   const [apiUrl, setApiUrl] = useState("")
   const [dimension, setDimension] = useState(384)
@@ -92,9 +102,11 @@ export function EmbeddingSettings() {
   const handleProviderChange = (val: string) => {
     setProvider(val)
     const models = PROVIDER_MODELS[val]?.models
-    if (models?.length) {
-      setModel(models[0]!.id)
-      setDimension(models[0]!.dim)
+    // 지원 차원 모델을 우선 선택(없으면 첫 모델 — 저장 시 백엔드가 거부)
+    const first = models?.find((m) => m.dim === SUPPORTED_DIMENSION) ?? models?.[0]
+    if (first) {
+      setModel(first.id)
+      setDimension(first.dim)
     }
   }
 
@@ -106,14 +118,13 @@ export function EmbeddingSettings() {
 
   const handleSave = async () => {
     setSaving(true)
-    setMessage(null)
     try {
       await updateEmbeddingConfig({ enabled, auto_on_write: autoOnWrite, provider, model, api_key: apiKey, api_url: apiUrl, dimension })
-      setMessage({ type: "success", text: "임베딩 설정을 저장했습니다." })
+      notifySuccess("임베딩 설정을 저장했습니다.")
       const st = await fetchEmbeddingStats().catch(() => null)
       setStats(st)
     } catch (e) {
-      setMessage({ type: "error", text: e instanceof Error ? e.message : "저장에 실패했습니다." })
+      notifyError(e, "임베딩 설정을 저장하지 못했습니다.")
     } finally {
       setSaving(false)
     }
@@ -126,7 +137,7 @@ export function EmbeddingSettings() {
       const result = await testEmbedding({ enabled, auto_on_write: autoOnWrite, provider, model, api_key: apiKey, api_url: apiUrl, dimension })
       setMessage({ type: result.success ? "success" : "error", text: result.message })
     } catch (e) {
-      setMessage({ type: "error", text: e instanceof Error ? e.message : "연결 테스트에 실패했습니다." })
+      setMessage({ type: "error", text: errorMessage(e) ?? "연결을 테스트하지 못했습니다." })
     } finally {
       setTesting(false)
     }
@@ -134,32 +145,34 @@ export function EmbeddingSettings() {
 
   const handleBackfill = async () => {
     setBackfilling(true)
-    setMessage(null)
     try {
       const result = await backfillEmbeddings()
-      setMessage({
-        type: "success",
-        text: `백필 완료: ${result.embedded}건 임베딩, ${result.skipped}건 건너뜀, ${result.errors}건 오류 (총 ${result.total}건)`,
+      notifySuccess("임베딩을 백필했습니다.", {
+        description: `${result.embedded}건 임베딩, ${result.skipped}건 건너뜀, ${result.errors}건 오류 (총 ${result.total}건)`,
       })
       const st = await fetchEmbeddingStats().catch(() => null)
       setStats(st)
     } catch (e) {
-      setMessage({ type: "error", text: e instanceof Error ? e.message : "백필에 실패했습니다." })
+      notifyError(e, "임베딩을 백필하지 못했습니다.")
     } finally {
       setBackfilling(false)
     }
   }
 
   const handleClear = async () => {
-    if (!confirm("모든 임베딩을 삭제할까요? 다시 사용하려면 백필을 실행해야 합니다.")) return
-    setMessage(null)
+    if (!(await askConfirm({
+      title: "임베딩 전체 삭제",
+      description: "모든 임베딩을 삭제할까요? 다시 사용하려면 백필을 실행해야 합니다.",
+      confirmText: "삭제",
+      destructive: true,
+    }))) return
     try {
       const result = await clearEmbeddings()
-      setMessage({ type: "success", text: `${result.deleted}개 임베딩을 삭제했습니다.` })
+      notifySuccess(`임베딩 ${result.deleted}개를 삭제했습니다.`)
       const st = await fetchEmbeddingStats().catch(() => null)
       setStats(st)
     } catch (e) {
-      setMessage({ type: "error", text: e instanceof Error ? e.message : "삭제에 실패했습니다." })
+      notifyError(e, "임베딩을 삭제하지 못했습니다.")
     }
   }
 
@@ -192,7 +205,7 @@ export function EmbeddingSettings() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="flex items-center gap-6 text-sm">
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-1.5 text-sm [&>div]:whitespace-nowrap">
               <div>
                 <span className="text-muted-foreground">커버리지: </span>
                 <span className="font-semibold">{stats.embedded_datasets} / {stats.total_datasets}</span>
@@ -202,7 +215,7 @@ export function EmbeddingSettings() {
                 <div>
                   <span className="text-muted-foreground">엔티티: </span>
                   <span className="font-semibold">
-                    용어집 {stats.embedded_entities.glossary_term} · Agent {stats.embedded_entities.ai_agent} · API {stats.embedded_entities.api}
+                    용어집 {stats.embedded_entities.glossary_term} · Agent {stats.embedded_entities.ai_agent} · API {stats.embedded_entities.api} · MCP 서버 {stats.embedded_entities.mcp_server ?? 0}
                   </span>
                 </div>
               )}
@@ -268,9 +281,14 @@ export function EmbeddingSettings() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {Object.entries(PROVIDER_MODELS).map(([key, val]) => (
-                  <SelectItem key={key} value={key}>{val.label}</SelectItem>
-                ))}
+                {Object.entries(PROVIDER_MODELS).map(([key, val]) => {
+                  const supported = val.models.some((m) => m.dim === SUPPORTED_DIMENSION)
+                  return (
+                    <SelectItem key={key} value={key} disabled={!supported}>
+                      {val.label}{supported ? "" : ` (미지원 — ${SUPPORTED_DIMENSION}차원 모델 없음)`}
+                    </SelectItem>
+                  )
+                })}
               </SelectContent>
             </Select>
           </div>
@@ -284,13 +302,20 @@ export function EmbeddingSettings() {
               </SelectTrigger>
               <SelectContent>
                 {PROVIDER_MODELS[provider]?.models.map((m) => (
-                  <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>
+                  <SelectItem key={m.id} value={m.id} disabled={m.dim !== SUPPORTED_DIMENSION}>
+                    {m.label}{m.dim !== SUPPORTED_DIMENSION ? ` (미지원 — ${SUPPORTED_DIMENSION}차원만 가능)` : ""}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground">
-              차원: {dimension}. 직접 모델명을 입력할 수도 있습니다.
+              차원: {dimension}. 벡터 컬럼이 {SUPPORTED_DIMENSION}차원 고정이라 {SUPPORTED_DIMENSION}차원 모델만 저장할 수 있습니다.
             </p>
+            {dimension !== SUPPORTED_DIMENSION && (
+              <p className="text-xs text-red-600">
+                현재 설정의 차원({dimension})은 지원하지 않습니다 — {SUPPORTED_DIMENSION}차원 모델을 선택하세요.
+              </p>
+            )}
           </div>
 
           {/* API Key (OpenAI only) */}
@@ -362,8 +387,8 @@ export function EmbeddingSettings() {
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            백필은 아직 임베딩이 없는 모든 데이터셋에 대해 임베딩을 생성합니다.
-            삭제는 모든 임베딩을 제거합니다(차원이 다른 제공자로 전환할 때 필요).
+            백필은 임베딩이 없거나 원문·모델이 바뀐 데이터셋과 용어집·AI Agent·API·MCP 서버를 (다시) 임베딩합니다.
+            모델을 바꿨으면 저장한 뒤 백필을 다시 실행하세요. 삭제는 모든 임베딩을 제거합니다.
           </p>
         </CardContent>
       </Card>

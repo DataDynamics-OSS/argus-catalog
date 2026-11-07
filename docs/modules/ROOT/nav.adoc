@@ -1,68 +1,94 @@
 * xref:index.adoc[개요]
 * xref:getting-started.adoc[시작하기]
 
+.사용자 가이드
 * 데이터 카탈로그
+** xref:catalog/dashboard.adoc[대시보드]
 ** xref:catalog/datasets.adoc[데이터셋]
-** xref:catalog/platforms.adoc[데이터 소스·플랫폼]
-** xref:catalog/schema.adoc[스키마]
-** xref:catalog/lineage.adoc[리니지 & ERD]
-** xref:catalog/tags-glossary.adoc[태그·용어집]
-** xref:catalog/standards.adoc[데이터 표준]
-** xref:catalog/quality.adoc[데이터 품질]
+*** xref:catalog/schema.adoc[스키마]
+*** xref:catalog/lineage.adoc[리니지 & ERD]
+*** xref:catalog/quality.adoc[데이터 품질]
+**** xref:catalog/quality-batch.adoc[품질 배치]
+** xref:catalog/platforms.adoc[데이터 소스]
+** xref:catalog/taxonomies.adoc[분류 체계]
+** xref:governance/change-management.adoc[변경 관리 · 내 결재함]
+** xref:federation/index.adoc[페더레이션]
+*** xref:federation/instances.adoc[인스턴스 관리]
+*** xref:federation/harvest.adoc[가져오기(HARVEST)]
+*** xref:federation/browse-search.adoc[탐색·통합 검색·리니지]
+*** xref:federation/import.adoc[로컬 승격(import)]
+*** xref:federation/governance.adoc[노출 거버넌스·운영]
 
-* 메타데이터 거버넌스
-** xref:governance/api-catalog.adoc[API 카탈로그]
-** xref:governance/ai-agent-catalog.adoc[AI Agent 카탈로그]
-** xref:governance/change-management.adoc[변경 관리]
+* AI 카탈로그
+** xref:governance/ai-agent-catalog.adoc[AI Agent]
+** xref:governance/mcp-server-catalog.adoc[MCP Server]
+*** xref:governance/mcp-server-catalog-advanced.adoc[감사와 정책 집행]
+** xref:models/registry.adoc[MLflow 모델]
+*** xref:models/stage-metrics.adoc[Stage · 성능 · 리니지]
+** xref:models/oci-hub.adoc[OCI 모델 허브]
+** xref:models/import.adoc[모델 반입(CLI·에어갭)]
 
-* 카탈로그 페더레이션
-** xref:federation/index.adoc[페더레이션 개요]
-** xref:federation/instances.adoc[인스턴스 관리]
-** xref:federation/harvest.adoc[가져오기(HARVEST)]
-** xref:federation/browse-search.adoc[탐색·통합 검색·리니지]
-** xref:federation/import.adoc[로컬 승격(import)]
-** xref:federation/governance.adoc[노출 거버넌스·운영]
+* API 카탈로그
+** xref:governance/api-catalog.adoc[API · 즐겨찾기]
 
-* ML 모델 레지스트리
-** xref:models/registry.adoc[모델 레지스트리]
-** xref:models/stage-metrics.adoc[Stage · 메트릭]
-** xref:models/oci-hub.adoc[OCI Model Hub]
-** xref:models/import.adoc[모델 반입(SDK·에어갭)]
+* 거버넌스
+** xref:governance/standards.adoc[데이터 표준]
+** xref:governance/glossary.adoc[용어집]
+** xref:governance/tags.adoc[태그]
+** xref:governance/alerts.adoc[알림]
 
-* AI
+* 검색과 AI 도우미
+** xref:ops/search.adoc[통합 검색]
 ** xref:ai/metadata-generation.adoc[메타데이터 자동 생성]
+*** xref:ai/metadata-generation-advanced.adoc[고급 — API·프롬프트]
 ** xref:ai/assistant.adoc[AI 어시스턴트]
-** xref:ai/fine-tuning.adoc[Fine-tuning 가이드]
 
-* 검색
-** xref:ops/search.adoc[시맨틱·하이브리드 검색]
-** xref:ops/embedding.adoc[임베딩 운영]
-
-* 운영
-** xref:ops/alerts.adoc[알림]
-** xref:ops/users.adoc[사용자·권한]
-** xref:ops/authentication.adoc[인증]
+.관리자 가이드
+* 관리 메뉴
+** xref:ops/users.adoc[사용자 관리]
 ** xref:ops/settings.adoc[설정]
+** xref:ops/permissions.adoc[권한 관리]
 
-* 설치 / 배포
+* 설치 · 배포
 ** xref:install/requirements.adoc[시스템 요구사항]
-** xref:install/setup.adoc[설치]
-** xref:install/docker.adoc[Docker Compose 배포]
+** xref:install/docker.adoc[Docker Compose 로 띄우기]
+** xref:install/setup.adoc[직접 설치]
 ** xref:install/production.adoc[운영 배포]
 ** xref:install/operations.adoc[운영 가이드]
 
+* 인증 · 검색 · AI 운영
+** xref:ops/authentication.adoc[인증]
+*** xref:ops/authentication-advanced.adoc[Keycloak · OIDC]
+** xref:ops/embedding.adoc[임베딩(시맨틱 검색)]
+*** xref:ops/embedding-advanced.adoc[고급 설정]
+** xref:ai/ai-service.adoc[AI 서비스]
+
+* 확장 (Extension)
+** xref:extensions/index.adoc[확장 개요]
+** xref:extensions/metadata-sync.adoc[Metadata Sync]
+*** xref:extensions/metadata-sync-sources.adoc[데이터 소스별 설정]
+** xref:extensions/query-service.adoc[Query Service]
+** 쿼리 수집기
+*** xref:extensions/hive.adoc[Hive Query Hook]
+*** xref:extensions/impala.adoc[Impala Query Agent]
+*** xref:extensions/trino.adoc[Trino Query Listener]
+*** xref:extensions/starrocks.adoc[StarRocks Audit Plugin]
+** xref:extensions/ldap-user-sync.adoc[LDAP User Sync]
+** xref:extensions/relationship-analyzer.adoc[Relationship Analyzer]
+** xref:extensions/sql-parser.adoc[SQL 리니지 파서]
+** xref:extensions/source-analyzer.adoc[Source Analyzer]
+
+.개발자 가이드
 * 플러그인 (커스텀 화면)
 ** xref:plugin/index.adoc[플러그인 개요]
 ** xref:plugin/frontend.adoc[프론트엔드 화면 플러그인]
 ** xref:plugin/backend.adoc[백엔드 API 플러그인]
+** xref:plugin/configuration.adoc[플러그인 설정·배포]
+** xref:plugin/usage.adoc[플러그인 사용·운영]
 ** xref:plugin/reference.adoc[확장 지점·계약 레퍼런스]
 
-* 부록
+* SDK · API
 ** xref:appendix/sdk.adoc[SDK · argus-model CLI]
 ** xref:appendix/api.adoc[External API]
-** xref:appendix/extensions.adoc[Extension 개요]
-*** xref:appendix/ext-metadata-sync.adoc[Metadata Sync]
-*** xref:appendix/ext-hive.adoc[Hive Query Hook]
-*** xref:appendix/ext-impala.adoc[Impala Query Agent]
-*** xref:appendix/ext-trino.adoc[Trino Query Listener]
-*** xref:appendix/ext-starrocks.adoc[StarRocks Audit Plugin]
+
+* xref:ai/fine-tuning.adoc[LLM Fine-tuning]

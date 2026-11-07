@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { Loader2, Music } from "lucide-react"
+import { assertFileResponse, fileLoadErrorMessage } from "./utils"
 
 /** Map extension to MIME type for the <audio> source element. */
 const audioMimeTypes: Record<string, string> = {
@@ -33,7 +34,7 @@ export function AudioViewer({ url, extension, fileName }: AudioViewerProps) {
 
     fetch(url)
       .then((res) => {
-        if (!res.ok) throw new Error(`Failed to fetch audio (${res.status})`)
+        assertFileResponse(res)
         return res.blob()
       })
       .then((blob) => {
@@ -43,7 +44,7 @@ export function AudioViewer({ url, extension, fileName }: AudioViewerProps) {
         setIsLoading(false)
       })
       .catch((err) => {
-        setError(err instanceof Error ? err.message : "Failed to load audio")
+        setError(fileLoadErrorMessage(err))
         setIsLoading(false)
       })
 

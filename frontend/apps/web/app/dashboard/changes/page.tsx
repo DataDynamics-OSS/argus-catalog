@@ -35,6 +35,9 @@ import {
   useUserNames,
 } from "@/features/change-mgmt/labels"
 import { useAuth } from "@/features/auth"
+import { usePermissions } from "@/features/permissions/use-permissions"
+import { approvalProgress } from "@/features/change-mgmt/approval-steps"
+import { errorMessage } from "@/lib/notify"
 
 /** ISO 문자열 → yyyy-MM-dd (없으면 —). */
 function fmtDate(s?: string | null): string {
@@ -55,17 +58,12 @@ const PRIORITY_COLOR: Record<string, string> = {
   LOW: "text-muted-foreground",
 }
 
-/** 결재 진행도: 승인 단계/전체 단계 (결재선 없으면 —). */
-function approvalProgress(cr: ChangeRequest): string {
-  const total = cr.approval_steps.length
-  if (total === 0) return "—"
-  const approved = cr.approval_steps.filter((s) => s.decision === "APPROVED").length
-  return `${approved}/${total}`
-}
 
 export default function ChangeRequestsPage() {
   const router = useRouter()
   const { user } = useAuth()
+  // 기능 권한 changes.create — 서버도 같은 키로 403
+  const canCreate = usePermissions().isFeatureAllowed("changes.create")
   const { userMap } = useUserNames()
   const [crs, setCrs] = useState<ChangeRequest[]>([])
   // 내 결재 대기 — 서버 인박스(현재 단계 결재자=나)를 단일 기준으로 사용한다
@@ -102,7 +100,7 @@ export default function ChangeRequestsPage() {
       setCrs(all)
       setInbox(myInbox)
     } catch (e) {
-      setError(e instanceof Error ? e.message : "load failed")
+      setError(errorMessage(e) ?? "load failed")
     } finally {
       setLoading(false)
     }
@@ -164,11 +162,17 @@ export default function ChangeRequestsPage() {
         header: () => <div className="text-center">결재</div>,
         cell: ({ row }) => (
           <div className="text-center tabular-nums">
-            {row.original.approval_steps.some((s) => s.decision === "REJECTED") ? (
-              <span className="font-medium text-red-600">반려</span>
-            ) : (
-              approvalProgress(row.original)
-            )}
+            {(() => {
+              // 반려(기한 초과 포함)·취소로 끝난 CR 은 남은 단계를 진행 안 함으로 본다 — approval-steps.ts
+              const p = approvalProgress(row.original)
+              return p.tone === "rejected" ? (
+                <span className="font-medium text-red-600">{p.text}</span>
+              ) : p.tone === "stopped" ? (
+                <span className="text-muted-foreground">{p.text}</span>
+              ) : (
+                p.text
+              )
+            })()}
           </div>
         ),
         meta: { className: "whitespace-nowrap" },
@@ -224,11 +228,13 @@ export default function ChangeRequestsPage() {
             <TabsTrigger value="approve">내 결재 대기 {approveCount}</TabsTrigger>
           </TabsList>
         </Tabs>
-        <Button size="sm" asChild>
-          <Link href="/dashboard/changes/new">
-            <Plus className="mr-1 h-4 w-4" /> 변경 요청 생성
-          </Link>
-        </Button>
+        {canCreate && (
+          <Button size="sm" asChild>
+            <Link href="/dashboard/changes/new">
+              <Plus className="mr-1 h-4 w-4" /> 변경 요청 생성
+            </Link>
+          </Button>
+        )}
       </div>
 
       {error && (

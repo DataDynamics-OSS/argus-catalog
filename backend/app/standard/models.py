@@ -49,7 +49,7 @@ class StandardWord(Base):
     word_abbr = Column(String(50), nullable=False)         # 영문약어: "CUST"
     description = Column(Text)
     word_type = Column(String(20), nullable=False, default="GENERAL")  # GENERAL, SUFFIX, PREFIX
-    is_forbidden = Column(String(5), default="false")      # 금칙어 여부
+    is_forbidden = Column(String(5), default="false")      # 금칙어 여부("true"/"false" 문자열)
     synonym_group_id = Column(Integer)                     # 이음동의어 그룹
     status = Column(String(20), nullable=False, default="ACTIVE")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -152,17 +152,22 @@ class TermColumnMapping(Base):
     term_id = Column(Integer, ForeignKey("catalog_standard_term.id", ondelete="CASCADE"), nullable=False)
     dataset_id = Column(Integer, ForeignKey("catalog_datasets.id", ondelete="CASCADE"), nullable=False)
     schema_id = Column(Integer, ForeignKey("catalog_dataset_schemas.id", ondelete="CASCADE"), nullable=False)
-    mapping_type = Column(String(20), nullable=False, default="MATCHED")  # MATCHED, SIMILAR, VIOLATION
+    # MATCHED(물리명·타입 일치) / SIMILAR(수동 지정 유사) / VIOLATION(물리명 일치·타입 불일치)
+    mapping_type = Column(String(20), nullable=False, default="MATCHED")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 class StandardChangeLog(Base):
-    """표준 데이터 변경 이력."""
+    """표준 데이터 변경 이력.
+
+    UPDATE 는 필드 단위로 old/new 값을 남기고, CREATE/DELETE 는 값 자리에
+    ``{"dictionary_id": N, "name": ...}`` 마커 JSON 을 저장해 대상 삭제 후에도 사전 단위로 걸러 볼 수 있게 한다.
+    """
 
     __tablename__ = "catalog_standard_change_log"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    entity_type = Column(String(20), nullable=False)  # WORD, DOMAIN, TERM, CODE_GROUP, CODE_VALUE
+    entity_type = Column(String(20), nullable=False)  # DICTIONARY, WORD, DOMAIN, TERM, CODE_GROUP, CODE_VALUE
     entity_id = Column(Integer, nullable=False)
     change_type = Column(String(20), nullable=False)  # CREATE, UPDATE, DELETE
     field_name = Column(String(100))

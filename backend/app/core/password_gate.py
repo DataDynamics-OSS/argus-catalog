@@ -40,6 +40,8 @@ PASSWORD_CHANGE_REQUIRED = "PASSWORD_CHANGE_REQUIRED"
 
 
 class PasswordChangeGateMiddleware(BaseHTTPMiddleware):
+    """로컬 모드에서 ``must_change_password`` 토큰의 API 호출을 403(PASSWORD_CHANGE_REQUIRED)으로 막는다."""
+
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
 
@@ -60,6 +62,7 @@ class PasswordChangeGateMiddleware(BaseHTTPMiddleware):
             payload = _verify_token_local(token)
         except Exception:
             # 디코딩/검증 실패 → 게이트가 막지 않고 라우터로 넘긴다(401 처리)
+            logger.debug("강제 변경 게이트: 토큰 검증 실패 — 통과시켜 일반 인증에 맡김 path=%s", path)
             return await call_next(request)
 
         if payload.get("must_change_password"):

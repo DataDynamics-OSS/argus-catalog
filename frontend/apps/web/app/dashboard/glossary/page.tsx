@@ -2,7 +2,7 @@
 
 import { useCallback, useContext, useEffect, useMemo, useRef, useState, createContext } from "react"
 import { useSearchParams } from "next/navigation"
-import { toast } from "sonner"
+import { errorMessage, toast } from "@/lib/notify"
 import {
   BookOpen, ChevronRight, FolderOpen, FileText, Plus, Pencil, Trash2, Check, X, MoveRight,
 } from "lucide-react"
@@ -18,14 +18,20 @@ import {
   Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@workspace/ui/components/dialog"
 import { Popover, PopoverContent, PopoverTrigger } from "@workspace/ui/components/popover"
+import { ConfirmDialog } from "@/components/confirm-dialog"
 import { DashboardHeader } from "@/components/dashboard-header"
 import {
   createGlossaryTerm, deleteGlossaryTerm, fetchGlossaryTerms, updateGlossaryTerm,
 } from "@/features/glossary/api"
 import type { GlossaryTerm } from "@/features/datasets/data/schema"
 import { useAuth } from "@/features/auth"
+import { usePermissions } from "@/features/permissions/use-permissions"
 
 ModuleRegistry.registerModules([AllCommunityModule])
+
+const GLOSSARY_EDIT_FEATURE = "glossary.edit"
+const isCategory = (t: { term_type?: string | null }) => (t.term_type ?? "TERM") === "CATEGORY"
+const errMsg = (e: unknown, fallback: string) => (errorMessage(e) ?? fallback)
 
 // ---------------------------------------------------------------------------
 // Tree node type
@@ -147,7 +153,7 @@ const TermDeleteCtx = createContext<(id: number) => void>(() => {})
 function TermDeleteRenderer(props: { value: number }) {
   const onDelete = useContext(TermDeleteCtx)
   return (
-    <button type="button" onClick={() => onDelete(props.value)}
+    <button type="button" onClick={() => onDelete(props.value)} aria-label="용어 삭제"
       className="flex items-center justify-center w-full h-full text-muted-foreground hover:text-destructive transition-colors cursor-pointer">
       <Trash2 className="h-3.5 w-3.5" />
     </button>
@@ -159,9 +165,13 @@ function TermDeleteRenderer(props: { value: number }) {
 // ---------------------------------------------------------------------------
 export default function GlossaryPage() {
   const { user } = useAuth()
+  const { isFeatureGranted } = usePermissions()
+  // 편집 권한 — admin 이거나 권한 관리에서 glossary.edit 를 명시 허용받은 역할 (미설정이면 admin 전용)
+  const canEdit = !!user?.is_admin || isFeatureGranted(GLOSSARY_EDIT_FEATURE)
   const searchParams = useSearchParams()
   const [terms, setTerms] = useState<GlossaryTerm[]>([])
-  const [, setIsLoading] = useState(true)
+  const [isLoading, setIsLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   // 검색 결과 등 외부에서 ?term=<id> 로 진입하면 해당 용어를 초기 선택한다.
   const initialTermId = Number(searchParams.get("term")) || null
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(initialTermId)
@@ -180,12 +190,20 @@ export default function GlossaryPage() {
   const [addMode, setAddMode] = useState<"category" | "term">("term")
   const [newName, setNewName] = useState("")
   const [newDesc, setNewDesc] = useState("")
+  const [creating, setCreating] = useState(false)
+
+  // 삭제 확인
+  const [pendingDelete, setPendingDelete] = useState<GlossaryTerm | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   const load = useCallback(async () => {
     try {
       setIsLoading(true)
       setTerms(await fetchGlossaryTerms())
-    } catch { /* */ } finally {
+      setLoadError(null)
+    } catch (e) {
+      setLoadError(errMsg(e, "용어집을 불러오지 못했습니다."))
+    } finally {
       setIsLoading(false)
     }
   }, [])
@@ -199,9 +217,41 @@ export default function GlossaryPage() {
     walk(tree)
     return m
   }, [tree])
+  // 분류별 하위(모든 깊이) 용어 수 — 트리를 한 번만 훑어 계산 (줄마다 다시 세지 않는다)
+  const leafCounts = useMemo(() => {
+    const m = new Map<number, number>()
+    const count = (n: TreeNode): number => {
+      let c = isCategory(n) ? 0 : 1
+      for (const ch of n.children) c += count(ch)
+      if (isCategory(n)) m.set(n.id, c)
+      return c
+    }
+    for (const r of tree) count(r)
+    return m
+  }, [tree])
+
+  // ?term=<id> 로 들어오면 상위 분류들을 펼쳐 트리에서 위치가 보이게 한다 (최초 1회)
+  const revealedInitial = useRef(false)
+  useEffect(() => {
+    if (revealedInitial.current || !initialTermId || nodeMap.size === 0) return
+    revealedInitial.current = true
+    const ancestors: number[] = []
+    const seen = new Set<number>()
+    let cur = nodeMap.get(initialTermId)?.parent_id ?? null
+    while (cur && !seen.has(cur)) {
+      seen.add(cur)
+      ancestors.push(cur)
+      cur = nodeMap.get(cur)?.parent_id ?? null
+    }
+    if (ancestors.length) setExpandedIds((prev) => new Set([...prev, ...ancestors]))
+  }, [initialTermId, nodeMap])
 
   // Selected node
   const selectedNode = selectedNodeId ? nodeMap.get(selectedNodeId) ?? null : null
+  // 새 항목의 상위 — 선택한 것이 용어면 그 용어가 속한 분류 (용어 아래에는 항목을 둘 수 없음)
+  const createParent = selectedNode
+    ? (isCategory(selectedNode) ? selectedNode : (selectedNode.parent_id ? nodeMap.get(selectedNode.parent_id) ?? null : null))
+    : null
 
   // Terms to show in right panel: TERM type under selected node (or all TERMs if none selected)
   const rightTerms = useMemo(() => {
@@ -231,45 +281,73 @@ export default function GlossaryPage() {
     })
   }
 
-  // Move to: update parent_id of all checked nodes
-  const moveTo = async (targetId: number | null) => {
-    // Prevent moving into own descendants
-    const targetDescendants = targetId ? new Set(collectIds(nodeMap.get(targetId)!)) : new Set<number>()
-    for (const id of checkedIds) {
-      if (id === targetId) continue
-      if (targetDescendants.has(id)) continue
-      await updateGlossaryTerm(id, { parent_id: targetId })
+  /** 여러 항목의 상위를 순서대로 바꾸고, 실패한 항목은 사유와 함께 알린다. */
+  const applyMoves = async (ids: number[], targetId: number | null) => {
+    const failures: string[] = []
+    let moved = 0
+    for (const id of ids) {
+      try {
+        await updateGlossaryTerm(id, { parent_id: targetId })
+        moved++
+      } catch (e) {
+        failures.push(`${nodeMap.get(id)?.name ?? id}: ${errMsg(e, "이동하지 못했습니다.")}`)
+      }
     }
-    setCheckedIds(new Set())
-    setMovePopoverOpen(false)
+    if (moved) toast.success(`${moved}개 항목을 이동했습니다.`)
+    if (failures.length) toast.error(`이동하지 못한 항목이 있습니다 — ${failures.join(" / ")}`)
     await load()
   }
 
-  // Category CRUD
-  const addCategory = () => {
-    setAddMode("category")
-    setNewName("")
-    setNewDesc("")
-    setAddDialogOpen(true)
+  // Move to: update parent_id of all checked nodes
+  const moveTo = async (targetId: number | null) => {
+    // 자기 자신이나 자기 하위로는 옮길 수 없다 — 대상이 옮길 항목의 하위 트리 안에 있으면 건너뛴다.
+    // (하위 항목을 상위 분류로 끌어올리는 이동은 허용)
+    const ids: number[] = []
+    let skipped = 0
+    for (const id of checkedIds) {
+      const node = nodeMap.get(id)
+      if (!node || node.parent_id === targetId) continue // 이미 그 위치
+      if (targetId !== null && collectIds(node).includes(targetId)) { skipped++; continue }
+      ids.push(id)
+    }
+    setCheckedIds(new Set())
+    setMovePopoverOpen(false)
+    if (skipped) toast.error(`자기 자신이나 하위 분류로는 옮길 수 없어 ${skipped}개 항목을 건너뛰었습니다.`)
+    if (ids.length) await applyMoves(ids, targetId)
   }
 
-  const addTerm = () => {
-    setAddMode("term")
+  // Category CRUD
+  const openAdd = (mode: "category" | "term") => {
+    setAddMode(mode)
     setNewName("")
     setNewDesc("")
     setAddDialogOpen(true)
   }
 
   const handleCreate = async () => {
-    if (!newName.trim()) return
-    await createGlossaryTerm({
-      name: newName.trim(),
-      description: newDesc.trim() || undefined,
-      parent_id: selectedNodeId ?? undefined,
-      term_type: addMode === "category" ? "CATEGORY" : "TERM",
-    })
-    setAddDialogOpen(false)
-    await load()
+    if (!newName.trim() || creating) return
+    setCreating(true)
+    try {
+      await createGlossaryTerm({
+        name: newName.trim(),
+        description: newDesc.trim() || undefined,
+        parent_id: createParent?.id,
+        term_type: addMode === "category" ? "CATEGORY" : "TERM",
+      })
+      setAddDialogOpen(false)
+      toast.success(addMode === "category" ? "분류를 추가했습니다." : "용어를 추가했습니다.")
+      // 하위 분류를 추가했으면 바로 보이도록 상위 분류를 펼친다
+      if (addMode === "category" && createParent) {
+        const parentId = createParent.id
+        setExpandedIds(prev => new Set([...prev, parentId]))
+      }
+      await load()
+    } catch (e) {
+      // 대화상자는 열어 둔 채 사유(이름 중복 등)를 알린다
+      toast.error(errMsg(e, "추가하지 못했습니다."))
+    } finally {
+      setCreating(false)
+    }
   }
 
   const startRename = (id: number, name: string) => {
@@ -279,39 +357,74 @@ export default function GlossaryPage() {
 
   const saveRename = async () => {
     if (!editingNodeId || !editingName.trim()) return
-    await updateGlossaryTerm(editingNodeId, { name: editingName.trim() })
-    setEditingNodeId(null)
-    await load()
+    if (editingName.trim() === nodeMap.get(editingNodeId)?.name) { setEditingNodeId(null); return }
+    try {
+      await updateGlossaryTerm(editingNodeId, { name: editingName.trim() })
+      setEditingNodeId(null)
+      await load()
+    } catch (e) {
+      // 편집 상태를 유지해 다시 고칠 수 있게 한다
+      toast.error(errMsg(e, "이름을 바꾸지 못했습니다."))
+    }
   }
 
   const cancelRename = () => setEditingNodeId(null)
 
-  const deleteNode = async (id: number) => {
+  // 분류 설명 편집 (분류는 그리드에 나오지 않으므로 별도 대화상자)
+  const [descTarget, setDescTarget] = useState<GlossaryTerm | null>(null)
+  const [descDraft, setDescDraft] = useState("")
+  const [savingDesc, setSavingDesc] = useState(false)
+  const openDescEdit = (t: GlossaryTerm) => { setDescTarget(t); setDescDraft(t.description ?? "") }
+  const saveDesc = async () => {
+    if (!descTarget) return
+    setSavingDesc(true)
     try {
-      await deleteGlossaryTerm(id)
-      if (selectedNodeId === id) setSelectedNodeId(null)
+      await updateGlossaryTerm(descTarget.id, { description: descDraft.trim() || null })
+      toast.success("분류 설명을 저장했습니다.")
+      setDescTarget(null)
       await load()
     } catch (e) {
-      // 차단형(하위 용어 존재 등) 삭제 실패 — 백엔드 친절 메시지를 토스트로.
-      toast.error(e instanceof Error ? e.message : "용어 삭제에 실패했습니다.")
+      toast.error(errMsg(e, "설명을 저장하지 못했습니다."))
+    } finally {
+      setSavingDesc(false)
     }
   }
 
-  // AG Grid — term update
+  const requestDelete = useCallback((id: number) => {
+    const t = terms.find((x) => x.id === id)
+    if (t) setPendingDelete(t)
+  }, [terms])
+
+  const confirmDelete = async () => {
+    if (!pendingDelete) return
+    setDeleting(true)
+    try {
+      await deleteGlossaryTerm(pendingDelete.id)
+      if (selectedNodeId === pendingDelete.id) setSelectedNodeId(null)
+      toast.success(`'${pendingDelete.name}'을(를) 삭제했습니다.`)
+      setPendingDelete(null)
+      await load()
+    } catch (e) {
+      // 차단형(하위 용어 존재 등) 삭제 실패 — 백엔드 안내 메시지를 토스트로.
+      toast.error(errMsg(e, "삭제하지 못했습니다."))
+      setPendingDelete(null)
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  // AG Grid — term update (실패하면 서버 값으로 되돌린다)
   const onCellValueChanged = useCallback(async (event: CellValueChangedEvent) => {
     const { data, colDef, newValue, oldValue } = event
     if (newValue === oldValue) return
     const field = colDef.field
     if (!field || !data.id) return
-    await updateGlossaryTerm(data.id, { [field]: newValue })
-  }, [])
-
-  const deleteTermFromGrid = useCallback(async (id: number) => {
     try {
-      await deleteGlossaryTerm(id)
-      load()
+      const value = field === "description" ? ((newValue ?? "") as string).trim() || null : newValue
+      await updateGlossaryTerm(data.id, { [field]: value })
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "용어 삭제에 실패했습니다.")
+      toast.error(errMsg(e, "저장하지 못했습니다."))
+      await load()
     }
   }, [load])
 
@@ -329,20 +442,20 @@ export default function GlossaryPage() {
   }, [])
 
   const moveTermsTo = async (targetId: number | null) => {
-    for (const id of gridSelectedIds) {
-      await updateGlossaryTerm(id, { parent_id: targetId })
-    }
+    const ids = [...gridSelectedIds].filter((id) => nodeMap.get(id)?.parent_id !== targetId)
     setGridSelectedIds(new Set())
+    gridRef.current?.api?.deselectAll()
     setMoveTermPopoverOpen(false)
-    await load()
+    if (ids.length) await applyMoves(ids, targetId)
   }
 
+  // 편집 권한이 없으면 선택·편집·삭제 열을 두지 않는다 (서버도 403 으로 막음)
   const columnDefs = useMemo<ColDef[]>(() => [
-    { headerCheckboxSelection: true, checkboxSelection: true, width: 45, maxWidth: 45, editable: false, sortable: false, headerName: "" },
-    { headerName: "이름", field: "name", minWidth: 160, editable: true, cellStyle: { fontWeight: 500, display: "flex", alignItems: "center" } },
-    { headerName: "설명", field: "description", flex: 1, minWidth: 250, editable: true, wrapText: true, autoHeight: true, cellStyle: { lineHeight: "1.4", whiteSpace: "normal", display: "flex", alignItems: "center" } },
-    { headerName: "", field: "id", width: 45, maxWidth: 45, editable: false, sortable: false, cellRenderer: "deleteRenderer" },
-  ] as ColDef[], [])
+    ...(canEdit ? [{ headerCheckboxSelection: true, checkboxSelection: true, width: 45, maxWidth: 45, editable: false, sortable: false, headerName: "" }] : []),
+    { headerName: "이름", field: "name", minWidth: 160, editable: canEdit, cellStyle: { fontWeight: 500, display: "flex", alignItems: "center" } },
+    { headerName: "설명", field: "description", flex: 1, minWidth: 250, editable: canEdit, wrapText: true, autoHeight: true, cellStyle: { lineHeight: "1.4", whiteSpace: "normal", display: "flex", alignItems: "center" } },
+    ...(canEdit ? [{ headerName: "", field: "id", width: 45, maxWidth: 45, editable: false, sortable: false, cellRenderer: "deleteRenderer" }] : []),
+  ] as ColDef[], [canEdit])
 
   const components = useMemo(() => ({ deleteRenderer: TermDeleteRenderer }), [])
 
@@ -373,7 +486,7 @@ export default function GlossaryPage() {
   }, [selectedNode, nodeMap])
 
   return (
-    <TermDeleteCtx.Provider value={deleteTermFromGrid}>
+    <TermDeleteCtx.Provider value={requestDelete}>
     <>
       <DashboardHeader title="용어집" />
       <div className="flex flex-1 flex-col gap-4 p-4">
@@ -384,12 +497,12 @@ export default function GlossaryPage() {
             <div className="flex items-center justify-between px-3 py-2 border-b flex-shrink-0">
               <span className="text-sm font-medium">분류</span>
               <div className="flex items-center gap-1">
-                {user?.is_admin && (
-                  <Button variant="outline" size="sm" onClick={addCategory}>
+                {canEdit && (
+                  <Button variant="outline" size="sm" onClick={() => openAdd("category")}>
                     <Plus className="h-3.5 w-3.5 mr-1" />추가
                   </Button>
                 )}
-                {user?.is_admin && checkedIds.size > 0 && (
+                {canEdit && checkedIds.size > 0 && (
                   <Popover open={movePopoverOpen} onOpenChange={setMovePopoverOpen}>
                     <PopoverTrigger asChild>
                       <Button variant="outline" size="sm">
@@ -431,10 +544,7 @@ export default function GlossaryPage() {
                 const isExpanded = expandedIds.has(node.id)
                 const isSelected = selectedNodeId === node.id
                 const isEditing = editingNodeId === node.id
-                const leafCount = collectIds(node).filter(id => {
-                  const n = nodeMap.get(id)
-                  return n ? (n.term_type ?? "TERM") === "TERM" : false
-                }).length
+                const leafCount = leafCounts.get(node.id) ?? 0
 
                 return (
                   <div
@@ -454,7 +564,7 @@ export default function GlossaryPage() {
                     </button>
 
                     {/* Checkbox */}
-                    {user?.is_admin && (
+                    {canEdit && (
                       <Checkbox
                         checked={checkedIds.has(node.id)}
                         onCheckedChange={() => toggleCheck(node.id)}
@@ -502,14 +612,14 @@ export default function GlossaryPage() {
                     )}
 
                     {/* Actions (visible on hover) */}
-                    {!isEditing && user?.is_admin && (
+                    {!isEditing && canEdit && (
                       <div className="shrink-0 flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
                         <button type="button" onClick={(e) => { e.stopPropagation(); startRename(node.id, node.name) }}
-                          className="p-0.5 text-muted-foreground hover:text-foreground">
+                          aria-label="이름 바꾸기" className="p-0.5 text-muted-foreground hover:text-foreground">
                           <Pencil className="h-3 w-3" />
                         </button>
-                        <button type="button" onClick={(e) => { e.stopPropagation(); deleteNode(node.id) }}
-                          className="p-0.5 text-muted-foreground hover:text-destructive">
+                        <button type="button" onClick={(e) => { e.stopPropagation(); requestDelete(node.id) }}
+                          aria-label="삭제" className="p-0.5 text-muted-foreground hover:text-destructive">
                           <Trash2 className="h-3 w-3" />
                         </button>
                       </div>
@@ -523,13 +633,28 @@ export default function GlossaryPage() {
           {/* ========== Right: Term List (AG Grid) ========== */}
           <div className="flex flex-col flex-1 min-h-0">
             <div className="flex items-center justify-between mb-2 flex-shrink-0">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium">{breadcrumb}</span>
-                <span className="text-sm text-muted-foreground">({rightTerms.length})</span>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium">{breadcrumb}</span>
+                  <span className="text-sm text-muted-foreground">({rightTerms.length})</span>
+                </div>
+                {selectedNode && isCategory(selectedNode) && (
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    <p className="text-sm text-muted-foreground truncate" title={selectedNode.description ?? ""}>
+                      {selectedNode.description || "분류 설명 없음"}
+                    </p>
+                    {canEdit && (
+                      <button type="button" onClick={() => openDescEdit(selectedNode)}
+                        aria-label="분류 설명 편집" className="p-0.5 text-muted-foreground hover:text-foreground shrink-0">
+                        <Pencil className="h-3 w-3" />
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
-              {user?.is_admin && (
+              {canEdit && (
                 <div className="flex items-center gap-1">
-                  <Button variant="outline" size="sm" onClick={addTerm}>
+                  <Button variant="outline" size="sm" onClick={() => openAdd("term")}>
                     <Plus className="h-3.5 w-3.5 mr-1" />용어 추가
                   </Button>
                   {gridSelectedIds.size > 0 && (
@@ -550,6 +675,12 @@ export default function GlossaryPage() {
                 </div>
               )}
             </div>
+            {loadError && (
+              <div className="mb-2 flex items-center justify-between gap-3 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm">
+                <span className="text-destructive">{loadError}</span>
+                <Button size="sm" variant="outline" onClick={load} disabled={isLoading}>다시 시도</Button>
+              </div>
+            )}
             <div className="ag-theme-alpine flex-1 min-h-0" style={{
               "--ag-font-family": "var(--font-sans)",
               "--ag-font-size": "14px",
@@ -568,11 +699,47 @@ export default function GlossaryPage() {
                 animateRows={false}
                 getRowId={(params) => String(params.data.id)}
                 components={components}
+                loading={isLoading && terms.length === 0}
+                overlayNoRowsTemplate={loadError ? "용어집을 불러오지 못했습니다." : "용어가 없습니다."}
               />
             </div>
           </div>
         </div>
       </div>
+
+      {/* ========== Delete Confirm ========== */}
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        onOpenChange={(o) => { if (!o && !deleting) setPendingDelete(null) }}
+        title={pendingDelete && isCategory(pendingDelete) ? "분류 삭제" : "용어 삭제"}
+        desc={pendingDelete
+          ? isCategory(pendingDelete)
+            ? `'${pendingDelete.name}' 분류를 삭제합니다. 하위 분류나 용어가 있으면 삭제되지 않습니다.`
+            : `'${pendingDelete.name}' 용어를 삭제합니다. 이 용어가 연결된 데이터셋에서도 연결이 해제되며, 되돌릴 수 없습니다.`
+          : ""}
+        confirmText="삭제"
+        destructive
+        isLoading={deleting}
+        handleConfirm={confirmDelete}
+      />
+
+      {/* ========== Category Description Dialog ========== */}
+      <Dialog open={descTarget !== null} onOpenChange={(o) => { if (!o && !savingDesc) setDescTarget(null) }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>분류 설명 편집</DialogTitle>
+            <DialogDescription>{descTarget ? `'${descTarget.name}' 분류의 설명을 수정합니다.` : ""}</DialogDescription>
+          </DialogHeader>
+          <Textarea value={descDraft} onChange={e => setDescDraft(e.target.value)} rows={4}
+            placeholder="이 분류에 속하는 용어의 범위·용도를 설명하세요..." />
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button variant="outline" disabled={savingDesc}>취소</Button>
+            </DialogClose>
+            <Button onClick={saveDesc} disabled={savingDesc}>저장</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* ========== Add Dialog ========== */}
       <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
@@ -583,15 +750,21 @@ export default function GlossaryPage() {
             </DialogTitle>
             <DialogDescription>
               {addMode === "category"
-                ? `${selectedNode ? `"${selectedNode.name}" 아래에 ` : ""}새 분류를 추가합니다.`
-                : `${selectedNode ? `"${selectedNode.name}" 아래에 ` : ""}용어를 추가합니다.`
+                ? `${createParent ? `"${createParent.name}" 아래에 ` : "최상위에 "}새 분류를 추가합니다.`
+                : `${createParent ? `"${createParent.name}" 아래에 ` : "최상위에 "}용어를 추가합니다.`
               }
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-2">
             <div className="grid gap-2">
               <Label>이름</Label>
-              <Input value={newName} onChange={e => setNewName(e.target.value)} placeholder={addMode === "category" ? "예: 고객 관리" : "예: 고객 생애 가치"} />
+              <Input value={newName} onChange={e => setNewName(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter" && !e.nativeEvent.isComposing) handleCreate() }} placeholder={addMode === "category" ? "예: 고객 관리" : "예: 고객 생애 가치"} />
+              <p className="text-sm text-muted-foreground">
+                {addMode === "category"
+                  ? "분류 이름은 용어집 전체에서 하나만 쓸 수 있습니다(같은 이름의 용어와는 공존 가능)."
+                  : "용어 이름은 용어집 전체에서 하나만 쓸 수 있습니다(같은 이름의 분류와는 공존 가능)."}
+              </p>
             </div>
             <div className="grid gap-2">
               <Label>설명</Label>
@@ -602,7 +775,7 @@ export default function GlossaryPage() {
             <DialogClose asChild>
               <Button variant="outline">취소</Button>
             </DialogClose>
-            <Button onClick={handleCreate} disabled={!newName.trim()}>생성</Button>
+            <Button onClick={handleCreate} disabled={!newName.trim() || creating}>생성</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

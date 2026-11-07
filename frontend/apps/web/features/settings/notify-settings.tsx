@@ -23,6 +23,7 @@ import {
   type NotifyConfig,
   type NotifyWebhookConfig,
 } from "./api"
+import { errorMessage, notifyError, notifySuccess } from "@/lib/notify"
 
 const EMPTY: NotifyConfig = {
   enabled: false,
@@ -61,12 +62,11 @@ export function NotifySettings() {
 
   const handleSave = async () => {
     setSaving(true)
-    setMessage(null)
     try {
       await updateNotifyConfig(cfg)
-      setMessage({ type: "success", text: "알림 설정을 저장했습니다." })
+      notifySuccess("알림 설정을 저장했습니다.")
     } catch (e) {
-      setMessage({ type: "error", text: e instanceof Error ? e.message : "저장에 실패했습니다." })
+      notifyError(e, "알림 설정을 저장하지 못했습니다.")
     } finally {
       setSaving(false)
     }
@@ -81,7 +81,7 @@ export function NotifySettings() {
       const result = await testNotify({ text: testText })
       setMessage({ type: result.success ? "success" : "error", text: result.message })
     } catch (e) {
-      setMessage({ type: "error", text: e instanceof Error ? e.message : "테스트에 실패했습니다." })
+      setMessage({ type: "error", text: errorMessage(e) ?? "테스트 알림을 보내지 못했습니다." })
     } finally {
       setTesting(false)
     }

@@ -1,19 +1,40 @@
-= 설치
+= 직접 설치
 
-기본 스택은 *Docker / Linux 패키지* 두 가지 방식을 모두 지원합니다. 이 페이지에서는 패키지 방식을 기준으로 차근차근 설명하겠습니다.
+PostgreSQL · 카탈로그 서버 · 웹 UI 를 서버에 **하나씩 직접 설치**하는 방법입니다. 이 페이지는 Linux 패키지 방식을 기준으로 설명합니다.
 
-== 설치 흐름 요약
+[NOTE]
+.이런 분께 필요합니다
+====
+* 컨테이너 없이 서버(VM · 물리 서버)에 직접 설치해야 하는 분
+* 이미 운영 중인 PostgreSQL · Temporal · Keycloak 에 붙여야 하는 분
+* 백엔드 · 프런트엔드를 개발하는 분
 
-전체 그림을 먼저 그려 두면 따라오기가 한결 쉽습니다. 큰 흐름은 다음 네 단계입니다.
+**처음 써 보거나 데모가 목적이라면 이 페이지는 건너뛰고** xref:install/docker.adoc[Docker Compose 배포] 를 따르세요. 명령 한 줄로 끝납니다.
+====
 
-. PostgreSQL · pgvector · (옵션) MinIO · Keycloak 준비
-. 서버 (`argus-catalog-server`) 설치 및 설정
-. UI (`argus-catalog-ui`) 설치
-. 초기 설정 (Settings · 플랫폼 등록)
+== 시작하기 전에
 
-== 1. 사전 준비
+=== 필요한 것
 
-본격적인 설치에 앞서 데이터베이스와 옵션 컴포넌트를 먼저 준비합니다.
+* Python 3.11 이상, Node.js 20 이상, pnpm 9 이상 — 자세한 사양은 xref:install/requirements.adoc[시스템 요구사항] 을 보세요.
+* PostgreSQL + pgvector (필수), Temporal (변경 관리에 기본 사용)
+* (선택) MinIO 또는 S3, Keycloak
+
+=== 설치 흐름
+
+. PostgreSQL · pgvector · Temporal · (옵션) MinIO · Keycloak 준비
+. 서버 (`backend/`, `argus-catalog-server`) 설치 · 설정과 변경 관리 워커 실행
+. UI (`frontend/`) 설치
+. 초기 설정 (설정 · 데이터 소스 등록)
+
+앞 단계가 끝나야 다음 단계로 넘어갈 수 있습니다.
+
+.설치와 초기 설정 순서
+image::diagrams/install-setup-01.png[설치와 초기 설정 순서,role="diagram"]
+
+== 사전 준비
+
+데이터베이스와 옵션 컴포넌트를 먼저 준비합니다.
 
 === PostgreSQL + pgvector
 
@@ -46,22 +67,41 @@ SQL
 별도 세션에서 슈퍼유저로 확장만 활성화해야 합니다.
 ====
 
-다음으로 스키마 DDL 을 적용합니다. *서버는 더 이상 시작 시 테이블을 자동 생성하지 않으므로(런타임 `create_all` 제거), 이 단계는 반드시 거쳐야 합니다.* (collector/lineage 포함 92개 테이블 + 컬럼 주석)
+다음으로 스키마 DDL 을 적용합니다. *서버는 시작할 때 테이블을 만들지 않으므로, 이 단계는 반드시 거쳐야 합니다.* (120개 테이블 + 컬럼 주석)
+관리자 계정(`admin` / `admin`)은 DDL 이 아니라 서버가 처음 기동할 때 만들며, 첫 로그인 때 비밀번호 변경을 요구합니다.
 
 [source,bash]
 ----
-psql -U argus -d argus_catalog -f packaging/config/argus-catalog-postgresql.sql
+# 저장소 루트에서
+psql -U argus -d argus_catalog -f backend/packaging/config/argus-catalog-postgresql.sql
 ----
 
+[TIP]
+.데모 데이터 넣기 (선택)
+====
 데모 데이터가 필요하다면 시드를 *순서대로* 적용합니다(스키마를 적용한 뒤 실행하세요).
 
 [source,bash]
 ----
-psql -U argus -d argus_catalog -f packaging/config/argus-catalog-seed-demo.sql
-psql -U argus -d argus_catalog -f packaging/config/argus-catalog-seed-sakila.sql
-psql -U argus -d argus_catalog -f packaging/config/argus-catalog-seed-ai.sql
-psql -U argus -d argus_catalog -f packaging/config/argus-catalog-seed-api.sql
+psql -U argus -d argus_catalog -f backend/packaging/config/argus-catalog-seed-demo.sql
+psql -U argus -d argus_catalog -f backend/packaging/config/argus-catalog-seed-sakila.sql
+psql -U argus -d argus_catalog -f backend/packaging/config/argus-catalog-seed-ai.sql
+psql -U argus -d argus_catalog -f backend/packaging/config/argus-catalog-seed-api.sql
 ----
+====
+
+=== Temporal
+
+변경 관리 결재 워크플로는 Temporal 로 실행합니다. 서버 설정 `temporal.enabled` 의 기본값이 `true` 이고
+기본 접속 대상은 `localhost:7233` 입니다. 가장 간단한 방법은 인프라 compose 에서 Temporal 만 띄우는 것입니다.
+
+[source,bash]
+----
+docker compose -f deploy/docker-compose.infra.yml up -d temporal temporal-ui
+# gRPC localhost:7233, UI http://localhost:8233
+----
+
+변경 관리를 쓰지 않는다면 `temporal.enabled=false` 로 끌 수 있습니다. 이때는 변경 요청 제출만 막힙니다.
 
 === MinIO (옵션)
 
@@ -83,15 +123,15 @@ docker run -p 8180:8080 \
   quay.io/keycloak/keycloak:26.0 start-dev
 ----
 
-Keycloak 을 설치하지 않으면 서버는 자동으로 Local JWT 모드로 동작합니다.
+인증 방식(`auth.type`)의 기본값은 `local` 이므로, Keycloak 으로 바꾸지 않으면 서버는 로컬 인증으로 동작합니다.
 
-== 2. 서버 설치
+== 서버 설치
 
-사전 준비가 끝났다면 이제 카탈로그 서버를 설치합니다.
+=== 설치하고 설정 파일 만들기
 
 [source,bash]
 ----
-cd argus-catalog-server
+cd backend
 python3.11 -m venv .venv && source .venv/bin/activate
 
 pip install -r requirements.txt
@@ -101,7 +141,7 @@ cp packaging/config/config.properties packaging/config/my-config.properties
 $EDITOR packaging/config/my-config.properties
 ----
 
-=== `config.properties` 주요 키
+설정 파일의 주요 키는 다음과 같습니다. DB 접속 정보(`db.*`)를 준비한 PostgreSQL 에 맞게 고치세요.
 
 [source,properties]
 ----
@@ -127,19 +167,21 @@ db.name=argus_catalog
 db.username=argus
 db.password=argus
 
-# 인증 (Keycloak)
-auth.type=keycloak
+# 인증 — 기본은 local. Keycloak 을 쓸 때만 keycloak 으로 바꿉니다.
+auth.type=local
 auth.keycloak.server_url=http://localhost:8180
 auth.keycloak.realm=argus
 auth.keycloak.client_id=argus-client
 auth.keycloak.client_secret=argus-client-secret
+
+# Temporal (변경 관리)
+temporal.enabled=true
+temporal.target=localhost:7233
 ----
 
 전체 키 목록은 xref:ops/settings.adoc[설정] 페이지를 참조하세요.
 
 === 서버 기동
-
-설정을 마쳤다면 서버를 기동합니다.
 
 [source,bash]
 ----
@@ -148,7 +190,7 @@ argus-catalog-server \
   --config-yaml packaging/config/config.yml \
   --config-properties packaging/config/my-config.properties
 
-# 개발 (auto-reload)
+# 개발 (auto-reload, packaging/config 의 설정 사용)
 make run
 ----
 
@@ -157,67 +199,13 @@ make run
 [source,bash]
 ----
 curl http://localhost:4600/health
-# {"status":"ok","service":"argus-catalog-server","uptime":5,"version":"0.1.0"}
+# {"status":"ok","service":"argus-catalog-server","uptime":5,"version":"0.5.0"}
 ----
 
-== 3. UI 설치
-
-서버가 준비되었으니 사용자가 실제로 마주할 웹 UI 를 설치합니다.
-
-[source,bash]
-----
-cd argus-catalog-ui
-
-# Node 20+ · pnpm 9+ 필요
-npm install -g pnpm@9
-pnpm install
-
-# 서버 주소 설정
-echo "API_BASE_URL=http://localhost:4600" > apps/web/.env.development
-
-# 개발 모드
-pnpm dev          # http://localhost:3000
-
-# 프로덕션 빌드
-pnpm build && pnpm start
-----
-
-== 4. 초기 설정
-
-설치를 마쳤다면 마지막으로 UI 에 로그인해 초기 설정을 잡아 줍니다. 아래 순서대로 진행하세요.
-
-. *Settings → Auth* — Keycloak 자동 시드 (*Initialize*) 또는 Local JWT 확인.
-. *Settings → Embedding* — 임베딩 프로바이더 선택 → *Test* → *Save*.
-. *Settings → LLM* — AI 메타데이터 생성 (선택).
-. *Settings → Object Storage* — S3 / MinIO (ML 모델 사용 시).
-. *Platforms* — 사내 데이터 소스 등록 → 연결 정보 → *Test Connection* → *Sync*.
-
-메뉴별 사용법은 xref:catalog/datasets.adoc[데이터 카탈로그] 와
-xref:models/registry.adoc[모델 레지스트리] 에서 자세히 다룹니다.
-
-== Keycloak 자동 설정
-
-SSO 를 쓰기로 했다면 Keycloak 설정이 조금 번거로울 수 있는데, 다행히 대부분은 버튼 한 번으로 처리됩니다. Settings → Auth 의 *Initialize* 버튼은 다음을 자동으로 생성합니다.
-
-* Realm — `argus`
-* Client — `argus-client` (Confidential, Standard Flow · Direct Access Grants 활성)
-* Realm Role — `argus-admin`, `argus-superuser`, `argus-user`
-* 기본 역할 — `argus-user` 를 default 로 부여
-
-직접 손으로 설정하고 싶다면 다음 단계를 따르면 됩니다.
-
-. Admin 콘솔 (`http://<keycloak>:8180/admin`) 에 로그인합니다.
-. *Create realm* → 이름을 `argus` 로 지정합니다.
-. *Clients → Create client* — Client ID `argus-client`, Confidential, Standard Flow + Direct Access Grants + Service Accounts ON. Redirect URI: `http://<ui-host>:3000/*`, `http://<server-host>:4600/*`. Web Origins: `+` 포함.
-. Credentials 탭에서 Client Secret 을 `argus-client-secret` 으로 지정합니다 (또는 임의 값으로 두고 서버 설정에 반영).
-. *Realm Roles* — `argus-admin`, `argus-superuser`, `argus-user` 를 생성합니다.
-. *Default roles* → `default-roles-argus` 에 `argus-user` 를 추가합니다.
-. *Users → Create user* — 이메일·Email Verified 는 필수입니다. Credentials 탭에서 비밀번호를 설정합니다 (`Temporary: OFF`).
-. *Role mapping* — 필요하다면 사용자에게 `argus-admin` / `argus-superuser` 를 부여합니다.
-
-== systemd 서비스 (옵션)
-
-서버를 부팅 시 자동으로 띄우고 싶다면 systemd 서비스로 등록하면 편리합니다. `/etc/systemd/system/argus-catalog-server.service` 파일을 다음과 같이 작성합니다.
+[TIP]
+.고급 사용자 — systemd 서비스로 등록 (옵션)
+====
+서버를 부팅 시 자동으로 띄우려면 `/etc/systemd/system/argus-catalog-server.service` 파일을 다음과 같이 작성합니다.
 
 [source,ini]
 ----
@@ -244,3 +232,83 @@ WantedBy=multi-user.target
 sudo systemctl daemon-reload
 sudo systemctl enable --now argus-catalog-server
 ----
+====
+
+=== 변경 관리 워커 기동
+
+변경 관리 워크플로는 API 서버가 아니라 별도 워커 프로세스가 실행합니다. 같은 `backend/` 코드와 설정으로 띄웁니다.
+워커는 `ARGUS_CATALOG_SERVER_CONFIG_DIR` 디렉터리(기본 `/etc/argus-catalog-server`)의 `config.yml` · `config.properties` 를 읽습니다.
+
+[source,bash]
+----
+cd backend
+ARGUS_CATALOG_SERVER_CONFIG_DIR=$PWD/packaging/config python -m app.change_mgmt.worker
+----
+
+== UI 설치
+
+사용자가 실제로 쓰는 웹 UI 를 설치합니다.
+
+[source,bash]
+----
+cd frontend
+
+# Node 20+ · pnpm 9+ 필요
+npm install -g pnpm@9
+pnpm install
+
+# 서버 주소 설정
+echo "API_BASE_URL=http://localhost:4600" > apps/web/.env.development
+
+# 개발 모드
+pnpm dev          # http://localhost:3000
+
+# 프로덕션 빌드 · 실행 (start 스크립트는 apps/web 에 있음)
+pnpm build
+cd apps/web && pnpm start
+----
+
+[[initial-setup]]
+== 초기 설정
+
+UI 에 로그인해 아래 순서대로 초기 설정을 합니다.
+
+. *설정 → 인증* — Keycloak 이면 *관리자 사용자명* · *관리자 비밀번호* 에 Keycloak 관리자 계정을 넣고 *초기화* 로 Realm · Client · 역할을 자동 생성하고, Local 이면 그대로 둡니다.
+. *설정 → 임베딩* — 임베딩 제공자 선택 → *연결 테스트* → *저장*.
+. *설정 → LLM / AI* — AI 메타데이터 생성 (선택).
+. *설정 → 오브젝트 스토리지* — S3 / MinIO (ML 모델 사용 시).
+. *데이터 카탈로그 → 데이터 소스* — 사내 데이터 소스 추가 → 연결 설정 → *연결 테스트* → xref:catalog/platforms.adoc#_메타데이터_동기화[메타데이터 동기화].
+
+설정 화면의 항목별 설명은 xref:ops/settings.adoc[설정] 을 참고하세요.
+
+메뉴별 사용법은 xref:catalog/datasets.adoc[데이터 카탈로그] 와
+xref:models/registry.adoc[모델 레지스트리] 에서 자세히 다룹니다.
+
+[TIP]
+.고급 사용자 — Keycloak 설정
+====
+*설정 → 인증* 에서 인증 방식을 Keycloak 으로 고르고
+*관리자 사용자명* · *관리자 비밀번호* 에 Keycloak 관리자 계정(초기화 때만 사용하며 저장하지 않음)을 입력한 뒤 *초기화* 를 누르면 다음을 자동으로 생성합니다.
+
+* Realm — `argus`
+* Client — `argus-client` (Confidential, Direct Access Grants 만 활성 — Standard Flow · Service Accounts 는 끄고 redirect URI · Web Origins 는 비움)
+* Client Secret — 입력값으로 맞추거나, 비워 두면 새로 만들어 인증 설정에 저장
+* Realm Role — `argus-admin`, `argus-superuser`, `argus-user`
+
+기본 역할(`default-roles-argus` 에 `argus-user` 추가)은 초기화가 설정하지 않으므로, 아래 수동 설정의 *Default roles* 단계를 따로 해 주세요.
+
+직접 손으로 설정하고 싶다면 다음 단계를 따르면 됩니다.
+
+. Admin 콘솔 (`http://<keycloak>:8180/admin`) 에 로그인합니다.
+. *Create realm* → 이름을 `argus` 로 지정합니다.
+. *Clients → Create client* — Client ID `argus-client`, Client authentication ON(Confidential), *Direct access grants* 만 ON(Standard flow · Implicit flow · Service accounts roles 는 OFF). Valid redirect URIs · Web origins 는 비워 둡니다 — 로그인은 카탈로그 서버가 비밀번호 방식으로 대신 처리하므로 브라우저가 Keycloak 화면으로 이동하지 않습니다.
+. Credentials 탭의 Client Secret 을 복사해 *설정 → 인증* 의 Client Secret 에 넣습니다. 고정값(`argus-client-secret`)은 개발용 realm 가져오기 파일에만 쓰고 운영에서는 쓰지 마세요.
+. *Realm Roles* — `argus-admin`, `argus-superuser`, `argus-user` 를 생성합니다.
+. *Default roles* → `default-roles-argus` 에 `argus-user` 를 추가합니다.
+. *Users → Create user* — 이메일·Email Verified 는 필수입니다. Credentials 탭에서 비밀번호를 설정합니다 (`Temporary: OFF`).
+. *Role mapping* — 필요하다면 사용자에게 `argus-admin` / `argus-superuser` 를 부여합니다.
+====
+
+== 자주 묻는 질문
+
+설치 중 오류(`type "vector" does not exist` 등)가 나면 xref:install/operations.adoc#faq[운영 가이드 — 자주 발생하는 이슈] 를 보세요.

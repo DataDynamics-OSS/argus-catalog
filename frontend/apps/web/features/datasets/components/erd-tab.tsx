@@ -5,11 +5,11 @@ import Link from "next/link"
 import { ReactFlow, Background, Controls, MarkerType, Position, Handle, useEdgesState, useNodesState, type Edge, type Node } from "@xyflow/react"
 import "@xyflow/react/dist/style.css"
 import { Copy, Key, Link2, Table2 } from "lucide-react"
-import { toast } from "sonner"
+import { errorMessage, toast } from "@/lib/notify"
 
 import { Button } from "@workspace/ui/components/button"
 import { Card, CardContent } from "@workspace/ui/components/card"
-import { authFetch } from "@/features/auth/auth-fetch"
+import { authFetch, throwOnError } from "@/features/auth/auth-fetch"
 
 // ---------------------------------------------------------------------------
 // Types — GET /catalog/datasets/{id}/erd 응답
@@ -243,18 +243,28 @@ function toMermaid(data: ErdData): string {
 export function ErdTab({ datasetId, datasourceId }: { datasetId?: number; datasourceId?: number }) {
   const [data, setData] = useState<ErdData | null>(null)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set())
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
+    setLoadError(null)
     const url = datasourceId != null
       ? `/api/v1/catalog/datasources/${datasourceId}/erd`
       : `/api/v1/catalog/datasets/${datasetId}/erd`
     authFetch(url)
-      .then((r: Response) => (r.ok ? r.json() : null))
+      .then(async (r: Response) => {
+        if (!r.ok) await throwOnError(r, "ER 다이어그램을 불러오지 못했습니다.")
+        return (await r.json()) as ErdData
+      })
       .then((d: ErdData | null) => { if (!cancelled) setData(d) })
-      .catch((err: unknown) => console.error("Failed to load ERD", { datasetId, err }))
+      .catch((err: unknown) => {
+        console.error("Failed to load ERD", { datasetId, err })
+        if (cancelled) return
+        setData(null)
+        setLoadError(errorMessage(err) ?? "ER 다이어그램을 불러오지 못했습니다.")
+      })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [datasetId, datasourceId])
@@ -295,11 +305,18 @@ export function ErdTab({ datasetId, datasourceId }: { datasetId?: number; dataso
   const copyMermaid = () => {
     if (!data) return
     navigator.clipboard.writeText(toMermaid(data))
-    toast.success("Mermaid erDiagram 소스를 복사했습니다")
+    toast.success("Mermaid erDiagram 소스를 복사했습니다.")
   }
 
   if (loading) {
     return <p className="py-12 text-center text-sm text-muted-foreground">ER 다이어그램 구성 중...</p>
+  }
+  if (loadError) {
+    return (
+      <Card><CardContent className="py-12 text-center text-sm text-destructive">
+        ER 다이어그램을 불러오지 못했습니다. {loadError !== "ER 다이어그램을 불러오지 못했습니다." && loadError}
+      </CardContent></Card>
+    )
   }
   if (!data || data.tables.length === 0) {
     return (

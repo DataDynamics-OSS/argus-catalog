@@ -16,7 +16,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -25,6 +25,7 @@ import app.federation.models as fm
 from app.core.config import settings
 from app.federation import breaker, client, harvester, service
 from app.federation import schemas as s
+from app.federation import search as fed_search
 
 _TABLES = ["federation_instances", "federation_datasets", "federation_sync_runs"]
 
@@ -142,10 +143,10 @@ async def _test_incremental_harvest() -> None:
 
     orig_fetch = client.fetch_export_datasets
     orig_hp = harvester.get_provider
-    orig_sp = service.get_provider
+    orig_sp = fed_search.get_provider
     client.fetch_export_datasets = fetch_full
     harvester.get_provider = no_provider
-    service.get_provider = no_provider
+    fed_search.get_provider = no_provider
     try:
         # 1차: watermark 없음 → full, updated_after=None, prune 가능(없음)
         async with Session() as db:
@@ -165,9 +166,10 @@ async def _test_incremental_harvest() -> None:
         async with Session() as db:
             inst = await service.get_instance(db, peer_id)
             r2 = await harvester.harvest_instance(db, inst)   # 기본 증분
-        # watermark 전달 확인 (SQLite 는 tz 를 보존하지 않으므로 tz 무관 비교)
+        # watermark(성공 실행 기록) - 겹침 구간 전달 확인 (SQLite 는 tz 를 보존하지 않으므로 tz 무관 비교)
         assert seen_after[0] is not None
-        assert seen_after[0].replace(tzinfo=None) == datetime(2026, 1, 1)
+        overlap = timedelta(seconds=settings.federation_watermark_overlap_seconds)
+        assert seen_after[0].replace(tzinfo=None) == datetime(2026, 1, 1) - overlap
         assert r2.datasets_pruned == 0                        # 증분은 prune 생략
         # 미러는 여전히 2건 유지(증분이라 customers 삭제 안 됨)
         async with Session() as db:
@@ -199,7 +201,7 @@ async def _test_incremental_harvest() -> None:
     finally:
         client.fetch_export_datasets = orig_fetch
         harvester.get_provider = orig_hp
-        service.get_provider = orig_sp
+        fed_search.get_provider = orig_sp
 
 
 async def _run() -> None:

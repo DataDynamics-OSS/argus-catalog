@@ -10,7 +10,10 @@ logger = logging.getLogger(__name__)
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    """모든 응답에 보안 헤더를 추가한다."""
+    """모든 응답에 보안 헤더를 추가한다.
+
+    nosniff(MIME 추측 금지)·DENY(iframe 삽입 금지)·X-XSS-Protection(구형 브라우저용).
+    """
 
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)

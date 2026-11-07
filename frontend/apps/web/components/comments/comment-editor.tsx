@@ -48,6 +48,7 @@ import {
 import { compressImageToDataUrl } from "@/lib/image-compress"
 import { ResizableImage } from "./resizable-image"
 import { Indent as IndentExtension } from "./indent-extension"
+import { usePrompt } from "@/components/confirm-provider"
 import { LANGUAGE_OPTIONS, lowlight } from "./lowlight"
 import {
   EMOJI_CATEGORIES,
@@ -66,6 +67,8 @@ type CommentEditorProps = {
   onCancel?: () => void
   /** 편집 시 표시할 초기 HTML — 댓글 외 컨텍스트(예: 데이터셋 설명 편집) 재사용용. */
   initialContent?: string
+  /** 카테고리 초기값(댓글 수정 시 기존 분류). 기본 "general". */
+  initialCategory?: string
   /** 카테고리 셀렉트 노출 여부. 댓글이 아닌 일반 텍스트 편집 시 ``false`` 권장. */
   showCategory?: boolean
   /** 입력값 실시간 동기화(폼 필드로 사용 시). 지정 시 편집 내용이 바뀔 때마다 HTML 을 전달. */
@@ -105,12 +108,13 @@ export function CommentEditor({
   autoFocus = false,
   onCancel,
   initialContent,
+  initialCategory = "general",
   showCategory = true,
   onChange,
   hideActions = false,
   onReady,
 }: CommentEditorProps) {
-  const [category, setCategory] = useState("general")
+  const [category, setCategory] = useState(initialCategory)
   const [submitting, setSubmitting] = useState(false)
   // 초기 콘텐츠가 있으면 처음부터 빈 상태가 아님 (등록 버튼 활성화 조건).
   const [isEmpty, setIsEmpty] = useState(!initialContent)
@@ -234,12 +238,14 @@ export function CommentEditor({
       const plain = editor.getText()
       await onSubmit(html, plain, category)
       editor.commands.clearContent()
-      setCategory("general")
+      setCategory(initialCategory)
       setIsEmpty(true)
+    } catch {
+      // 실패 알림은 호출자(onSubmit)가 한다 — 입력한 내용은 지우지 않고 그대로 둔다
     } finally {
       setSubmitting(false)
     }
-  }, [editor, category, onSubmit])
+  }, [editor, category, onSubmit, initialCategory])
 
   // 표 안 우클릭 시 컨텍스트 메뉴 (행/열 add·del, 표 삭제 등)
   const onContextMenu = (e: React.MouseEvent) => {
@@ -306,6 +312,7 @@ export function CommentEditor({
 // ---------------------------------------------------------------------------
 
 function Toolbar({ editor }: { editor: Editor }) {
+  const askInput = usePrompt()
   const btn =
     "h-7 w-7 inline-flex items-center justify-center rounded hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed text-muted-foreground"
   const btnActive =
@@ -447,10 +454,16 @@ function Toolbar({ editor }: { editor: Editor }) {
       {/* 링크 / 이미지 */}
       <button
         type="button" title="링크"
-        onClick={() => {
+        onClick={async () => {
           const prev = editor.getAttributes("link").href as string | undefined
-          const url = window.prompt("링크 URL", prev ?? "https://")
-          if (url === null) return
+          const input = await askInput({
+            title: "링크",
+            label: "링크 URL",
+            description: "비워 두고 확인하면 링크를 제거합니다.",
+            defaultValue: prev ?? "https://",
+          })
+          if (input === null) return
+          const url = input.trim()
           if (url === "") {
             editor.chain().focus().extendMarkRange("link").unsetLink().run()
             return
@@ -461,8 +474,8 @@ function Toolbar({ editor }: { editor: Editor }) {
       ><LinkIcon className="h-3.5 w-3.5" /></button>
       <button
         type="button" title="이미지 (URL)"
-        onClick={() => {
-          const url = window.prompt("이미지 URL", "https://")
+        onClick={async () => {
+          const url = (await askInput({ title: "이미지 삽입", label: "이미지 URL", defaultValue: "https://", required: true }))?.trim()
           if (!url) return
           editor.chain().focus().setImage({ src: url }).run()
         }}

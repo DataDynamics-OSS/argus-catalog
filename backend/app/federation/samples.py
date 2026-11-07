@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 def _root() -> Path:
+    """미러 샘플 저장 루트(``data_dir/federation/samples``)."""
     return settings.data_dir / "federation" / "samples"
 
 
@@ -39,6 +40,10 @@ def write_sample(
     p = sample_path(instance_id, federation_dataset_id)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(sample, ensure_ascii=False), encoding="utf-8")
+    logger.debug(
+        "미러 샘플 저장: instance_id=%s federation_dataset_id=%s",
+        instance_id, federation_dataset_id,
+    )
 
 
 def read_sample(instance_id: int, federation_dataset_id: int) -> dict | None:
@@ -48,7 +53,8 @@ def read_sample(instance_id: int, federation_dataset_id: int) -> dict | None:
         return None
     try:
         return json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError):  # noqa: BLE001 — 손상 파일은 미보유로 취급
+    except (OSError, ValueError) as e:  # noqa: BLE001 — 손상 파일은 미보유로 취급
+        logger.warning("미러 샘플 읽기 실패(미보유로 취급): path=%s error=%s", p, e)
         return None
 
 
@@ -56,8 +62,12 @@ def delete_sample(instance_id: int, federation_dataset_id: int) -> None:
     """미러 데이터셋 1건의 샘플 파일을 삭제(prune 시)."""
     try:
         sample_path(instance_id, federation_dataset_id).unlink(missing_ok=True)
-    except OSError:
-        pass
+    except OSError as e:
+        # 삭제 실패는 무시(다음 prune 에서 재시도) — 원인 추적용으로만 남긴다.
+        logger.warning(
+            "미러 샘플 삭제 실패: instance_id=%s federation_dataset_id=%s error=%s",
+            instance_id, federation_dataset_id, e,
+        )
 
 
 def delete_instance_samples(instance_id: int) -> None:
@@ -65,3 +75,4 @@ def delete_instance_samples(instance_id: int) -> None:
     d = _root() / str(instance_id)
     if d.exists():
         shutil.rmtree(d, ignore_errors=True)
+        logger.info("인스턴스 미러 샘플 디렉터리 삭제: instance_id=%s", instance_id)

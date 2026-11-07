@@ -8,23 +8,26 @@ import {
   Card, CardContent, CardDescription, CardHeader, CardTitle,
 } from "@workspace/ui/components/card"
 
+import { useConfirm } from "@/components/confirm-provider"
 import { recomputeRelationships, resolveLineage } from "@/features/settings/api"
-
-type Msg = { type: "success" | "error"; text: string } | null
+import { notifyError, notifySuccess } from "@/lib/notify"
 
 // 쿼리 기반 분석 유지보수 — 컬럼 관계 재계산 + lineage dataset_id 해석.
 export function RelationshipSettings() {
   const [running, setRunning] = useState(false)
-  const [message, setMessage] = useState<Msg>(null)
   const [linRunning, setLinRunning] = useState(false)
-  const [linMessage, setLinMessage] = useState<Msg>(null)
+  const askConfirm = useConfirm()
 
   const handleRecompute = async () => {
-    if (!confirm("수집된 모든 쿼리 이력을 재분석해 컬럼 관계를 재구축합니다.\n기존 관계는 초기화 후 다시 쌓입니다. 계속할까요?")) {
+    if (!(await askConfirm({
+      title: "컬럼 관계 전체 재계산",
+      description: "수집된 모든 쿼리 이력을 재분석해 컬럼 관계를 재구축합니다.\n기존 관계는 초기화 후 다시 쌓입니다. 계속할까요?",
+      confirmText: "재계산",
+      destructive: true,
+    }))) {
       return
     }
     setRunning(true)
-    setMessage(null)
     try {
       const r = await recomputeRelationships(true)
       const perPlatform = Object.entries(r.per_platform)
@@ -34,13 +37,12 @@ export function RelationshipSettings() {
       const unresolved = r.unresolved_tables?.length
         ? ` · 미해석 테이블 ${r.unresolved_tables.length}개: ${r.unresolved_tables.slice(0, 8).join(", ")}${r.unresolved_tables.length > 8 ? " …" : ""}`
         : ""
-      setMessage({
-        type: "success",
-        text: `재계산 완료: 쿼리 ${r.queries_analyzed}건 분석, 관계쌍 ${r.pairs_pushed}건 적재 (초기화 ${r.reset_deleted ?? 0}건) · ${perPlatform}${unresolved}`,
+      notifySuccess("컬럼 관계를 재계산했습니다.", {
+        description: `쿼리 ${r.queries_analyzed}건 분석, 관계쌍 ${r.pairs_pushed}건 적재 (초기화 ${r.reset_deleted ?? 0}건) · ${perPlatform}${unresolved}`,
       })
     } catch (e) {
       console.error("Failed to recompute relationships", e)
-      setMessage({ type: "error", text: e instanceof Error ? e.message : "재계산에 실패했습니다." })
+      notifyError(e, "컬럼 관계를 재계산하지 못했습니다.")
     } finally {
       setRunning(false)
     }
@@ -48,16 +50,14 @@ export function RelationshipSettings() {
 
   const handleResolveLineage = async () => {
     setLinRunning(true)
-    setLinMessage(null)
     try {
       const r = await resolveLineage()
-      setLinMessage({
-        type: "success",
-        text: `lineage 해석 완료: ${r.resolved}건 데이터셋 연결, 미해석 ${r.remaining_unresolved}건 남음`,
+      notifySuccess("쿼리 lineage 를 해석했습니다.", {
+        description: `${r.resolved}건 데이터셋 연결, 미해석 ${r.remaining_unresolved}건 남음`,
       })
     } catch (e) {
       console.error("Failed to resolve lineage", e)
-      setLinMessage({ type: "error", text: e instanceof Error ? e.message : "lineage 해석에 실패했습니다." })
+      notifyError(e, "쿼리 lineage 를 해석하지 못했습니다.")
     } finally {
       setLinRunning(false)
     }
@@ -86,11 +86,6 @@ export function RelationshipSettings() {
             수집된 모든 쿼리 이력(Trino/Hive/Impala/StarRocks)을 다시 분석해 관계를 재구축합니다.
             파서 개선이나 기능 도입 이전 이력을 일괄 반영할 때 사용하세요. 평소에는 쿼리 수집 시 자동으로 갱신됩니다.
           </p>
-          {message && (
-            <p className={`text-sm ${message.type === "success" ? "text-green-600" : "text-red-600"}`}>
-              {message.text}
-            </p>
-          )}
         </CardContent>
       </Card>
 
@@ -114,11 +109,6 @@ export function RelationshipSettings() {
           <p className="text-xs text-muted-foreground">
             데이터셋 생성 시 자동으로도 점증 해석되며, 이 버튼은 과거 이력을 일괄 백필합니다.
           </p>
-          {linMessage && (
-            <p className={`text-sm ${linMessage.type === "success" ? "text-green-600" : "text-red-600"}`}>
-              {linMessage.text}
-            </p>
-          )}
         </CardContent>
       </Card>
     </div>

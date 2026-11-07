@@ -16,6 +16,8 @@ export type CRStatus =
   | "CANCELLED"
   | "CLOSED"
 export type Decision = "APPROVED" | "REJECTED" | "DELEGATED" | "PENDING"
+/** 결재자가 보낼 수 있는 결정값 — PENDING 은 상태값이라 서버가 422 로 거부한다. */
+export type DecisionInput = Exclude<Decision, "PENDING">
 
 export interface ApprovalStep {
   id: number
@@ -88,10 +90,8 @@ export async function createChangeRequest(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.detail || `변경 요청 생성 실패: ${res.status}`)
-  }
+  // 결재선 검증 422 는 detail 이 배열 — 사람이 읽을 메시지로(throwOnError)
+  if (!res.ok) await throwOnError(res, "변경 요청을 생성하지 못했습니다.")
   return res.json()
 }
 
@@ -104,13 +104,13 @@ export async function listChangeRequests(params?: {
   if (params?.dataset_id) search.set("dataset_id", String(params.dataset_id))
   const qs = search.toString() ? `?${search.toString()}` : ""
   const res = await authFetch(`${BASE}${qs}`)
-  if (!res.ok) throw new Error(`변경 요청 목록 조회 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`변경 요청 목록을 불러오지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 
 export async function getChangeRequest(crId: number): Promise<ChangeRequest> {
   const res = await authFetch(`${BASE}/${crId}`)
-  if (!res.ok) throw new Error(`변경 요청 조회 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`변경 요청을 불러오지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 
@@ -125,7 +125,7 @@ export async function submitChangeRequest(
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
-    throw new Error(err.detail || `변경 요청 제출 실패: ${res.status}`)
+    throw new Error(err.detail || `변경 요청을 제출하지 못했습니다. (HTTP ${res.status})`)
   }
   return res.json()
 }
@@ -135,7 +135,7 @@ export async function submitChangeRequest(
 export async function submitDecision(
   crId: number,
   payload: {
-    decision: Decision
+    decision: DecisionInput
     comment?: string
     delegated_to?: string
   },
@@ -147,14 +147,14 @@ export async function submitDecision(
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
-    throw new Error(err.detail || `결재 제출 실패: ${res.status}`)
+    throw new Error(err.detail || `결재를 처리하지 못했습니다. (HTTP ${res.status})`)
   }
 }
 
 // 결재 인박스 — 현재 사용자가 지금 결재할 차례인 CR 목록
 export async function listMyInbox(): Promise<ChangeRequest[]> {
   const res = await authFetch(`${BASE}/inbox`)
-  if (!res.ok) throw new Error(`결재 인박스 조회 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`결재 대기 목록을 불러오지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 
@@ -172,7 +172,7 @@ export async function getMyInboxCount(): Promise<number> {
 
 export async function cancelChangeRequest(crId: number): Promise<void> {
   const res = await authFetch(`${BASE}/${crId}/cancel`, { method: "POST" })
-  if (!res.ok) await throwOnError(res, "변경 요청 취소 실패")
+  if (!res.ok) await throwOnError(res, "변경 요청을 취소하지 못했습니다.")
 }
 
 export interface NotificationLog {
@@ -188,8 +188,22 @@ export interface NotificationLog {
   ack_comment?: string | null
 }
 
+export interface Consumer {
+  id: number
+  dataset_id: number
+  consumer_name: string
+  criticality?: string | null
+}
+
+/** 데이터셋 소비자 목록 — 알림 이력의 소비자 이름 표시용(공개 조회). */
+export async function listConsumers(datasetId: number): Promise<Consumer[]> {
+  const res = await authFetch(`${BASE}/consumers/${datasetId}`)
+  if (!res.ok) throw new Error(`소비자 목록을 불러오지 못했습니다. (HTTP ${res.status})`)
+  return res.json()
+}
+
 export async function listNotifications(crId: number): Promise<NotificationLog[]> {
   const res = await authFetch(`${BASE}/${crId}/notifications`)
-  if (!res.ok) throw new Error(`알림 이력 조회 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`알림 이력을 불러오지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }

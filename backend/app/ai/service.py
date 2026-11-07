@@ -47,6 +47,7 @@ async def _load_glossary_context(session: AsyncSession) -> list[dict]:
     )
     dict_ids = [r[0] for r in dict_result.all()]
     if not dict_ids:
+        logger.debug("용어집 컨텍스트: 활성 표준 사전 없음")
         return []
 
     result = await session.execute(
@@ -77,7 +78,7 @@ async def _load_glossary_context(session: AsyncSession) -> list[dict]:
 async def _load_lineage_context(
     session: AsyncSession, dataset_id: int,
 ) -> dict[str, list[str]]:
-    """리니지 컨텍스트용으로 상류/하류 데이터셋 이름을 로드.
+    """리니지 컨텍스트용으로 상류/하류 데이터셋 이름을 로드 (방향별 최대 10개).
 
     Returns: {"upstream": ["db.table1", ...], "downstream": ["db.table2", ...]}
     """
@@ -99,6 +100,8 @@ async def _load_lineage_context(
     )
     downstream = [r[0] for r in downstream_result.all()]
 
+    logger.debug("리니지 컨텍스트: dataset_id=%d upstream=%d downstream=%d",
+                 dataset_id, len(upstream), len(downstream))
     return {"upstream": upstream, "downstream": downstream}
 
 
@@ -111,7 +114,9 @@ async def _load_fewshot_examples(
 ) -> list[dict]:
     """적용된 AI 생성 결과를 few-shot 예시로 로드.
 
-    동일 데이터소스 타입에서 결과가 적용(승인)된 예시를 선택한다.
+    동일 데이터소스 타입에서 결과가 적용(승인)된 예시를 최신순으로 선택한다.
+    적용된 예시가 없고 generation_type 이 description 이면, 사람이 작성한 설명 중
+    가장 긴 것들로 대체한다.
     Returns: [{"dataset_name": "...", "generated_text": "..."}, ...]
     """
     result = await session.execute(
@@ -159,6 +164,8 @@ async def _load_fewshot_examples(
                 "dataset_name": r.name,
                 "generated_text": r.description,
             })
+        logger.debug("few-shot 예시: AI 적용 결과 없음 → 수동 설명으로 대체 count=%d",
+                     len(examples))
 
     return examples
 
@@ -168,7 +175,11 @@ async def _load_fewshot_examples(
 # ---------------------------------------------------------------------------
 
 def _parse_json_response(text: str) -> dict | None:
-    """LLM 응답에서 JSON 을 추출 (마크다운 펜스 허용)."""
+    """LLM 응답에서 JSON 을 추출 (마크다운 펜스 허용).
+
+    1) 전체 문자열 직접 파싱 → 2) ```json ... ``` 펜스 내부 → 3) 첫 '{' 부터 마지막 '}' 까지
+    순서로 시도하고, 모두 실패하면 None 을 반환한다.
+    """
     # 직접 파싱 시도
     text = text.strip()
     try:
@@ -184,7 +195,7 @@ def _parse_json_response(text: str) -> dict | None:
         except json.JSONDecodeError:
             pass
 
-    # 첫 { ... } 블록 탐색 시도
+    # 첫 '{' 부터 마지막 '}' 까지(탐욕적 매칭) 잘라 파싱 시도
     brace_match = re.search(r"\{.*\}", text, re.DOTALL)
     if brace_match:
         try:
@@ -208,13 +219,18 @@ async def _call_llm(
     """
     provider = await get_provider()
     if provider is None:
+        logger.warning("LLM 호출 불가: 제공자가 초기화되지 않음")
         raise ValueError("LLM 제공자가 초기화되지 않았습니다. 설정 > AI 에서 활성화하세요.")
 
+    logger.debug("LLM 호출: provider=%s model=%s prompt_len=%d max_tokens=%d",
+                 provider.provider_name(), provider.model_name(), len(prompt), max_tokens)
     result = await provider.generate(prompt, system_prompt, temperature, max_tokens)
     parsed = _parse_json_response(result["text"])
 
     if parsed is None:
         # 교정 프롬프트로 재시도
+        logger.warning("LLM 응답 JSON 파싱 실패 → 교정 프롬프트로 1회 재시도: model=%s",
+                       provider.model_name())
         retry_prompt = (
             "Your previous response was not valid JSON. "
             "Please fix and respond with valid JSON only:\n\n" + result["text"]
@@ -222,6 +238,7 @@ async def _call_llm(
         result2 = await provider.generate(retry_prompt, system_prompt, temperature, max_tokens)
         parsed = _parse_json_response(result2["text"])
         if parsed is None:
+            logger.warning("LLM 응답 JSON 파싱 재시도 실패: model=%s", provider.model_name())
             raise ValueError(f"LLM 응답을 JSON 으로 파싱하지 못했습니다(재시도 후): {result2['text'][:200]}")
         # 토큰 카운트 합산
         result["prompt_tokens"] = (result.get("prompt_tokens") or 0) + (
@@ -249,7 +266,11 @@ def _load_sample_data(
 ) -> tuple[list[dict] | None, dict[str, list] | None]:
     """디스크의 Parquet 파일에서 샘플 데이터를 로드.
 
-    (sample_rows, sample_values) 를 반환하거나, 없으면 (None, None) 반환.
+    경로: ``{data_dir}/samples/{datasource_name}/{dataset_name}/sample.parquet``.
+    호출부(_get_dataset_context)는 datasource_name 인자에 Datasource.datasource_id
+    문자열을 넘긴다(샘플 업로드 경로 규칙과 동일).
+    (sample_rows, sample_values) 를 반환하거나, 없으면/읽기 실패 시 (None, None) 반환.
+    값은 모두 str 로 변환한다.
     """
     from pathlib import Path
 
@@ -259,6 +280,7 @@ def _load_sample_data(
         Path(settings.data_dir) / "samples" / datasource_name / dataset_name / "sample.parquet"
     )
     if not parquet_path.exists():
+        logger.debug("샘플 데이터 없음: datasource=%s dataset=%s", datasource_name, dataset_name)
         return None, None
 
     try:
@@ -283,7 +305,12 @@ def _load_sample_data(
 
 
 async def _get_dataset_context(session: AsyncSession, dataset_id: int) -> dict | None:
-    """프롬프트 구성을 위해 데이터셋 + 데이터소스 + 스키마 + 샘플 데이터를 로드."""
+    """프롬프트 구성을 위해 데이터셋 + 데이터소스 + 스키마 + 샘플 데이터를 로드.
+
+    데이터셋이 없으면 None. 이름이 ``db.table`` 형식이면 database/table_name 으로 나누고,
+    점이 없으면 database 는 빈 문자열이 된다. DDL·행 수는 datasource_properties JSON 의
+    ``ddl`` / ``estimated_rows`` 키에서 읽는다.
+    """
     result = await session.execute(
         select(
             Dataset.id, Dataset.name, Dataset.summary, Dataset.description,
@@ -296,6 +323,7 @@ async def _get_dataset_context(session: AsyncSession, dataset_id: int) -> dict |
     )
     row = result.first()
     if not row:
+        logger.debug("데이터셋 컨텍스트 없음: dataset_id=%d", dataset_id)
         return None
 
     # name 을 database.table 로 분해
@@ -332,7 +360,7 @@ async def _get_dataset_context(session: AsyncSession, dataset_id: int) -> dict |
         try:
             props = json.loads(row.datasource_properties)
         except (json.JSONDecodeError, TypeError):
-            pass
+            logger.warning("datasource_properties JSON 파싱 실패 → 무시: dataset_id=%d", dataset_id)
 
     # Parquet 파일에서 샘플 데이터 로드
     sample_rows, sample_values = _load_sample_data(
@@ -398,7 +426,13 @@ async def generate_dataset_description(
 ) -> dict:
     """LLM 을 사용해 데이터셋 설명을 생성.
 
+    apply=True 면 Dataset.description 에 바로 반영하고 임베딩 갱신을 트리거한다.
+    설명이 이미 있고 force=False 면 LLM 을 호출하지 않고 skipped=True 로 반환한다.
+
     Returns: {"dataset_id", "description", "confidence", "applied", "log_id"}
+        (건너뛴 경우 log_id 대신 "skipped", "reason")
+    Raises:
+        ValueError: 데이터셋이 없거나, 제공자 미초기화·JSON 파싱 실패 시.
     """
     ctx = await _get_dataset_context(session, dataset_id)
     if not ctx:
@@ -406,6 +440,7 @@ async def generate_dataset_description(
 
     # 이미 설명이 있으면 건너뜀 (force 가 아닌 경우)
     if ctx["description"] and not force:
+        logger.debug("데이터셋 설명 생성 건너뜀(기존 설명 존재): dataset_id=%d", dataset_id)
         return {
             "dataset_id": dataset_id,
             "description": ctx["description"],
@@ -481,6 +516,8 @@ async def generate_dataset_description(
         except Exception as e:
             logger.warning("AI 설명 적용 후 임베딩 갱신 실패: %s", e)
 
+    logger.info("AI 데이터셋 설명 생성: dataset_id=%d applied=%s log_id=%s",
+                dataset_id, apply, log.id)
     return {
         "dataset_id": dataset_id,
         "description": description,
@@ -501,13 +538,18 @@ async def generate_dataset_summary(
 
     이미 summary 가 있고 force=False 면 건너뜀.
     description 이 존재하면 그 의미를 한 줄로 압축. 없으면 컬럼/샘플로 추론.
+    llm_max_tokens 설정이 없을 때의 기본값은 256(설명 생성보다 작게).
     Returns: {"dataset_id", "summary", "confidence", "applied", "log_id"}
+        (건너뛴 경우 log_id 대신 "skipped", "reason")
+    Raises:
+        ValueError: 데이터셋이 없거나 LLM 호출/파싱 실패 시.
     """
     ctx = await _get_dataset_context(session, dataset_id)
     if not ctx:
         raise ValueError(f"데이터셋을 찾을 수 없습니다: id={dataset_id}")
 
     if ctx.get("summary") and not force:
+        logger.debug("데이터셋 요약 생성 건너뜀(기존 요약 존재): dataset_id=%d", dataset_id)
         return {
             "dataset_id": dataset_id,
             "summary": ctx["summary"],
@@ -534,7 +576,7 @@ async def generate_dataset_summary(
     llm_result = await _call_llm(prompt, max_tokens=int(cfg.get("llm_max_tokens", "256")))
     data = llm_result["data"]
     summary = (data.get("summary") or "").strip().strip('"').strip("'")
-    # 200자 제한 — DB 컬럼 길이를 초과하지 않도록 안전하게 자름
+    # 200자 제한 — Dataset.summary 컬럼(String(200)) 길이를 초과하지 않도록 자름
     if len(summary) > 200:
         summary = summary[:200]
     confidence = data.get("confidence", 0.5)
@@ -566,6 +608,8 @@ async def generate_dataset_summary(
     await session.commit()
     await session.refresh(log)
 
+    logger.info("AI 데이터셋 요약 생성: dataset_id=%d applied=%s log_id=%s",
+                dataset_id, apply, log.id)
     return {
         "dataset_id": dataset_id,
         "summary": summary,
@@ -584,7 +628,15 @@ async def generate_column_descriptions(
 ) -> dict:
     """데이터셋의 모든 컬럼에 대한 설명을 생성.
 
-    Returns: {"dataset_id", "columns": [...], "applied"}
+    force=False 면 설명이 비어 있는 컬럼만 대상으로 한다. LLM 이 돌려준 컬럼명은
+    대소문자 무시로 대상 컬럼에 매핑하고, 매핑되지 않거나 설명이 빈 항목은 버린다.
+    컬럼마다 AIGenerationLog 를 1건씩 남기며 토큰 수는 첫 로그에만 기록한다.
+    max_tokens 는 설정값과 4096 중 작은 값.
+
+    Returns: {"dataset_id", "columns": [...], "total_generated", "applied"}
+        (건너뛴 경우 "skipped", "reason")
+    Raises:
+        ValueError: 데이터셋이 없거나 LLM 호출/파싱 실패 시.
     """
     ctx = await _get_dataset_context(session, dataset_id)
     if not ctx:
@@ -595,6 +647,7 @@ async def generate_column_descriptions(
     if not force:
         target_columns = [c for c in columns if not c.get("description")]
         if not target_columns:
+            logger.debug("컬럼 설명 생성 건너뜀(모든 컬럼에 설명 존재): dataset_id=%d", dataset_id)
             return {
                 "dataset_id": dataset_id,
                 "columns": [],
@@ -642,6 +695,8 @@ async def generate_column_descriptions(
 
         col_info = col_name_map.get(name.lower())
         if not col_info or not desc:
+            logger.debug("컬럼 설명 결과 무시(매핑 실패 또는 빈 설명): dataset_id=%d name=%s",
+                         dataset_id, name)
             continue
 
         # 로깅
@@ -681,6 +736,8 @@ async def generate_column_descriptions(
 
     await session.commit()
 
+    logger.info("AI 컬럼 설명 생성: dataset_id=%d targets=%d generated=%d applied=%s",
+                dataset_id, len(target_columns), len(results), apply)
     return {
         "dataset_id": dataset_id,
         "columns": results,
@@ -697,7 +754,13 @@ async def suggest_tags(
 ) -> dict:
     """데이터셋에 대한 태그를 제안.
 
-    Returns: {"dataset_id", "tags": [...], "new_tags": [...], "applied"}
+    apply=True 면 기존 태그(이름 대소문자 무시 일치)를 할당하고, new_tags 중 없는 태그는
+    새로 만든 뒤 할당한다. 이미 할당된 태그는 다시 넣지 않는다.
+
+    Returns: {"dataset_id", "suggested_tags": [...], "new_tags": [...],
+              "applied_tags": [...], "created_tags": [...], "applied", "log_id"}
+    Raises:
+        ValueError: 데이터셋이 없거나 LLM 호출/파싱 실패 시.
     """
     ctx = await _get_dataset_context(session, dataset_id)
     if not ctx:
@@ -801,6 +864,8 @@ async def suggest_tags(
     await session.commit()
     await session.refresh(log)
 
+    logger.info("AI 태그 제안: dataset_id=%d suggested=%d new=%d applied=%d created=%d",
+                dataset_id, len(suggested_tags), len(new_tags), len(applied_tags), len(created_tags))
     return {
         "dataset_id": dataset_id,
         "suggested_tags": suggested_tags,
@@ -820,7 +885,11 @@ async def detect_pii(
 ) -> dict:
     """데이터셋에서 PII 컬럼을 탐지.
 
-    Returns: {"dataset_id", "pii_columns": [...], "applied"}
+    apply=True 면 이름이 일치(대소문자 무시)하는 컬럼의 DatasetSchema.pii_type 을 갱신한다.
+
+    Returns: {"dataset_id", "pii_columns": [...], "applied", "log_id"}
+    Raises:
+        ValueError: 데이터셋이 없거나 LLM 호출/파싱 실패 시.
     """
     ctx = await _get_dataset_context(session, dataset_id)
     if not ctx:
@@ -878,6 +947,8 @@ async def detect_pii(
     await session.commit()
     await session.refresh(log)
 
+    logger.info("AI PII 탐지: dataset_id=%d pii_columns=%d applied=%s",
+                dataset_id, len(pii_columns), apply)
     return {
         "dataset_id": dataset_id,
         "pii_columns": pii_columns,
@@ -895,7 +966,8 @@ async def generate_all_for_dataset(
 ) -> dict:
     """단일 데이터셋에 대해 모든 생성 작업을 실행.
 
-    모든 작업의 결과를 합쳐서 반환한다.
+    설명 → 컬럼 설명 → 태그 → PII 순서로 순차 실행하고 결과를 합쳐서 반환한다.
+    하나라도 ValueError 를 내면 이후 작업은 실행되지 않는다(앞선 작업은 이미 커밋됨).
     """
     desc_result = await generate_dataset_description(
         session, dataset_id, apply=apply, force=force, language=language
@@ -907,7 +979,7 @@ async def generate_all_for_dataset(
         session, dataset_id, apply=apply, language=language
     )
     pii_result = await detect_pii(
-        session, dataset_id, apply=apply
+        session, dataset_id, apply=apply, language=language
     )
 
     return {
@@ -937,6 +1009,8 @@ async def bulk_generate(
         empty_only: 설명이 비어 있는 데이터셋만 처리 (기본 True).
 
     Returns: {"total", "processed", "errors", "results": [...]}
+
+    데이터셋별 실패는 errors 로 집계하고 계속 진행한다(예외를 전파하지 않음).
     """
     types = generation_types or ["description"]
 
@@ -951,6 +1025,8 @@ async def bulk_generate(
     dataset_ids = [r[0] for r in result.all()]
 
     total = len(dataset_ids)
+    logger.info("AI 일괄 생성 시작: total=%d types=%s apply=%s datasource_id=%s",
+                total, types, apply, datasource_id)
     processed = 0
     errors = 0
     results = []
@@ -972,7 +1048,7 @@ async def bulk_generate(
                 )
             if "pii" in types:
                 ds_result["pii"] = await detect_pii(
-                    session, ds_id, apply=apply
+                    session, ds_id, apply=apply, language=language
                 )
             results.append({"dataset_id": ds_id, **ds_result})
             processed += 1
@@ -981,6 +1057,7 @@ async def bulk_generate(
             logger.warning("데이터셋 %d 일괄 생성 실패: %s", ds_id, e)
             results.append({"dataset_id": ds_id, "error": str(e)})
 
+    logger.info("AI 일괄 생성 완료: total=%d processed=%d errors=%d", total, processed, errors)
     return {
         "total": total,
         "processed": processed,
@@ -993,8 +1070,36 @@ async def bulk_generate(
 # 제안 관리
 # ---------------------------------------------------------------------------
 
+def _parse_tag_suggestion(text: str) -> tuple[list[str], list[dict]]:
+    """태그 제안 본문 → (기존 태그 이름들, 새 태그 [{name, description}]).
+
+    카탈로그 서버는 ``{"tags": [...], "new_tags": [...]}`` 로, AI 서비스(enrich)는 태그 이름
+    배열(``["a", "b"]``)로 남긴다 — 둘 다 받는다. 배열 형식의 이름은 적용할 때 없으면 새로 만든다.
+    """
+    try:
+        data = json.loads(text)
+    except (TypeError, ValueError):
+        return [], []
+    if isinstance(data, list):
+        return [], [{"name": str(t).strip(), "description": ""} for t in data if str(t).strip()]
+    if isinstance(data, dict):
+        tags = [str(t) for t in (data.get("tags") or []) if str(t).strip()]
+        new_tags = [t for t in (data.get("new_tags") or []) if isinstance(t, dict)]
+        return tags, new_tags
+    return [], []
+
+
+def _parse_pii_suggestion(text: str) -> list[dict]:
+    """PII 제안 본문 → [{"name", "pii_type", ...}] (형식이 다르면 빈 목록)."""
+    try:
+        data = json.loads(text)
+    except (TypeError, ValueError):
+        return []
+    return [p for p in data if isinstance(p, dict)] if isinstance(data, list) else []
+
+
 async def get_suggestions(session: AsyncSession, dataset_id: int) -> list[dict]:
-    """데이터셋의 미적용 AI 제안을 모두 조회."""
+    """데이터셋의 미적용 AI 제안을 모두 조회 — 비교용 현재 값(current_text)을 함께 싣는다."""
     result = await session.execute(
         select(AIGenerationLog)
         .where(
@@ -1004,6 +1109,38 @@ async def get_suggestions(session: AsyncSession, dataset_id: int) -> list[dict]:
         .order_by(AIGenerationLog.created_at.desc())
     )
     logs = result.scalars().all()
+    if not logs:
+        return []
+
+    ds = (await session.execute(select(Dataset).where(Dataset.id == dataset_id))).scalars().first()
+    fields = (await session.execute(
+        select(DatasetSchema).where(DatasetSchema.dataset_id == dataset_id)
+    )).scalars().all()
+    by_id = {f.id: f for f in fields}
+    by_name = {f.field_path.lower(): f for f in fields}
+    tag_names = (await session.execute(
+        select(Tag.name).join(DatasetTag, DatasetTag.tag_id == Tag.id)
+        .where(DatasetTag.dataset_id == dataset_id).order_by(Tag.name)
+    )).scalars().all()
+
+    def current_of(log: AIGenerationLog) -> str | None:
+        if log.generation_type == "pii_detection":
+            cols = []
+            for p in _parse_pii_suggestion(log.generated_text):
+                f = by_name.get(str(p.get("name", "")).lower())
+                cols.append({"name": p.get("name"), "pii_type": f.pii_type if f else None})
+            return json.dumps(cols, ensure_ascii=False)
+        if log.generation_type == "tag_suggestion":
+            return json.dumps(list(tag_names), ensure_ascii=False)
+        if log.entity_type == "column":
+            f = by_id.get(log.entity_id)
+            return f.description if f else None
+        if ds and log.generation_type == "description":
+            return ds.description
+        if ds and log.generation_type == "summary":
+            return ds.summary
+        return None
+
     return [
         {
             "id": log.id,
@@ -1015,6 +1152,7 @@ async def get_suggestions(session: AsyncSession, dataset_id: int) -> list[dict]:
             "provider": log.provider,
             "model": log.model,
             "created_at": log.created_at.isoformat() if log.created_at else None,
+            "current_text": current_of(log),
         }
         for log in logs
     ]
@@ -1038,6 +1176,15 @@ async def _apply_log(session: AsyncSession, log: AIGenerationLog) -> bool:
         if ds:
             ds.description = log.generated_text
 
+    elif log.entity_type == "dataset" and log.generation_type == "summary":
+        # 한 줄 요약 — 생성 때와 같이 200자로 자른다(DB 컬럼 길이)
+        ds_result = await session.execute(
+            select(Dataset).where(Dataset.id == log.entity_id)
+        )
+        ds = ds_result.scalars().first()
+        if ds:
+            ds.summary = log.generated_text.strip()[:200]
+
     elif log.entity_type == "column" and log.generation_type == "description":
         schema_result = await session.execute(
             select(DatasetSchema).where(DatasetSchema.id == log.entity_id)
@@ -1047,11 +1194,11 @@ async def _apply_log(session: AsyncSession, log: AIGenerationLog) -> bool:
             schema.description = log.generated_text
 
     elif log.generation_type == "pii_detection":
-        pii_data = json.loads(log.generated_text)
+        pii_data = _parse_pii_suggestion(log.generated_text)
         ctx = await _get_dataset_context(session, log.dataset_id)
         if ctx:
             col_name_map = {c["field_path"].lower(): c for c in ctx["columns"]}
-            for pii in (pii_data if isinstance(pii_data, list) else []):
+            for pii in pii_data:
                 col_info = col_name_map.get(pii.get("name", "").lower())
                 if col_info:
                     schema_result = await session.execute(
@@ -1064,9 +1211,7 @@ async def _apply_log(session: AsyncSession, log: AIGenerationLog) -> bool:
     elif log.generation_type == "tag_suggestion":
         # 미리보기 때 로깅한 후보(tags/new_tags)를 그대로 적용 — suggest_tags(apply=True) 와
         # 동일한 할당 로직이지만 LLM 을 재호출하지 않아 미리 본 결과가 그대로 반영된다.
-        tag_data = json.loads(log.generated_text)
-        suggested_tags = tag_data.get("tags", []) if isinstance(tag_data, dict) else []
-        new_tags = tag_data.get("new_tags", []) if isinstance(tag_data, dict) else []
+        suggested_tags, new_tags = _parse_tag_suggestion(log.generated_text)
         # 기존 태그 할당
         for tag_name in suggested_tags:
             tag_row = await session.execute(
@@ -1110,17 +1255,26 @@ async def _apply_log(session: AsyncSession, log: AIGenerationLog) -> bool:
 
 
 async def apply_suggestion(session: AsyncSession, suggestion_id: int) -> dict:
-    """이전에 생성된 제안 1건을 적용."""
+    """이전에 생성된 제안 1건을 적용.
+
+    이미 적용된 제안이면 {"id", "already_applied": True} 를 반환한다.
+    Raises:
+        ValueError: 제안이 없을 때(라우터에서 404).
+    """
     result = await session.execute(
         select(AIGenerationLog).where(AIGenerationLog.id == suggestion_id)
     )
     log = result.scalars().first()
     if not log:
+        logger.warning("AI 제안 적용 실패: 제안 없음 suggestion_id=%d", suggestion_id)
         raise ValueError(f"제안을 찾을 수 없습니다: id={suggestion_id}")
 
     if not await _apply_log(session, log):
+        logger.debug("AI 제안 이미 적용됨: suggestion_id=%d", suggestion_id)
         return {"id": log.id, "already_applied": True}
     await session.commit()
+    logger.info("AI 제안 적용: suggestion_id=%d dataset_id=%s type=%s/%s",
+                log.id, log.dataset_id, log.entity_type, log.generation_type)
 
     # 임베딩 갱신 트리거
     try:
@@ -1136,6 +1290,7 @@ async def apply_suggestions(session: AsyncSession, suggestion_ids: list[int]) ->
     """여러 제안을 한 번에 적용 — 컬럼 설명처럼 건별 로그가 다수일 때 사용.
 
     전부 반영한 뒤 한 번만 커밋하고, 영향받은 데이터셋별로 임베딩을 1회 갱신한다.
+    존재하지 않거나 이미 적용된 ID 는 조용히 건너뛴다.
     """
     if not suggestion_ids:
         return {"applied_ids": [], "count": 0}
@@ -1153,6 +1308,8 @@ async def apply_suggestions(session: AsyncSession, suggestion_ids: list[int]) ->
             dataset_ids.add(log.dataset_id)
 
     await session.commit()
+    logger.info("AI 제안 일괄 적용: requested=%d applied=%d datasets=%d",
+                len(suggestion_ids), len(applied_ids), len(dataset_ids))
 
     # 데이터셋별 임베딩 1회 갱신
     if dataset_ids:
@@ -1181,6 +1338,7 @@ async def import_suggestions(
         select(Dataset).where(Dataset.id == dataset_id)
     )).scalars().first()
     if not ds:
+        logger.warning("제안 반입 실패: 데이터셋 없음 dataset_id=%d", dataset_id)
         raise ValueError(f"데이터셋을 찾을 수 없습니다: id={dataset_id}")
 
     # 컬럼 제안 검증용 — field id 집합
@@ -1194,6 +1352,8 @@ async def import_suggestions(
         generation_type = item.get("generation_type")
         text = item.get("generated_text") or ""
         if not text or entity_type not in ("dataset", "column", "tag", "pii"):
+            logger.debug("제안 반입 건너뜀(빈 텍스트 또는 알 수 없는 entity_type): dataset=%d type=%s",
+                         dataset_id, entity_type)
             continue
         entity_id = int(item.get("entity_id") or dataset_id)
         # 컬럼 제안은 entity_id 가 이 데이터셋의 schema field 여야 한다
@@ -1222,16 +1382,22 @@ async def import_suggestions(
 
 
 async def reject_suggestion(session: AsyncSession, suggestion_id: int) -> dict:
-    """제안을 거절로 표시 (삭제)."""
+    """제안을 거절 처리한다 — 별도 상태 없이 로그 행을 삭제한다.
+
+    Raises:
+        ValueError: 제안이 없을 때(라우터에서 404).
+    """
     result = await session.execute(
         select(AIGenerationLog).where(AIGenerationLog.id == suggestion_id)
     )
     log = result.scalars().first()
     if not log:
+        logger.warning("AI 제안 거절 실패: 제안 없음 suggestion_id=%d", suggestion_id)
         raise ValueError(f"제안을 찾을 수 없습니다: id={suggestion_id}")
 
     await session.delete(log)
     await session.commit()
+    logger.info("AI 제안 거절(삭제): suggestion_id=%d", suggestion_id)
     return {"id": suggestion_id, "rejected": True}
 
 
@@ -1240,7 +1406,11 @@ async def reject_suggestion(session: AsyncSession, suggestion_id: int) -> dict:
 # ---------------------------------------------------------------------------
 
 async def get_ai_stats(session: AsyncSession) -> dict:
-    """AI 생성 통계를 반환."""
+    """AI 생성 통계를 반환.
+
+    전체/적용/대기 건수, 누적 토큰, 데이터셋 설명 커버리지(removed 제외), 생성 타입별 건수,
+    현재 활성 제공자/모델을 담는다.
+    """
     total_generations = (await session.execute(
         select(func.count()).select_from(AIGenerationLog)
     )).scalar() or 0
@@ -1305,6 +1475,8 @@ async def generate_descriptions_post_sync(dataset_ids: list[int]) -> None:
     """백그라운드 작업: sync 후 데이터셋 설명을 생성.
 
     자체 DB 세션을 사용한다. 실패는 로깅되지만 전파되지 않는다.
+    llm_enabled 와 llm_auto_generate_on_sync 가 모두 켜져 있을 때만 동작하며,
+    결과는 apply=True 로 바로 적용된다(기존 설명이 있는 데이터셋은 건너뜀).
     """
     if not dataset_ids:
         return
@@ -1317,11 +1489,15 @@ async def generate_descriptions_post_sync(dataset_ids: list[int]) -> None:
         auto_sync = cfg.get("llm_auto_generate_on_sync", "false").lower() in ("true", "1", "yes")
 
         if not enabled or not auto_sync:
+            logger.debug("sync 후 AI 생성 비활성: enabled=%s auto_sync=%s", enabled, auto_sync)
             return
 
         logger.info("sync 후 AI 생성 시작: 데이터셋 %d개", len(dataset_ids))
+        failed = 0  # 완료 요약 로그용 실패 건수
         for ds_id in dataset_ids:
             try:
                 await generate_dataset_description(session, ds_id, apply=True)
             except Exception as e:
+                failed += 1
                 logger.warning("데이터셋 %d sync 후 AI 생성 실패: %s", ds_id, e)
+        logger.info("sync 후 AI 생성 완료: total=%d failed=%d", len(dataset_ids), failed)

@@ -1,78 +1,219 @@
 = 모델 반입 (SDK · 에어갭)
+:toc: macro
+:toclevels: 2
 
-HuggingFace 같은 외부 출처의 모델을 사내망으로 들여오는 방법을 살펴봅니다. Python SDK 와
-`argus-model` CLI 를 사용하면 OCI 모델 저장소(S3/MinIO)에 모델을 적재할 수 있고,
+HuggingFace 같은 외부 출처의 모델이나 직접 만든 모델 파일을 카탈로그로 들여오는 방법을 설명합니다.
+Python SDK 와 `argus-model` CLI 를 사용하면 오브젝트 저장소(S3/MinIO)에 모델을 적재할 수 있고,
 인터넷이 차단된 **에어갭(폐쇄망) 환경**도 지원합니다.
 
-== 설치
+toc::[]
 
+== 시작하기 전에
+
+=== 이런 일을 할 수 있습니다
+
+* **내 모델 올리기** — 로컬 디렉터리를 OCI 모델 허브의 새 버전으로 올립니다(`push`).
+* **HuggingFace 모델 가져오기** — HuggingFace 모델을 OCI 모델 허브나 MLflow 레지스트리로 가져옵니다(관리자).
+* **에어갭 반입** — 인터넷 구간에서 받은 모델 파일을 폐쇄망 카탈로그에 등록합니다.
+* **내려받기** — 등록된 모델 버전의 파일을 로컬로 받습니다(`pull`).
+
+=== 먼저 알아 둘 용어
+
+[cols="1,4",options="header"]
+|===
+| 용어 | 뜻
+
+| `argus-model`
+| `argus-catalog-sdk` 패키지에 들어 있는 명령줄 도구(CLI)입니다.
+
+| OCI 모델 허브 / MLflow 레지스트리
+| 모델을 담는 두 저장소입니다. 새로 만드는 모델이라면 **OCI 모델 허브 + `push`** 를 권합니다.
+
+| 에어갭(폐쇄망)
+| 외부 인터넷이 차단된 환경입니다.
+|===
+
+=== 메뉴 위치
+
+OCI 모델 허브 화면의 *가이드 ▼ → 모델 올리기 (push·가져오기)* 를 누르면 지금 접속한 서버 주소로 채운 예시를 볼 수 있습니다.
+
+image::models-import/import-guide.png[OCI 모델 허브의 모델 가져오기 방법 안내, 900]
+
+=== 누가 무엇을 할 수 있나요
+
+[cols="2,3",options="header"]
+|===
+| 작업 | 할 수 있는 사람
+
+| `push` (OCI 모델 올리기) | 로그인한 사용자 (기존 모델은 소유자 · 생성자 · 관리자)
+| `pull` · `files` · `manifest` · 목록 조회 | 로그인한 사용자
+| `oci-delete` | 소유자 · 생성자 · 관리자
+| HuggingFace 가져오기(`oci-import-hf` · `import-hf`), `import-local`, MLflow 모델 `delete` | 관리자
+|===
+
+명령별 권한 전체는 <<_cli_argus_model>> 표를 보세요.
+
+== SDK 설치와 로그인
+
+. SDK 를 설치합니다.
++
 [source,bash]
 ----
 pip install argus-catalog-sdk   # 또는 sdk/ 에서 로컬 설치
 ----
+. 서버 주소와 자격 증명을 환경 변수로 둡니다. 서버 API 는 조회까지 모두 로그인이 필요합니다.
++
+[source,bash]
+----
+export ARGUS_SERVER=http://catalog.corp:4600
+export ARGUS_USERNAME=mjkim ARGUS_PASSWORD='********'
+----
 
-== CLI — `argus-model`
+환경 변수 대신 명령마다 옵션으로 줘도 됩니다.
 
-`argus-model` 명령으로 대부분의 반입 작업을 처리할 수 있습니다. 자주 쓰는 명령은
-다음과 같습니다.
-
-[cols="2,3",options="header"]
+[cols="1,1,3",options="header"]
 |===
-| 명령 | 설명
+| 옵션 | 환경 변수 | 설명
 
-| `argus-model list` | 등록된 모델 목록
-| `argus-model import-hf HF_ID NAME` | HuggingFace Hub 에서 임포트(서버 측 다운로드)
-| `argus-model push LOCAL_DIR NAME` | 로컬 디렉터리를 새 버전으로 푸시(클라이언트 측 업로드)
-| `argus-model import-local DIR NAME` | 서버 로컬 디렉터리에서 임포트(에어갭)
-| `argus-model pull NAME VERSION DEST` | 모델 파일을 로컬로 내려받기
-| `argus-model files NAME VERSION` | 버전의 파일 목록
-| `argus-model manifest NAME VERSION` | OCI manifest 조회
-| `argus-model delete NAME` | 모델 영구 삭제
+| `--server URL` | `ARGUS_SERVER` | 카탈로그 서버 주소 (기본 `http://localhost:4600`). 웹 UI 주소도 됩니다.
+| `--username`, `--password` | `ARGUS_USERNAME`, `ARGUS_PASSWORD` | 명령을 실행할 때 로그인
+| `--token TOKEN` | `ARGUS_TOKEN` | 이미 받은 액세스 토큰. 사용자명 · 비밀번호보다 우선 (SSO 환경)
 |===
+
+[TIP]
+.고급 사용자 — 폐쇄망에서 SDK 설치
+====
+폐쇄망에서는 릴리스에 포함된 SDK 패키지를 씁니다. Rocky Linux / RHEL 8 · 9 는
+`dnf install -y ./argus-catalog-sdk-<버전>-1.x86_64.rpm`(명령은 `/usr/bin`, tar.gz 로 설치하면 `/usr/local/bin`)으로,
+다른 OS · Python(3.11+) 은 함께 제공되는 `argus_catalog_sdk-<버전>-py3-none-any.whl` 을 `pip install` 합니다
+(의존성 httpx · rich · PyYAML 이 필요합니다).
+====
+
+== 로컬 모델 올리기 (`push`)
+
+로컬 디렉터리를 OCI 모델로 올립니다. 모델이 없으면 새로 만들고, 있으면 다음 버전으로 추가됩니다.
 
 [source,bash]
 ----
-# HuggingFace 모델 반입
-argus-model import-hf bert-base-uncased argus.ml.bert --server http://localhost:4600
-
-# 로컬 디렉터리 푸시
-argus-model push ./my-model argus.ml.custom --description "사내 분류 모델"
+argus-model push ./my-model my-custom-model --description "사내 분류 모델"
 ----
 
+== HuggingFace 모델 가져오기 (관리자)
+
+[source,bash]
+----
+# HuggingFace 모델을 OCI 모델 허브로 (관리자)
+argus-model oci-import-hf bert-base-uncased --name bert-base
+----
+
+MLflow 레지스트리로 가져오려면 `import-hf HF_ID NAME` 을 씁니다.
+
+[[_에어갭_반입]]
 == 에어갭 반입
 
-외부 인터넷이 차단된 환경에서는 다음 절차로 반입합니다.
+외부 인터넷이 차단된 환경에서는 인터넷 구간에서 모델을 받아 파일로 옮긴 뒤 폐쇄망 카탈로그에 등록합니다.
 
-. 인터넷이 가능한 구간에서 모델을 내려받아 파일로 준비합니다.
-. 그 파일을 사내(서버가 접근할 수 있는) 위치로 전송합니다.
-. 서버의 로컬 디렉터리에서 임포트합니다.
+.외부 모델의 에어갭 반입
+image::diagrams/models-import-01.png[외부 모델의 에어갭 반입,role="diagram"]
 
+=== 방법 1 — `push` (권장)
+
+에어갭 망의 PC 로 파일을 옮긴 뒤 그 PC 에서 올립니다. 서버 파일시스템에 접근할 필요가 없고 관리자가 아니어도 됩니다.
+
+. 인터넷 구간에서 모델을 가져오고 파일로 내려받습니다.
++
 [source,bash]
 ----
-argus-model import-local /data/models/bert argus.ml.bert
+argus-model oci-import-hf bert-base-uncased --name bert-base --server http://online-catalog:4600
+argus-model pull bert-base 1 ./bert-base --server http://online-catalog:4600
+----
+. USB · 파일 전송으로 `./bert-base` 를 에어갭 PC 로 옮깁니다.
+. 에어갭 PC 에서 올립니다.
++
+[source,bash]
+----
+argus-model push ./bert-base bert-base --server http://airgap-catalog:4600
 ----
 
-== Python SDK
+=== 방법 2 — `import-local` (관리자, MLflow 레지스트리)
 
+. 파일을 카탈로그 서버가 읽을 수 있는 경로에 복사합니다.
+. 그 서버 경로를 지정해 반입합니다.
++
+[source,bash]
+----
+argus-model import-local /data/transferred/bert argus.ml.bert --server http://airgap-catalog:4600
+----
+. MLflow 모델 상세의 버전 탭에서 새 버전을 확인합니다.
+
+image::models-import/local-import-versions.png[로컬 반입으로 만든 MLflow 모델 버전, 900]
+
+[WARNING]
+====
+* `import-local` 의 경로는 명령을 실행하는 PC 가 아니라 **카탈로그 서버(컨테이너) 안의 경로**입니다.
+  없는 경로나 파일이 없는 디렉터리를 주면 400 으로 바로 거부되고 모델 · 버전은 만들어지지 않습니다.
+* 반입 도중 실패하면 만든 버전은 *등록 실패*(`FAILED_REGISTRATION`)로 남고 사유가 기록됩니다. 저장소(MinIO)에 연결할 수 없으면
+  503 "오브젝트 스토리지에 연결할 수 없습니다. MinIO 실행 여부와 설정을 확인하세요." 입니다. 저장소를 복구한 뒤 실패한 버전을 지우고 다시 반입합니다.
+====
+
+[[_cli_argus_model]]
+== 명령 한눈에 보기 (`argus-model`)
+
+명령은 저장소별로 나뉩니다.
+
+[cols="2,3,1",options="header"]
+|===
+| 명령 | 설명 | 권한
+
+| `push LOCAL_DIR NAME` | 로컬 디렉터리를 OCI 모델 새 버전으로 올림(없으면 모델 생성) | 로그인 (기존 모델은 소유자 · 생성자 · 관리자)
+| `oci-list` | OCI 모델 목록 | 로그인
+| `oci-import-hf HF_ID` | HuggingFace → OCI 모델 허브 (`--name`, `--revision`, `--no-wait`) | 관리자
+| `oci-delete NAME` | OCI 모델과 파일 삭제 | 소유자 · 생성자 · 관리자
+| `list` | MLflow 모델 목록 | 로그인
+| `import-hf HF_ID NAME` | HuggingFace → MLflow 레지스트리 | 관리자
+| `import-local SERVER_DIR NAME` | 서버 디렉터리 → MLflow 레지스트리 (에어갭) | 관리자
+| `delete NAME...` | MLflow 모델 영구 삭제 | 관리자
+| `pull NAME VERSION DEST` | 버전 파일 전체 내려받기 (두 저장소 공통) | 로그인
+| `files NAME VERSION` · `manifest NAME VERSION` | 파일 목록 · OCI manifest (두 저장소 공통) | 로그인
+|===
+
+명령별 사용법 · 실행 예시 · 문제 해결은 xref:appendix/sdk.adoc[SDK · argus-model CLI] 를 참고하세요.
+
+[[_python_sdk]]
+[TIP]
+.고급 사용자 — Python SDK 로 같은 작업하기
+====
 [source,python]
 ----
-from argus_catalog_sdk import ModelClient
+from argus_catalog_sdk import ApiError, ModelClient
 
-client = ModelClient("http://localhost:4600", username="admin", password="...")
+with ModelClient("http://localhost:4600", username="admin", password="...") as client:   # 또는 token="..."
+    # 로컬 디렉터리를 OCI 모델로
+    r = client.push("./my-model", "my-custom-model")
 
-# HuggingFace 에서 임포트
-client.import_huggingface("bert-base-uncased", "argus.ml.bert")
+    # HuggingFace 에서 OCI 모델 허브로 (관리자) — MLflow 레지스트리로는 import_huggingface(hf_id, model_name)
+    client.oci_import_huggingface("bert-base-uncased", name="bert-base")
 
-# 모델을 로컬로 내려받기
-client.pull("argus.ml.bert", version=1, dest="/tmp/bert")
+    # 모델을 로컬로 내려받기
+    client.pull("bert-base", 1, "/tmp/bert")
 ----
+
+서버가 오류로 답하면 `ApiError`(`status_code`, `detail`)가 납니다.
+====
 
 [NOTE]
 ====
-MLflow 로 등록한 모델의 학습·추론에는 MLflow 클라이언트를 사용합니다. 이 SDK 는 OCI 모델
-저장소 관리(업로드·다운로드·HuggingFace 임포트·에어갭 전송)를 담당합니다.
-자세한 적용 범위는 `sdk/README.md` 를 참고하세요.
+MLflow 로 등록한 모델의 학습 · 추론에는 MLflow 클라이언트를 사용합니다(xref:models/registry.adoc[모델 레지스트리]). 이 SDK 는
+오브젝트 저장소 관리(업로드 · 다운로드 · HuggingFace 가져오기 · 에어갭 반입)를 담당합니다.
 ====
 
-// TODO: screenshot - 모델 반입 / OCI Hub
-// image::models-import/import.png[모델 반입, 800]
+== 자주 묻는 질문
+
+*Q. `import-local` 이 400 으로 거부됩니다.* +
+A. 경로는 내 PC 가 아니라 **카탈로그 서버(컨테이너) 안의 경로**여야 하고, 그 안에 파일이 있어야 합니다.
+
+*Q. 503 "오브젝트 스토리지에 연결할 수 없습니다." 가 나옵니다.* +
+A. 저장소(MinIO)가 실행 중인지, 설정이 맞는지 확인하세요. 복구한 뒤 *등록 실패* 로 남은 버전을 지우고 다시 반입합니다.
+
+*Q. 관리자가 아닌데 폐쇄망으로 모델을 옮겨야 합니다.* +
+A. <<_에어갭_반입,방법 1 — `push`>> 를 쓰세요. 서버 파일시스템 접근이나 관리자 권한이 필요 없습니다.

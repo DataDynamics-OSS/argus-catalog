@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { Loader2 } from "lucide-react"
+import { assertFileResponse, fileLoadErrorMessage } from "./utils"
 
 type PdfViewerProps = {
   /** Presigned download URL for the PDF file. */
@@ -18,7 +19,7 @@ export function PdfViewer({ url }: PdfViewerProps) {
 
     fetch(url)
       .then((res) => {
-        if (!res.ok) throw new Error(`Failed to fetch PDF (${res.status})`)
+        assertFileResponse(res)
         return res.blob()
       })
       .then((blob) => {
@@ -28,7 +29,7 @@ export function PdfViewer({ url }: PdfViewerProps) {
         setIsLoading(false)
       })
       .catch((err) => {
-        setError(err instanceof Error ? err.message : "Failed to load PDF")
+        setError(fileLoadErrorMessage(err))
         setIsLoading(false)
       })
 

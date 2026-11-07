@@ -38,7 +38,7 @@ import { useAuth } from "@/features/auth"
 import { UsersActionDialog } from "@/features/users/components/users-action-dialog"
 import type { User as UserType } from "@/features/users/data/schema"
 import { findPreset, type AvatarPreset } from "@/lib/avatar"
-import { toast } from "sonner"
+import { toast } from "@/lib/notify"
 
 export function SidebarUser() {
   const { user, logout, setAvatar, authType } = useAuth()

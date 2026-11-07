@@ -45,6 +45,17 @@ database:
     recycle: ${db.pool.recycle:3600}
   echo: ${db.echo:false}
 
+# API 카탈로그가 사용자 지정 URL(스펙 URL 가져오기·Try-it)로 서버측 호출할 때의 SSRF 정책.
+# 루프백·링크로컬(클라우드 메타데이터)·카탈로그 자체 인프라(DB·오브젝트 스토리지·Temporal·
+# Keycloak·metadata-sync)는 항상 차단된다. 사설망은 사내 API 등록을 위해 기본 허용.
+api_outbound:
+  block_private: false     # true 면 사설망(10/8·172.16/12·192.168/16·fc00::/7·100.64/10)도 차단
+  allowed_hosts: ""        # 우선 허용 — 호스트명/IP/CIDR 쉼표 구분 (예: "api.internal,10.20.0.0/16")
+  denied_hosts: ""         # 추가 차단 — 호스트명/IP/CIDR 쉼표 구분
+
+api_observability:
+  retention_days: 180      # API 호출(Try-it) 기록 보관 기간(일). 지난 기록은 주기적으로 삭제, 0 이면 보관 무제한
+
 external:
   cache:
     max_size: 1000
@@ -54,6 +65,7 @@ external:
 # Object Storage (MinIO / S3) — 최초 seed 기본값. 이후 DB 설정값으로 덮어쓴다.
 object_storage:
   endpoint: ${os.endpoint:http://localhost:9000}
+  public_endpoint: ${os.public_endpoint:}
   access_key: ${os.access_key:minioadmin}
   secret_key: ${os.secret_key:minioadmin}
   region: ${os.region:us-east-1}
@@ -63,9 +75,10 @@ object_storage:
 
 # 변경 관리(change-mgmt) 결재/통지 워크플로우용 Temporal 설정
 # 개발 스택 기동: docker compose -f backend/deploy/temporal/docker-compose.yml up -d
-# AI 어시스턴트 에이전트 (agent/ serve 모드) — 설정 시 채팅을 프록시.
-# 비워 두면 서버 내장 단순 대화로 폴백한다.
+# AI 어시스턴트 (argus-catalog-ai-service 의 assistant 서버, 예: http://<호스트>:8930) — 설정 시 채팅을 프록시.
+# 비워 두면 서버 내장 단순 대화로 폴백한다. agent.url 은 이전 이름(한 버전 동안 유지).
 assistant:
+  service.url: ${assistant.service.url:}
   agent.url: ${assistant.agent.url:}
 
 temporal:
@@ -73,3 +86,25 @@ temporal:
   target: ${temporal.target:localhost:7233}
   namespace: ${temporal.namespace:default}
   task_queue: ${temporal.task_queue:change-mgmt}
+
+# 카탈로그 페더레이션 — 값은 코드 기본값(app/core/config.py)과 동일.
+# export 토큰은 환경변수 ARGUS_FEDERATION_TOKEN 이 우선하며, 비우면 export 인증 비강제(개발용).
+# public_base_url: 이 인스턴스의 공개 base URL — 설정하면 같은 URL 을 peer 로 등록(자기 자신 등록)하지 못한다.
+# full_sync_interval_seconds: 0 이면 주기적 전체 동기화 비활성.
+# export_exclude_sensitivity / export_datasource_allowlist: 쉼표 구분(allowlist 를 비우면 전체 허용).
+federation:
+  export_token: ${federation.export_token:}
+  export_allow_anonymous_sample: ${federation.export_allow_anonymous_sample:false}
+  public_base_url: ${federation.public_base_url:}
+  harvest_enabled: ${federation.harvest_enabled:true}
+  harvest_tick_seconds: ${federation.harvest_tick_seconds:300}
+  harvest_samples: ${federation.harvest_samples:true}
+  full_sync_interval_seconds: ${federation.full_sync_interval_seconds:86400}
+  watermark_overlap_seconds: ${federation.watermark_overlap_seconds:300}
+  stale_run_seconds: ${federation.stale_run_seconds:7200}
+  sample_limit: ${federation.sample_limit:100}
+  export_exclude_pii: ${federation.export_exclude_pii:false}
+  export_exclude_sensitivity: ${federation.export_exclude_sensitivity:}
+  export_datasource_allowlist: ${federation.export_datasource_allowlist:}
+  breaker_threshold: ${federation.breaker_threshold:3}
+  breaker_cooldown_seconds: ${federation.breaker_cooldown_seconds:60}

@@ -15,6 +15,8 @@ DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 class _ProgramNameFilter(logging.Filter):
+    """모든 레코드에 ``programname`` 속성(앱 이름)을 붙여 LOG_FORMAT 의 %(programname)s 를 채운다."""
+
     def __init__(self, program_name: str) -> None:
         super().__init__()
         self.program_name = program_name
@@ -25,6 +27,8 @@ class _ProgramNameFilter(logging.Filter):
 
 
 class _DailyFileHandler(TimedRotatingFileHandler):
+    """자정마다 롤링하고, 지난 파일을 ``{stem}_{YYYYMMDD}{ext}`` 이름으로 남기는 파일 핸들러."""
+
     def __init__(self, log_dir: Path, filename: str, backup_count: int) -> None:
         log_file = log_dir / filename
         super().__init__(
@@ -41,6 +45,7 @@ class _DailyFileHandler(TimedRotatingFileHandler):
         self.namer = self._namer
 
     def _namer(self, default_name: str) -> str:
+        """기본 이름 ``app.log.20260101`` → ``app_20260101.log`` 로 바꾼다."""
         parts = default_name.rsplit(".", 1)
         if len(parts) == 2:
             date_suffix = parts[1]
@@ -49,6 +54,11 @@ class _DailyFileHandler(TimedRotatingFileHandler):
 
 
 def setup_logging() -> None:
+    """루트 로거를 설정 파일 기준(레벨·디렉터리·보관 개수)으로 초기화한다.
+
+    기존 루트 핸들러를 모두 지우고 일 단위 롤링 파일 핸들러 하나만 단다. 로그 레벨이 DEBUG 면
+    SQLAlchemy 엔진 로그(SQL)도 DEBUG 로, 아니면 WARNING 이상만 남긴다.
+    """
     log_dir = settings.log_dir
     log_dir.mkdir(parents=True, exist_ok=True)
 
@@ -75,3 +85,6 @@ def setup_logging() -> None:
         sa_logger.setLevel(logging.DEBUG)
     else:
         sa_logger.setLevel(logging.WARNING)
+    root_logger.info("로깅 초기화: level=%s file=%s backup_count=%d",
+                     logging.getLevelName(log_level), log_dir / settings.log_filename,
+                     settings.log_rolling_backup_count)

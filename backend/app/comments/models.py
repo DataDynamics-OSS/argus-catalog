@@ -25,6 +25,8 @@ from app.core.database import Base
 
 
 class Comment(Base):
+    """댓글 1건 — 최상위 댓글과 모든 깊이의 답글을 같은 테이블에 담는다."""
+
     __tablename__ = "catalog_comments"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -49,7 +51,7 @@ class Comment(Base):
     author_email = Column(String(255))
     author_avatar = Column(String(500))
 
-    # 비정규화된 답글 수 (답글 생성/삭제 시 갱신)
+    # 비정규화된 "보이는 직접 답글 수" (답글 생성/삭제 시 갱신 — comments.service.delete_comment 참고)
     reply_count = Column(Integer, nullable=False, default=0)
 
     # 타임스탬프

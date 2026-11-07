@@ -14,6 +14,7 @@ import {
   CardTitle,
 } from "@workspace/ui/components/card"
 import { useAuth } from "@/features/auth"
+import { errorMessage } from "@/lib/notify"
 
 export default function LoginPage() {
   const router = useRouter()
@@ -43,7 +44,7 @@ export default function LoginPage() {
         userInfo.must_change_password ? "/change-password-required" : "/dashboard"
       )
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Login failed")
+      setError(errorMessage(err) ?? "로그인하지 못했습니다.")
     } finally {
       setLoading(false)
     }
@@ -54,16 +55,16 @@ export default function LoginPage() {
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
           <CardTitle className="text-2xl font-bold">Argus Catalog</CardTitle>
-          <CardDescription>Sign in to your account</CardDescription>
+          <CardDescription>계정으로 로그인하세요</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             <div className="flex flex-col gap-2">
-              <Label htmlFor="username">Username</Label>
+              <Label htmlFor="username">사용자명</Label>
               <Input
                 id="username"
                 type="text"
-                placeholder="Enter your username"
+                placeholder="사용자명을 입력하세요"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 required
@@ -72,11 +73,11 @@ export default function LoginPage() {
               />
             </div>
             <div className="flex flex-col gap-2">
-              <Label htmlFor="password">Password</Label>
+              <Label htmlFor="password">비밀번호</Label>
               <Input
                 id="password"
                 type="password"
-                placeholder="Enter your password"
+                placeholder="비밀번호를 입력하세요"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
@@ -87,7 +88,7 @@ export default function LoginPage() {
               <p className="text-sm text-destructive">{error}</p>
             )}
             <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? "Signing in..." : "Sign in"}
+              {loading ? "로그인 중…" : "로그인"}
             </Button>
           </form>
         </CardContent>

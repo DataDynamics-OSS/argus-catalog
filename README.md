@@ -5,178 +5,125 @@
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-데이터, 모델, API, 그리고 AI 에이전트까지 — 흩어져 있던 자산을 한곳에서 찾고 관리하고 싶었던
-적이 있다면, **Argus Catalog** 가 그 자리를 채워 줍니다. DataHub 스타일의 **데이터 카탈로그**와
-Unity Catalog OSS 호환 **ML 모델 레지스트리**를 하나로 묶은 오픈소스 메타데이터 플랫폼으로,
-이 모든 자산을 **하나의 카탈로그에서 거버넌스**합니다. 외부망과 단절된 **에어갭(폐쇄망) 환경도
-적극 지원**하니, 인터넷이 닿지 않는 사내망에서도 그대로 쓸 수 있습니다.
+**Argus Catalog** 는 회사 안에 흩어진 데이터·ML 모델·API·AI 에이전트를 **한 곳에서 찾고, 이해하고, 관리하는**
+오픈소스 메타데이터 플랫폼입니다. 데이터 카탈로그와 MLflow 호환 모델 레지스트리를 한 제품으로 묶었고,
+인터넷이 차단된 **폐쇄망(에어갭)** 에서도 그대로 동작합니다.
 
-- **데이터 카탈로그** — 데이터셋·스키마·리니지·데이터 품질·표준·용어집과
-  **임베딩 기반 하이브리드 검색**(pgvector — 키워드 + 시맨틱)
-- **메타데이터 거버넌스** — OpenAPI 스펙(**API 카탈로그**)과 **AI Agent 카탈로그**(도구/MCP·평가·미터링)
-- **카탈로그 페더레이션** — 여러 Argus 인스턴스를 **하나로 연합**해 통합 검색·탐색,
-  HARVEST 미러·재임베딩(에어갭 친화), cross-instance 리니지, **로컬 승격(import)**
-- **ML 모델 레지스트리** — **MLflow · OCI 호환**, 버전/Stage 관리, 모델 카드, OCI 모델 허브
-- **모델 반입 SDK** — 외부(HuggingFace 등) 모델을 **에어갭 사내망으로 반입**하는
-  Python SDK + `argus-model` CLI (OCI Airgap 임포트)
-- **AI** — LLM(OpenAI/Anthropic/Ollama) 기반 메타데이터 자동 생성과 tool-use AI 어시스턴트
+- **찾기** — 이름·설명·의미로 검색(키워드 + 임베딩 시맨틱 검색), 분류 체계·태그·용어집으로 탐색
+- **이해하기** — 스키마·DDL·샘플·리니지·ER 다이어그램·데이터 품질 점수를 한 화면에서
+- **관리하기** — 소유자·표준·변경 관리(결재)·메뉴/기능 권한·알림
+- **모델과 AI 자산까지** — MLflow·OCI 모델, OpenAPI, AI Agent, MCP Server 를 같은 카탈로그에서
 
-![데이터셋의 메타데이터](docs/modules/ROOT/assets/images/index/dataset.png?w=300 "데이터셋의 메타데이터")
+<p align="center">
+  <img src=".github/images/dataset.png" width="720" alt="데이터셋 상세 — 분류 체계·용어집·태그·소유자·품질 점수 등 메타데이터">
+  <br><sub>데이터셋 상세 — 분류·용어집·태그·소유자·품질 점수를 한 화면에서</sub>
+</p>
 
-![데이터셋의 PySpark 코드](docs/modules/ROOT/assets/images/index/pyspark.png?w=300 "데이터셋의 PySpark 코드")
+<p align="center">
+  <img src=".github/images/pyspark.png" width="720" alt="데이터셋 상세의 PySpark 탭 — 원천 DB 에서 S3 데이터레이크로 옮기는 코드 자동 생성">
+  <br><sub>PySpark 탭 — 원천 테이블을 데이터레이크로 옮기는 적재 코드를 자동으로 만들어 줍니다</sub>
+</p>
 
-여러 도구를 따로따로 설치하고 연결할 필요 없이, 이 모든 기능을 단일 저장소에서 한 번에 제공합니다.
+## 5분 만에 띄워 보기
 
-## 주요 기능
+Docker 만 있으면 됩니다. 저장소 루트에서:
 
-아래는 Argus Catalog가 제공하는 기능을 영역별로 정리한 목록입니다. 데이터 카탈로그부터
-품질, 거버넌스, 모델 레지스트리, AI까지 어떤 범위를 다루는지 한눈에 살펴보세요.
+```bash
+docker compose -f deploy/docker-compose.yml up -d --build
+```
 
-- **데이터 카탈로그**
-  - 데이터셋 관리
-    - 등록 · 검색 · 태그 · 소유자(Technical/Business/Data Steward)
-    - 11종 데이터 소스 메타데이터 동기화
-  - 리니지 & ERD
-    - 이기종 시스템 간 컬럼 수준 데이터 흐름 추적
-    - DDL 파싱 기반 ER 다이어그램(Mermaid 내보내기)
-  - 데이터 표준 & 용어집
-    - 멀티 표준 사전 · 형태소 분석 기반 용어 자동 생성
-    - 준수율 측정 · 트리 분류 용어집
-  - 시맨틱 검색
-    - pgvector 기반 키워드 + 시맨틱 하이브리드 검색
-- **데이터 품질**
-  - 프로파일링 & 검증
-    - 소스 DB 직접 프로파일링(최빈값 포함)
-    - 10종 규칙 검증(기본 8종 + CUSTOM_SQL/CUSTOM_PYTHON)
-  - 품질 점수 & 전파
-    - 점수 자동 동기화(GOOD/WARN/BAD)·추세
-    - 리니지 업스트림 품질 전파 경고
-- **메타데이터 거버넌스**
-  - API 카탈로그
-    - OpenAPI/REST API 스펙 등록
-    - 버전 diff · 린트
-    - URN 기반 메타데이터 관리
-  - AI Agent 카탈로그
-    - 에이전트 등록 · 도구/MCP
-    - 리니지 · 버전 · 평가 · 미터링
-- **카탈로그 페더레이션**
-  - 인스턴스 연합 · 모드(LIVE/HARVEST/HYBRID)
-    - 통합 검색 · 탐색(트리+그리드) · cross-instance 리니지
-    - HARVEST 미러·재임베딩·샘플 미러링(에어갭 친화)
-  - 로컬 승격(import) · 노출 거버넌스
-    - 미러 데이터셋을 로컬 카탈로그로 복사(태그 매칭·"페더레이션" 마커)
-    - visibility 정책 · 서비스 토큰 · circuit breaker · 관측성
-- **ML 모델 레지스트리**
-  - 모델 관리
-    - MLflow 연동 · 버전/Stage 관리(STAGING/PRODUCTION)
-    - 메트릭 비교 · 모델 카드
-  - OCI 모델 허브
-    - HuggingFace 스타일 모델 브라우저 · OCI 매니페스트
-    - Airgap 임포트
-- **AI**
-  - AI 메타데이터 생성
-    - LLM(OpenAI/Anthropic/Ollama) 기반
-    - 설명 · 태그 추천 · PII 감지(미리보기 후 승인)
-  - AI 어시스턴트
-    - tool-use 채팅 — 카탈로그/스키마/ERD/품질/리니지/SQL 도구 호출
-    - 실데이터 근거 응답
-- **운영**
-  - 알림
-    - 스키마 변경 영향 분석
-    - 품질 실패 트리거 · Webhook 통지
+| 접속 | 주소 |
+|------|------|
+| 웹 화면 | http://localhost:3000 |
+| API 문서 (Swagger) | http://localhost:4600/docs |
+
+처음 로그인은 `admin` / `admin` 입니다. 로그인하면 **비밀번호 변경 화면**이 먼저 나오니 새 비밀번호로 바꾸세요.
+그다음 *데이터 카탈로그 → 데이터 소스* 에서 사내 DB 를 등록하고 메타데이터를 동기화하면 데이터셋이 채워집니다.
+샘플 데이터(Sakila)와 다른 구성은 [`deploy/README.md`](deploy/README.md) 를 참고하세요.
+
+> 기본 계정·비밀번호는 로컬 데모용입니다. 운영에 올리기 전에 [운영 환경 보안 설정](#운영-환경-보안-설정-️)을 꼭 확인하세요.
+
+## 무엇을 할 수 있나요
+
+| 영역 | 할 수 있는 일 |
+|------|---------------|
+| **데이터 카탈로그** | 11종 데이터 소스(MySQL·PostgreSQL·Oracle·SQL Server·Hive·Impala·Trino·StarRocks·Greenplum·Kudu·Iceberg REST) 메타데이터 동기화, 데이터셋 대시보드, 분류 체계, 스키마·DDL·샘플, 컬럼 리니지·ER 다이어그램, 댓글 |
+| **데이터 품질** | 원천 DB 직접 프로파일링, 10종 검증 규칙(프로파일 기반 추천 포함), 품질 점수·추세, 예약 검증, 업스트림 품질 경고, 외부 품질 배치(pandas·PySpark) 결과 반입 |
+| **거버넌스** | 데이터 표준·용어집·태그, 변경 관리(결재선·영향 분석·통지), 알림(스키마 변경·품질 실패 → 화면 알림·Webhook) |
+| **API · AI 자산** | API 카탈로그(OpenAPI 등록·버전 비교·시험 호출), AI Agent 카탈로그, MCP Server 카탈로그(승인 정책·감사·정책 번들 배포) |
+| **ML 모델** | MLflow 호환 모델 레지스트리(버전·Stage·성능 비교·모델 카드·리니지), OCI 모델 허브(HuggingFace 가져오기·에어갭 반입), 모델 파일 브라우저 |
+| **AI** | LLM(OpenAI·Anthropic·Ollama)으로 설명·컬럼 설명·태그·PII 자동 생성(미리보기 후 적용), 카탈로그 도구를 쓰는 AI 어시스턴트 |
+| **페더레이션** | 여러 Argus 인스턴스를 연합해 통합 검색·탐색·리니지, HARVEST 미러, 로컬 승격 |
+| **운영** | 로컬·Keycloak(OIDC) 인증, LDAP 사용자 동기화, 사용자 관리, 역할별 메뉴·기능 권한, 쿼리 수집기(Hive·Impala·Trino·StarRocks) |
+
+화면별 사용법은 사용자 매뉴얼([`docs/`](docs), Antora)에 정리돼 있습니다.
+모델 반입·조회는 Python SDK 와 `argus-model` CLI([`sdk/`](sdk))로도 할 수 있습니다.
 
 ## 저장소 구성
 
-이 프로젝트가 어떻게 나뉘어 있는지 궁금하다면, 아래 표에서 각 디렉토리가 맡은 역할을 확인할 수 있습니다.
-
-| 디렉토리 | 역할 |
+| 디렉터리 | 역할 |
 |----------|------|
-| [`backend/`](backend) | FastAPI 기반 카탈로그·모델 레지스트리 백엔드 |
-| [`frontend/`](frontend) | Next.js 기반 사용자/관리자 웹 UI |
-| [`sdk/`](sdk) | OCI 모델 저장소용 Python SDK + `argus-model` CLI |
-| [`agent/`](agent) | AI 메타데이터 생성·AI 어시스턴트 독립 에이전트 (로컬 LLM 연동) |
+| [`backend/`](backend) | 카탈로그·모델 레지스트리 서버 (FastAPI, 포트 4600) |
+| [`frontend/`](frontend) | 웹 화면 (Next.js) |
+| [`ai-service/`](ai-service) | AI 메타데이터 생성·AI 어시스턴트 서비스 (argus-catalog-ai-service, 선택) |
+| [`sdk/`](sdk) | 모델 반입·조회용 Python SDK + `argus-model` CLI |
+| [`extensions/`](extensions) | 쿼리 수집기·Query Service·Metadata Sync·LDAP User Sync 등 확장 |
 | [`quality/`](quality) | 외부 품질 배치 (pandas / PySpark) |
-| [`tests/`](tests) | 플랫폼별 통합 테스트 (Hive·Trino·StarRocks·PostgreSQL 등) |
+| [`deploy/`](deploy) | Docker Compose 스택 (데모·인프라·운영 오버라이드) |
+| [`release/`](release) | 폐쇄망용 설치 묶음(tar.gz + systemd, RPM) 빌드 |
+| [`docs/`](docs) | 사용자 매뉴얼 (Antora · PDF) |
+| [`tests/`](tests) | 데이터 소스별 통합 테스트 |
 
-## 기술 스택
+## 개발 환경에서 직접 실행
 
-Argus Catalog는 어떤 기술 위에서 돌아갈까요? 백엔드부터 임베딩·검색까지, 핵심 구성 요소를 정리했습니다.
+백엔드를 고쳐 가며 개발할 때는 인프라만 컨테이너로 띄우고 서버와 화면은 로컬에서 실행합니다.
 
-- **Backend** — Python 3.11+, FastAPI, Uvicorn, SQLAlchemy, PostgreSQL(pgvector)
-- **Frontend** — Next.js, React, TypeScript, pnpm
-- **Model Registry** — MLflow 호환, OCI 매니페스트, S3/MinIO 호환 오브젝트 스토리지
-- **임베딩 / 검색** — pgvector 하이브리드 검색. 임베딩 제공자 선택 가능 —
-  **Local**(sentence-transformers, 오프라인) / **OpenAI**(text-embedding-3 등) / **Ollama**(nomic-embed-text 등)
-- **AI(LLM)** — OpenAI / Anthropic / Ollama (OpenAI 호환 엔드포인트)
+```bash
+docker compose -f deploy/docker-compose.infra.yml up -d   # MinIO·Temporal·Keycloak·Sakila
+
+cd backend && make dev && make run          # 백엔드 :4600 (uvicorn --reload)
+cd frontend && pnpm install && pnpm dev     # 화면 :3000 (Next.js dev)
+```
+
+카탈로그 DB(PostgreSQL + pgvector)는 인프라 compose 에 들어 있지 않으니 따로 준비하고,
+연결 정보는 `backend/packaging/config/config.properties` 에 적습니다(스키마 DDL 은 같은 폴더의 `argus-catalog-postgresql.sql`).
+화면은 기본으로 `http://localhost:4600` 의 API 에 연결됩니다. AI 기능을 쓰려면 [`ai-service/`](ai-service) 를 함께 띄우고
+LLM(Ollama 등)을 연결합니다 — 설정 예시는 [`ai-service/.env.example`](ai-service/.env.example).
 
 ## 외부 의존성
 
-카탈로그 서버가 어떤 외부 서비스와 손잡고 무슨 일을 하는지 정리했습니다. 처음부터 전부 갖출
-필요는 없습니다. **필수**가 아닌 항목은 해당 기능을 쓰지 않는 한 없어도 잘 동작합니다.
+처음부터 전부 갖출 필요는 없습니다. **필수**가 아닌 항목은 그 기능을 쓸 때만 필요합니다.
 
 | 서비스 | 구분 | 용도 |
 |--------|------|------|
-| **PostgreSQL** (pgvector) | 필수 | 카탈로그 메타데이터 저장 + pgvector 기반 시맨틱 검색 |
-| **오브젝트 스토리지** (MinIO / S3 호환) | 필수 | ML 모델 아티팩트 저장 (모델 레지스트리 · OCI Model Hub) |
-| **Temporal** | 기본 활성 | 변경관리(change-mgmt) 워크플로 엔진. `temporal.enabled=false` 로 끄면 변경관리 submit 만 비활성 |
-| **Keycloak** | 선택 | OIDC/SSO 인증 (`auth.type=keycloak`). 기본은 로컬 인증(`local`)이라 불필요 |
-| **OpenLDAP** | 선택 | LDAP 사용자 동기화 (`extensions/ldap-user-sync`) |
-| **MLflow** | 선택 | 모델 레지스트리 MLflow 연동 (메트릭 · 버전 관리) |
+| **PostgreSQL** (pgvector) | 필수 | 카탈로그 저장소 + 시맨틱 검색 |
+| **오브젝트 스토리지** (MinIO / S3 호환) | 필수 | 모델 파일 저장 (모델 레지스트리 · OCI 모델 허브) |
+| **Temporal** | 기본 사용 | 변경 관리 결재 워크플로. 끄면(`temporal.enabled=false`) 변경 요청 제출만 막힘 |
+| **Keycloak** | 선택 | OIDC/SSO 인증. 기본은 로컬 인증 |
+| **OpenLDAP / AD** | 선택 | LDAP 사용자 동기화 (`extensions/ldap-user-sync`) |
 | **LLM** (OpenAI / Anthropic / Ollama) | 선택 | AI 메타데이터 생성 · AI 어시스턴트 |
-| MariaDB (Sakila) | 데모 | 로컬 데모용 샘플 데이터셋 |
-
-> 위 의존성을 로컬에서 한 번에 띄우는 docker-compose 스택과 사용법은 [`deploy/`](deploy) 를 참고하세요.
-
-## 빠른 시작
-
-말보다 직접 띄워 보는 게 빠르겠죠. 백엔드와 프론트엔드를 차례로 실행하는 방법을 살펴봅니다.
-
-### Backend
-
-```bash
-cd backend
-make dev      # pip install -e ".[dev]"
-make run      # uvicorn --reload (port 4600)
-```
-
-기본 설정으로 백엔드를 돌리려면 PostgreSQL · 오브젝트 스토리지 같은 인프라가 함께 떠 있어야
-합니다. 연결 정보는 환경/설정 파일로 주입하면 됩니다.
-
-### Frontend
-
-```bash
-cd frontend
-pnpm install
-pnpm dev       # 개발 서버 (Turbopack, port 3000)
-```
-
-프론트엔드는 별도 설정 없이도 기본적으로 백엔드 API(`http://localhost:4600`)에 연결됩니다.
-
-### AI 에이전트 (선택)
-
-AI 기능까지 써 보고 싶다면 `agent/` 를 띄워 보세요. 로컬 LLM(ollama 등)과 연동해 메타데이터
-자동 생성과 AI 어시스턴트를 제공합니다. 설정 예시는 [`agent/.env.example`](agent/.env.example) 를 참고하세요.
+| **임베딩 모델** | 선택 | 시맨틱 검색. 로컬(sentence-transformers, 오프라인) / OpenAI / Ollama 중 선택 |
 
 ## 운영 환경 보안 설정 ⚠️
 
-편하게 시작하라고 이 저장소에는 **로컬 개발용 기본값**을 미리 넣어 두었습니다. 다만 이 값들을
-그대로 운영에 올리면 보안에 큰 구멍이 생깁니다. 운영 배포 전에는 다음 항목을 반드시 바꿔 주세요.
+저장소에 들어 있는 기본값은 **로컬 개발용**입니다. 운영에 올리기 전에 반드시 바꾸세요.
 
 | 항목 | 환경변수 / 위치 | 기본값(개발용) |
 |------|-----------------|----------------|
-| 로컬 JWT 서명키 | `ARGUS_JWT_SECRET` | 미설정 시 개발용 기본키(경고 로그) |
+| 관리자 계정 | 첫 로그인 시 변경 | `admin / admin` |
+| 로컬 JWT 서명키 | `ARGUS_JWT_SECRET` | 미설정 시 개발용 키(경고 로그) |
 | 자격증명 암호화 키 | `ARGUS_SECRET_KEY` | 미설정 시 개발용 패스프레이즈(경고 로그) |
 | 카탈로그 DB 계정 | 설정 파일 | `argus / argus` |
 | 오브젝트 스토리지 | 설정 파일 | `minioadmin / minioadmin` |
 | Keycloak client secret | 설정 파일 | `argus-client-secret` |
 
-운영에서는 `ARGUS_JWT_SECRET`, `ARGUS_SECRET_KEY` 를 충분히 긴 무작위 값으로 설정하고
-모든 기본 크리덴셜을 교체해야 합니다.
+`ARGUS_JWT_SECRET`·`ARGUS_SECRET_KEY` 는 충분히 긴 무작위 값으로 정하고, 모든 기본 계정을 교체하세요.
+운영 배포 절차는 [`deploy/README.md`](deploy/README.md#운영-배포), 폐쇄망 설치 묶음은 [`release/README.md`](release/README.md) 를 참고하세요.
 
 ## 버전 관리
 
-버전은 [Semantic Versioning](https://semver.org/lang/ko/) 규칙을 따르며, 루트 `VERSION` 파일
-하나가 단일 기준점이 됩니다. 구체적인 규칙과 릴리스 절차는 [VERSIONING.md](VERSIONING.md) 를 참고하세요.
+[Semantic Versioning](https://semver.org/lang/ko/) 을 따르며, 루트 `VERSION` 파일이 단일 기준입니다.
+규칙과 릴리스 절차는 [VERSIONING.md](VERSIONING.md) 를 참고하세요.
 
 ## 라이선스
 

@@ -25,7 +25,9 @@ import { Button } from "@workspace/ui/components/button"
 import { Separator } from "@workspace/ui/components/separator"
 import { Database, ArrowRight, X, Link2, Plus, Trash2, GitBranch } from "lucide-react"
 import Link from "next/link"
-import { authFetch } from "@/features/auth/auth-fetch"
+import { useAuth } from "@/features/auth"
+import { authFetch, throwOnError } from "@/features/auth/auth-fetch"
+import { errorMessage, notifyError, toast } from "@/lib/notify"
 import { LineageAddDialog } from "./lineage-add-dialog"
 
 const BASE = "/api/v1/catalog"
@@ -641,17 +643,21 @@ export function LineageTab({
   const [error, setError] = useState<string | null>(null)
   const [selectedEdge, setSelectedEdge] = useState<SelectedEdgeInfo | null>(null)
   const [addDialogOpen, setAddDialogOpen] = useState(false)
+  // 리니지 추가·삭제는 서버가 관리자 전용(POST/DELETE /catalog/lineage) — 같은 기준으로 노출
+  const { user } = useAuth()
+  const canEditLineage = !!user?.is_admin
 
   const loadLineage = useCallback(async () => {
     try {
       setLoading(true)
+      setError(null)
       const resp = await authFetch(`${BASE}/datasets/${datasetId}/lineage`)
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+      if (!resp.ok) await throwOnError(resp, "리니지를 불러오지 못했습니다.")
       const data = await resp.json()
       setLineageData(data)
     } catch (e: unknown) {
       console.error("Failed to load lineage", { datasetId, err: e })
-      setError(e instanceof Error ? e.message : "리니지를 불러오지 못했습니다")
+      setError(errorMessage(e) ?? "리니지를 불러오지 못했습니다.")
     } finally {
       setLoading(false)
     }
@@ -737,12 +743,14 @@ export function LineageTab({
   const handleDeleteLineage = async (lineageId: number) => {
     try {
       const resp = await authFetch(`${BASE}/lineage/${lineageId}`, { method: "DELETE" })
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+      if (!resp.ok) await throwOnError(resp, "리니지를 삭제하지 못했습니다.")
       console.info("Lineage deleted", { lineageId })
+      toast.success("리니지를 삭제했습니다.")
       setSelectedEdge(null)
       loadLineage()
     } catch (err) {
       console.error("Failed to delete lineage", { lineageId, err })
+      notifyError(err, "리니지를 삭제하지 못했습니다.")
     }
   }
 
@@ -846,8 +854,8 @@ export function LineageTab({
     setNodes(flowNodes)
   }, [flowNodes, setNodes])
 
-  // -- Add Lineage button (always visible) --
-  const addButton = (
+  // -- Add Lineage button (관리자만) --
+  const addButton = canEditLineage ? (
     <Button
       variant="outline"
       size="sm"
@@ -857,7 +865,7 @@ export function LineageTab({
       <Plus className="h-3.5 w-3.5" />
       리니지 추가
     </Button>
-  )
+  ) : null
 
   if (loading) {
     return (
@@ -938,7 +946,7 @@ export function LineageTab({
               <EdgeDetailPanel
                 info={selectedEdge}
                 onClose={() => setSelectedEdge(null)}
-                onDelete={handleDeleteLineage}
+                onDelete={canEditLineage ? handleDeleteLineage : undefined}
               />
             )}
           </div>

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """설정(Settings) ORM 모델."""
 
-from sqlalchemy import Column, DateTime, Integer, String, func
+from sqlalchemy import Column, DateTime, Integer, String, Text, func
 
 from app.core.database import Base
 
@@ -18,7 +18,8 @@ class CatalogConfiguration(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     category = Column(String(50), nullable=False)
     config_key = Column(String(100), nullable=False, unique=True)
-    config_value = Column(String(500), nullable=False, default="")
+    # 비밀값은 "enc:" 암호문으로 저장(app.settings.service) — 길이 제한 없는 TEXT
+    config_value = Column(Text, nullable=False, default="")
     description = Column(String(255))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

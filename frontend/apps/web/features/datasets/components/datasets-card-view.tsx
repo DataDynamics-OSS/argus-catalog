@@ -56,9 +56,11 @@ type CardActions = {
   onDelete?: (row: DatasetSummary) => void
   onRemove?: (id: number) => void
   removeLabel?: string
+  /** 지정 시 true 인 카드에만 "제거" 를 보인다. */
+  canRemove?: (row: DatasetSummary) => boolean
 }
 
-function DatasetCard({ row, onDelete, onRemove, removeLabel = "제거" }: { row: DatasetSummary } & CardActions) {
+function DatasetCard({ row, onDelete, onRemove, removeLabel = "제거", canRemove }: { row: DatasetSummary } & CardActions) {
   // URN 의 path 에서 마지막 토큰(table) 을 떼고 남은 prefix 를 12px 라인으로 표시.
   const path = pathFromUrn(row.urn)
   const lastDot = path.lastIndexOf(".")
@@ -124,7 +126,7 @@ function DatasetCard({ row, onDelete, onRemove, removeLabel = "제거" }: { row:
                   </DropdownMenuItem>
                 </>
               )}
-              {onRemove && (
+              {onRemove && (!canRemove || canRemove(row)) && (
                 <>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
@@ -178,6 +180,7 @@ export function DatasetsCardView({
   onDelete,
   onRemove,
   removeLabel,
+  canRemove,
 }: { rows: DatasetSummary[] } & CardActions) {
   if (rows.length === 0) {
     return (
@@ -195,6 +198,7 @@ export function DatasetsCardView({
           onDelete={onDelete}
           onRemove={onRemove}
           removeLabel={removeLabel}
+          canRemove={canRemove}
         />
       ))}
     </div>

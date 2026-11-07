@@ -47,13 +47,13 @@ export async function fetchDatasets(
   query.set("page_size", String(params?.pageSize ?? 20))
 
   const res = await authFetch(`${BASE}/datasets?${query.toString()}`)
-  if (!res.ok) throw new Error(`데이터셋 조회 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`데이터셋을 불러오지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 
 export async function fetchDataset(id: number): Promise<DatasetDetail> {
   const res = await authFetch(`${BASE}/datasets/${id}`)
-  if (!res.ok) throw new Error(`데이터셋 조회 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`데이터셋을 불러오지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 
@@ -84,7 +84,7 @@ export async function createDataset(payload: {
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
-    throw new Error(err.detail || `데이터셋 생성 실패: ${res.status}`)
+    throw new Error(err.detail || `데이터셋을 생성하지 못했습니다. (HTTP ${res.status})`)
   }
   return res.json()
 }
@@ -137,7 +137,7 @@ export async function updateDataset(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   })
-  if (!res.ok) await throwOnError(res, "데이터셋 수정 실패")
+  if (!res.ok) await throwOnError(res, "데이터셋을 수정하지 못했습니다.")
   return res.json()
 }
 
@@ -146,7 +146,7 @@ export async function deleteDataset(id: number): Promise<void> {
   if (!res.ok) {
     // 백엔드 친절 메시지(권한·차단 등 detail)를 그대로 전달.
     const err = await res.json().catch(() => ({}))
-    throw new Error(err.detail || `데이터셋 삭제 실패: ${res.status}`)
+    throw new Error(err.detail || `데이터셋을 삭제하지 못했습니다. (HTTP ${res.status})`)
   }
 }
 
@@ -160,13 +160,13 @@ export type DatasourceMetadata = {
 
 export async function fetchDatasourceMetadata(datasourceId: number): Promise<DatasourceMetadata> {
   const res = await authFetch(`${BASE}/datasources/${datasourceId}/metadata`)
-  if (!res.ok) throw new Error(`데이터 소스 메타데이터 조회 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`데이터 소스 메타데이터를 불러오지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 
 export async function fetchDatasources(): Promise<Datasource[]> {
   const res = await authFetch(`${BASE}/datasources`)
-  if (!res.ok) throw new Error(`데이터 소스 조회 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`데이터 소스를 불러오지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 
@@ -178,7 +178,7 @@ export async function addDatasetTag(
     method: "POST",
   })
   if (!res.ok)
-    await throwOnError(res, "태그 추가 실패")
+    await throwOnError(res, "태그를 추가하지 못했습니다.")
 }
 
 export async function removeDatasetTag(
@@ -189,7 +189,7 @@ export async function removeDatasetTag(
     method: "DELETE",
   })
   if (!res.ok)
-    await throwOnError(res, "태그 제거 실패")
+    await throwOnError(res, "태그를 제거하지 못했습니다.")
 }
 
 export async function addDatasetOwner(
@@ -202,7 +202,7 @@ export async function addDatasetOwner(
     body: JSON.stringify(payload),
   })
   if (!res.ok)
-    await throwOnError(res, "소유자 추가 실패")
+    await throwOnError(res, "소유자를 추가하지 못했습니다.")
 }
 
 export async function removeDatasetOwner(
@@ -214,7 +214,7 @@ export async function removeDatasetOwner(
     { method: "DELETE" }
   )
   if (!res.ok)
-    await throwOnError(res, "소유자 제거 실패")
+    await throwOnError(res, "소유자를 제거하지 못했습니다.")
 }
 
 export async function updateDatasetProperties(
@@ -228,7 +228,7 @@ export async function updateDatasetProperties(
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
-    throw new Error(err.detail || `속성 수정 실패: ${res.status}`)
+    throw new Error(err.detail || `속성을 수정하지 못했습니다. (HTTP ${res.status})`)
   }
   return res.json()
 }
@@ -250,7 +250,7 @@ export async function updateDatasetSchema(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(fields),
   })
-  if (!res.ok) await throwOnError(res, "스키마 수정 실패")
+  if (!res.ok) await throwOnError(res, "스키마를 수정하지 못했습니다.")
   return res.json()
 }
 
@@ -289,7 +289,7 @@ export async function fetchSchemaHistory(
   const res = await authFetch(
     `${BASE}/datasets/${datasetId}/schema/history?page=${page}&page_size=${pageSize}`,
   )
-  if (!res.ok) throw new Error(`스키마 이력 조회 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`스키마 이력을 불러오지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 
@@ -301,7 +301,7 @@ export async function addDatasetGlossaryTerm(
     `${BASE}/datasets/${datasetId}/glossary/${termId}`,
     { method: "POST" }
   )
-  if (!res.ok) await throwOnError(res, "용어 추가 실패")
+  if (!res.ok) await throwOnError(res, "용어를 추가하지 못했습니다.")
 }
 
 export async function removeDatasetGlossaryTerm(
@@ -313,7 +313,7 @@ export async function removeDatasetGlossaryTerm(
     { method: "DELETE" }
   )
   if (!res.ok)
-    await throwOnError(res, "용어 제거 실패")
+    await throwOnError(res, "용어를 제거하지 못했습니다.")
 }
 
 // ---------------------------------------------------------------------------
@@ -323,14 +323,14 @@ export async function removeDatasetGlossaryTerm(
 export async function uploadSampleData(
   datasetId: number,
   file: File
-): Promise<{ status: string; path: string; size: number }> {
+): Promise<{ status: string; file: string; size: number }> {
   const form = new FormData()
   form.append("file", file)
   const res = await authFetch(`${BASE}/datasets/${datasetId}/sample`, {
     method: "POST",
     body: form,
   })
-  if (!res.ok) await throwOnError(res, "샘플 데이터 업로드 실패")
+  if (!res.ok) await throwOnError(res, "샘플 데이터를 업로드하지 못했습니다.")
   return res.json()
 }
 
@@ -346,7 +346,7 @@ export async function deleteSampleData(
   const res = await authFetch(`${BASE}/datasets/${datasetId}/sample`, {
     method: "DELETE",
   })
-  if (!res.ok) await throwOnError(res, "샘플 데이터 삭제 실패")
+  if (!res.ok) await throwOnError(res, "샘플 데이터를 삭제하지 못했습니다.")
 }
 
 export async function convertSampleToParquet(
@@ -355,7 +355,7 @@ export async function convertSampleToParquet(
   const res = await authFetch(`${BASE}/datasets/${datasetId}/sample/convert-to-parquet`, {
     method: "POST",
   })
-  if (!res.ok) await throwOnError(res, "Parquet 변환 실패")
+  if (!res.ok) await throwOnError(res, "Parquet으로 변환하지 못했습니다.")
   return res.json()
 }
 
@@ -384,7 +384,7 @@ export async function saveDelimiterConfig(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(config),
   })
-  if (!res.ok) await throwOnError(res, "구분자 설정 저장 실패")
+  if (!res.ok) await throwOnError(res, "구분자 설정을 저장하지 못했습니다.")
 }
 
 export async function fetchDelimiterConfig(
@@ -417,7 +417,7 @@ export async function semanticSearch(
 ): Promise<SemanticSearchResponse> {
   const params = new URLSearchParams({ q, limit: String(limit), threshold: String(threshold) })
   const res = await authFetch(`${BASE}/search/semantic?${params}`)
-  if (!res.ok) throw new Error(`시맨틱 검색 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`시맨틱 검색 결과를 불러오지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 
@@ -430,12 +430,12 @@ export async function hybridSearch(
     keyword_weight: String(keywordWeight), semantic_weight: String(semanticWeight),
   })
   const res = await authFetch(`${BASE}/search/hybrid?${params}`)
-  if (!res.ok) throw new Error(`하이브리드 검색 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`하이브리드 검색 결과를 불러오지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 
 export type EntitySearchResult = {
-  entity_type: "glossary_term" | "ai_agent" | "api"
+  entity_type: "glossary_term" | "ai_agent" | "api" | "mcp_server"
   id: number
   name: string
   display_name: string | null
@@ -453,6 +453,7 @@ export type UnifiedSearchResponse = {
   glossary_terms: EntitySearchResult[]
   ai_agents: EntitySearchResult[]
   apis: EntitySearchResult[]
+  mcp_servers?: EntitySearchResult[]
   total: number
 }
 
@@ -463,6 +464,6 @@ export async function unifiedSearch(
     q, limit: String(limit), entity_limit: String(entityLimit), threshold: String(threshold),
   })
   const res = await authFetch(`${BASE}/search/unified?${params}`)
-  if (!res.ok) throw new Error(`통합 검색 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`통합 검색 결과를 불러오지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }

@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """페더레이션용 SQLAlchemy ORM 모델.
 
-Phase 0 PoC 는 ``FederatedInstance``(peer 레지스트리)만 사용한다. HARVEST 모드용
-미러 테이블/동기화 이력(``FederationSyncRun`` 등)은 후속 단계에서 추가한다.
+- ``FederatedInstance`` — peer 레지스트리
+- ``FederatedDataset`` / ``FederatedDatasetEmbedding`` — HARVEST 미러와 허브 모델 재임베딩
+- ``FederationLineage`` — peer 가 보고한 리니지 엣지 미러(cross-instance stitching)
+- ``FederationSyncRun`` — HARVEST 실행 이력(진행률·watermark)
 """
 
 import logging
@@ -36,7 +38,7 @@ class FederatedInstance(Base):
 
     Trino 의 catalog(connector) 등록에 해당한다. ``instance_key`` 는 이 허브 안에서
     peer 를 구분하는 네임스페이스 prefix(예: ``team-payments``)로, 연합 검색 결과의
-    출처 표시와 (후속 단계의) cross-instance URN 네임스페이싱에 사용한다.
+    출처 표시와 cross-instance URN 네임스페이싱(``{instance_key}::{remote_urn}``)에 사용한다.
     """
 
     __tablename__ = "federation_instances"
@@ -46,12 +48,12 @@ class FederatedInstance(Base):
     instance_key = Column(String(64), nullable=False, unique=True)
     name = Column(String(200), nullable=False)            # 표시용 이름
     base_url = Column(String(500), nullable=False)        # 예: https://catalog.team-a.internal
-    # peer 호출 시 Bearer 로 전송할 서비스 토큰 (선택). Phase 0 은 평문 보관 —
-    # Phase 1 에서 ARGUS_SECRET_KEY 기반 암호화로 전환한다. 응답에는 노출하지 않는다.
+    # peer 호출 시 Bearer 로 전송할 서비스 토큰 (선택). ARGUS_SECRET_KEY 파생 키로 Fernet
+    # 암호화한 ``enc:...`` 형태로 저장한다(token_store). 응답에는 노출하지 않는다.
     auth_token = Column(Text)
-    # 연합 모드: HARVEST / LIVE / HYBRID. Phase 0 PoC 는 LIVE 만 실제 동작.
+    # 연합 모드: HARVEST(미러 검색) / LIVE(요청 시 fan-out) / HYBRID(미러 검색 + LIVE 드릴다운).
     mode = Column(String(20), nullable=False, default="LIVE")
-    # HARVEST 주기(초) — 후속 단계 사용
+    # HARVEST 주기(초) — 스케줄러가 마지막 SUCCESS 이후 이 주기가 지나면 가져온다(HARVEST/HYBRID)
     sync_interval_sec = Column(Integer, nullable=False, default=900)
     # 상태: ACTIVE(연합 검색 포함) / PAUSED(제외)
     status = Column(String(20), nullable=False, default="ACTIVE")
@@ -105,7 +107,7 @@ class FederatedDataset(Base):
     source_text = Column(Text)
     # peer 측 등록 시각(원본 데이터셋 created_at)
     remote_created_at = Column(DateTime(timezone=True))
-    # peer 측 최종 수정 시각 — 증분 동기화 watermark(후속 단계)
+    # peer 측 최종 수정 시각(원본 updated_at). 증분 watermark 자체는 FederationSyncRun.watermark 에 둔다
     remote_updated_at = Column(DateTime(timezone=True))
     harvested_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -176,9 +178,14 @@ class FederationSyncRun(Base):
     datasets_embedded = Column(Integer, nullable=False, default=0)
     datasets_pruned = Column(Integer, nullable=False, default=0)
     # 단계별 진행률(가중 % 계산용) — 현재 단계와 그 단계의 진척 분자/분모.
-    phase = Column(String(20), nullable=False, default="FETCH")  # FETCH/EMBED/FINALIZE
+    phase = Column(String(20), nullable=False, default="FETCH")  # FETCH/EMBED/SAMPLE/FINALIZE
     phase_done = Column(Integer, nullable=False, default=0)
     phase_total = Column(Integer, nullable=False, default=0)
+    # 전체 동기화(prune 포함) 여부 — 주기적 전체 동기화 도래 판단에 사용
+    is_full = Column(Boolean, nullable=False, default=False)
+    # 다음 증분 동기화 기준 시각. SUCCESS 실행에서만 기록해 부분 실패가 watermark 를
+    # 전진시켜 미수신 데이터셋을 영구 누락시키는 것을 막는다.
+    watermark = Column(DateTime(timezone=True))
     error = Column(Text)
     started_at = Column(DateTime(timezone=True), server_default=func.now())
     finished_at = Column(DateTime(timezone=True))

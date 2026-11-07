@@ -16,10 +16,16 @@ logger = logging.getLogger(__name__)
 
 
 class Base(DeclarativeBase):
+    """모든 ORM 모델의 공통 선언 베이스."""
     pass
 
 
 def _build_database_url() -> str:
+    """설정으로 SQLAlchemy 비동기 DB URL 을 만든다(비밀번호 포함 — 로그에 그대로 남기지 말 것).
+
+    Raises:
+        ValueError: db_type 이 postgresql / mariadb / mysql 이 아닐 때.
+    """
     db_type = settings.db_type.lower()
     host = settings.db_host
     port = settings.db_port
@@ -47,11 +53,13 @@ async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False
 
 
 async def get_session() -> AsyncSession:
+    """FastAPI 의존성: 요청 단위 비동기 세션을 열고 응답 후 닫는다(커밋은 핸들러 책임)."""
     async with async_session() as session:
         yield session
 
 
 async def init_database() -> None:
+    """기동 시 DB 연결을 확인한다(``SELECT 1``). 로그의 URL 은 비밀번호를 마스킹한다."""
     db_url = _build_database_url()
     masked = db_url
     if settings.db_password:
@@ -84,5 +92,6 @@ async def reconcile_schema() -> None:
 
 
 async def close_database() -> None:
+    """종료 시 엔진 연결 풀을 정리한다."""
     await engine.dispose()
     logger.info("데이터베이스 연결 풀 종료")

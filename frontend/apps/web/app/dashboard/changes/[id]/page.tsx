@@ -1,12 +1,14 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
+import Link from "next/link"
 import { useParams, useRouter } from "next/navigation"
 import {
   ArrowLeft,
   CheckCircle2,
   Circle,
   Clock,
+  MinusCircle,
   XCircle,
   AlertTriangle,
 } from "lucide-react"
@@ -20,6 +22,7 @@ import {
   type NotificationLog,
   cancelChangeRequest,
   getChangeRequest,
+  listConsumers,
   listNotifications,
   submitChangeRequest,
   submitDecision,
@@ -29,10 +32,16 @@ import {
   PRIORITY_LABEL,
   StatusBadge,
 } from "@/features/change-mgmt/labels"
+import { stepDisplayState } from "@/features/change-mgmt/approval-steps"
+import { notificationRecipient, notificationStatus } from "@/features/change-mgmt/notification-labels"
+import { SchemaChangeView } from "@/features/change-mgmt/schema-change"
 import { fetchDataset } from "@/features/datasets/api"
 import { fetchUsers } from "@/features/users/api"
 import { type User } from "@/features/users/data/schema"
 import { useAuth } from "@/features/auth"
+import { usePermissions } from "@/features/permissions/use-permissions"
+import { useConfirm, usePrompt } from "@/components/confirm-provider"
+import { errorMessage, notifyError } from "@/lib/notify"
 
 const userDisplayName = (u: User) => `${u.lastName ?? ""}${u.firstName ?? ""}`.trim() || u.username
 
@@ -92,11 +101,16 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 export default function ChangeRequestDetailPage() {
   const params = useParams<{ id: string }>()
   const router = useRouter()
+  const askConfirm = useConfirm()
+  const askInput = usePrompt()
   const { user } = useAuth()
+  // 기능 권한 changes.approve — 서버도 같은 키로 403 (현재 차례 결재자 본인 검사와 별개)
+  const canApprove = usePermissions().isFeatureAllowed("changes.approve")
   const crId = Number(params.id)
 
   const [cr, setCr] = useState<ChangeRequest | null>(null)
   const [notifications, setNotifications] = useState<NotificationLog[]>([])
+  const [consumerNames, setConsumerNames] = useState<Record<number, string>>({})
   const [datasetName, setDatasetName] = useState<string | null>(null)
   const [userMap, setUserMap] = useState<Record<string, string>>({})
   const [emailMap, setEmailMap] = useState<Record<string, string>>({})
@@ -123,8 +137,15 @@ export default function ChangeRequestDetailPage() {
       } catch {
         setNotifications([])
       }
+      // 소비자 대상 통지의 수신처 표시용 — 소비자 이름 (best-effort)
+      try {
+        const cs = await listConsumers(data.dataset_id)
+        setConsumerNames(Object.fromEntries(cs.map((c) => [c.id, c.consumer_name])))
+      } catch {
+        setConsumerNames({})
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "조회 실패")
+      setError(errorMessage(e) ?? "변경 요청을 불러오지 못했습니다.")
     } finally {
       setLoading(false)
     }
@@ -157,7 +178,7 @@ export default function ChangeRequestDetailPage() {
       await submitChangeRequest(cr.id)
       await reload()
     } catch (e) {
-      alert(e instanceof Error ? e.message : "결재 상신 실패")
+      notifyError(e, "결재를 상신하지 못했습니다.")
     } finally {
       setBusy(false)
     }
@@ -165,13 +186,19 @@ export default function ChangeRequestDetailPage() {
 
   const onCancel = async () => {
     if (!cr) return
-    if (!confirm("이 변경 요청을 취소하시겠습니까?")) return
+    if (!(await askConfirm({
+      title: "변경 요청 취소",
+      description: "이 변경 요청을 취소하시겠습니까?",
+      confirmText: "요청 취소",
+      cancelText: "닫기",
+      destructive: true,
+    }))) return
     setBusy(true)
     try {
       await cancelChangeRequest(cr.id)
       await reload()
     } catch (e) {
-      alert(e instanceof Error ? e.message : "취소 실패")
+      notifyError(e, "변경 요청을 취소하지 못했습니다.")
     } finally {
       setBusy(false)
     }
@@ -182,7 +209,15 @@ export default function ChangeRequestDetailPage() {
     if (!cr) return
     let comment: string | undefined
     if (decision === "REJECTED") {
-      const reason = window.prompt("반려 사유를 입력하세요 (선택):")
+      const reason = await askInput({
+        title: "반려",
+        label: "반려 사유 (선택)",
+        placeholder: "요청자에게 전달할 반려 사유를 입력하세요.",
+        multiline: true,
+        confirmText: "반려",
+        destructive: true,
+        maxLength: 1000,
+      })
       if (reason === null) return // 취소
       comment = reason.trim() || undefined
     }
@@ -191,7 +226,7 @@ export default function ChangeRequestDetailPage() {
       await submitDecision(cr.id, { decision, comment })
       await reload()
     } catch (e) {
-      alert(e instanceof Error ? e.message : "결재 처리 실패")
+      notifyError(e, "결재를 처리하지 못했습니다.")
     } finally {
       setBusy(false)
     }
@@ -206,14 +241,16 @@ export default function ChangeRequestDetailPage() {
         <Button variant="ghost" size="sm" onClick={() => router.push("/dashboard/changes")}>
           <ArrowLeft className="mr-1 h-4 w-4" /> 목록으로
         </Button>
-        {cr && (
+        {cr && (user?.is_admin || cr.requested_by === user?.username) && (
+          /* 상신·취소는 요청자 본인 또는 관리자만 (서버도 403) */
           <div className="flex gap-2">
             {cr.status === "DRAFT" && (
               <Button size="sm" onClick={onSubmit} disabled={busy}>
                 결재 상신
               </Button>
             )}
-            {["DRAFT", "SUBMITTED", "APPROVING", "SCHEDULED"].includes(cr.status) && (
+            {/* 적용 전(작성 중~승인·예정 대기)만 취소 가능 — 서버와 같음(DRAFT 는 바로 취소, 상신 후는 워크플로우에 취소 요청) */}
+            {["DRAFT", "SUBMITTED", "APPROVING", "APPROVED", "SCHEDULED"].includes(cr.status) && (
               <Button size="sm" variant="outline" onClick={onCancel} disabled={busy}>
                 취소
               </Button>
@@ -255,7 +292,13 @@ export default function ChangeRequestDetailPage() {
                   : cr.requested_by}
               </Field>
               <Field label="대상 데이터셋">
-                {datasetName ?? `#${cr.dataset_id}`}
+                {/* 데이터셋 상세로 이동 — 예전에는 이름만 텍스트로 보였다 */}
+                <Link
+                  href={`/dashboard/datasets/${cr.dataset_id}`}
+                  className="text-primary hover:underline"
+                >
+                  {datasetName ?? `#${cr.dataset_id}`}
+                </Link>
               </Field>
               <Field label="적용 예정">{fmtDateTime(cr.scheduled_at)}</Field>
               <Field label="적용 완료">{fmtDateTime(cr.applied_at)}</Field>
@@ -273,6 +316,13 @@ export default function ChangeRequestDetailPage() {
             </Section>
           )}
 
+          {/* 스키마 변경 — 승인 후 적용(APPLIED)되는 내용 */}
+          {(cr.change_type !== "COSMETIC" || cr.schema_after) && (
+            <Section title="스키마 변경">
+              <SchemaChangeView raw={cr.schema_after} before={cr.schema_before} />
+            </Section>
+          )}
+
           {/* 결재선 — 현재 차례(가장 낮은 PENDING)이고 그 결재자가 본인일 때만 버튼 노출 */}
           <Section title="결재선">
             {cr.approval_steps.length === 0 ? (
@@ -286,32 +336,48 @@ export default function ChangeRequestDetailPage() {
                   const currentOrder = pendingOrders.length ? Math.min(...pendingOrders) : null
                   return cr.approval_steps.map((s) => {
                   const canDecide =
+                    canApprove &&
                     cr.status === "APPROVING" &&
                     s.decision === "PENDING" &&
                     s.step_order === currentOrder &&
                     s.approver === user?.username
+                  const display = stepDisplayState(cr.status, s.decision)
                   return (
                   <div
                     key={s.id}
                     className="flex items-center justify-between rounded border px-2 py-1.5 text-sm"
                   >
                     <div className="flex items-center gap-2">
-                      {s.decision === "APPROVED" ? (
+                      {/* 반려·취소·기한 초과로 끝난 CR 의 남은 단계는 진행 안 함(회색) — 예전에는 대기(주황 시계)로 보였다 */}
+                      {display === "APPROVED" ? (
                         <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-                      ) : s.decision === "REJECTED" ? (
+                      ) : display === "REJECTED" ? (
                         <XCircle className="h-4 w-4 text-rose-600" />
-                      ) : s.decision === "PENDING" ? (
+                      ) : display === "PENDING" ? (
                         <Clock className="h-4 w-4 text-amber-600" />
+                      ) : display === "SKIPPED" ? (
+                        <MinusCircle className="h-4 w-4 text-gray-400" />
                       ) : (
                         <Circle className="h-4 w-4 text-gray-400" />
                       )}
                       <span className="text-xs text-muted-foreground">#{s.step_order}</span>
-                      <span>
+                      <span className={display === "SKIPPED" ? "text-muted-foreground" : undefined}>
                         {userMap[s.approver] ?? s.approver}
                         {userMap[s.approver] && (
                           <span className="ml-1 text-xs text-muted-foreground">({s.approver})</span>
                         )}
                       </span>
+                      {display === "SKIPPED" && (
+                        <Badge variant="outline" className="text-xs text-muted-foreground">
+                          진행 안 함
+                        </Badge>
+                      )}
+                      {/* 위임 — 대결자를 함께 보인다(예전에는 회색 아이콘만 있어 누구에게 위임했는지 알 수 없었다) */}
+                      {s.decision === "DELEGATED" && (
+                        <Badge variant="outline" className="text-xs">
+                          위임{s.delegated_to ? ` → ${userMap[s.delegated_to] ? `${userMap[s.delegated_to]} (${s.delegated_to})` : s.delegated_to}` : ""}
+                        </Badge>
+                      )}
                       {s.comment && (
                         <span className="text-xs text-muted-foreground">— {s.comment}</span>
                       )}
@@ -407,18 +473,10 @@ export default function ChangeRequestDetailPage() {
                       <tr key={n.id} className="border-b last:border-0">
                         <td className="py-1.5 pr-3">{CHANNEL_LABEL[n.channel] ?? n.channel}</td>
                         <td className="py-1.5 pr-3">{STAGE_LABEL[n.stage] ?? n.stage}</td>
-                        <td className="py-1.5 pr-3 text-muted-foreground">{n.recipient ?? "—"}</td>
+                        <td className="py-1.5 pr-3 text-muted-foreground">{notificationRecipient(n, consumerNames)}</td>
                         <td className="py-1.5 pr-3">
-                          <Badge
-                            className={
-                              n.status === "SENT"
-                                ? "bg-emerald-200 text-emerald-800"
-                                : n.status === "FAILED"
-                                  ? "bg-rose-200 text-rose-800"
-                                  : "bg-gray-200 text-gray-700"
-                            }
-                          >
-                            {n.status === "SENT" ? "발송됨" : n.status === "FAILED" ? "실패" : n.status}
+                          <Badge className={notificationStatus(n.status).className}>
+                            {notificationStatus(n.status).label}
                           </Badge>
                         </td>
                         <td className="py-1.5 pr-3 text-muted-foreground">{fmtDateTime(n.sent_at)}</td>

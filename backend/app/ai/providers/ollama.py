@@ -33,6 +33,11 @@ class OllamaLLMProvider(LLMProvider):
         temperature: float = 0.3,
         max_tokens: int = 1024,
     ) -> dict:
+        """`/api/generate` 를 비스트리밍(stream=False)으로 호출해 결과를 반환한다.
+
+        토큰 수는 Ollama 의 prompt_eval_count/eval_count 값을 사용한다.
+        HTTP 오류는 ``httpx.HTTPStatusError`` 로 그대로 전파된다.
+        """
         payload: dict = {
             "model": self._model_id,
             "prompt": prompt,
@@ -45,6 +50,10 @@ class OllamaLLMProvider(LLMProvider):
         if system_prompt:
             payload["system"] = system_prompt
 
+        logger.debug(
+            "Ollama 생성 요청: model=%s prompt_len=%d max_tokens=%d",
+            self._model_id, len(prompt), max_tokens,
+        )
         resp = await self._client.post(
             f"{self._base_url}/api/generate",
             json=payload,
@@ -52,6 +61,10 @@ class OllamaLLMProvider(LLMProvider):
         resp.raise_for_status()
         data = resp.json()
 
+        logger.debug(
+            "Ollama 생성 응답: model=%s prompt_tokens=%s completion_tokens=%s",
+            self._model_id, data.get("prompt_eval_count"), data.get("eval_count"),
+        )
         return {
             "text": data.get("response", ""),
             "prompt_tokens": data.get("prompt_eval_count"),

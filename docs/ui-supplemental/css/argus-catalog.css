@@ -152,3 +152,8 @@ pre, code {
   height: auto !important;
   max-width: 100%;
 }
+
+.doc .imageblock.diagram a {
+  display: block;
+  cursor: zoom-in;
+}

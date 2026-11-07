@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Scan model-artifacts directory and populate catalog_models table.
 
+서버 데이터 디렉터리의 MLflow 모델 파일(MLmodel 등)을 훑어 catalog_models 행을 채우는 1회성 스크립트.
+
 Usage:
-    cd argus-catalog-server
+    cd backend
     python scripts/seed_catalog_models.py
 
 Reads every {model_name}/versions/{N}/ directory under data_dir/model-artifacts/,
@@ -34,6 +36,10 @@ logger = logging.getLogger(__name__)
 
 
 async def main() -> None:
+    """model-artifacts/{모델}/versions/{N}/ 를 순회해 없는 (모델, 버전) 만 삽입한다.
+
+    MLmodel 파일이 없거나 대응하는 model_version 행이 없으면 건너뛴다.
+    """
     await init_database()
     # 스키마는 SQL DDL(packaging/config/argus-catalog-*.sql)로 사전 생성돼 있어야 한다.
 

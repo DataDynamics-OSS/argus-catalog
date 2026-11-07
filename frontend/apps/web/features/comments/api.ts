@@ -46,7 +46,7 @@ export async function fetchComments(
     page_size: String(pageSize),
   })
   const res = await authFetch(`${BASE}?${params}`)
-  if (!res.ok) throw new Error(`댓글 조회 실패: ${res.status}`)
+  if (!res.ok) throw new Error(`댓글을 불러오지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
 
@@ -66,7 +66,7 @@ export async function createComment(payload: {
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
-    throw new Error(err.detail || `댓글 작성 실패: ${res.status}`)
+    throw new Error(err.detail || `댓글을 작성하지 못했습니다. (HTTP ${res.status})`)
   }
   return res.json()
 }
@@ -80,13 +80,13 @@ export async function updateComment(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   })
-  if (!res.ok) await throwOnError(res, "댓글 수정 실패")
+  if (!res.ok) await throwOnError(res, "댓글을 수정하지 못했습니다.")
   return res.json()
 }
 
 export async function deleteComment(commentId: number): Promise<void> {
   const res = await authFetch(`${BASE}/${commentId}`, { method: "DELETE" })
-  if (!res.ok) await throwOnError(res, "댓글 삭제 실패")
+  if (!res.ok) await throwOnError(res, "댓글을 삭제하지 못했습니다.")
 }
 
 export async function fetchCommentCount(

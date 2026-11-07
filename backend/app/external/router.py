@@ -12,12 +12,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import AdminUser, CurrentUser, OptionalUser
+from app.core.auth import AdminUser, OptionalUser
 from app.core.config import settings
 from app.core.database import get_session
 from app.external.cache import get_cache
 from app.external.schemas import CacheConfigResponse, CacheConfigUpdate
-from app.external.service import get_dataset_avro_schema, get_dataset_metadata
+from app.external.service import (
+    _resolve_dataset_id,
+    get_dataset_avro_schema,
+    get_dataset_metadata,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/external", tags=["external"])
@@ -55,10 +59,12 @@ async def get_metadata_by_urn(
     """URN 으로 dataset 메타데이터를 조회한다.
 
     성능: 첫 호출 ~20ms(DB), 두 번째 이후 호출 < 1ms(캐시).
-    URN→ID 매핑도 캐시된다.
+    URN→ID 매핑도 캐시된다. 응답 본문의 ``_cache`` 에 캐시 적중 여부가 들어간다. 없으면 404.
     """
+    logger.debug("외부 메타데이터 조회(URN): urn=%s no_cache=%s", urn, no_cache)
     result = await get_dataset_metadata(session, urn, no_cache=_no_cache(no_cache))
     if result is None:
+        logger.warning("외부 메타데이터 조회 대상 없음: urn=%s", urn)
         raise HTTPException(status_code=404, detail=f"데이터셋을(를) 찾을 수 없습니다: {urn}")
     return result
 
@@ -74,8 +80,10 @@ async def get_avro_by_urn(
 
     표준 Avro record 만 본문에 반환. 캐시 진단은 ``X-Cache-*`` 응답 헤더로 노출.
     """
+    logger.debug("외부 Avro 스키마 조회(URN): urn=%s no_cache=%s", urn, no_cache)
     result = await get_dataset_avro_schema(session, urn, no_cache=_no_cache(no_cache))
     if result is None:
+        logger.warning("외부 Avro 스키마 조회 대상 없음: urn=%s", urn)
         raise HTTPException(status_code=404, detail=f"데이터셋을(를) 찾을 수 없습니다: {urn}")
     avro, hit = result
     return _avro_response(avro, hit)
@@ -93,9 +101,11 @@ async def get_metadata_by_id(
     user: OptionalUser = None,
     session: AsyncSession = Depends(get_session),
 ):
-    """내부 ID 로 dataset 메타데이터를 조회한다."""
+    """내부 ID 로 dataset 메타데이터를 조회한다. 없으면 404."""
+    logger.debug("외부 메타데이터 조회(ID): dataset_id=%d no_cache=%s", dataset_id, no_cache)
     result = await get_dataset_metadata(session, dataset_id, no_cache=_no_cache(no_cache))
     if result is None:
+        logger.warning("외부 메타데이터 조회 대상 없음: dataset_id=%d", dataset_id)
         raise HTTPException(status_code=404, detail="데이터셋을(를) 찾을 수 없습니다.")
     return result
 
@@ -107,9 +117,11 @@ async def get_avro_by_id(
     user: OptionalUser = None,
     session: AsyncSession = Depends(get_session),
 ):
-    """내부 ID 로 Avro 스키마를 조회한다."""
+    """내부 ID 로 Avro 스키마를 조회한다. 없으면 404."""
+    logger.debug("외부 Avro 스키마 조회(ID): dataset_id=%d no_cache=%s", dataset_id, no_cache)
     result = await get_dataset_avro_schema(session, dataset_id, no_cache=_no_cache(no_cache))
     if result is None:
+        logger.warning("외부 Avro 스키마 조회 대상 없음: dataset_id=%d", dataset_id)
         raise HTTPException(status_code=404, detail="데이터셋을(를) 찾을 수 없습니다.")
     avro, hit = result
     return _avro_response(avro, hit)
@@ -121,11 +133,26 @@ async def get_avro_by_id(
 
 
 @router.delete("/datasets/{dataset_id}/cache")
-async def invalidate_by_id(_guard: AdminUser, dataset_id: int, user: OptionalUser = None):
-    """ID 로 지정한 dataset 의 캐시 데이터를 무효화한다."""
+async def invalidate_by_id(
+    _guard: AdminUser,
+    dataset_id: int,
+    user: OptionalUser = None,
+    session: AsyncSession = Depends(get_session),
+):
+    """ID 로 지정한 dataset 의 캐시 데이터를 무효화한다(관리자 전용).
+
+    서비스는 URN 기준 키(``metadata:{urn}`` / ``avro:{urn}``)로 적재하므로 ID 로 정규 URN 을
+    조회해 그 키를 지운다. dataset 이 없으면 지울 항목이 없으므로 0 을 반환한다.
+    """
     cache = get_cache()
-    count = await cache.invalidate(f"metadata:{dataset_id}")
-    count += await cache.invalidate(f"avro:{dataset_id}")
+    resolved = await _resolve_dataset_id(session, dataset_id)
+    count = 0
+    if resolved is not None:
+        _, urn = resolved
+        count += int(await cache.invalidate(f"metadata:{urn}"))
+        count += int(await cache.invalidate(f"avro:{urn}"))
+    else:
+        logger.warning("캐시 무효화 대상 dataset 없음: dataset_id=%d", dataset_id)
     logger.info("dataset id 기준 캐시 무효화: dataset_id=%d, entries=%d", dataset_id, count)
     return {"invalidated": count, "dataset_id": dataset_id}
 
@@ -141,12 +168,14 @@ async def clear_cache(_guard: AdminUser, user: OptionalUser = None):
 
 @router.get("/cache/stats")
 async def cache_stats(user: OptionalUser = None):
+    """캐시 크기·적중률 등 통계 조회(인증 선택)."""
     cache = get_cache()
     return await cache.stats()
 
 
 @router.get("/cache/config", response_model=CacheConfigResponse)
 async def get_cache_config(user: OptionalUser = None):
+    """현재 캐시 설정(최대 크기·TTL·사용 여부)과 항목 수 조회."""
     cache = get_cache()
     return CacheConfigResponse(
         max_size=cache.max_size,
@@ -157,10 +186,19 @@ async def get_cache_config(user: OptionalUser = None):
 
 
 @router.put("/cache/config", response_model=CacheConfigResponse)
-async def update_cache_config(body: CacheConfigUpdate, user: CurrentUser = None):
+async def update_cache_config(body: CacheConfigUpdate, _admin: AdminUser):
+    """캐시 설정 변경 — 관리자 전용(설정 > 캐시). 메모리에만 반영되어 재기동 시 config 값으로 돌아간다."""
+    before = {"max_size": settings.cache_max_size, "ttl_seconds": settings.cache_ttl_seconds,
+              "enabled": settings.cache_enabled}
     settings.cache_max_size = body.max_size
     settings.cache_ttl_seconds = body.ttl_seconds
     settings.cache_enabled = body.enabled
+    after = {"max_size": body.max_size, "ttl_seconds": body.ttl_seconds, "enabled": body.enabled}
+    changes = {k: {"old": before[k], "new": after[k]} for k in after if before[k] != after[k]}
+    if changes:
+        from app.audit.service import record
+        await record(None, _admin, "settings", "settings.cache", target="cache",
+                     summary=f"cache 설정 변경: {', '.join(changes)}", detail={"changes": changes})
 
     cache = get_cache()
     await cache.reconfigure(max_size=body.max_size, ttl_seconds=body.ttl_seconds)

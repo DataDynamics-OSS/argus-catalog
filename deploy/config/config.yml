@@ -44,6 +44,14 @@ database:
     recycle: ${db.pool.recycle:3600}
   echo: ${db.echo:false}
 
+# API 카탈로그가 사용자 지정 URL(스펙 URL 가져오기·Try-it)로 서버측 호출할 때의 SSRF 정책.
+# 루프백·링크로컬(클라우드 메타데이터)·카탈로그 자체 인프라(DB·오브젝트 스토리지·Temporal·
+# Keycloak·metadata-sync)는 항상 차단된다. 사설망은 사내 API 등록을 위해 기본 허용.
+api_outbound:
+  block_private: false     # true 면 사설망(10/8·172.16/12·192.168/16·fc00::/7·100.64/10)도 차단
+  allowed_hosts: ""        # 우선 허용 — 호스트명/IP/CIDR 쉼표 구분 (예: "api.internal,10.20.0.0/16")
+  denied_hosts: ""         # 추가 차단 — 호스트명/IP/CIDR 쉼표 구분
+
 external:
   cache:
     max_size: 1000

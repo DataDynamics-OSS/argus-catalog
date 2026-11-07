@@ -22,6 +22,7 @@ function buildPreset(id: string, label: string, style: Style, seed: string): Ava
 
 // 10 seeds shown in the DiceBear playground when the "adventurer" style is
 // selected (https://www.dicebear.com/playground/).
+// id 목록은 백엔드 AVATAR_PRESET_IDS(backend/app/auth/router.py)와 같아야 한다 — 그 밖의 id 는 저장 시 422.
 export const AVATAR_PRESETS: AvatarPreset[] = [
   buildPreset("adventurer-aiden", "Aiden", adventurer, "aiden"),
   buildPreset("adventurer-aidan", "Aidan", adventurer, "aidan"),

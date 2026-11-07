@@ -13,7 +13,7 @@ import {
 } from "@workspace/ui/components/dialog"
 import { Input } from "@workspace/ui/components/input"
 import { Label } from "@workspace/ui/components/label"
-import { toast } from "sonner"
+import { notifyError, toast } from "@/lib/notify"
 
 import { deleteDataset } from "../api"
 import { useDatasets } from "./datasets-provider"
@@ -48,7 +48,7 @@ export function DatasetsDeleteDialog() {
       close()
       await refreshDatasets()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "삭제에 실패했습니다.")
+      notifyError(e, "데이터셋을 삭제하지 못했습니다.")
     } finally {
       setDeleting(false)
     }

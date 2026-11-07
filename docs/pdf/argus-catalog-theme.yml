@@ -1,59 +1,110 @@
 extends: default
 
+# 글꼴 — 파일은 make fonts 로 pdf/fonts/ 에 준비한다(gitignore).
+# - Noto Sans KR        (본문 · 제목 · 표 · 머리말/바닥글) — 정적 TTF Regular/Bold
+# - Nanum Gothic Coding (코드 블록 · 인라인 코드, monospace)
 font:
   catalog:
     merge: true
-    Nanum Gothic:
-      normal: NanumGothic-Regular.ttf
-      bold: NanumGothic-Bold.ttf
-      italic: NanumGothic-Regular.ttf
-      bold_italic: NanumGothic-Bold.ttf
+    Noto Sans KR:
+      normal: NotoSansKR-Regular.ttf
+      bold: NotoSansKR-Bold.ttf
+      italic: NotoSansKR-Regular.ttf
+      bold_italic: NotoSansKR-Bold.ttf
     Nanum Gothic Coding:
       normal: NanumGothicCoding-Regular.ttf
       bold: NanumGothicCoding-Bold.ttf
       italic: NanumGothicCoding-Regular.ttf
       bold_italic: NanumGothicCoding-Bold.ttf
   fallbacks:
-    - Nanum Gothic
+    - Noto Sans KR
 
+# 글꼴 크기 — 본문 9.5pt 를 기준으로 제목은 약 1.2 배씩 올린다.
+# 책에서는 각 페이지가 한 단계 내려 들어가므로 h1=부, h2=장(페이지 제목), h3=절(==), h4=소절(===).
 base:
-  font_family: Nanum Gothic
-  font_size: 10.5
+  font_family: Noto Sans KR
+  font_size: 9.5
+  font_size_large: 11
+  font_size_small: 8.5
   line_height_length: 14
+  line_height: 1.45
 
 heading:
-  font_family: Nanum Gothic
+  font_family: Noto Sans KR
+  h1_font_size: 22
+  h2_font_size: 18
+  h3_font_size: 14
+  h4_font_size: 11.5
+  h5_font_size: 10
+  h6_font_size: 9.5
+  margin_top: 10
+  margin_bottom: 6
 
 title_page:
   title:
-    font_family: Nanum Gothic
+    font_family: Noto Sans KR
+    font_size: 26
   subtitle:
-    font_family: Nanum Gothic
+    font_family: Noto Sans KR
+    font_size: 14
   authors:
-    font_family: Nanum Gothic
+    font_family: Noto Sans KR
   revision:
-    font_family: Nanum Gothic
+    font_family: Noto Sans KR
 
+# 코드는 본문보다 한 단계 작게
 code:
   font_family: Nanum Gothic Coding
+  font_size: 8.5
+  line_height: 1.35
 
 codespan:
   font_family: Nanum Gothic Coding
+  font_size: 0.92em
 
 abstract:
-  font_family: Nanum Gothic
+  font_family: Noto Sans KR
 
 admonition:
   label:
-    font_family: Nanum Gothic
+    font_family: Noto Sans KR
 
 table:
-  font_family: Nanum Gothic
+  font_family: Noto Sans KR
+  font_size: 9
   head:
-    font_family: Nanum Gothic
+    font_family: Noto Sans KR
 
-footer:
-  font_family: Nanum Gothic
+caption:
+  font_size: 9
+
+toc:
+  font_size: 9.5
+
+# 쪽 번호는 본문 첫 장("1. Argus Catalog 소개")부터 1 로 시작하고, 표지·목차에는 찍지 않는다.
+page:
+  numbering:
+    start_at: body
+
+running_content:
+  start_at: body
 
 header:
-  font_family: Nanum Gothic
+  font_family: Noto Sans KR
+
+# 바닥글 — 홀수·짝수 쪽 모두 왼쪽 저작권, 오른쪽 쪽 번호(번갈아 바뀌지 않게 recto/verso 동일)
+footer:
+  font_family: Noto Sans KR
+  font_size: 7.5
+  font_color: '#6B6B6B'
+  border_color: '#DDDDDD'
+  recto:
+    left:
+      content: '© {localyear} Data Dynamics Inc. All rights reserved.'
+    right:
+      content: '{page-number}'
+  verso:
+    left:
+      content: '© {localyear} Data Dynamics Inc. All rights reserved.'
+    right:
+      content: '{page-number}'

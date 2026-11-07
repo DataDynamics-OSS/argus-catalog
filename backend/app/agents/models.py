@@ -15,13 +15,13 @@
 
 이름/버전 규칙:
   - ``name``    : 전사 고유 식별자 (예: ``cs.payment-refund-assistant``)
-  - ``urn``     : ``{name}.{ENV}.agent`` (예: ``...PROD.agent``)
+  - ``urn``     : ``{name}.agent`` (예: ``cs.payment-refund-assistant.agent``)
   - ``version`` : SemVer 문자열 (예: ``1.3.0-release``)
 
 상태(``status``) 라이프사이클:
   ``draft`` → ``staging`` → ``active`` → ``blocked`` / ``deprecated`` / ``retired``
-  소프트 삭제는 ``status='retired'`` 로 표현하지 않고 별도 처리 없이 목록에서
-  필터링한다(모델 레지스트리의 ``deleted`` 와 동일한 컨벤션).
+  삭제는 하드 삭제(하위 테이블 FK CASCADE)이며 소프트 삭제 상태는 따로 없다.
+  목록 조회는 ``retired`` 도 기본으로 제외하지 않고 ``status`` 필터로만 좁힌다.
 
 JSON 컬럼:
   capabilities/input_schema/output_schema/guardrails 등 구조화 메타데이터는
@@ -57,8 +57,8 @@ class AIAgent(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     # 전사 고유 식별자 (display 가 아닌 머신용 키)
     name = Column(String(255), nullable=False, unique=True)
-    # URN: {name}.{ENV}.agent
-    urn = Column(String(500), nullable=False, unique=True)
+    # URN: {name}.agent (service._generate_agent_urn)
+    urn =Column(String(500), nullable=False, unique=True)
     # UI 노출명
     display_name = Column(String(255))
     # LLM 자동생성 + 휴먼 승인 대상
@@ -141,6 +141,14 @@ class AIAgent(Base):
     created_by = Column(String(200))
     updated_by = Column(String(200))
 
+    # --- 관리 방식 (정의 파일 일괄 등록) ---
+    # ui: 화면/개별 API 로 등록, manifest: 정의 파일(agent.yaml) 반영으로 관리,
+    # discovered: 미등록 에이전트 발견 기록에서 초안으로 등록
+    managed_by = Column(String(20), nullable=False, server_default="ui")
+    source_ref = Column(String(1000))  # 정의 파일 위치(저장소·경로) — 반영 도구가 넘김
+    last_applied_at = Column(DateTime(timezone=True))
+    last_applied_by = Column(String(200))
+
 
 class AIAgentVersion(Base):
     """에이전트 사양 버전 이력 (system_prompt 스냅샷 포함).
@@ -201,6 +209,13 @@ class AIAgentMcpServer(Base):
     # API key / OAuth2.1 / none
     auth_method = Column(String(50))
     description = Column(Text)
+    # MCP Server 카탈로그 배포 인스턴스 참조 (NULL = 직접 입력한 "미등록 MCP")
+    mcp_deployment_id = Column(
+        Integer, ForeignKey("catalog_mcp_deployments.id", ondelete="SET NULL")
+    )
+    # 에이전트별 허용 범위 (NULL = 인스턴스에서 노출·승인된 전체)
+    allowed_groups = Column(JSON)
+    allowed_tools = Column(JSON)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -338,3 +353,52 @@ class AIAgentStatusHistory(Base):
     note = Column(Text)
     changed_by = Column(String(200))
     changed_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class AIAgentDiscovery(Base):
+    """미등록 에이전트 발견 기록.
+
+    실행 환경이 카탈로그에 없는 이름으로 호출 기록·정책 판정 기록을 보내면(HTTP 404) 버리지 않고 이름별로 모은다.
+    같은 이름은 한 행에 횟수·마지막 시각만 갱신한다. ``status``: new(처리 전) / ignored(무시) / registered(등록됨).
+    설계: design/ai-agent-bulk-registration-design.md §5
+    """
+
+    __tablename__ = "catalog_ai_agent_discoveries"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(255), nullable=False, unique=True)
+    first_seen_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    last_seen_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    seen_count = Column(Integer, nullable=False, default=1)
+    invocation_count = Column(Integer, nullable=False, default=0)  # 호출 기록으로 발견된 횟수
+    hook_event_count = Column(Integer, nullable=False, default=0)  # 정책 판정 기록으로 발견된 횟수
+    reported_by = Column(String(200))  # 마지막으로 보낸 계정(실행 환경 서비스 계정)
+    last_consumer = Column(String(200))  # 마지막 호출자(호출 기록의 consumer)
+    status = Column(String(20), nullable=False, default="new", index=True)
+    agent_id = Column(Integer, ForeignKey("catalog_ai_agents.id", ondelete="SET NULL"))
+    status_changed_by = Column(String(200))
+    status_changed_at = Column(DateTime(timezone=True))
+
+
+class AIAgentView(Base):
+    """에이전트 목록의 저장된 보기(필터·정렬 조합).
+
+    ``owner_sub`` 는 만든 사람(토큰 ``sub``). ``shared`` 면 모두에게 보이고, 만든 사람·관리자만 고치거나 지운다.
+    ``query`` 는 목록 질의 값(dict). 설계: design/ai-agent-ownership-design.md §4.3
+    """
+
+    __tablename__ = "catalog_ai_agent_views"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False)
+    owner_sub = Column(String(100), nullable=False, index=True)
+    owner_name = Column(String(200))
+    shared = Column(Boolean, nullable=False, default=False, server_default="false")
+    query = Column(JSON, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+# catalog_ai_agent_mcp_servers.mcp_deployment_id 가 참조하는 MCP Server 카탈로그 테이블을
+# 같은 메타데이터에 등록한다(에이전트 모델만 import 하는 스크립트·테스트에서도 FK 해석 가능).
+from app.mcp_servers import models as _mcp_models  # noqa: E402,F401

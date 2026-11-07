@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """모델 다운로드 로그 기록 및 사용량 통계.
 
-모델 다운로드 이벤트(``model_download_logs`` 테이블)를 적재하고, 일/주/월
-단위 집계를 대시보드용으로 제공한다. 차트는 보통 최근 30일을 ``date``
-단위로 그룹핑한 ``(date, count)`` 시퀀스를 사용한다.
+모델 다운로드 이벤트(``catalog_model_download_log`` 테이블)를 적재하고, 시/일/주/월
+단위 집계와 게시(READY 확정) 추이를 대시보드용으로 제공한다. 차트는 보통 최근 30일을
+``date`` 단위로 그룹핑한 ``{"date", "count"}`` 시퀀스를 사용한다.
+``date_trunc`` 를 쓰므로 PostgreSQL 전용이다.
 
-로깅 정책: 로그 적재 자체는 빈도가 매우 높아 INFO 를 생략하고, 일관성을
-깨뜨릴 수 있는 외래 키 누락(예: 존재하지 않는 모델·버전 참조) 정도만
-WARNING 으로 기록한다.
+로깅 정책: 로그 적재 자체는 빈도가 매우 높아 INFO 를 생략하고(DEBUG), 적재(커밋)
+실패만 WARNING 으로 기록한다(주 요청 흐름은 계속).
 """
 
 import logging
@@ -31,7 +31,7 @@ async def log_download(
 ) -> None:
     """모델 다운로드 이벤트를 기록한다.
 
-    user_agent 는 500자로 잘라낸다. 커밋 실패는 로깅하되 전파하지 않는다 —
+    user_agent 는 500자로 잘라낸다. 커밋 실패는 로깅·세션 롤백만 하고 전파하지 않는다 —
     다운로드 로깅이 주 요청 흐름을 깨뜨려서는 안 된다.
     """
     try:
@@ -44,9 +44,14 @@ async def log_download(
         )
         session.add(entry)
         await session.commit()
-        logger.info("다운로드 로깅: %s v%d (%s), 출처 %s", model_name, version, download_type, client_ip)
+        logger.debug("다운로드 로깅: %s v%d (%s)", model_name, version, download_type)
     except Exception as e:
         logger.warning("다운로드 로깅 실패 %s v%d: %s", model_name, version, e)
+        # 실패한 트랜잭션을 되돌려 호출자가 같은 세션을 계속 쓸 수 있게 한다
+        try:
+            await session.rollback()
+        except Exception as rb_err:  # noqa: BLE001 — 롤백 실패도 다운로드 자체는 막지 않는다
+            logger.debug("다운로드 기록 롤백 실패: %s", rb_err)
 
 
 async def get_total_download_count(session: AsyncSession) -> int:
@@ -68,7 +73,7 @@ async def get_download_count_by_model(session: AsyncSession) -> dict[str, int]:
 async def get_hourly_download(
     session: AsyncSession, hours: int = 24,
 ) -> list[dict]:
-    """최근 N시간의 시간별 다운로드 수를 반환."""
+    """최근 N시간의 시간별 다운로드 수를 반환(``date`` 는 ``HH:MM``)."""
     since = datetime.now(timezone.utc) - timedelta(hours=hours)
     result = await session.execute(
         select(
@@ -105,7 +110,7 @@ async def get_daily_download(
 async def get_weekly_download(
     session: AsyncSession, weeks: int = 12,
 ) -> list[dict]:
-    """최근 N주의 주별 다운로드 수를 반환."""
+    """최근 N주의 주별 다운로드 수를 반환(``date`` 는 주 시작일 ``YYYY-MM-DD``)."""
     since = datetime.now(timezone.utc) - timedelta(weeks=weeks)
     result = await session.execute(
         select(
@@ -122,7 +127,7 @@ async def get_weekly_download(
 async def get_monthly_download(
     session: AsyncSession, months: int = 12,
 ) -> list[dict]:
-    """최근 N개월의 월별 다운로드 수를 반환."""
+    """최근 N개월(30일 × N 근사)의 월별 다운로드 수를 반환."""
     since = datetime.now(timezone.utc) - timedelta(days=months * 30)
     result = await session.execute(
         select(

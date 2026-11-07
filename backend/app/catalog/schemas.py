@@ -1,22 +1,29 @@
 # SPDX-License-Identifier: Apache-2.0
-"""요청/응답 검증을 위한 데이터 카탈로그 스키마."""
+"""요청/응답 검증을 위한 데이터 카탈로그 스키마.
+
+데이터 소스·조직/시스템·토폴로지·데이터셋·스키마 필드·태그·용어집·소유자·파이프라인·
+리니지·분류체계의 Pydantic 모델을 모은다. "true"/"false" 문자열 플래그는 DB 컬럼 형식을 따른다.
+"""
 
 from datetime import datetime
 from enum import Enum
+from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # ---------------------------------------------------------------------------
 # 열거형(Enum)
 # ---------------------------------------------------------------------------
 
 class DatasetOrigin(str, Enum):
+    """데이터셋·데이터 소스의 환경 구분."""
     PROD = "PROD"
     DEV = "DEV"
     STAGING = "STAGING"
 
 
 class DatasetStatus(str, Enum):
+    """데이터셋 상태 — removed 는 원본에서 사라진 데이터셋(목록·집계에서 기본 제외)."""
     ACTIVE = "active"
     INACTIVE = "inactive"
     DEPRECATED = "deprecated"
@@ -24,6 +31,7 @@ class DatasetStatus(str, Enum):
 
 
 class OwnerType(str, Enum):
+    """데이터셋 소유자 역할."""
     TECHNICAL_OWNER = "TECHNICAL_OWNER"
     BUSINESS_OWNER = "BUSINESS_OWNER"
     DATA_STEWARD = "DATA_STEWARD"
@@ -34,14 +42,27 @@ class OwnerType(str, Enum):
 # ---------------------------------------------------------------------------
 
 class DatasourceCreate(BaseModel):
-    name: str = Field(..., min_length=1, max_length=200)
-    type: str = Field(..., min_length=1, max_length=100)
-    logo_url: str | None = None
-    # 환경 (DEV/STAGING/PROD). 생성 시점에만 지정 가능하며 이후 변경 불가.
+    """데이터 소스 생성 요청 — type 은 소문자·숫자·_- 로 된 유형 키."""
+    # 길이는 DDL 과 맞춘다: name VARCHAR(100), datasource_id VARCHAR(36) = "{type}-" + 접미사
+    # (service._generate_datasource_id — 현재 ms 타임스탬프 11자 + 랜덤 6자 = 17자)
+    # → type 최대 18자 + "-" 1자 + 접미사 17자 = 36자.
+    name: str = Field(..., min_length=1, max_length=100)
+    type: str = Field(..., min_length=1, max_length=18, pattern=r"^[a-z0-9][a-z0-9_-]*$")
+    logo_url: str | None = Field(default=None, max_length=500, pattern=r"^(https?://|/)\S*$")
+    # 환경 (DEV/STAGING/PROD). 이후 변경 가능(DatasourceUpdate) — 변경 시 소속 데이터셋도 갱신.
     origin: DatasetOrigin = DatasetOrigin.DEV
+
+    @field_validator("name")
+    @classmethod
+    def _strip_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("이름을 입력하세요.")
+        return v
 
 
 class DatasourceResponse(BaseModel):
+    """데이터 소스 응답."""
     id: int
     datasource_id: str
     name: str
@@ -56,23 +77,44 @@ class DatasourceResponse(BaseModel):
 
 
 class DatasourceConfigurationSave(BaseModel):
+    """접속 설정 저장 요청 — 빈 비밀값은 "변경 안 함"(datasource_secrets.seal_config)."""
     config: dict
 
 
 class DatasourceConnectionTest(BaseModel):
-    """연결 설정 테스트 요청 — 저장 전 임의 config 도 검증 가능."""
+    """연결 설정 테스트 요청 — 저장 전 임의 config 도 검증 가능.
+
+    ``datasource_id`` 를 주면 config 의 빈 비밀값(마스킹되어 내려간 비밀번호 등)을
+    저장된 값으로 채워 테스트한다.
+    """
     type: str
     config: dict
+    datasource_id: int | None = None
 
 
 class DatasourceConnectionTestResult(BaseModel):
+    """연결 테스트 결과."""
     ok: bool
     message: str
     latency_ms: int | None = None
+    # 서버에서 연결 테스트를 지원하지 않는 유형(실패와 구분해 안내)
+    unsupported: bool = False
 
 
 class DatasourceUpdate(BaseModel):
-    name: str | None = Field(None, min_length=1, max_length=200)
+    """데이터 소스 부분 수정 요청(이름·환경)."""
+    name: str | None = Field(None, min_length=1, max_length=100)
+
+    @field_validator("name")
+    @classmethod
+    def _strip_name(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        v = v.strip()
+        if not v:
+            raise ValueError("이름을 입력하세요.")
+        return v
+
     # 환경 변경 가능(승격 등). URN 에는 origin 이 포함되지 않으므로 식별자는 불변이며,
     # 변경 시 소속 데이터셋의 origin 도 함께 갱신된다.
     origin: DatasetOrigin | None = None
@@ -87,18 +129,47 @@ class DatasourceSystemAssign(BaseModel):
 # Organization / System schemas (조직 → 시스템 → 데이터 소스 계층)
 # ---------------------------------------------------------------------------
 
+def _reject_explicit_null(model: BaseModel, fields: tuple[str, ...]) -> None:
+    """부분 수정에서 NOT NULL 컬럼에 null 을 명시하면 422 — 예전에는 DB 제약 오류로 떨어졌다."""
+    for f in fields:
+        if f in model.model_fields_set and getattr(model, f) is None:
+            raise ValueError(f"{f} 는 null 일 수 없습니다.")
+
+
+def _strip_name(v: str | None) -> str | None:
+    """이름 앞뒤 공백 제거 — 공백만이면 거부(422)."""
+    if v is None:
+        return v
+    v = v.strip()
+    if not v:
+        raise ValueError("이름을 입력하세요.")
+    return v
+
+
 class OrganizationCreate(BaseModel):
+    """조직 생성 요청 — parent_id 가 없으면 루트 조직."""
     name: str = Field(..., min_length=1, max_length=200)
     parent_id: int | None = None
     description: str | None = None
     sort_order: int = 0
 
+    # 앞뒤 공백 제거, 공백만이면 422 — 예전에는 생성만 검증이 없어 "   " 이름이 201 로 저장됐다
+    _name = field_validator("name")(_strip_name)
+
 
 class OrganizationUpdate(BaseModel):
+    """조직 부분 수정 요청 — 보낸 필드만 반영(name·sort_order 는 null 불가)."""
     name: str | None = Field(None, min_length=1, max_length=200)
     parent_id: int | None = None        # 이동 (순환 검증)
     description: str | None = None
     sort_order: int | None = None
+
+    _name = field_validator("name")(_strip_name)
+
+    @model_validator(mode="after")
+    def _not_null(self):
+        _reject_explicit_null(self, ("name", "sort_order"))
+        return self
 
 
 class OrganizationResponse(BaseModel):
@@ -115,6 +186,7 @@ class OrganizationResponse(BaseModel):
 
 
 class SystemCreate(BaseModel):
+    """시스템 생성 요청."""
     name: str = Field(..., min_length=1, max_length=200)
     org_id: int | None = None          # None = 미분류(조직 미배정)
     summary: str | None = Field(None, max_length=200)
@@ -123,8 +195,11 @@ class SystemCreate(BaseModel):
     status: str = "ACTIVE"
     sort_order: int = 0
 
+    _name = field_validator("name")(_strip_name)
+
 
 class SystemUpdate(BaseModel):
+    """시스템 부분 수정 요청 — 보낸 필드만 반영(name·status·sort_order 는 null 불가)."""
     name: str | None = Field(None, min_length=1, max_length=200)
     org_id: int | None = None           # 조직 이동
     summary: str | None = Field(None, max_length=200)
@@ -132,6 +207,13 @@ class SystemUpdate(BaseModel):
     owner: str | None = None
     status: str | None = None
     sort_order: int | None = None
+
+    _name = field_validator("name")(_strip_name)
+
+    @model_validator(mode="after")
+    def _not_null(self):
+        _reject_explicit_null(self, ("name", "status", "sort_order"))
+        return self
 
 
 class SystemResponse(BaseModel):
@@ -187,6 +269,7 @@ class TopologyUnassigned(BaseModel):
 
 
 class TopologyResponse(BaseModel):
+    """사이드바 토폴로지 — 조직 트리와 미분류 버킷."""
     organizations: list[TopologyOrganization] = Field(default_factory=list)
     unassigned: TopologyUnassigned = Field(default_factory=TopologyUnassigned)
 
@@ -196,9 +279,12 @@ TopologyOrganization.model_rebuild()
 
 
 class DatasourceConfigurationResponse(BaseModel):
+    """접속 설정 응답 — 비밀값은 마스킹된다."""
     id: int
     datasource_id: int
     config: dict
+    # 저장된 비밀값 키 — config 에는 빈 문자열로 마스킹되어 내려간다.
+    secret_fields: list[str] = []
     created_at: datetime
     updated_at: datetime
 
@@ -208,6 +294,7 @@ class DatasourceConfigurationResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 class SchemaFieldCreate(BaseModel):
+    """스키마 필드 생성 요청 — 플래그는 "true"/"false" 문자열."""
     field_path: str = Field(..., min_length=1, max_length=500)
     display_name: str | None = Field(default=None, max_length=255)
     field_type: str = Field(..., min_length=1, max_length=100)
@@ -244,10 +331,52 @@ class SchemaFieldResponse(BaseModel):
 # 태그 스키마
 # ---------------------------------------------------------------------------
 
+_TAG_COLOR_PATTERN = r"^#[0-9a-fA-F]{6}$"
+
+
+def _strip_tag_name(v: str | None) -> str | None:
+    """앞뒤 공백 제거 — 공백만 있는 이름은 거부한다."""
+    if v is None:
+        return v
+    v = v.strip()
+    if not v:
+        raise ValueError("이름을 입력하세요.")
+    return v
+
+
 class TagCreate(BaseModel):
+    """태그 생성 요청 — 색상은 #rrggbb(소문자로 정규화)."""
     name: str = Field(..., min_length=1, max_length=100)
     description: str | None = None
-    color: str = "#3b82f6"
+    # DB 컬럼이 VARCHAR(7) 이고 배지 배경색으로 그대로 쓰이므로 #rrggbb 만 허용한다
+    color: str = Field("#3b82f6", pattern=_TAG_COLOR_PATTERN)
+
+    @field_validator("name")
+    @classmethod
+    def _strip_name(cls, v: str) -> str:
+        return _strip_tag_name(v)
+
+    @field_validator("color")
+    @classmethod
+    def _lower_color(cls, v: str) -> str:
+        return v.lower()
+
+
+class TagUpdate(BaseModel):
+    """태그 부분 수정 요청."""
+    name: str | None = Field(None, min_length=1, max_length=100)
+    description: str | None = None
+    color: str | None = Field(None, pattern=_TAG_COLOR_PATTERN)
+
+    @field_validator("name")
+    @classmethod
+    def _strip_name(cls, v: str | None) -> str | None:
+        return _strip_tag_name(v)
+
+    @field_validator("color")
+    @classmethod
+    def _lower_color(cls, v: str | None) -> str | None:
+        return v.lower() if v else v
 
 
 class TagResponse(BaseModel):
@@ -264,18 +393,43 @@ class TagResponse(BaseModel):
 # 용어집 용어 스키마
 # ---------------------------------------------------------------------------
 
+GlossaryTermType = Literal["CATEGORY", "TERM"]
+
+
+def _strip_glossary_name(v: str | None) -> str | None:
+    """앞뒤 공백 제거 — 공백만 있는 이름은 빈 값으로 보고 거부한다."""
+    if v is None:
+        return v
+    v = v.strip()
+    if not v:
+        raise ValueError("이름을 입력하세요.")
+    return v
+
+
 class GlossaryTermCreate(BaseModel):
+    """용어집 항목 생성 요청 — term_type 은 CATEGORY(분류) 또는 TERM(용어)."""
     name: str = Field(..., min_length=1, max_length=200)
     description: str | None = None
     parent_id: int | None = None
-    term_type: str = "TERM"  # CATEGORY 또는 TERM
+    term_type: GlossaryTermType = "TERM"
+
+    @field_validator("name")
+    @classmethod
+    def _strip_name(cls, v: str | None) -> str | None:
+        return _strip_glossary_name(v)
 
 
 class GlossaryTermUpdate(BaseModel):
+    """용어집 항목 부분 수정 요청."""
     name: str | None = Field(None, min_length=1, max_length=200)
     description: str | None = None
     parent_id: int | None = None
-    term_type: str | None = None
+    term_type: GlossaryTermType | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _strip_name(cls, v: str | None) -> str | None:
+        return _strip_glossary_name(v)
 
 
 class GlossaryTermResponse(BaseModel):
@@ -295,6 +449,7 @@ class GlossaryTermResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 class OwnerCreate(BaseModel):
+    """데이터셋 소유자 추가 요청."""
     owner_name: str = Field(..., min_length=1, max_length=200)
     owner_type: OwnerType = OwnerType.TECHNICAL_OWNER
 
@@ -327,12 +482,14 @@ class DatasetPropertyResponse(BaseModel):
 
 
 class DatasetCreate(BaseModel):
+    """데이터셋 생성 요청 — 스키마 필드·태그·소유자·속성을 함께 받을 수 있다."""
     name: str = Field(..., min_length=1, max_length=255)
     display_name: str | None = Field(default=None, max_length=255)
     datasource_id: int
     summary: str | None = Field(default=None, max_length=200)
     description: str | None = None
-    origin: DatasetOrigin = DatasetOrigin.PROD
+    # 생략하면 데이터 소스의 환경(origin)을 따른다(UI 와 동일) — 이전에는 항상 PROD 였다.
+    origin: DatasetOrigin | None = None
     qualified_name: str | None = None
     table_type: str | None = None
     storage_format: str | None = None
@@ -350,6 +507,7 @@ class DatasetCreate(BaseModel):
 
 
 class DatasetUpdate(BaseModel):
+    """데이터셋 부분 수정 요청(None 인 필드는 변경하지 않음)."""
     name: str | None = Field(None, min_length=1, max_length=255)
     display_name: str | None = Field(default=None, max_length=255)
     summary: str | None = Field(default=None, max_length=200)
@@ -393,6 +551,7 @@ class DatasetUpdate(BaseModel):
 
 
 class DatasetResponse(BaseModel):
+    """데이터셋 상세 응답 — 스키마·태그·소유자·용어·속성 포함."""
     id: int
     urn: str
     created_by: str | None = None
@@ -467,11 +626,14 @@ class DatasetSummary(BaseModel):
     tag_count: int = 0
     owner_count: int = 0
     schema_field_count: int = 0
+    # 생성자(소유자) — 목록 행 ⋮ "삭제" 노출 판단용(삭제는 생성자 또는 관리자만)
+    created_by: str | None = None
     created_at: datetime
     updated_at: datetime
 
 
 class PaginatedDatasets(BaseModel):
+    """데이터셋 목록 페이지 응답."""
     items: list[DatasetSummary]
     total: int
     page: int
@@ -483,6 +645,7 @@ class PaginatedDatasets(BaseModel):
 # ---------------------------------------------------------------------------
 
 class SchemaChangeEntry(BaseModel):
+    """스키마 스냅샷의 필드 변경 1건(before/after 는 필드 속성 dict)."""
     type: str  # ADD, MODIFY, DROP
     field: str
     before: dict | None = None
@@ -490,6 +653,7 @@ class SchemaChangeEntry(BaseModel):
 
 
 class SchemaSnapshotResponse(BaseModel):
+    """스키마 변경 이력 스냅샷 응답."""
     id: int
     dataset_id: int
     synced_at: datetime
@@ -528,14 +692,24 @@ class SearchResult(BaseModel):
 # 대시보드 스키마
 # ---------------------------------------------------------------------------
 
+class TagUsageRef(BaseModel):
+    """태그를 쓰는 데이터셋 외 항목(OCI 모델·알림 규칙) 요약."""
+    id: int
+    name: str
+    is_active: bool | None = None
+
+
 class TagUsage(BaseModel):
-    """카탈로그 전반의 태그 사용 정보."""
+    """카탈로그 전반의 태그 사용 정보 — 데이터셋·OCI 모델·알림 규칙(TAG 범위)."""
     tag: TagResponse
     datasets: list[DatasetSummary] = Field(default_factory=list)
     total_datasets: int = 0
+    oci_models: list[TagUsageRef] = Field(default_factory=list)
+    alert_rules: list[TagUsageRef] = Field(default_factory=list)
 
 
 class CatalogStats(BaseModel):
+    """카탈로그 대시보드 통계."""
     total_datasets: int
     total_datasources: int
     total_tags: int
@@ -602,6 +776,7 @@ class DatasourceFeatureResponse(BaseModel):
 
 
 class DatasourceMetadataResponse(BaseModel):
+    """데이터 소스 유형별 메타데이터(데이터 타입·테이블 타입·저장 포맷·기능)."""
     datasource: DatasourceResponse
     data_types: list[DatasourceDataTypeResponse] = Field(default_factory=list)
     table_types: list[DatasourceTableTypeResponse] = Field(default_factory=list)
@@ -759,7 +934,7 @@ class DatasetLineageResponse(BaseModel):
     source_datasource_name: str | None = None         # 원본 데이터 소스 인스턴스 이름
     target_datasource_name: str | None = None         # 대상 데이터 소스 인스턴스 이름
     relation_type: str                              # 관계 유형 (ETL, FILE_EXPORT 등)
-    lineage_source: str                             # 출처 (MANUAL, PIPELINE, QUERY_AGGREGATED)
+    lineage_source: str                             # 출처 (MANUAL, PIPELINE, QUERY_AGGREGATED, FK)
     pipeline_id: int | None = None                  # 파이프라인 ID
     pipeline_name: str | None = None                # 파이프라인 이름 (JOIN 조회)
     description: str | None = None                  # 관계 설명
@@ -775,15 +950,29 @@ class DatasetLineageResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 class TaxonomyCreate(BaseModel):
+    """분류체계 생성 요청."""
     name: str = Field(..., min_length=1, max_length=200)
     description: str | None = None
     sort_order: int = 0
 
 
+def _reject_explicit_nulls(model: BaseModel, fields: tuple[str, ...]) -> None:
+    """수정 요청에서 생략은 허용하되 명시적 null 은 거부 (DB NOT NULL 컬럼 → 409 대신 422)."""
+    for f in fields:
+        if f in model.model_fields_set and getattr(model, f) is None:
+            raise ValueError(f"{f} 는 비울 수 없습니다.")
+
+
 class TaxonomyUpdate(BaseModel):
+    """분류체계 부분 수정 요청(name·sort_order 는 null 불가)."""
     name: str | None = Field(None, min_length=1, max_length=200)
     description: str | None = None
     sort_order: int | None = None
+
+    @model_validator(mode="after")
+    def _no_null_required(self):
+        _reject_explicit_nulls(self, ("name", "sort_order"))
+        return self
 
 
 class TaxonomyResponse(BaseModel):
@@ -799,6 +988,7 @@ class TaxonomyResponse(BaseModel):
 
 
 class CategoryCreate(BaseModel):
+    """분류 생성 요청 — parent_id 가 없으면 분류체계의 루트 분류."""
     taxonomy_id: int
     name: str = Field(..., min_length=1, max_length=200)
     parent_id: int | None = None
@@ -807,10 +997,16 @@ class CategoryCreate(BaseModel):
 
 
 class CategoryUpdate(BaseModel):
+    """분류 부분 수정·이동 요청(name·sort_order 는 null 불가)."""
     name: str | None = Field(None, min_length=1, max_length=200)
     parent_id: int | None = None        # 이동(순환 검증)
     description: str | None = None
     sort_order: int | None = None
+
+    @model_validator(mode="after")
+    def _no_null_required(self):
+        _reject_explicit_nulls(self, ("name", "sort_order"))
+        return self
 
 
 class CategoryResponse(BaseModel):

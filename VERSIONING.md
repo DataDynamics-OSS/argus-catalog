@@ -28,7 +28,7 @@ MAJOR.MINOR.PATCH   (예: 1.4.2)
 - **Python SDK + `argus-model` CLI** — 공개 함수 시그니처·명령
 - **DB 스키마** — 마이그레이션 호환성
 - **설정 키** (`config.yml` / `config.properties` / 환경변수)
-- **에이전트 연동 인터페이스** (`agent/ serve` ↔ 카탈로그)
+- **AI 서비스 연동 인터페이스** (`ai-service/` assistant ↔ 카탈로그)
 
 내부 모듈·테스트·주석·로그 문구 등 **비공개 표면**의 변경은 버전에 영향을 주지 않습니다.
 
@@ -85,8 +85,14 @@ SemVer 접미사를 붙여 어느 정도 익은 버전인지 표시합니다.
 | `python tools/sync-version.py --set X.Y.Z` | `VERSION` 갱신 후 동기화(버전 올릴 때) |
 
 관리 대상: 모든 `pyproject.toml`(백엔드는 dynamic 이라 자동 추종) · `__version__` 을 가진
-`__init__.py` · 지정한 `package.json`. 존재하지 않는 파일은 건너뜁니다.
-(내부 빌드 설정 패키지 `frontend/packages/*` 는 `private`·`0.0.0` 으로 제외합니다.)
+`__init__.py` · 지정한 `package.json` · 모든 `pom.xml` 의 프로젝트 `<version>`(엔진 수집기 Java 확장 —
+산출물 이름 `…-X.Y.Z.jar` 도 이 값을 따름) · StarRocks 플러그인 `plugin.properties` 의 `version=`.
+존재하지 않는 파일은 건너뜁니다.
+(내부 빌드 설정 패키지 `frontend/packages/*` 는 `private`·`0.0.0` 으로, 통합 테스트용 외부 프로젝트 예시
+`design/integration-test/scripts/extensions-it/data/` 는 제품 버전과 무관해 제외합니다.)
+
+버전을 올리면 Java 확장의 산출물 이름이 바뀌므로, 문서·스크립트에 적힌 jar 이름(`impala-query-agent-X.Y.Z.jar` 등)도
+함께 고칩니다(`git grep -nE '(impala-query-agent|trino-query-listener|starrocks-audit-plugin|hive-query-hook)-[0-9]'`).
 
 ### CI 강제
 
@@ -113,7 +119,13 @@ git push origin main --tags
 
 # 5) (공개 반영이 필요하면) 공개 저장소로 publish
 #    tools/publish-oss.sh -m "release 0.2.0"
+
+# 6) 설치 패키지(폐쇄망 EL8/EL9 용 tar.gz + RPM) 빌드 → GitHub Release 에 첨부
+release/build.sh            # 산출물: release/dist/0.2.0/ (*.tar.gz, *.rpm, SHA256SUMS)
 ```
+
+설치 패키지 구성과 빌드 방법은 [release/README.md](release/README.md), 운영자 설치 안내는
+[release/README-INSTALL.md](release/README-INSTALL.md) 를 참고하세요.
 
 릴리스 전 CI(`version-sync` · lint · test) 통과를 필수로 합니다.
 
@@ -141,6 +153,6 @@ git push origin main --tags
 
 ## 컴포넌트별 버전
 
-모노레포의 핵심 제품 컴포넌트(backend · frontend · sdk · agent · extensions · tests · docs)는
+모노레포의 핵심 제품 컴포넌트(backend · frontend · sdk · ai-service · extensions · tests · docs)는
 `VERSION` 으로 **버전을 일원화**합니다. 향후 컴포넌트별로 독립 버전이 필요해지면 이 정책을
 개정합니다.

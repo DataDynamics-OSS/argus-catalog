@@ -75,8 +75,17 @@ export type FilesystemDataSource = {
     onProgress: (progress: number) => void,
   ) => Promise<void>
 
-  /** Get a download URL for a given path. */
+  /**
+   * 보기(미리보기)용 주소 — 화면이 fetch·<img src> 로 읽는다(로그인 필요한 API 는 blob: 주소로 돌려준다).
+   * 크기 제한이 있는 보기 전용이다. 내려받기에는 getDirectDownloadUrl 을 쓴다.
+   */
   getDownloadUrl: (path: string) => Promise<string>
+
+  /**
+   * 내려받기용 주소 — 브라우저가 링크로 바로 저장하도록 짧은 다운로드 토큰을 붙인 주소.
+   * 파일을 메모리에 올리지 않아 수 GB 모델 파일도 내려받을 수 있다. 없으면 getDownloadUrl 로 대신한다.
+   */
+  getDirectDownloadUrl?: (path: string) => Promise<string>
 
   /** Rename/move a path. */
   renamePath?: (sourcePath: string, destinationPath: string) => Promise<void>

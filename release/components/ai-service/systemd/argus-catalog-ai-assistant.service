@@ -1,0 +1,22 @@
+[Unit]
+Description=Argus Catalog AI Service — AI assistant server
+Documentation=file:///opt/argus-catalog-ai-service/share/installer/README-INSTALL.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=argus
+Group=argus
+Environment=ARGUS_AI_PORT=8930
+EnvironmentFile=/etc/argus-catalog-ai-service/ai-service.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/argus-catalog-ai-service/venv/bin/argus-catalog-ai assistant --port ${ARGUS_AI_PORT}
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

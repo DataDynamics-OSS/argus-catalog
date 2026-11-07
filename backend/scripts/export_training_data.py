@@ -2,6 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Export training data for fine-tuning from catalog DB + synthetic semiconductor data.
 
+카탈로그 DB 의 사람이 작성한 메타데이터와 합성 반도체 테이블 정의로 SFT 학습 데이터(train/eval JSONL)를 만든다.
+DB 추출 쿼리는 방언 독립적인 표준 SQL(catalog_datasources 조인, 태그는 파이썬에서 묶음)이며,
+실패하면 오류를 출력하고 합성 데이터만으로 계속한다.
+
 Produces ChatML-format JSONL files for supervised fine-tuning (SFT).
 
 Sources:
@@ -29,8 +33,12 @@ SYSTEM_PROMPT = (
 # ---------------------------------------------------------------------------
 
 async def export_from_db(db_url: str) -> list[dict]:
-    """Extract training samples from existing catalog metadata."""
-    from sqlalchemy import select, text
+    """Extract training samples from existing catalog metadata.
+
+    설명(10자 이상)·컬럼 설명(2개 이상)·태그가 있는 active 데이터셋으로 description /
+    column_description / tag_suggestion 세 가지 과제 샘플을 만든다.
+    """
+    from sqlalchemy import text
     from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
     from sqlalchemy.orm import sessionmaker
 
@@ -44,9 +52,9 @@ async def export_from_db(db_url: str) -> list[dict]:
         rows = await session.execute(text("""
             SELECT
                 d.id, d.name, d.description,
-                p.type AS platform_type, p.name AS platform_name
+                ds.type AS platform_type, ds.name AS platform_name
             FROM catalog_datasets d
-            JOIN catalog_platforms p ON d.platform_id = p.id
+            JOIN catalog_datasources ds ON d.datasource_id = ds.id
             WHERE d.description IS NOT NULL
               AND d.description != ''
               AND d.status = 'active'
@@ -119,9 +127,9 @@ JSON format: {{"description": "...", "confidence": 0.0-1.0}}"""
 
         # 2) Column descriptions (group by dataset)
         ds_rows = await session.execute(text("""
-            SELECT DISTINCT d.id, d.name, d.description, p.type AS platform_type
+            SELECT DISTINCT d.id, d.name, d.description, ds.type AS platform_type
             FROM catalog_datasets d
-            JOIN catalog_platforms p ON d.platform_id = p.id
+            JOIN catalog_datasources ds ON d.datasource_id = ds.id
             JOIN catalog_dataset_schemas s ON s.dataset_id = d.id
             WHERE s.description IS NOT NULL AND s.description != ''
               AND d.status = 'active'
@@ -192,21 +200,24 @@ JSON format: {{"columns": [{{"name": "col_name", "description": "...", "confiden
                 ],
             })
 
-        # 3) Tag suggestions
+        # 3) Tag suggestions — 태그 목록은 array_agg(PostgreSQL 전용) 대신 파이썬에서 데이터셋별로 묶는다
         tag_rows = await session.execute(text("""
-            SELECT d.id, d.name, d.description, p.type AS platform_type,
-                   array_agg(t.name) AS tags
+            SELECT d.id, d.name, d.description, ds.type AS platform_type, t.name AS tag_name
             FROM catalog_dataset_tags dt
             JOIN catalog_datasets d ON dt.dataset_id = d.id
             JOIN catalog_tags t ON dt.tag_id = t.id
-            JOIN catalog_platforms p ON d.platform_id = p.id
+            JOIN catalog_datasources ds ON d.datasource_id = ds.id
             WHERE d.status = 'active'
-            GROUP BY d.id, d.name, d.description, p.type
-            HAVING count(t.id) >= 1
+            ORDER BY d.id, t.name
         """))
 
-        for row in tag_rows.fetchall():
-            ds_id, ds_name, ds_desc, platform_type, tags = row
+        tagged: dict[int, tuple] = {}
+        for ds_id, ds_name, ds_desc, platform_type, tag_name in tag_rows.fetchall():
+            if ds_id not in tagged:
+                tagged[ds_id] = (ds_name, ds_desc, platform_type, [])
+            tagged[ds_id][3].append(tag_name)
+
+        for ds_id, (ds_name, ds_desc, platform_type, tags) in tagged.items():
 
             col_rows = await session.execute(text("""
                 SELECT field_path FROM catalog_dataset_schemas

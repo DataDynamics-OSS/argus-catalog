@@ -14,11 +14,14 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@workspace/ui/components/select"
 
+import { useAuth } from "@/features/auth"
 import {
+  AuthChangeConfirmError,
   fetchAuthConfig, fetchAuthSecret, initializeKeycloak,
   testAuthConnection, updateAuthConfig,
   type InitStep,
 } from "./api"
+import { errorMessage, notifyError, notifySuccess, toast } from "@/lib/notify"
 
 function StepIcon({ status }: { status: string }) {
   if (status === "ok") return <CheckCircle2 className="h-4 w-4 text-blue-500" />
@@ -64,7 +67,7 @@ export function AuthSettings() {
   const [initRunning, setInitRunning] = useState(false)
   const [initSteps, setInitSteps] = useState<InitStep[]>([])
   const [initAdminUser, setInitAdminUser] = useState("admin")
-  const [initAdminPass, setInitAdminPass] = useState("admin")
+  const [initAdminPass, setInitAdminPass] = useState("")
 
   const handleToggleSecret = async () => {
     if (!showSecret && realSecret === null) {
@@ -100,18 +103,31 @@ export function AuthSettings() {
 
   useEffect(() => { loadConfig() }, [loadConfig])
 
-  const handleSave = async () => {
+  // 저장하면 로그인이 끊기는 변경(방식 전환·Keycloak 연결 정보) — 서버가 알려 준 결과를 보여 주고 확인받는다
+  const { logout } = useAuth()
+  const [confirmMsg, setConfirmMsg] = useState<string | null>(null)
+
+  const handleSave = async (confirm = false) => {
     setSaving(true)
-    setMessage(null)
     try {
       await updateAuthConfig({
         type: authType,
         server_url: serverUrl, realm, client_id: clientId, client_secret: clientSecret,
         admin_role: adminRole, superuser_role: superuserRole, user_role: userRole,
-      })
-      setMessage({ type: "success", text: `인증 설정을 저장했습니다 (${authType} 모드)` })
+      }, confirm)
+      if (confirm) {
+        setConfirmMsg(null)
+        await logout() // 현재 토큰은 새 설정에서 더 이상 유효하지 않다 — 다시 로그인
+        return
+      }
+      notifySuccess(`인증 설정을 저장했습니다. (${authType} 모드)`)
     } catch (e) {
-      setMessage({ type: "error", text: e instanceof Error ? e.message : "저장에 실패했습니다." })
+      if (e instanceof AuthChangeConfirmError) {
+        setConfirmMsg(e.message)
+      } else {
+        setConfirmMsg(null)
+        notifyError(e, "인증 설정을 저장하지 못했습니다.")
+      }
     } finally {
       setSaving(false)
     }
@@ -128,7 +144,7 @@ export function AuthSettings() {
       })
       setMessage({ type: result.success ? "success" : "error", text: result.message })
     } catch (e) {
-      setMessage({ type: "error", text: e instanceof Error ? e.message : "연결 테스트에 실패했습니다." })
+      setMessage({ type: "error", text: errorMessage(e) ?? "연결을 테스트하지 못했습니다." })
     } finally {
       setTesting(false)
     }
@@ -142,18 +158,14 @@ export function AuthSettings() {
     if (!initAdminPass.trim()) missing.push("관리자 비밀번호")
     if (!realm.trim()) missing.push("Realm")
     if (!clientId.trim()) missing.push("Client ID")
-    if (!clientSecret.trim() || clientSecret === "••••••••" && !realSecret) {
-      // Need to resolve masked secret
-    }
     if (!adminRole.trim()) missing.push("Admin Role")
     if (!superuserRole.trim()) missing.push("Superuser Role")
     if (!userRole.trim()) missing.push("User Role")
 
     if (missing.length > 0) {
-      setMessage({ type: "error", text: `필수 항목이 비어 있습니다: ${missing.join(", ")}` })
+      toast.error("필수 항목이 비어 있습니다.", { description: missing.join(", ") })
       return
     }
-    setMessage(null)
     setInitSteps([])
     setInitOpen(true)
   }
@@ -162,17 +174,8 @@ export function AuthSettings() {
     setInitRunning(true)
     setInitSteps([])
     try {
-      // Get real secret if masked
-      let secret = clientSecret
-      if (secret === "••••••••" && realSecret) {
-        secret = realSecret
-      } else if (secret === "••••••••") {
-        try {
-          secret = await fetchAuthSecret()
-        } catch {
-          secret = "argus-client-secret"
-        }
-      }
+      // 마스킹 값·빈 값은 그대로 보낸다 — 서버가 저장된 secret 을 쓰고, 없으면 새로 생성해 저장한다
+      const secret = clientSecret === "••••••••" && realSecret ? realSecret : clientSecret
 
       const result = await initializeKeycloak({
         server_url: serverUrl,
@@ -184,8 +187,15 @@ export function AuthSettings() {
         roles: [adminRole, superuserRole, userRole].filter(Boolean),
       })
       setInitSteps(result.steps)
+      // 서버가 secret 을 설정에 저장했으면 화면 값도 다시 읽는다(마스킹 표시)
+      if (result.steps.some((st) => st.step === "설정 저장" && st.status === "created")) {
+        setRealSecret(null)
+        setShowSecret(false)
+        const cfg = await fetchAuthConfig()
+        setClientSecret(cfg.client_secret)
+      }
     } catch (e) {
-      setInitSteps([{ step: "초기화", status: "error", message: e instanceof Error ? e.message : "실패" }])
+      setInitSteps([{ step: "초기화", status: "error", message: errorMessage(e) ?? "Keycloak 을 초기화하지 못했습니다." }])
     } finally {
       setInitRunning(false)
     }
@@ -261,7 +271,7 @@ export function AuthSettings() {
                   type={showAdminPass ? "text" : "password"}
                   value={initAdminPass}
                   onChange={(e) => setInitAdminPass(e.target.value)}
-                  placeholder="admin"
+                  placeholder="초기화 때만 사용 (저장하지 않음)"
                   className="pr-10"
                 />
                 <button
@@ -298,7 +308,9 @@ export function AuthSettings() {
                   {showSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
               </div>
-              <p className="text-xs text-muted-foreground">변경하지 않으면 기존 secret이 유지됩니다.</p>
+              <p className="text-xs text-muted-foreground">
+                변경하지 않으면 기존 secret이 유지됩니다. 비워 둔 채 Keycloak 초기화를 실행하면 임의의 secret을 새로 만들어 저장합니다.
+              </p>
             </div>
           </div>
 
@@ -320,7 +332,7 @@ export function AuthSettings() {
           )}
 
           <div className="flex items-center gap-2 pt-2">
-            <Button onClick={handleSave} disabled={saving}>
+            <Button onClick={() => void handleSave()} disabled={saving}>
               {saving ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Save className="h-4 w-4 mr-1" />}
               저장
             </Button>
@@ -341,6 +353,26 @@ export function AuthSettings() {
       </Card>
 
       {/* Initialize Dialog */}
+      <Dialog open={confirmMsg !== null} onOpenChange={(open) => { if (!open && !saving) setConfirmMsg(null) }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>인증 설정 변경 확인</DialogTitle>
+            <DialogDescription>{confirmMsg}</DialogDescription>
+          </DialogHeader>
+          <p className="text-xs text-muted-foreground">
+            새 설정으로 로그인할 수 없게 되면 서버를 환경변수 <code>ARGUS_AUTH_FORCE_LOCAL=true</code> 로
+            재기동해 로컬 관리자 계정으로 복구할 수 있습니다.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmMsg(null)} disabled={saving}>취소</Button>
+            <Button onClick={() => void handleSave(true)} disabled={saving}>
+              {saving ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : null}
+              저장하고 다시 로그인
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={initOpen} onOpenChange={(open) => { if (!initRunning) setInitOpen(open) }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
@@ -350,7 +382,8 @@ export function AuthSettings() {
             </DialogTitle>
             <DialogDescription>
               Keycloak에 realm, client, role을 자동으로 생성합니다.
-              이미 존재하는 리소스는 건너뜁니다.
+              이미 존재하는 리소스는 건너뜁니다. client는 서버 간 로그인(password grant)만 허용하고
+              브라우저 리다이렉트·서비스 계정은 끈 상태로 만들며, 예전 설정으로 만든 client도 그렇게 좁힙니다.
             </DialogDescription>
           </DialogHeader>
 

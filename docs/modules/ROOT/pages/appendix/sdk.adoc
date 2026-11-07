@@ -1,171 +1,633 @@
-= SDK 가이드
+= SDK · argus-model CLI
+:toc: macro
+:toclevels: 2
 
-`argus-catalog-sdk` 는 OCI 기반 모델 저장소를 코드로 다루기 위한 Python SDK 와
-`argus-model` CLI 를 함께 제공합니다. 모델을 직접 등록하거나 내려받는 작업을
-파이썬 몇 줄, 혹은 터미널 명령 한 줄로 처리할 수 있습니다. MLflow 모델의 등록·로딩은
-별도 래퍼 없이 MLflow 클라이언트 (`mlflow.sklearn.log_model()`,
-`mlflow.pyfunc.load_model()`) 를 그대로 사용하시면 됩니다.
+**Argus Catalog SDK**(`argus-catalog-sdk`)는 모델 저장소와 AI 에이전트 정의를 코드와 터미널에서 다루는 도구입니다.
+Python 라이브러리 `ModelClient` 와 두 개의 명령줄 도구가 함께 설치됩니다.
+
+* `argus-model` — 모델 파일 올리기(push)·내려받기(pull), HuggingFace 가져오기, 에어갭 반입, 삭제
+* `argus-catalog` — AI 에이전트 정의 파일(`agent.yaml`) 반영·정리·내보내기 (`argus-model` 과 같은 프로그램이라 어느 이름으로 실행해도 됩니다)
+
+이 문서는 처음 사용하는 분을 기준으로 작업 순서대로 설명합니다. 예시의 출력은 모두 통합 테스트 환경에서 실제로 실행한 결과입니다.
+중간중간 나오는 **고급 사용자** 상자는 몰라도 사용에 지장이 없는 심화 내용이니 처음에는 건너뛰어도 됩니다.
+
+[NOTE]
+====
+**MLflow 로 학습·기록하는 모델은 MLflow 클라이언트를 그대로 쓰세요.** `mlflow.sklearn.log_model()`, `mlflow.pyfunc.load_model()` 같은
+호출은 Argus Catalog 의 MLflow 호환 API 로 바로 연결됩니다. 이 SDK 는 모델 **파일**을 올리고 내려받는 일(MLflow 로 기록한 모델의 파일 내려받기 포함),
+외부 모델 반입, 에이전트 정의 파일 관리를 맡습니다.
+====
+
+toc::[]
+
+== 시작하기 전에
+
+=== 이런 일을 할 수 있습니다
+
+* **모델 올리기** — 로컬 디렉터리를 통째로 OCI 모델 허브의 새 버전으로 올립니다. 하위 폴더 구조가 그대로 유지됩니다.
+* **내려받기** — 한 버전의 파일 전체를 로컬 디렉터리로 받습니다.
+* **HuggingFace 가져오기** — 모델 ID 만으로 서버가 직접 받아 저장소에 넣습니다.
+* **에어갭 반입** — 인터넷이 없는 망으로 옮긴 파일을 등록합니다.
+* **정리** — 모델을 파일까지 함께 삭제합니다.
+* **에이전트 정의 파일** — Git 으로 관리하는 `agent.yaml` 을 카탈로그에 반영하고, 빠진 에이전트를 사용 중단으로 돌립니다.
+
+=== 두 가지 모델 저장소
+
+Argus Catalog 에는 성격이 다른 두 저장소가 있고, 명령도 나뉘어 있습니다. 모델 이름은 두 저장소를 통틀어 하나만 쓸 수 있습니다.
+
+[cols="1,2,2",options="header"]
+|===
+| | OCI 모델 허브 | MLflow 모델 레지스트리
+
+| 화면 | AI 카탈로그 → OCI 모델 허브 | AI 카탈로그 → MLflow 모델
+| 이름 예 | `my-bert`, `ml-film-recommender-onnx` | `argus.ml.churn_predictor` (점으로 구분)
+| 올리기 | `push` (누구나 자기 모델) | MLflow 클라이언트, `import-hf`·`import-local` (관리자)
+| 목록 | `oci-list` | `list`
+| HuggingFace | `oci-import-hf` | `import-hf`
+| 삭제 | `oci-delete` | `delete`
+| 공통 2+| `pull`, `files`, `manifest` — 두 저장소 모두 같은 명령 (MLflow 클라이언트로 기록한 버전은 `manifest` 없음)
+|===
+
+TIP: 새로 만드는 모델이라면 **OCI 모델 허브 + `push`** 를 권합니다. 로그인한 사용자라면 누구나 자기 모델을 만들고 올릴 수 있습니다.
+
+=== 누가 무엇을 할 수 있나요
+
+모든 명령은 **로그인이 필요**합니다. 조회(`oci-list`·`list`·`files`·`manifest`)도 로그인 정보 없이 실행하면 `API error 401: 인증이 필요합니다.` 로 거부됩니다.
+
+[cols="2,1,1",options="header"]
+|===
+| 작업 | 일반 사용자 | 관리자
+
+| 목록·파일·manifest 조회 (`oci-list`, `list`, `files`, `manifest`) | ✓ | ✓
+| 내려받기 (`pull`) | ✓ | ✓
+| 새 OCI 모델 만들고 올리기 (`push`) | ✓ | ✓
+| 남의 OCI 모델에 새 버전 올리기·삭제 | × (소유자·생성자만) | ✓
+| HuggingFace 가져오기, 서버 디렉터리 반입, MLflow 모델 삭제 | × | ✓
+| 에이전트 정의 파일 반영·정리 | ✓ (자기 에이전트) | ✓
+|===
 
 == 설치
 
-먼저 SDK 를 설치합니다. HuggingFace 모델 임포트 기능까지 쓰려면 추가 의존성을 함께 설치하세요.
+Python 3.11 이상이 필요합니다. 가상환경에 설치하면 `argus-model`·`argus-catalog` 명령이 함께 생깁니다.
 
-[source,bash]
+[source,console]
 ----
-pip install argus-catalog-sdk
-
-# HuggingFace 임포트까지 사용하려면
-pip install "argus-catalog-sdk[huggingface]"
+$ python3 -m venv venv && . venv/bin/activate
+$ pip install argus-catalog-sdk        # 사내 배포 패키지가 없으면 저장소의 sdk/ 디렉터리: pip install ./sdk
+$ pip show argus-catalog-sdk | grep -E "^(Name|Version|Requires):"
+Name: argus-catalog-sdk
+Version: 0.5.0
+Requires: httpx, PyYAML, rich
+$ argus-model --help
+usage: argus-model [-h]
+                   {oci-list,oci-import-hf,oci-delete,list,pull,push,import-hf,import-local,files,manifest,delete,agent-apply,agent-export}
+                   ...
 ----
 
-== SDK 기본 사용
+명령마다 `--help` 로 옵션을 볼 수 있습니다 (예: `argus-model push --help`). 전체 목록은 <<명령 레퍼런스>>에 있습니다.
 
-`ModelClient` 에 카탈로그 서버 주소를 넘겨 클라이언트를 만든 다음, 모델을 조회하거나
-등록하면 됩니다. 가장 기본이 되는 목록 조회와 등록을 먼저 살펴보겠습니다.
+== 서버 주소와 로그인
+
+모든 명령은 `--server` 로 카탈로그 서버 주소를 받습니다. 매번 적기 번거로우니 **환경 변수**로 두는 것이 편합니다.
+
+[cols="1,1,2",options="header"]
+|===
+| 옵션 | 환경 변수 | 설명
+
+| `--server URL` | `ARGUS_SERVER` | 카탈로그 서버 주소 (기본 `http://localhost:4600`). 웹 UI 주소를 넣어도 됩니다
+| `--username`, `--password` | `ARGUS_USERNAME`, `ARGUS_PASSWORD` | 명령을 실행할 때 로그인
+| `--token TOKEN` | `ARGUS_TOKEN` | 이미 받은 액세스 토큰. 사용자명·비밀번호보다 우선
+|===
+
+[source,console]
+----
+$ export ARGUS_SERVER=http://catalog.corp:4600
+$ export ARGUS_USERNAME=mjkim ARGUS_PASSWORD='********'
+$ argus-model oci-list --page-size 3
+                               OCI 모델 (총 3개)
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━┓
+┃ 이름                     ┃ 출처        ┃ 최신 버전 ┃    상태    ┃ 수정일     ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━┩
+│ ml-film-recommender-onnx │ mlflow      │    v1     │   review   │ 2026-11-06 │
+│ embedding-bge-m3         │ huggingface │    v1     │  approved  │ 2026-11-06 │
+│ llm-qwen2.5-7b-instruct  │ huggingface │    v1     │ production │ 2026-11-06 │
+└──────────────────────────┴─────────────┴───────────┴────────────┴────────────┘
+----
+
+로그인 정보가 없으면 조회를 포함한 모든 명령이 거부되고, 비밀번호가 틀리면 바로 알려 줍니다. 오류가 나면 종료 코드가 1 이라 스크립트에서 구분할 수 있습니다.
+
+[source,console]
+----
+$ argus-model push model-a it-sdk-demo          # 로그인 정보 없이
+푸시하는 중: model-a -> it-sdk-demo
+오류: API error 401: 인증이 필요합니다.
+$ argus-model oci-list --username admin --password wrong
+오류: API error 401: 사용자명 또는 비밀번호가 올바르지 않습니다.
+$ echo $?
+1
+----
+
+[TIP]
+.고급 사용자 — SSO 환경
+====
+Keycloak 등 SSO 로 로그인하는 환경에서는 웹에서 받은 액세스 토큰을 `ARGUS_TOKEN` 으로 넘깁니다.
+토큰은 만료되므로 오래 걸리는 작업 전에 새로 받으세요.
+====
+
+== 모델 올리기 — `push`
+
+로컬 디렉터리의 파일을 OCI 모델 허브의 **새 버전**으로 올립니다. 모델이 없으면 만들고(실행한 사용자가 생성자), 있으면 다음 버전으로 추가합니다.
+
+예를 들어 아래와 같은 디렉터리가 있다고 합시다. 하위 폴더에 같은 이름의 `config.json` 이 있고, Git·macOS 가 만든 숨김 파일도 섞여 있습니다.
+
+[source,console]
+----
+$ find model-a -type f | sort
+model-a/.git/HEAD
+model-a/.gitattributes
+model-a/README.md
+model-a/config.json
+model-a/onnx/.DS_Store
+model-a/onnx/model.onnx
+model-a/tokenizer/config.json
+----
+
+[source,console]
+----
+$ argus-model push model-a it-sdk-demo --description "SDK 통합 테스트 모델" \
+      --owner ml-team --task text-classification --framework onnx
+푸시하는 중: model-a -> it-sdk-demo
+v1 푸시 완료: 4개 파일
+$ argus-model files it-sdk-demo 1
+                  it-sdk-demo v1 파일
+┏━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━┓
+┃ 파일명                ┃   크기 ┃ 수정일              ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━┩
+│ README.md             │   56 B │ 2026-11-07T06:25:34 │
+│ config.json           │   32 B │ 2026-11-07T06:25:34 │
+│ manifest.json         │ 1.5 KB │ 2026-11-07T06:25:35 │
+│ onnx/model.onnx       │ 8.0 KB │ 2026-11-07T06:25:34 │
+│ tokenizer/config.json │   22 B │ 2026-11-07T06:25:34 │
+└───────────────────────┴────────┴─────────────────────┘
+----
+
+push 는 이렇게 동작합니다.
+
+* **하위 폴더 구조를 그대로 올립니다.** `onnx/model.onnx` 는 버전 안에서도 `onnx/model.onnx` 이고, 두 `config.json` 은 서로 덮어쓰지 않습니다.
+* **숨김 파일은 올리지 않습니다.** 경로 어느 단계든 `.` 으로 시작하면(`.git/`, `.gitattributes`, `onnx/.DS_Store`) 건너뜁니다. 올릴 파일이 하나도 없으면 아무것도 만들지 않고 멈춥니다.
+* **`manifest.json` 은 서버가 만듭니다.** 파일을 다 올리면 버전을 확정하면서 파일별 다이제스트를 담은 OCI manifest 를 함께 저장합니다.
+* **`README.md` 가 있으면** 모델 상세 화면의 README 로 쓰입니다.
+* **`--description`·`--owner`·`--task`·`--framework` 는 모델을 처음 만들 때만** 반영됩니다. 이미 있는 모델의 정보는 웹 화면에서 바꾸세요.
+
+같은 이름으로 다시 push 하면 다음 버전이 됩니다.
+
+[source,console]
+----
+$ argus-model push model-a it-sdk-demo
+푸시하는 중: model-a -> it-sdk-demo
+v2 푸시 완료: 4개 파일
+----
+
+[NOTE]
+====
+**올리다가 끊겼다면 그냥 다시 실행하세요.** 확정 전에 끊긴 버전은 목록에 나타나지 않고, 그 번호에 파일만 남습니다.
+다시 push 하면 SDK 가 그 번호를 알아서 처리하므로 남은 파일이 새 버전에 섞이지 않습니다.
+
+* 남은 파일이 **24시간보다 오래됐으면** 끊긴 push 의 찌꺼기로 보고 지운 뒤 그 번호를 다시 씁니다
+  (`이전에 끊긴 push 가 v2 에 남긴 파일을 정리했습니다.` 가 출력됨).
+* **최근 것이면** 다른 사람이 지금 올리는 중일 수 있어 건드리지 않고 다음 번호로 올립니다
+  (예: v1 다음 push 가 v2 에서 방금 끊겼다면 다시 실행한 push 는 v3).
+
+그래서 끊긴 직후 다시 실행하면 대개 다음 번호로 올라가고 **버전 번호가 하나 빕니다**(v1, v3). 비어 있는 번호의 남은 파일은
+목록에 나오지 않으며, 하루가 지난 뒤 그 번호를 쓰게 되는 push 가 정리합니다.
+====
+
+[TIP]
+.고급 사용자 — 남은 파일 직접 정리
+====
+Python 에서는 `push(..., stale_after=초)` 로 기준 시간을 바꿀 수 있고(`0` 이면 바로 정리), 확정되지 않은 번호의 파일을
+`delete_unfinalized_files(모델, 버전)` 으로 직접 지울 수 있습니다(소유자·생성자·관리자). 그 번호에 버전 기록이 있으면
+`409` 로 거부되니, 등록된 버전은 모델 삭제를 쓰세요. 정리 기능이 없는 이전 서버에서는 push 가 예전처럼 다음 번호로 건너뜁니다.
+====
+
+=== 큰 파일은 저장소로 직접 — `--presigned-min-mb`
+
+기본적으로 파일은 카탈로그 서버를 거쳐 저장소로 갑니다. 수 GB 짜리 가중치 파일은 서버 메모리를 많이 쓰므로,
+기준 크기 이상인 파일은 **저장소(S3/MinIO)로 직접** 올리도록 지정하세요.
+
+[source,console]
+----
+$ argus-model push model-big my-llm --presigned-min-mb 100     # 100 MB 이상은 저장소로 직접
+----
+
+이때 클라이언트가 서버가 알려 주는 저장소 주소에 접속할 수 있어야 합니다. 관리자는 오브젝트 스토리지 설정의
+**외부용 주소**(`public_endpoint`)를 사용자 PC 에서 닿는 주소로 설정해 두어야 합니다 (<<문제 해결>> 참고).
+
+== 내려받기 — `pull`
+
+한 버전의 파일 전체를 받습니다. 하위 폴더 구조가 그대로 복원되고, 큰 파일도 조금씩 디스크에 바로 써서 메모리를 거의 쓰지 않습니다.
+
+[source,console]
+----
+$ argus-model pull it-sdk-demo 2 out-v2
+내려받는 중: it-sdk-demo v2 -> out-v2
+5개 파일 다운로드 완료:
+  out-v2/README.md
+  out-v2/config.json
+  out-v2/manifest.json
+  out-v2/onnx/model.onnx
+  out-v2/tokenizer/config.json
+$ diff -rq model-a out-v2
+model-a에만: .git
+model-a에만: .gitattributes
+out-v2에만: manifest.json
+model-a/onnx에만: .DS_Store
+----
+
+원본과 다른 것은 올리지 않은 숨김 파일과 서버가 만든 `manifest.json` 뿐입니다.
+
+* 받는 동안에는 `<파일>.part` 에 쓰고, 다 받으면 원래 이름으로 바꿉니다. 중간에 실패하면 `.part` 는 지워집니다.
+* 서버가 알려 준 파일 이름이 대상 디렉터리 밖(`..`, 절대 경로)을 가리키면 **아무 파일도 받지 않고** 멈춥니다.
+
+== 파일 목록과 manifest — `files`, `manifest`
+
+[source,console]
+----
+$ argus-model files it-sdk-demo 1          # 파일명·크기·수정일 표
+$ argus-model manifest it-sdk-demo 1       # OCI manifest (JSON)
+{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.manifest.v1+json",
+  "config": {
+    "mediaType": "application/vnd.argus.model.config.v1+json",
+    "digest": "sha256:b2a072e2…",
+    "size": 32
+  },
+  "layers": [
+    {
+      "mediaType": "application/vnd.argus.model.weights.onnx",
+      "digest": "sha256:c70f60a7…",
+      "size": 8192,
+      "annotations": { "org.opencontainers.image.title": "onnx/model.onnx" }
+    },
+    …
+----
+
+manifest 의 레이어마다 파일 종류(가중치·설정·토크나이저 등)와 SHA-256 다이제스트가 기록되어, 내려받은 파일이 올린 파일과 같은지 확인할 수 있습니다.
+자세한 구조는 xref:models/oci-hub.adoc[OCI 모델 허브] 를 참고하세요.
+
+== HuggingFace 에서 가져오기 (관리자)
+
+모델 ID 만 주면 **서버가** HuggingFace 에서 받아 저장소에 넣습니다. 서버가 인터넷에 접속할 수 있어야 합니다.
+
+=== OCI 모델 허브로 — `oci-import-hf`
+
+[source,console]
+----
+$ argus-model oci-import-hf prajjwal1/bert-tiny --name my-bert-tiny \
+      --task fill-mask --framework pytorch --language en
+OCI 허브로 가져오는 중: prajjwal1/bert-tiny (revision=main)
+my-bert-tiny v1 가져오기 완료: 4개 파일, 17,990,746 바이트
+----
+
+* `--name` 을 빼면 HuggingFace ID 의 `/` 를 `-` 로 바꾼 이름을 씁니다 (`prajjwal1-bert-tiny`).
+* `--revision` 으로 브랜치·태그·커밋을 고를 수 있습니다 (기본 `main`).
+* 기본은 **끝날 때까지 기다립니다.** 큰 모델이라 기다리기 싫다면 `--no-wait` 로 접수만 하고, 진행 상태는 웹 화면의 버전 탭에서 봅니다.
+
+[source,console]
+----
+$ argus-model oci-import-hf prajjwal1/bert-tiny --name my-bert-tiny --no-wait
+OCI 허브로 가져오는 중: prajjwal1/bert-tiny (revision=main)
+접수됨: my-bert-tiny v2 — 웹 UI 버전 탭에서 진행 상태를 확인하세요.
+----
+
+=== MLflow 레지스트리로 — `import-hf`
+
+[source,console]
+----
+$ argus-model import-hf prajjwal1/bert-tiny argus.it.sdk_bert
+임포트하는 중: prajjwal1/bert-tiny -> argus.it.sdk_bert (revision=main)
+v1 임포트 완료: 4개 파일, 17,990,746 바이트
+저장 위치: s3://model-artifacts/argus.it.sdk_bert/v1/
+----
+
+== 에어갭(폐쇄망) 반입
+
+인터넷이 없는 망에 모델을 들여오는 방법은 두 가지입니다.
+
+.온라인 모델을 에어갭으로 반입
+image::diagrams/appendix-sdk-01.png[온라인 모델을 에어갭으로 반입,role="diagram"]
+
+**방법 1 — `push` (권장).** 에어갭 망의 PC 에 파일을 옮긴 뒤 그 PC 에서 push 합니다. 서버 파일시스템에 접근할 필요가 없고 관리자가 아니어도 됩니다.
+
+[source,console]
+----
+# ── 인터넷 구간 ──
+$ argus-model oci-import-hf bert-base-uncased --name bert-base --server http://online-catalog:4600
+$ argus-model pull bert-base 1 ./bert-base --server http://online-catalog:4600
+# ── USB · 파일 전송으로 ./bert-base 를 에어갭 PC 로 ──
+$ argus-model push ./bert-base bert-base --server http://airgap-catalog:4600
+----
+
+받은 디렉터리의 `manifest.json` 은 push 할 때 그대로 올라가도 되지만, 에어갭 서버가 확정할 때 새로 만들어 덮어씁니다.
+
+**방법 2 — `import-local` (관리자, MLflow 레지스트리).** 파일을 **카탈로그 서버가 읽을 수 있는 경로**에 먼저 복사한 뒤, 그 서버 경로를 지정합니다.
+
+[source,console]
+----
+$ argus-model import-local /data/transferred/my-model argus.it.sdk_local --description "로컬 반입"
+임포트하는 중: /data/transferred/my-model -> argus.it.sdk_local
+v1 임포트 완료: 2개 파일, 4,099 바이트
+----
+
+WARNING: `import-local` 의 경로는 명령을 실행하는 PC 가 아니라 **카탈로그 서버(컨테이너) 안의 경로**입니다.
+없는 경로나 파일이 없는 디렉터리를 주면 `API error 400` 으로 바로 거부되고 모델·버전은 만들어지지 않습니다.
+반입 도중 실패하면 그 버전은 `FAILED_REGISTRATION`(실패 사유 기록)으로 남아 웹 화면에서 실패로 보입니다. 저장소(MinIO)에 닿지 않으면 `API error 503` 입니다.
+
+== MLflow 모델 조회·삭제
+
+[source,console]
+----
+$ argus-model list --search churn
+                          모델 (총 1개)
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━┳━━━━━━━┳━━━━━━━━━━━━┓
+┃ 이름                     ┃ 소유자 ┃ 버전 ┃ 상태  ┃ 수정일     ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━╇━━━━━━━╇━━━━━━━━━━━━┩
+│ argus.ml.churn_predictor │ jypark │  v1  │ READY │ 2026-11-06 │
+└──────────────────────────┴────────┴──────┴───────┴────────────┘
+----
+
+`files`·`manifest`·`pull` 은 OCI 모델과 같은 방법으로 씁니다.
+
+MLflow 클라이언트(`mlflow.*.log_model()`)로 기록한 모델은 파일이 저장소(S3)가 아니라 **서버 디스크**에 있습니다.
+`files`·`pull` 은 저장소에 파일이 없으면 서버의 MLflow 모델 파일 브라우저(웹 화면의 'MLflow 모델 파일')로 찾아
+같은 방식(하위 폴더 유지)으로 보여 주고 받습니다. 일반 사용자도 등록된 모델의 폴더 안은 조회·내려받기할 수 있고
+(OCI 모델과 같은 규칙), 서버 디스크 전체 탐색만 관리자 전용입니다. `manifest` 는 SDK 로 반입한
+(저장소에 있는) 버전에만 있습니다.
+
+[source,console]
+----
+$ argus-model pull argus.ml.film_recommender 1 out-film
+내려받는 중: argus.ml.film_recommender v1 -> out-film
+5개 파일 다운로드 완료:
+  out-film/MLmodel
+  out-film/conda.yaml
+  out-film/python_env.yaml
+  out-film/python_model.pkl
+  out-film/requirements.txt
+----
+
+== 삭제
+
+삭제는 되돌릴 수 없으므로 확인을 받습니다. 스크립트에서는 `-y`/`--yes` 로 확인을 건너뜁니다.
+
+[source,console]
+----
+$ argus-model oci-delete it-sdk-big                     # OCI 모델 — 모델 이름을 다시 입력
+OCI 모델 'it-sdk-big' 과 저장된 파일을 삭제합니다. 모델 이름을 입력하세요: it-sdk-big
+삭제됨: it-sdk-big
+$ argus-model delete argus.it.sdk_local argus.it.sdk_bert   # MLflow 모델(관리자) — '모델 삭제' 입력
+2개 모델 삭제: argus.it.sdk_local, argus.it.sdk_bert
+확인하려면 '모델 삭제' 를 입력하세요: 모델 삭제
+삭제됨: ['argus.it.sdk_local', 'argus.it.sdk_bert']
+----
+
+* 두 명령 모두 DB 기록과 저장소 파일을 함께 지웁니다.
+* 확인 문구를 다르게 입력하면 "취소됨" 으로 끝나고 아무것도 지우지 않습니다. 이때 종료 코드는 1 이라 스크립트에서 취소를 구분할 수 있습니다.
+* 없는 MLflow 모델 이름은 `찾을 수 없음: [...]` 으로 따로 알려 줍니다.
+
+== AI 에이전트 정의 파일 — `argus-catalog`
+
+에이전트를 `agent.yaml` 로 Git 에서 관리하고 카탈로그에 반영합니다. 정의 파일 형식과 화면 쪽 설명은
+xref:governance/ai-agent-catalog.adoc[AI Agent 카탈로그] 를 참고하세요.
+
+[source,yaml]
+----
+# agents/a.yaml
+apiVersion: argus.catalog/v1
+kind: Agent
+metadata: {name: it.sdk-a, owner: mjkim@corp.example, department: 품질팀, category: test}
+spec:
+  version: 1.0.0
+  status: active
+  release: {systemPromptFile: prompts/a.md}   # 지시문은 파일 기준 상대 경로의 별도 파일로
+----
+
+[source,console]
+----
+$ argus-catalog agent-apply -f agents/ --source it-sdk-repo --dry-run     # 1) 미리 보기
+              반영 미리 보기
+┏━━━━━━━━━━┳━━━━━━┳━━━━━━┳━━━━━━━━━━━━━━━┓
+┃ 이름     ┃ 결과 ┃ 내용 ┃ 파일          ┃
+┡━━━━━━━━━━╇━━━━━━╇━━━━━━╇━━━━━━━━━━━━━━━┩
+│ it.sdk-a │ 생성 │ —    │ agents/a.yaml │
+│ it.sdk-b │ 생성 │ —    │ agents/b.yaml │
+└──────────┴──────┴──────┴───────────────┘
+반영 미리 보기: 생성 2 · 갱신 0 · 변경 없음 0 · 실패 0
+미리 보기입니다 — 실제로 바뀐 것은 없습니다. --dry-run 없이 다시 실행하면 반영됩니다.
+$ argus-catalog agent-apply -f agents/ --source it-sdk-repo               # 2) 반영
+$ rm agents/b.yaml
+$ argus-catalog agent-apply -f agents/ --source it-sdk-repo --prune       # 3) 빠진 에이전트 정리
+반영 결과: 생성 0 · 갱신 0 · 변경 없음 1 · 실패 0
+                  정리 결과
+┏━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━┓
+┃ 이름     ┃ 결과      ┃ 내용                ┃
+┡━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━┩
+│ it.sdk-b │ 사용 중단 │ active → deprecated │
+└──────────┴───────────┴─────────────────────┘
+$ argus-catalog agent-export it.sdk-a it.sdk-b -o exported/                # 4) 정의 파일로 내보내기
+2개 정의 파일을 exported/ 에 저장했습니다.
+----
+
+* `-f` 에 파일이나 디렉터리를 여러 번 줄 수 있습니다. 디렉터리는 하위까지 `*.yaml`·`*.yml` 을 읽되, **숨김 디렉터리(`.github/` 등)는 건너뜁니다.**
+* `--prune` 은 `-f` 로 준 위치에서 반영했던 에이전트 중 이번에 없는 것을 **사용 중단**(삭제 아님)으로 바꿉니다. 읽지 못한 파일이 하나라도 있으면 정리는 건너뜁니다.
+* `--source` 는 정의 파일 저장소 이름입니다. 빼면 Git 원격 주소(`origin`)를 씁니다. 주소에 든 사용자·토큰(`https://x-access-token:…@github.com/…`)은 빼고 기록합니다.
+* 실패가 있으면 종료 코드 1 이라 CI 에서 바로 쓸 수 있습니다. `-v` 를 주면 '변경 없음' 도 표에 나옵니다.
+* `agent-export` 는 이름을 빼면 `--search`·`--status`·`--category`·`--department` 조건에 맞는 전체를 내보냅니다.
+  `-o` 를 빼면 정의 파일 원문을 표준 출력으로 내보내므로(여러 개면 `---` 로 구분) `> agents.yaml` 처럼 바로 저장할 수 있습니다.
+* 에이전트 이름은 소문자·숫자·`.`·`_`·`-` 로만 이루어집니다. 규칙에 맞지 않는 이름을 주면 서버에 묻기 전에 거부합니다.
+
+== Python SDK
+
+명령줄 도구가 하는 일은 모두 `ModelClient` 로 할 수 있습니다.
 
 [source,python]
 ----
-from argus_catalog_sdk import ModelClient
+from argus_catalog_sdk import ApiError, ModelClient
 
-client = ModelClient("http://catalog-server:4600")
+with ModelClient("http://catalog.corp:4600", username="mjkim", password="...") as c:
+    r = c.push("model-a", "it-sdk-demo", task="text-classification", framework="onnx")
+    print(r)    # {'model_name': 'it-sdk-demo', 'version': 1, 'file_count': 4, 'total_size': …, 'status': 'ready', 'cleaned_versions': []}
 
-# 모델 목록
-result = client.list_models(search="iris")
-for m in result["items"]:
-    print(m["name"], m["max_version_number"], m["latest_version_status"])
-
-# 모델 등록
-client.create_model(
-    name="argus.ml.iris_classifier",
-    description="Iris flower classifier",
-    owner="ml-team",
-)
+    files = c.pull("it-sdk-demo", r["version"], "out")    # ['out/README.md', 'out/config.json', …]
+    print(c.list_files("it-sdk-demo", 1))
 ----
 
-=== 파일 업로드 / 다운로드
+* `with` 블록이 끝나면 연결을 닫습니다. `with` 없이 쓰면 다 쓴 뒤 `c.close()` 를 부르세요. 요청마다 연결을 새로 열지 않고 재사용합니다.
+* 인증은 `token=` 이 `username=`/`password=` 보다 우선합니다. 둘 다 없으면 조회를 포함한 모든 호출이 401 로 거부됩니다.
 
-모델 파일은 크기에 따라 두 가지 방식으로 올립니다. 작은 파일은 서버를 경유해 간단히 올리고,
-큰 파일은 Presigned URL 로 S3 에 직접 올려 서버 부하를 줄입니다.
+=== 오류 처리
+
+서버가 오류로 응답하면 `ApiError` 가 납니다. `status_code` 와 서버가 보낸 `detail` 을 담고 있고, `RuntimeError` 를 상속하므로 기존 `except RuntimeError` 코드도 그대로 동작합니다.
 
 [source,python]
 ----
-# 소형 파일 — 서버 경유
-client.upload_file("argus.ml.iris", version=1, filepath="/path/to/model.pkl")
-
-# 대형 파일 — Presigned URL 로 S3 직접 PUT
-client.upload_via_presigned("argus.ml.bert", version=1,
-                            filepath="/path/to/model.safetensors")
-
-# 일괄 다운로드
-client.pull("argus.ml.bert", version=1, dest="/tmp/bert")
-
-# 로컬 디렉토리 → 새 버전으로 일괄 업로드
-client.push("/path/to/my-model", "argus.ml.custom",
-            description="My custom model", owner="data-team")
+try:
+    c.oci_get_model("no-such-model")
+except ApiError as e:
+    print(e.status_code, e.detail)
 ----
 
-=== HuggingFace · Airgap 임포트
+[source,console]
+----
+상태 코드: 404 | 내용: 모델 'no-such-model'을(를) 찾을 수 없습니다.
+RuntimeError 로도 잡힘: True
+push 충돌: 409 'argus.ml.churn_predictor' 은(는) OCI 모델이 아닌 다른 모델(MLflow 등)이  …
+로그인 실패: 401 사용자명 또는 비밀번호가 올바르지 않습니다.
+----
 
-인터넷이 되는 환경에서는 HuggingFace 모델을 ID 만으로 곧바로 가져올 수 있고,
-폐쇄망(에어갭) 환경에서는 USB 나 SCP 로 옮겨 둔 로컬 디렉토리에서 임포트합니다.
+=== 주요 메서드
+
+[cols="2,3",options="header"]
+|===
+| 메서드 | 설명
+
+| `push(local_dir, model_name, description=, owner=, task=, framework=, presigned_min_size=, stale_after=)` | 디렉터리를 OCI 모델 새 버전으로. `presigned_min_size` 는 바이트, `stale_after` 는 남은 파일을 정리할 기준(초, 기본 86400 = 24시간). 결과의 `cleaned_versions` 는 정리한 번호
+| `pull(model_name, version, dest)` | 버전 전체 내려받기 — 받은 경로 목록 (MLflow 기록 모델은 서버 디스크에서)
+| `list_files(name, version)`, `get_manifest(name, version)` | 파일 목록, OCI manifest
+| `delete_unfinalized_files(name, version)` | 확정되지 않은 번호에 남은 파일 삭제 — 지운 개수 (버전 기록이 있으면 409)
+| `oci_list_models(...)`, `oci_get_model(name)`, `oci_list_versions(name)` | OCI 모델 조회 (버전 `status`: ready / importing / failed)
+| `oci_import_huggingface(hf_model_id, name=, revision=, wait=True, ...)` | HuggingFace → OCI 허브. `wait=False` 면 접수만
+| `oci_delete_model(name)` | OCI 모델 삭제
+| `list_models(...)`, `get_model(name)`, `hard_delete_models(names)` | MLflow 모델 조회·영구 삭제
+| `import_huggingface(hf_model_id, model_name, revision=)`, `import_local(local_dir, model_name)` | MLflow 레지스트리로 반입 (관리자). `local_dir` 는 서버 안의 경로
+| `upload_file(name, version, path, filename=)`, `upload_via_presigned(...)`, `finalize(...)` | 파일 단위 업로드·확정 (보통은 `push` 를 쓰세요)
+| `apply_agents(...)`, `prune_agents(...)`, `export_agent(name)`, `list_agents(...)` | 에이전트 정의 파일 (명령줄 `agent-apply` 의 기반)
+|===
+
+[TIP]
+.고급 사용자 — 프록시·사설 인증서·요청 기록
+====
+연결 설정을 바꾸려면 직접 만든 `httpx.Client` 를 `http_client=` 로 넘깁니다. 넘긴 클라이언트는 SDK 가 닫지 않습니다.
 
 [source,python]
 ----
-# 온라인
-client.import_huggingface(
-    hf_model_id="bert-base-uncased",
-    model_name="argus.ml.bert",
-    revision="main",
-    description="BERT base uncased",
-    owner="nlp-team",
-)
+import httpx
 
-# 에어갭 (USB / SCP 로 파일 전송 후)
-client.import_local(
-    local_dir="/data/transferred/bert",
-    model_name="argus.ml.bert",
-)
+def show(req):                      # 요청마다 호출 — 어떤 요청이 어디로 가는지 확인
+    if req.method in ("POST", "PUT"):
+        print(f"  {req.method:4} {req.url.host}:{req.url.port} {req.url.path}")
+
+http = httpx.Client(verify="/etc/ssl/corp-ca.pem", event_hooks={"request": [show]})
+with ModelClient("https://catalog.corp", username="mjkim", password="...", http_client=http) as c:
+    c.push("model-big", "my-llm", presigned_min_size=1024 * 1024)
 ----
 
-=== Finalize · 삭제
-
-파일을 모두 올린 뒤에는 `finalize` 로 manifest 를 만들고 버전을 확정합니다.
-모델을 정리할 때는 목록에서만 숨기는 소프트 삭제와 저장소까지 지우는 하드 삭제 중 골라 쓰면 됩니다.
-
-[source,python]
+[source,console]
 ----
-# 업로드 완료 후 manifest 생성 + 버전 확정
-client.finalize("argus.ml.custom", version=1,
-                annotations={"ai.argus.model.task": "classification"})
-
-# 소프트 삭제 (목록에서 숨김)
-client.delete_model("argus.ml.old_model")
-
-# 하드 삭제 (DB + 저장소 완전 삭제)
-client.hard_delete_models(["argus.ml.old_model", "argus.ml.test"])
+  POST 127.0.0.1:46600 /api/v1/auth/login
+  POST 127.0.0.1:46600 /api/v1/oci-models
+  POST 127.0.0.1:46600 /api/v1/model-store/it-sdk-big/versions/2/upload
+  POST 127.0.0.1:46600 /api/v1/model-store/it-sdk-big/versions/2/upload-url
+  PUT  127.0.0.1:46900 /model-artifacts/it-sdk-big/v2/weights.safetensors
+  POST 127.0.0.1:46600 /api/v1/oci-models/it-sdk-big/versions/2/finalize
 ----
 
-== `argus-model` CLI
+작은 `config.json` 은 서버(`46600`)로, 기준 크기를 넘은 가중치는 저장소(`46900`)로 직접 가는 것을 볼 수 있습니다.
+====
 
-코드를 작성하지 않고 터미널에서 바로 다루고 싶다면 `argus-model` CLI 가 편리합니다.
-SDK 가 제공하는 기능 대부분을 명령 한 줄로 쓸 수 있습니다.
+== 문제 해결
 
-[source,bash]
-----
-# 목록
-argus-model list
-argus-model list --search iris --page 2 --page-size 10
+[cols="2,2,3",options="header"]
+|===
+| 증상 | 원인 | 해결
 
-# Pull / Push
-argus-model pull argus.ml.iris_classifier 1 /tmp/iris-model
-argus-model push /path/to/model argus.ml.custom --description "My custom model"
+| `pull`·대용량 push 에서 `Name or service not known` (또는 연결 실패), 주소가 `minio:9000` 등 내부 이름
+| 저장소 외부용 주소가 설정되지 않아 서버 내부 주소로 다운로드·업로드 주소가 만들어짐
+| 관리자가 오브젝트 스토리지 설정의 `public_endpoint` 를 사용자 PC 에서 닿는 주소로 설정 (`PUT /api/v1/settings/object-storage`)
 
-# HuggingFace · Airgap
-argus-model import-hf bert-base-uncased argus.ml.bert
-argus-model import-local /data/transferred/bert argus.ml.bert
+| `API error 401: 인증이 필요합니다.`
+| 로그인 정보 없음
+| `ARGUS_USERNAME`/`ARGUS_PASSWORD` 또는 `ARGUS_TOKEN` 설정
 
-# 파일 / 매니페스트
-argus-model files argus.ml.iris_classifier 1
-argus-model manifest argus.ml.iris_classifier 1
+| `API error 401: 사용자명 또는 비밀번호가 올바르지 않습니다.`
+| 비밀번호 오류 또는 토큰 만료
+| 비밀번호 확인, 토큰 새로 받기
 
-# 삭제
-argus-model delete argus.ml.old_model --yes
-----
+| `API error 403: 모델의 소유자 또는 관리자만 …`
+| 남의 OCI 모델에 push
+| 모델 소유자·관리자에게 요청하거나 다른 이름으로 push
 
-서버 주소는 `--server http://<host>:4600` 플래그로 지정합니다. 생략하면 기본값인
-`http://localhost:4600` 을 사용합니다.
+| `API error 409: … OCI 모델이 아닌 다른 모델(MLflow 등)이 이미 쓰는 이름입니다`
+| MLflow 모델과 이름이 같음
+| 다른 이름 사용 (파일은 올라가지 않은 상태)
 
-== Airgap 워크플로우
+| `files` 가 비어 있음 / `pull` 이 `API error 404: … 파일이 저장소에 없습니다`
+| 없는 버전, 또는 서버 디스크에도 파일이 없는 MLflow 모델
+| 버전 번호 확인, 웹 화면의 'MLflow 모델 파일' 에서 파일이 있는지 확인
 
-폐쇄망에 모델을 들여올 때의 전형적인 흐름입니다. 인터넷 환경에서 모델을 받아 USB 나 SCP 로
-옮긴 다음, 에어갭 환경에서 로컬 임포트하는 순서로 진행합니다.
+| `API error 401: 서버 디스크에 저장된 MLflow 모델 파일은 로그인해야 볼 수 있습니다.`
+| MLflow 클라이언트로 기록한 모델을 로그인 없이 조회
+| `ARGUS_USERNAME`/`ARGUS_PASSWORD` 또는 `ARGUS_TOKEN` 설정
 
-[source,bash]
-----
-# ── 인터넷 환경 ──
-argus-model import-hf bert-base-uncased argus.ml.bert \
-    --server http://online-catalog:4600
-argus-model pull argus.ml.bert 1 /usb/bert-export/ \
-    --server http://online-catalog:4600
+| `files`·`pull` 이 `API error 403: 메뉴 접근 권한이 없습니다: models` / `등록된 MLflow 모델의 파일만 볼 수 있습니다…`
+| 내 역할에 *MLflow 모델* 메뉴가 막혀 있음, 또는 소프트 삭제된 모델
+| 관리자에게 메뉴 권한·모델 복원을 요청
 
-# USB / SCP 전송
-scp -r /usb/bert-export/ airgap-server:/data/transferred/bert/
+| `import-local` 이 `API error 400: 디렉터리가 없습니다(카탈로그 서버 기준 경로)` / `가져올 파일이 없습니다`
+| 서버 안에 없는 경로, 또는 숨김 파일만 있는 디렉터리
+| 카탈로그 서버(컨테이너) 안의 경로인지 확인 (모델은 만들어지지 않으므로 정리할 것 없음)
 
-# ── Airgap 환경 ──
-argus-model import-local /data/transferred/bert argus.ml.bert \
-    --server http://airgap-catalog:4600
-----
+| 취소했는데 스크립트가 실패로 처리함
+| 삭제 확인을 취소하면 종료 코드 1
+| 스크립트에서는 `--yes` 를 쓰거나 종료 코드 1 을 취소로 처리
 
-자세한 OCI 매니페스트 구조는 xref:models/oci-hub.adoc[OCI Model Hub] 를 참조하세요.
+| `import-hf`·`oci-import-hf` 가 `API error 404: HuggingFace 에서 '…' 모델을 찾을 수 없습니다` / `400: … revision … 이(가) 없습니다` / `400: … gated 모델`
+| 모델 ID 오타, 비공개·접근 승인이 필요한 모델, 없는 revision
+| HuggingFace 에서 ID·revision 확인. 반입 전에 확인하므로 모델·버전은 만들어지지 않음 (`502` 는 서버가 HuggingFace 에 닿지 않음)
 
-== 인증 토큰
+| `API error 503: 오브젝트 스토리지에 연결할 수 없습니다. MinIO 실행 여부와 설정을 확인하세요.`
+| 카탈로그 서버가 저장소(MinIO/S3)에 닿지 않음
+| 관리자에게 저장소 상태·설정 확인 요청. 반입 도중이었다면 그 버전은 `FAILED_REGISTRATION` 으로 남음
 
-SSO 환경에서는 사용자 토큰을 헤더로 전달합니다 (환경변수 지원은 향후 SDK 에 추가될 예정입니다).
+| `API error 502: Backend server is unreachable. …`
+| `--server` 에 웹 UI 주소를 줬는데 웹 UI 뒤의 카탈로그 서버가 내려가 있음
+| 카탈로그 서버 상태 확인, 또는 서버 주소(API) 를 직접 지정
 
-[source,python]
-----
-client = ModelClient(
-    "http://catalog:4600",
-    headers={"Authorization": "Bearer <access_token>"},
-)
-----
+| `agent-export` 가 `오류: 에이전트 이름이 올바르지 않습니다: …`
+| 이름에 대문자·한글·`/` 등 규칙 밖 문자
+| 웹 화면이나 `agent-export` (이름 없이 조건으로) 에서 실제 이름 확인
+
+| `oci-import-hf` 가 오래 기다림
+| 큰 모델을 서버가 받는 중
+| `--no-wait` 로 접수만 하고 웹 화면 버전 탭에서 진행 확인
+|===
+
+== 명령 레퍼런스
+
+모든 명령은 공통으로 `--server`, `--token`, `--username`, `--password` 를 받습니다.
+
+[cols="2,3,1",options="header"]
+|===
+| 명령 | 설명 · 주요 옵션 | 권한
+
+| `oci-list` | OCI 모델 목록. `--search`, `--page`, `--page-size`(최대 50) | 로그인
+| `push LOCAL_DIR NAME` | 디렉터리를 OCI 모델 새 버전으로. `--description`, `--owner`, `--task`, `--framework`(새 모델일 때), `--presigned-min-mb MB` | 로그인
+| `oci-import-hf HF_ID` | HuggingFace → OCI 허브. `--name`, `--revision`, `--description`, `--owner`, `--task`, `--framework`, `--language`, `--no-wait` | 관리자
+| `oci-delete NAME` | OCI 모델과 파일 삭제. `-y` | 소유자·생성자·관리자
+| `list` | MLflow 모델 목록. `--search`, `--page`, `--page-size`(최대 100) | 로그인
+| `import-hf HF_ID NAME` | HuggingFace → MLflow 레지스트리. `--revision`, `--description` | 관리자
+| `import-local SERVER_DIR NAME` | 서버 디렉터리 → MLflow 레지스트리. `--description` | 관리자
+| `delete NAME...` | MLflow 모델 영구 삭제. `--yes` | 관리자
+| `pull NAME VERSION DEST` | 버전 파일 전체 내려받기 | 로그인
+| `files NAME VERSION` | 파일 목록 | 로그인
+| `manifest NAME VERSION` | OCI manifest | 로그인
+| `agent-apply -f PATH ...` | 에이전트 정의 파일 반영. `--dry-run`, `--prune`, `--source`, `-v` | 로그인
+| `agent-export [NAME...]` | 정의 파일로 내보내기. `-o DIR`(없으면 표준 출력), `--search`, `--status`, `--category`, `--department` | 로그인
+|===
+
+[NOTE]
+====
+이 문서의 예시는 통합 테스트(`design/integration-test/23-sdk.md`)에서 실행한 결과입니다.
+전체 명령과 출력은 `design/integration-test/assets/23-sdk/` 의 로그에 있으며, `bash design/integration-test/scripts/sdk-it/run.sh` 로 다시 만들 수 있습니다.
+====

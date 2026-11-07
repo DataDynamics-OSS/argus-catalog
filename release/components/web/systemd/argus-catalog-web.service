@@ -1,0 +1,22 @@
+[Unit]
+Description=Argus Catalog Web UI
+Documentation=file:///opt/argus-catalog-web/share/installer/README-INSTALL.md
+After=network-online.target argus-catalog-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=argus
+Group=argus
+WorkingDirectory=/opt/argus-catalog-web/app/apps/web
+EnvironmentFile=/etc/argus-catalog-web/web.env
+ExecStart=/opt/argus-catalog-web/node/bin/node /opt/argus-catalog-web/app/apps/web/server.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+LimitNOFILE=65536
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -12,6 +12,7 @@ import {
 } from "@workspace/ui/components/tooltip"
 
 import { hybridSearch, type SemanticSearchResult, type SemanticSearchResponse } from "../api"
+import { errorMessage } from "@/lib/notify"
 
 export function DatasetsSmartSearch() {
   const router = useRouter()
@@ -31,7 +32,7 @@ export function DatasetsSmartSearch() {
       setResults(resp.items)
       setMeta({ provider: resp.provider, model: resp.model, total: resp.total })
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Search failed")
+      setError(errorMessage(e) ?? "Search failed")
       setResults(null)
     } finally {
       setLoading(false)

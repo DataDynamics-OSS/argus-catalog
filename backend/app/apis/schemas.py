@@ -1,13 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
-"""API Catalog Pydantic 스키마."""
+"""API Catalog Pydantic 스키마(요청·응답 DTO).
+
+``/api/v1/apis`` 라우터와 서비스 레이어가 사용한다. 응답 모델은 ``from_attributes`` 로 ORM 객체에서 변환된다.
+"""
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ApiStatus(str, Enum):
@@ -21,10 +25,33 @@ class ApiStatus(str, Enum):
 # 생성 / 수정
 # ---------------------------------------------------------------------------
 
+# API 식별자 규칙 — URN(`<name>.api`)·URL 경로에 쓰이므로 영문·숫자·점·하이픈·언더스코어만(화면 검사와 동일)
+API_NAME_RE = re.compile(r"[A-Za-z0-9._-]+")
+API_NAME_RULE = "API 식별자는 영문·숫자·점(.)·하이픈(-)·언더스코어(_)만 사용할 수 있습니다."
+
+
+def _normalize_api_name(v: str | None) -> str | None:
+    """식별자 앞뒤 공백 제거. 빈 값은 None(자동 생성 대상), 규칙 위반은 ValueError(→ 422)."""
+    if v is None:
+        return None
+    v = v.strip()
+    if not v:
+        return None
+    if not API_NAME_RE.fullmatch(v):
+        raise ValueError(API_NAME_RULE)
+    return v
+
+
 class ApiCreate(BaseModel):
     """API 등록. 스펙(text/url)을 주면 파싱해 엔드포인트 추출(source=spec),
     스펙이 없으면 수동 등록(source=manual, name 필수)."""
     name: str | None = Field(None, max_length=255)
+
+    @field_validator("name")
+    @classmethod
+    def _check_name(cls, v: str | None) -> str | None:
+        return _normalize_api_name(v)
+
     display_name: str | None = None
     description: str | None = None
     owner_email: str | None = None
@@ -41,6 +68,33 @@ class ApiCreate(BaseModel):
     protocol: str | None = None
     contract_text: str | None = None
     contract_url: str | None = None
+
+
+class SpecPreviewRequest(BaseModel):
+    """등록 전 스펙 미리보기 — 저장하지 않고 파싱 결과와 사용될 식별자만 확인."""
+    spec_text: str | None = None
+    spec_url: str | None = None
+    name: str | None = Field(None, max_length=255)
+
+    @field_validator("name")
+    @classmethod
+    def _check_name(cls, v: str | None) -> str | None:
+        return _normalize_api_name(v)
+
+
+class SpecPreviewResponse(BaseModel):
+    format: str
+    title: str | None = None
+    description: str | None = None
+    version: str
+    base_url: str | None = None
+    endpoint_count: int = 0
+    server_count: int = 0
+    security_count: int = 0
+    # 등록 시 사용될 식별자 — 입력값 또는 스펙 제목으로 자동 생성(중복이면 -2, -3 … 을 붙인 값)
+    name: str
+    name_auto: bool
+    name_available: bool
 
 
 class EndpointCreate(BaseModel):
@@ -73,6 +127,8 @@ class ApiUpdate(BaseModel):
     note: str | None = None
     contract_text: str | None = None
     contract_url: str | None = None
+    # 상태 변경 사유 — status 와 함께 보내면 상태 변경 이력의 note 로 기록(API 필드에는 저장하지 않음)
+    status_note: str | None = Field(None, max_length=1000)
 
 
 class SpecUpload(BaseModel):
@@ -84,6 +140,17 @@ class SpecUpload(BaseModel):
 # ---------------------------------------------------------------------------
 # 응답
 # ---------------------------------------------------------------------------
+
+class ApiOwnerInfo(BaseModel):
+    """owner_email 과 일치하는 등록 사용자(argus_users) 정보 — 목록·상세 표시용."""
+    email: str
+    username: str
+    first_name: str | None = None
+    last_name: str | None = None
+    organization: str | None = None
+    department: str | None = None
+    model_config = {"from_attributes": True}
+
 
 class ApiSummary(BaseModel):
     id: int
@@ -106,6 +173,8 @@ class ApiSummary(BaseModel):
     tier: str | None = None
     tags: list[str] | None = None
     endpoint_count: int = 0
+    # owner_email 로 조회한 사용자 정보 — 미지정이거나 등록되지 않은 이메일이면 None
+    owner: ApiOwnerInfo | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -155,7 +224,16 @@ class ApiSpecResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ApiPermissions(BaseModel):
+    """현재 사용자가 이 API 에 할 수 있는 작업 — 화면의 버튼 노출 판단용(실제 통제는 각 엔드포인트 가드)."""
+    # 개요 편집·상태 변경·삭제·스펙 새 버전·엔드포인트 추가/수정/삭제·알림 확인 — 생성자 본인 또는 관리자
+    can_edit: bool = False
+    # 자격증명·리니지 추가/삭제 — 관리자 전용
+    can_admin: bool = False
+
+
 class ApiDetailResponse(ApiSummary):
+    permissions: ApiPermissions = ApiPermissions()
     note: str | None = None
     contract_text: str | None = None
     raw_spec: str | None = None
@@ -231,7 +309,22 @@ class LineageResponse(BaseModel):
     note: str | None = None
     created_by: str | None = None
     created_at: datetime
+    # 데이터셋 대상의 상세 화면 id(URN·이름으로 찾은 경우) — 링크용
+    target_id: int | None = None
     model_config = {"from_attributes": True}
+
+
+class LineageTargetOption(BaseModel):
+    """리니지 대상 자동완성 항목."""
+    ref: str
+    label: str
+    id: int | None = None
+
+
+class IncomingLineageResponse(LineageResponse):
+    """다른 API 가 이 API 를 대상으로 등록한 엣지(들어오는 관계) — 출발 API 정보 포함."""
+    source_api_name: str
+    source_display_name: str | None = None
 
 
 class ApiUsageResponse(BaseModel):
@@ -246,7 +339,7 @@ class ApiUsageResponse(BaseModel):
     by_status: list[dict[str, Any]] = []      # {status, count}
     top_endpoints: list[dict[str, Any]] = []  # {endpoint, count, avg_latency_ms}
     top_callers: list[dict[str, Any]] = []    # {name, count}
-    daily: list[dict[str, Any]] = []          # {date, count}
+    daily: list[dict[str, Any]] = []          # {date, count, errors}
     recent: list[dict[str, Any]] = []         # 최근 호출 20건
 
 
@@ -273,7 +366,12 @@ class ApiStats(BaseModel):
     published_apis: int
     by_status: list[dict[str, Any]]
     by_protocol: list[dict[str, Any]]
+    by_category: list[dict[str, Any]] = []  # 목록 카테고리 필터 옵션
     total_endpoints: int
+    # 목록 상단 지표 카드용
+    certified_apis: int = 0          # 인증 상태 CERTIFIED
+    unowned_apis: int = 0            # 소유자(owner_email) 미지정
+    open_alert_apis: int = 0         # 확인되지 않은(OPEN) Breaking 변경 알림이 있는 API 수
 
 
 # ---------------------------------------------------------------------------
@@ -303,7 +401,8 @@ class InvokeRequest(BaseModel):
     url: str  # 완성된 호출 URL (서버 base + path + query)
     headers: dict[str, str] | None = None
     body: Any | None = None
-    timeout: float = 30.0
+    # 호출 하나가 서버 연결을 오래 붙잡지 않도록 1~60초로 제한
+    timeout: float = Field(30.0, ge=1, le=60)
     # 저장된 자격증명 주입(서버 측). api_name + credential_id 동시 지정 시 적용.
     api_name: str | None = None
     credential_id: int | None = None
@@ -340,9 +439,13 @@ class FavoriteResponse(BaseModel):
     api_id: int
     api_name: str | None = None
     api_display_name: str | None = None
+    api_status: str | None = None
+    api_protocol: str | None = None
     method: str
     path: str
     summary: str | None = None
+    # 현재 스펙·엔드포인트 목록에 없는 즐겨찾기(새 스펙에서 제거·경로 변경 등) — 화면에서 따로 표시·정리
+    endpoint_missing: bool = False
     created_at: datetime
     model_config = {"from_attributes": True}
 

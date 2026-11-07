@@ -829,7 +829,7 @@ WHERE NOT EXISTS (
 
 INSERT INTO catalog_glossary_terms (name, description, term_type)
 VALUES ('영화 대여', 'DVD 대여점(Sakila) 도메인 비즈니스 용어', 'CATEGORY')
-ON CONFLICT (name) DO NOTHING;
+ON CONFLICT (term_type, name) DO NOTHING;
 
 INSERT INTO catalog_glossary_terms (name, description, parent_id, term_type)
 SELECT t.name, t.description, p.id, 'TERM'
@@ -846,7 +846,7 @@ FROM (VALUES
     ('장르',     '영화 분류 체계 (Action/Comedy/Drama 등 16종).')
 ) AS t(name, description)
 JOIN catalog_glossary_terms p ON p.name = '영화 대여' AND p.term_type = 'CATEGORY'
-ON CONFLICT (name) DO NOTHING;
+ON CONFLICT (term_type, name) DO NOTHING;
 
 -- 용어 ↔ 데이터셋 연결
 INSERT INTO catalog_dataset_glossary_terms (dataset_id, term_id)

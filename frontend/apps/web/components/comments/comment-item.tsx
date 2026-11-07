@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { Bug, Lightbulb, MessageSquare, MoreHorizontal, Sparkles, Trash2 } from "lucide-react"
+import { Bug, Lightbulb, MessageSquare, MoreHorizontal, Pencil, Sparkles, Trash2 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import {
@@ -12,17 +12,24 @@ import {
 } from "@workspace/ui/components/dropdown-menu"
 
 import type { CommentData } from "@/features/comments/api"
+import { isCommentEdited } from "@/features/comments/edited"
+import { notifyError } from "@/lib/notify"
 import { CommentEditor } from "./comment-editor"
 import { RichTextViewer } from "./rich-text-viewer"
 
 type CommentItemProps = {
   comment: CommentData
   currentUser: string
+  /** 관리자는 타인 댓글도 삭제 가능(서버와 동일 기준: 작성자 또는 관리자). */
+  isAdmin?: boolean
   entityType: string
   entityId: string
   onReply: (parentId: number, content: string, contentPlain: string, category: string) => Promise<void>
   onDelete: (commentId: number) => Promise<void>
+  /** 본문·분류 수정 — 작성자 또는 관리자(서버 `PUT /comments/{id}` 와 같은 기준). */
+  onEdit: (commentId: number, content: string, contentPlain: string, category: string) => Promise<void>
 }
+
 
 function timeAgo(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime()
@@ -40,12 +47,15 @@ function timeAgo(iso: string): string {
 export function CommentItem({
   comment,
   currentUser,
+  isAdmin = false,
   entityType,
   entityId,
   onReply,
   onDelete,
+  onEdit,
 }: CommentItemProps) {
   const [showReplyEditor, setShowReplyEditor] = useState(false)
+  const [editing, setEditing] = useState(false)
 
   // 댓글의 author_name 은 새 형식 "성이름(username)" 또는 구 형식 "username".
   // 표시명(괄호 앞)과 username(괄호 안)을 분리해 두면 placeholder·ownership 비교가 깔끔하다.
@@ -58,8 +68,18 @@ export function CommentItem({
     setShowReplyEditor(false)
   }
 
+  const handleEdit = async (content: string, contentPlain: string, category: string) => {
+    try {
+      await onEdit(comment.id, content, contentPlain, category)
+      setEditing(false)
+    } catch (err) {
+      notifyError(err, "댓글을 수정하지 못했습니다.")
+      throw err // 에디터가 입력 내용을 지우지 않도록 실패를 전달
+    }
+  }
+
   // 구 형식(username 만 저장)과 새 형식("이름(username)") 모두 ownership 인식
-  const isOwner = authorUsername === currentUser || comment.author_name === currentUser
+  const isOwner = authorUsername === currentUser || comment.author_name === currentUser || isAdmin
   const maxDepthIndent = Math.min(comment.depth, 4) // Cap indent at 4 levels
 
   return (
@@ -80,6 +100,11 @@ export function CommentItem({
             </div>
             <span className="text-sm font-medium">{comment.author_name}</span>
             <span className="text-xs text-muted-foreground">{timeAgo(comment.created_at)}</span>
+            {isCommentEdited(comment) && (
+              <span className="text-xs text-muted-foreground" title={new Date(comment.updated_at).toLocaleString()}>
+                (수정됨)
+              </span>
+            )}
             {comment.category === "suggestion" && (
               <span className="inline-flex items-center gap-1 text-xs text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">
                 <Lightbulb className="h-3 w-3" />
@@ -117,6 +142,10 @@ export function CommentItem({
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => setEditing(true)}>
+                    <Pencil className="h-3.5 w-3.5 mr-1.5" />
+                    수정
+                  </DropdownMenuItem>
                   <DropdownMenuItem
                     className="text-destructive"
                     onClick={() => onDelete(comment.id)}
@@ -130,8 +159,19 @@ export function CommentItem({
           </div>
         </div>
 
-        {/* Content — RichTextViewer 가 prose 스타일 + highlight.js 적용을 모두 담당. */}
-        <RichTextViewer html={comment.content} />
+        {/* Content — RichTextViewer 가 prose 스타일 + highlight.js 적용을 모두 담당. 수정 중이면 에디터. */}
+        {editing ? (
+          <CommentEditor
+            onSubmit={handleEdit}
+            initialContent={comment.content}
+            initialCategory={comment.category}
+            submitLabel="저장"
+            autoFocus
+            onCancel={() => setEditing(false)}
+          />
+        ) : (
+          <RichTextViewer html={comment.content} />
+        )}
       </div>
       )}
 
@@ -154,10 +194,12 @@ export function CommentItem({
           key={reply.id}
           comment={reply}
           currentUser={currentUser}
+          isAdmin={isAdmin}
           entityType={entityType}
           entityId={entityId}
           onReply={onReply}
           onDelete={onDelete}
+          onEdit={onEdit}
         />
       ))}
     </div>

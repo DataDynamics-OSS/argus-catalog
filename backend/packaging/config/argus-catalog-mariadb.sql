@@ -10,9 +10,9 @@ CREATE TABLE IF NOT EXISTS catalog_datasources (
     name VARCHAR(100) NOT NULL COMMENT '데이터 소스 표시 이름',
     logo_url VARCHAR(500) COMMENT '데이터 소스 로고 이미지 URL',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '생성 시각',
-    datasource_id VARCHAR(36) NOT NULL UNIQUE COMMENT '데이터 소스 외부 식별자 (UUID, 고유)',
+    datasource_id VARCHAR(36) NOT NULL UNIQUE COMMENT '데이터 소스 외부 식별자 ({type}-{ms타임스탬프hex}{랜덤hex} 형식, 고유)',
     type VARCHAR(100) NOT NULL COMMENT '데이터 소스 플랫폼 유형 (예: hive/trino/postgres)',
-    origin VARCHAR(20) NOT NULL DEFAULT 'DEV' COMMENT '환경 구분 (DEV/STAGING/PROD), 생성 후 불변'
+    origin VARCHAR(20) NOT NULL DEFAULT 'DEV' COMMENT '환경 구분 (DEV/STAGING/PROD), 수정 가능 — 변경 시 소속 데이터셋 origin 에 전파'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 
@@ -132,12 +132,14 @@ CREATE TABLE IF NOT EXISTS catalog_dataset_tags (
 
 CREATE TABLE IF NOT EXISTS catalog_glossary_terms (
     id INT AUTO_INCREMENT PRIMARY KEY COMMENT 'PK',
-    name VARCHAR(200) NOT NULL UNIQUE COMMENT '용어명 (고유)',
+    name VARCHAR(200) NOT NULL COMMENT '용어명 (유형(term_type)별 고유)',
     description TEXT COMMENT '용어 설명',
     parent_id INT COMMENT '상위 용어 ID (catalog_glossary_terms(id) 자기참조, 계층 구조)' REFERENCES catalog_glossary_terms(id),
     term_type VARCHAR(20) NOT NULL DEFAULT 'TERM' COMMENT '항목 유형 (CATEGORY/TERM)',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '생성 시각',
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '수정 시각'
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '수정 시각',
+    -- 이름은 유형별로 유일: 분류 '고객' 과 용어 '고객' 은 공존 가능
+    CONSTRAINT uq_glossary_terms_type_name UNIQUE (term_type, name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 
@@ -350,6 +352,8 @@ CREATE TABLE IF NOT EXISTS catalog_models (
     sklearn_version VARCHAR(20) COMMENT 'scikit-learn 버전',
     mlflow_version VARCHAR(20) COMMENT 'MLflow 버전',
     mlflow_model_id VARCHAR(100) COMMENT 'MLflow 모델 식별자',
+    flavor VARCHAR(50) COMMENT '대표 MLflow flavor (python_function 제외 첫 flavor — sklearn/pytorch/xgboost 등)',
+    flavor_version VARCHAR(50) COMMENT '대표 flavor 라이브러리 버전',
     model_size_bytes BIGINT COMMENT '모델 아티팩트 크기(byte)',
     utc_time_created VARCHAR(50) COMMENT 'MLmodel 생성 시각 (UTC 원본 문자열)',
     time_created TIMESTAMP COMMENT '생성 시각 (서버 로컬 타임존 변환값)',
@@ -494,7 +498,7 @@ CREATE TABLE IF NOT EXISTS catalog_comments (
     author_name VARCHAR(100) NOT NULL COMMENT '작성자 표시 이름',
     author_email VARCHAR(255) COMMENT '작성자 이메일',
     author_avatar VARCHAR(500) COMMENT '작성자 아바타 이미지 URL',
-    reply_count INT NOT NULL COMMENT '답글 수 (비정규화 캐시값)',
+    reply_count INT NOT NULL COMMENT '보이는 직접 답글 수 (삭제됐어도 보이는 답글이 있으면 포함, 비정규화 캐시값)',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '생성 시각',
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '수정 시각',
     is_deleted TINYINT(1) NOT NULL DEFAULT 0 COMMENT '소프트 삭제 여부',
@@ -536,14 +540,23 @@ CREATE TABLE IF NOT EXISTS argus_collector_hive_query_history (
     query TEXT COMMENT '실행된 SQL 원문',
     status VARCHAR(16) NOT NULL COMMENT '실행 상태 (SUCCESS/FAILED 등)',
     error_msg TEXT COMMENT '실패 시 오류 메시지',
+    datasource_id VARCHAR(100) COMMENT '수집 출처 데이터소스 식별자 (hook 의 platformId)',
     inputs_json TEXT COMMENT 'hook 권위 입력 테이블(JSON 배열). 배치 write-lineage 우선 사용',
     outputs_json TEXT COMMENT 'hook 권위 출력 테이블(JSON 배열)',
+    output_columns_json TEXT COMMENT 'hook 출력 테이블별 컬럼 순서(JSON 객체). 컬럼 목록 없는 INSERT 의 위치 매핑',
     received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '수집 서버 수신 시각'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 
 -- query_id 는 UNIQUE 제약이 인덱스를 겸하므로 별도 인덱스 불필요.
 CREATE INDEX IF NOT EXISTS idx_hive_query_history_status ON argus_collector_hive_query_history (status);
+
+-- 기존 설치 업그레이드용(재실행 안전): 수집기 ORM 이 쓰는 datasource_id 컬럼.
+ALTER TABLE argus_collector_hive_query_history ADD COLUMN IF NOT EXISTS datasource_id VARCHAR(100) COMMENT '수집 출처 데이터소스 식별자 (hook 의 platformId)';
+-- 기존 설치 업그레이드용(재실행 안전): hook 권위 입출력 테이블(배치 write-lineage 가 SELECT 함).
+ALTER TABLE argus_collector_hive_query_history ADD COLUMN IF NOT EXISTS inputs_json TEXT COMMENT 'hook 권위 입력 테이블(JSON 배열). 배치 write-lineage 우선 사용';
+ALTER TABLE argus_collector_hive_query_history ADD COLUMN IF NOT EXISTS outputs_json TEXT COMMENT 'hook 권위 출력 테이블(JSON 배열)';
+ALTER TABLE argus_collector_hive_query_history ADD COLUMN IF NOT EXISTS output_columns_json TEXT COMMENT 'hook 출력 테이블별 컬럼 순서(JSON 객체). 컬럼 목록 없는 INSERT 의 위치 매핑';
 
 -- ---------------------------------------------------------------------------
 -- Collector - Impala Query History
@@ -555,8 +568,11 @@ CREATE TABLE IF NOT EXISTS argus_collector_impala_query_history (
     query_type VARCHAR(32) COMMENT '쿼리 유형 (DML/DDL/QUERY/UNKNOWN)',
     query_state VARCHAR(32) COMMENT '쿼리 실행 상태 (FINISHED/EXCEPTION 등)',
     statement TEXT COMMENT '실행된 SQL 문',
+    plan TEXT COMMENT '실행 계획 (Java Agent 가 줄 때)',
     database VARCHAR(256) COMMENT '쿼리 대상 데이터베이스명',
     username VARCHAR(256) COMMENT '실효 사용자 (delegate 지정 시 그 값, 아니면 접속 사용자)',
+    connected_user VARCHAR(256) COMMENT '인증된 접속 사용자',
+    delegate_user VARCHAR(256) COMMENT '위임/프록시 사용자',
     coordinator_host VARCHAR(512) COMMENT '쿼리를 조정한 coordinator 호스트',
     start_time TIMESTAMP COMMENT '쿼리 시작 시각',
     end_time TIMESTAMP COMMENT '쿼리 종료 시각',
@@ -565,6 +581,14 @@ CREATE TABLE IF NOT EXISTS argus_collector_impala_query_history (
     datasource_id VARCHAR(100) COMMENT '수집 출처 데이터소스 식별자',
     received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '수집 적재 시각'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 기존 설치 업그레이드용(재실행 안전): 수집기 ORM 이 쓰는 Impala Agent 필드.
+ALTER TABLE argus_collector_impala_query_history ADD COLUMN IF NOT EXISTS plan TEXT COMMENT '실행 계획 (Java Agent 가 줄 때)';
+ALTER TABLE argus_collector_impala_query_history ADD COLUMN IF NOT EXISTS connected_user VARCHAR(256) COMMENT '인증된 접속 사용자';
+ALTER TABLE argus_collector_impala_query_history ADD COLUMN IF NOT EXISTS delegate_user VARCHAR(256) COMMENT '위임/프록시 사용자';
+
+-- CM 폴러 ↔ Java Agent 동일 쿼리 병합 조회(datasource + 시작시각 근접)용.
+CREATE INDEX IF NOT EXISTS idx_impala_query_history_ds_start ON argus_collector_impala_query_history (datasource_id, start_time);
 
 
 -- ---------------------------------------------------------------------------
@@ -774,6 +798,7 @@ CREATE TABLE IF NOT EXISTS relationship_observations (
     UNIQUE KEY uq_relobs (query_id, a_table(150), a_col(150), b_table(150), b_col(150)),
     INDEX idx_relobs_datasource (datasource_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='쿼리 JOIN 키 관측치(staging). rollup 이 집계';
+CREATE INDEX IF NOT EXISTS idx_relobs_observed_at ON relationship_observations (observed_at);  -- 보존 기간 삭제용
 
 CREATE TABLE IF NOT EXISTS relationship_ingest_offset (
     partition_key   VARCHAR(100) PRIMARY KEY,
@@ -818,7 +843,7 @@ CREATE TABLE IF NOT EXISTS argus_alert_rule (
 
 CREATE TABLE IF NOT EXISTS argus_lineage_alert (
     id INT AUTO_INCREMENT PRIMARY KEY COMMENT 'PK',
-    alert_type VARCHAR(32) NOT NULL COMMENT '알림 유형 (SCHEMA_CHANGE/LINEAGE_BROKEN/SYNC_FAILED/QUALITY_FAILED)',
+    alert_type VARCHAR(32) NOT NULL COMMENT '알림 유형 (SCHEMA_CHANGE/QUALITY_FAILED/MCP_POLICY_DRIFT/MCP_SECURITY_WARNING)',
     severity VARCHAR(16) NOT NULL COMMENT '심각도 (INFO/WARNING/BREAKING)',
     source_dataset_id INT NOT NULL COMMENT '변경 발생 원본 데이터셋, catalog_datasets(id) 참조' REFERENCES catalog_datasets(id) ON DELETE CASCADE,
     affected_dataset_id INT COMMENT '영향받은 하위 데이터셋, catalog_datasets(id) 참조' REFERENCES catalog_datasets(id) ON DELETE CASCADE,
@@ -1530,6 +1555,36 @@ CREATE TABLE IF NOT EXISTS catalog_ai_agent_status_history (
 CREATE INDEX IF NOT EXISTS ix_catalog_ai_agent_status_history_agent_id ON catalog_ai_agent_status_history (agent_id);
 CREATE INDEX IF NOT EXISTS ix_catalog_ai_agent_status_history_changed_at ON catalog_ai_agent_status_history (changed_at);
 
+CREATE TABLE IF NOT EXISTS catalog_ai_agent_discoveries (
+    id INT AUTO_INCREMENT PRIMARY KEY COMMENT 'PK',
+    name VARCHAR(255) NOT NULL UNIQUE COMMENT '실행 환경이 보낸 에이전트 이름(카탈로그 미등록)',
+    first_seen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '처음 발견 시각',
+    last_seen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '마지막 발견 시각',
+    seen_count INT NOT NULL DEFAULT 1 COMMENT '발견 횟수(전체)',
+    invocation_count INT NOT NULL DEFAULT 0 COMMENT '호출 기록으로 발견된 횟수',
+    hook_event_count INT NOT NULL DEFAULT 0 COMMENT '정책 판정 기록으로 발견된 횟수',
+    reported_by VARCHAR(200) COMMENT '마지막으로 보낸 계정',
+    last_consumer VARCHAR(200) COMMENT '마지막 호출자',
+    status VARCHAR(20) NOT NULL DEFAULT 'new' COMMENT 'new / ignored / registered',
+    agent_id INT COMMENT '등록된 에이전트 (catalog_ai_agents(id) 참조, 삭제 시 NULL)' REFERENCES catalog_ai_agents(id) ON DELETE SET NULL,
+    status_changed_by VARCHAR(200) COMMENT '상태를 바꾼 사용자',
+    status_changed_at TIMESTAMP NULL COMMENT '상태 변경 시각'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE INDEX IF NOT EXISTS ix_catalog_ai_agent_discoveries_status ON catalog_ai_agent_discoveries (status);
+CREATE INDEX IF NOT EXISTS ix_catalog_ai_agent_discoveries_last_seen_at ON catalog_ai_agent_discoveries (last_seen_at);
+
+CREATE TABLE IF NOT EXISTS catalog_ai_agent_views (
+    id INT AUTO_INCREMENT PRIMARY KEY COMMENT 'PK',
+    name VARCHAR(100) NOT NULL COMMENT '보기 이름',
+    owner_sub VARCHAR(100) NOT NULL COMMENT '만든 사람(토큰 sub)',
+    owner_name VARCHAR(200) COMMENT '만든 사람 이름(표시용)',
+    shared BOOLEAN NOT NULL DEFAULT FALSE COMMENT '공유 여부(모두에게 보임)',
+    query JSON NOT NULL COMMENT '목록 질의 값(필터·정렬)',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '생성 시각',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '수정 시각'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE INDEX IF NOT EXISTS ix_catalog_ai_agent_views_owner_sub ON catalog_ai_agent_views (owner_sub);
+
 CREATE TABLE IF NOT EXISTS catalog_apis (
     id INT AUTO_INCREMENT PRIMARY KEY COMMENT 'PK',
     name VARCHAR(255) NOT NULL UNIQUE COMMENT 'API 고유 이름 (unique)',
@@ -1637,6 +1692,8 @@ CREATE TABLE IF NOT EXISTS catalog_api_invocations (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE INDEX IF NOT EXISTS ix_catalog_api_invocations_api_id ON catalog_api_invocations (api_id);
 CREATE INDEX IF NOT EXISTS ix_catalog_api_invocations_created_at ON catalog_api_invocations (created_at);
+-- 관측 탭 집계(API·기간 조건) 용 복합 인덱스
+CREATE INDEX IF NOT EXISTS ix_catalog_api_invocations_api_created ON catalog_api_invocations (api_id, created_at);
 
 CREATE TABLE IF NOT EXISTS catalog_api_lineage (
     id INT AUTO_INCREMENT PRIMARY KEY COMMENT 'PK',
@@ -1776,6 +1833,10 @@ ALTER TABLE argus_users ADD COLUMN IF NOT EXISTS department VARCHAR(100);
 ALTER TABLE catalog_ai_agent_tools ADD COLUMN IF NOT EXISTS risk VARCHAR(20);
 ALTER TABLE catalog_ai_agent_tools ADD COLUMN IF NOT EXISTS requires_approval BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE catalog_ai_agents ADD COLUMN IF NOT EXISTS streaming BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE catalog_ai_agents ADD COLUMN IF NOT EXISTS managed_by VARCHAR(20) NOT NULL DEFAULT 'ui';
+ALTER TABLE catalog_ai_agents ADD COLUMN IF NOT EXISTS source_ref VARCHAR(1000);
+ALTER TABLE catalog_ai_agents ADD COLUMN IF NOT EXISTS last_applied_at TIMESTAMP NULL;
+ALTER TABLE catalog_ai_agents ADD COLUMN IF NOT EXISTS last_applied_by VARCHAR(200);
 ALTER TABLE catalog_dataset_schemas ADD COLUMN IF NOT EXISTS display_name VARCHAR(255);
 ALTER TABLE catalog_dataset_schemas ADD COLUMN IF NOT EXISTS pii_type VARCHAR(50);
 ALTER TABLE catalog_datasources ADD COLUMN IF NOT EXISTS system_id INT REFERENCES catalog_systems(id) ON DELETE SET NULL;
@@ -1933,6 +1994,8 @@ CREATE TABLE IF NOT EXISTS federation_sync_runs (
     phase VARCHAR(20) NOT NULL DEFAULT 'FETCH' COMMENT '현재 단계 (FETCH/EMBED/FINALIZE)',
     phase_done INT NOT NULL DEFAULT 0 COMMENT '현재 단계 진척 분자',
     phase_total INT NOT NULL DEFAULT 0 COMMENT '현재 단계 진척 분모',
+    is_full BOOLEAN NOT NULL DEFAULT FALSE COMMENT '전체 동기화(prune 포함) 여부',
+    watermark TIMESTAMP NULL COMMENT '다음 증분 동기화 기준 시각(성공 실행에서 관측한 peer updated_at 최댓값)',
     error TEXT COMMENT '실패 사유',
     started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '시작 시각',
     finished_at TIMESTAMP NULL COMMENT '종료 시각',
@@ -1948,6 +2011,10 @@ ALTER TABLE federation_sync_runs ADD COLUMN IF NOT EXISTS phase_done INT NOT NUL
     COMMENT '현재 단계 진척 분자';
 ALTER TABLE federation_sync_runs ADD COLUMN IF NOT EXISTS phase_total INT NOT NULL DEFAULT 0
     COMMENT '현재 단계 진척 분모';
+ALTER TABLE federation_sync_runs ADD COLUMN IF NOT EXISTS is_full BOOLEAN NOT NULL DEFAULT FALSE
+    COMMENT '전체 동기화(prune 포함) 여부';
+ALTER TABLE federation_sync_runs ADD COLUMN IF NOT EXISTS watermark TIMESTAMP NULL
+    COMMENT '다음 증분 동기화 기준 시각(성공 실행에서 관측한 peer updated_at 최댓값)';
 
 
 -- ===========================================================================
@@ -1968,3 +2035,384 @@ CREATE TABLE IF NOT EXISTS federation_lineage (
     INDEX ix_federation_lineage_source (source_urn),
     INDEX ix_federation_lineage_target (target_urn)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='HARVEST 로 가져온 peer 리니지 엣지(URN→URN, cross-instance stitching)';
+
+
+-- ===========================================================================
+-- MCP Server 카탈로그 (design/mcp-server-catalog.md)
+--   정의(catalog_mcp_servers) / 배포 인스턴스(catalog_mcp_deployments) 2계층.
+--   필드 출처(MCP 표준 / Registry server.json / 서버 설정 / Argus 전용)는
+--   backend/app/mcp_servers/origins.py 에서 관리한다.
+-- ===========================================================================
+
+CREATE TABLE IF NOT EXISTS catalog_mcp_servers (
+    id INT AUTO_INCREMENT PRIMARY KEY COMMENT 'PK',
+    name VARCHAR(255) NOT NULL UNIQUE COMMENT '카탈로그 이름 (예: hive-mcp)',
+    urn VARCHAR(500) NOT NULL UNIQUE COMMENT 'URN {name}.mcp',
+    display_name VARCHAR(255) COMMENT 'UI 노출명',
+    description TEXT COMMENT '설명 (Registry server.json description)',
+    status VARCHAR(20) NOT NULL DEFAULT 'draft' COMMENT '상태 (draft/staging/active/blocked/deprecated/retired)',
+    version VARCHAR(50) NOT NULL DEFAULT '0.1.0' COMMENT '정의 버전 (SemVer)',
+    owner_email VARCHAR(200) COMMENT '소유자 이메일',
+    department VARCHAR(200) COMMENT '소속 부서',
+    category VARCHAR(100) COMMENT '분류',
+    tags JSON COMMENT '태그 목록',
+    provider_type VARCHAR(30) NOT NULL DEFAULT 'community' COMMENT 'internal / vendor / community',
+    vendor VARCHAR(200) COMMENT '제공사',
+    framework VARCHAR(50) NOT NULL DEFAULT 'generic' COMMENT 'argus-forge / generic — 수집 경로·설정 매핑 선택',
+    target_platform VARCHAR(100) COMMENT '대상 시스템 종류 (hive, kafka …)',
+    source_repo VARCHAR(500) COMMENT '소스 저장소',
+    source_path VARCHAR(500) COMMENT '저장소 내 경로',
+    registry_name VARCHAR(255) COMMENT 'MCP Registry server.json name (reverse-DNS)',
+    title VARCHAR(255) COMMENT 'server.json title',
+    website_url VARCHAR(1000) COMMENT 'server.json websiteUrl',
+    repository_url VARCHAR(1000) COMMENT 'server.json repository.url',
+    license VARCHAR(100) COMMENT '라이선스 (SPDX)',
+    packages JSON COMMENT 'server.json packages',
+    remotes JSON COMMENT 'server.json remotes',
+    package_checksum VARCHAR(200) COMMENT '배포 산출물 체크섬',
+    oci_artifact_ref VARCHAR(500) COMMENT 'OCI 이미지 참조',
+    supported_transports JSON COMMENT '지원 전송 (stdio / streamable_http / sse)',
+    launch_config JSON COMMENT 'stdio 실행 템플릿 (command, args, env 키 이름만)',
+    server_info JSON COMMENT 'initialize serverInfo',
+    protocol_version VARCHAR(30) COMMENT 'MCP 프로토콜 버전',
+    capabilities JSON COMMENT 'initialize capabilities',
+    instructions TEXT COMMENT 'initialize instructions',
+    capability_hash VARCHAR(64) COMMENT '수집 결과 해시 (변경 감지)',
+    last_synced_at TIMESTAMP NULL COMMENT '마지막 수집 시각',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '생성 시각',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '수정 시각',
+    created_by VARCHAR(200) COMMENT '생성자',
+    updated_by VARCHAR(200) COMMENT '수정자'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='MCP 서버 정의 (제품/패키지 단위)';
+
+CREATE TABLE IF NOT EXISTS catalog_mcp_server_tool_groups (
+    id INT AUTO_INCREMENT PRIMARY KEY COMMENT 'PK',
+    mcp_server_id INT NOT NULL COMMENT '서버 정의',
+    group_key VARCHAR(100) NOT NULL COMMENT '그룹 키 (read / write / dml / destructive …)',
+    label VARCHAR(200) COMMENT '표시명',
+    description TEXT COMMENT '설명',
+    config_key VARCHAR(300) COMMENT '서버 설정 키 (예: hive allow.dml)',
+    default_enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '서버 기본값',
+    default_risk VARCHAR(20) NOT NULL DEFAULT 'medium' COMMENT '기본 위험도',
+    mutating TINYINT(1) NOT NULL DEFAULT 0 COMMENT '변경 도구 그룹 여부',
+    sort_order INT NOT NULL DEFAULT 0 COMMENT '정렬',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '생성 시각',
+    UNIQUE KEY uq_mcp_tool_group_key (mcp_server_id, group_key),
+    FOREIGN KEY (mcp_server_id) REFERENCES catalog_mcp_servers(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='MCP 도구 그룹';
+
+CREATE TABLE IF NOT EXISTS catalog_mcp_server_tools (
+    id INT AUTO_INCREMENT PRIMARY KEY COMMENT 'PK',
+    mcp_server_id INT NOT NULL COMMENT '서버 정의',
+    group_id INT NULL COMMENT '도구 그룹',
+    name VARCHAR(200) NOT NULL COMMENT '도구 이름 (MCP)',
+    title VARCHAR(300) COMMENT '제목 (MCP)',
+    description TEXT COMMENT '설명 (MCP)',
+    input_schema JSON COMMENT 'inputSchema (MCP)',
+    output_schema JSON COMMENT 'outputSchema (MCP)',
+    annotations JSON COMMENT 'annotations (MCP)',
+    meta JSON COMMENT '_meta (MCP)',
+    mutating TINYINT(1) NOT NULL DEFAULT 0 COMMENT '변경 도구 여부',
+    risk VARCHAR(20) COMMENT '위험도 (low/medium/high/critical)',
+    risk_confirmed TINYINT(1) NOT NULL DEFAULT 0 COMMENT '위험도 사람 확정 여부',
+    requires_approval TINYINT(1) NOT NULL DEFAULT 0 COMMENT '실행 전 승인 필요 권고',
+    resource_types JSON COMMENT '다루는 리소스 종류',
+    notes TEXT COMMENT '메모',
+    source VARCHAR(30) NOT NULL DEFAULT 'manual' COMMENT '행 출처: manual / mcp / forge_rest / registry / forge_seed / config',
+    removed_at TIMESTAMP NULL COMMENT '서버에서 사라진 시각',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '생성 시각',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '수정 시각',
+    UNIQUE KEY uq_mcp_tool_name (mcp_server_id, name),
+    FOREIGN KEY (mcp_server_id) REFERENCES catalog_mcp_servers(id) ON DELETE CASCADE,
+    FOREIGN KEY (group_id) REFERENCES catalog_mcp_server_tool_groups(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='MCP 서버가 제공하는 도구';
+
+CREATE TABLE IF NOT EXISTS catalog_mcp_server_resources (
+    id INT AUTO_INCREMENT PRIMARY KEY COMMENT 'PK',
+    mcp_server_id INT NOT NULL COMMENT '서버 정의',
+    uri VARCHAR(1000) NOT NULL COMMENT 'uri 또는 uriTemplate',
+    is_template TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'resource template 여부',
+    name VARCHAR(300) COMMENT '이름',
+    title VARCHAR(300) COMMENT '제목',
+    description TEXT COMMENT '설명',
+    mime_type VARCHAR(200) COMMENT 'MIME 타입',
+    annotations JSON COMMENT 'annotations',
+    source VARCHAR(30) NOT NULL DEFAULT 'manual' COMMENT '행 출처',
+    removed_at TIMESTAMP NULL COMMENT '서버에서 사라진 시각',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '생성 시각',
+    UNIQUE KEY uq_mcp_resource_uri (mcp_server_id, uri(700)),
+    FOREIGN KEY (mcp_server_id) REFERENCES catalog_mcp_servers(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='MCP resources / resource templates';
+
+CREATE TABLE IF NOT EXISTS catalog_mcp_server_prompts (
+    id INT AUTO_INCREMENT PRIMARY KEY COMMENT 'PK',
+    mcp_server_id INT NOT NULL COMMENT '서버 정의',
+    name VARCHAR(300) NOT NULL COMMENT '이름',
+    title VARCHAR(300) COMMENT '제목',
+    description TEXT COMMENT '설명',
+    arguments JSON COMMENT 'arguments',
+    source VARCHAR(30) NOT NULL DEFAULT 'manual' COMMENT '행 출처',
+    removed_at TIMESTAMP NULL COMMENT '서버에서 사라진 시각',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '생성 시각',
+    UNIQUE KEY uq_mcp_prompt_name (mcp_server_id, name),
+    FOREIGN KEY (mcp_server_id) REFERENCES catalog_mcp_servers(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='MCP prompts';
+
+CREATE TABLE IF NOT EXISTS catalog_mcp_deployments (
+    id INT AUTO_INCREMENT PRIMARY KEY COMMENT 'PK',
+    mcp_server_id INT NOT NULL COMMENT '서버 정의',
+    name VARCHAR(255) NOT NULL UNIQUE COMMENT '배포 이름 (예: hive-mcp-prod)',
+    urn VARCHAR(500) NOT NULL UNIQUE COMMENT 'URN {name}.{ENV}.mcp',
+    display_name VARCHAR(255) COMMENT 'UI 노출명',
+    description TEXT COMMENT '설명',
+    environment VARCHAR(20) NOT NULL DEFAULT 'DEV' COMMENT 'DEV / STG / PROD',
+    status VARCHAR(20) NOT NULL DEFAULT 'draft' COMMENT '상태',
+    owner_email VARCHAR(200) COMMENT '운영 책임자',
+    department VARCHAR(200) COMMENT '부서',
+    tags JSON COMMENT '태그',
+    transport VARCHAR(30) NOT NULL DEFAULT 'streamable_http' COMMENT 'stdio / streamable_http / sse',
+    endpoint VARCHAR(1000) COMMENT 'MCP endpoint URL',
+    rest_api_base VARCHAR(1000) COMMENT 'Forge 도구 REST 기준 경로',
+    auth_method VARCHAR(30) NOT NULL DEFAULT 'none' COMMENT 'none / bearer / api_key / basic / oauth2',
+    auth_config JSON COMMENT '비밀이 아닌 인증 설정 (헤더 이름 등)',
+    deployment_scope VARCHAR(30) NOT NULL DEFAULT 'shared' COMMENT 'shared / external / local',
+    host VARCHAR(300) COMMENT '실행 호스트',
+    target_endpoint VARCHAR(1000) COMMENT '대상 시스템 주소 (서버 설정 수집)',
+    datasource_id INT NULL COMMENT '대상 데이터 소스 catalog_datasources(id)',
+    service_principal VARCHAR(300) COMMENT '대상 시스템 접속 계정 (서버 설정 수집)',
+    principal_auth VARCHAR(50) COMMENT '대상 시스템 인증 방식',
+    limits JSON COMMENT '결과 크기 상한 (서버 설정 수집)',
+    security_warnings JSON COMMENT '설정 보안 경고',
+    deployed_version VARCHAR(100) COMMENT '구동 버전 (serverInfo.version)',
+    server_info JSON COMMENT 'initialize serverInfo',
+    protocol_version VARCHAR(30) COMMENT 'MCP 프로토콜 버전',
+    policy_mode VARCHAR(20) NOT NULL DEFAULT 'observe' COMMENT 'observe / enforce (Phase 3)',
+    policy_version VARCHAR(100) COMMENT '승인 정책 버전 토큰',
+    collect_interval_minutes INT COMMENT '주기 수집 간격(분)',
+    health_status VARCHAR(20) NOT NULL DEFAULT 'unknown' COMMENT 'unknown / healthy / degraded / down',
+    last_health_check_at TIMESTAMP NULL COMMENT '마지막 헬스체크',
+    latency_ms INT COMMENT '응답 시간(ms)',
+    instance_id VARCHAR(200) COMMENT 'Forge /readyz instance_id',
+    observed_hash VARCHAR(64) COMMENT '마지막 수집 해시',
+    last_observed_at TIMESTAMP NULL COMMENT '마지막 수집 시각',
+    observed_source VARCHAR(30) COMMENT '마지막 수집 경로 (mcp / forge_rest / config)',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '생성 시각',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '수정 시각',
+    created_by VARCHAR(200) COMMENT '생성자',
+    updated_by VARCHAR(200) COMMENT '수정자',
+    INDEX ix_mcp_deployments_server (mcp_server_id),
+    FOREIGN KEY (mcp_server_id) REFERENCES catalog_mcp_servers(id) ON DELETE CASCADE,
+    FOREIGN KEY (datasource_id) REFERENCES catalog_datasources(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='MCP 서버 배포 인스턴스';
+
+CREATE TABLE IF NOT EXISTS catalog_mcp_deployment_credentials (
+    id INT AUTO_INCREMENT PRIMARY KEY COMMENT 'PK',
+    deployment_id INT NOT NULL UNIQUE COMMENT '배포',
+    kind VARCHAR(30) NOT NULL DEFAULT 'bearer' COMMENT 'bearer / api_key / basic',
+    header_name VARCHAR(100) COMMENT 'api_key 헤더 이름',
+    username VARCHAR(200) COMMENT 'basic 사용자',
+    secret_encrypted TEXT NOT NULL COMMENT 'Fernet 암호문',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '수정 시각',
+    updated_by VARCHAR(200) COMMENT '수정자',
+    FOREIGN KEY (deployment_id) REFERENCES catalog_mcp_deployments(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='MCP 배포 접속 자격증명 (암호화)';
+
+CREATE TABLE IF NOT EXISTS catalog_mcp_deployment_group_states (
+    id INT AUTO_INCREMENT PRIMARY KEY COMMENT 'PK',
+    deployment_id INT NOT NULL COMMENT '배포',
+    group_id INT NOT NULL COMMENT '도구 그룹',
+    observed_enabled TINYINT(1) NULL COMMENT '관측 on/off (NULL = 모름)',
+    observed_basis VARCHAR(20) COMMENT 'config / manifest / inferred',
+    approved_enabled TINYINT(1) NULL COMMENT '승인 on/off (Phase 2)',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '수정 시각',
+    UNIQUE KEY uq_mcp_dep_group_state (deployment_id, group_id),
+    FOREIGN KEY (deployment_id) REFERENCES catalog_mcp_deployments(id) ON DELETE CASCADE,
+    FOREIGN KEY (group_id) REFERENCES catalog_mcp_server_tool_groups(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='배포별 도구 그룹 on/off';
+
+CREATE TABLE IF NOT EXISTS catalog_mcp_deployment_tool_states (
+    id INT AUTO_INCREMENT PRIMARY KEY COMMENT 'PK',
+    deployment_id INT NOT NULL COMMENT '배포',
+    tool_id INT NOT NULL COMMENT '도구',
+    observed_exposed TINYINT(1) NULL COMMENT '서버가 실제 등록했는지',
+    observed_at TIMESTAMP NULL COMMENT '관측 시각',
+    approved_blocked TINYINT(1) NOT NULL DEFAULT 0 COMMENT '카탈로그 차단 (Phase 2/3)',
+    approved_requires_approval TINYINT(1) NULL COMMENT '배포별 승인 필요 재정의',
+    UNIQUE KEY uq_mcp_dep_tool_state (deployment_id, tool_id),
+    FOREIGN KEY (deployment_id) REFERENCES catalog_mcp_deployments(id) ON DELETE CASCADE,
+    FOREIGN KEY (tool_id) REFERENCES catalog_mcp_server_tools(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='배포별 도구 노출 상태와 차단';
+
+CREATE TABLE IF NOT EXISTS catalog_mcp_resource_scopes (
+    id INT AUTO_INCREMENT PRIMARY KEY COMMENT 'PK',
+    deployment_id INT NOT NULL COMMENT '배포',
+    agent_link_id INT NULL COMMENT '에이전트별 추가 제한 catalog_ai_agent_mcp_servers(id)',
+    layer VARCHAR(20) NOT NULL DEFAULT 'observed' COMMENT 'observed / approved',
+    resource_type VARCHAR(50) NOT NULL COMMENT '리소스 종류 (topic, bucket, znode_path …)',
+    action VARCHAR(20) NOT NULL DEFAULT 'any' COMMENT 'read / write / delete / any',
+    effect VARCHAR(20) NOT NULL COMMENT 'allow / deny / protect / mask',
+    patterns JSON NOT NULL COMMENT '패턴 목록',
+    match_type VARCHAR(20) NOT NULL DEFAULT 'fnmatch' COMMENT 'fnmatch / regex / exact',
+    config_key VARCHAR(300) COMMENT '원래 서버 설정 키',
+    description TEXT COMMENT '설명',
+    source VARCHAR(30) NOT NULL DEFAULT 'manual' COMMENT 'config / manual',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '생성 시각',
+    INDEX ix_mcp_resource_scopes_deployment (deployment_id),
+    FOREIGN KEY (deployment_id) REFERENCES catalog_mcp_deployments(id) ON DELETE CASCADE,
+    FOREIGN KEY (agent_link_id) REFERENCES catalog_ai_agent_mcp_servers(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='MCP 리소스 범위 규칙';
+
+CREATE TABLE IF NOT EXISTS catalog_mcp_status_history (
+    id INT AUTO_INCREMENT PRIMARY KEY COMMENT 'PK',
+    entity_type VARCHAR(20) NOT NULL COMMENT 'server / deployment',
+    entity_id INT NOT NULL COMMENT '대상 id',
+    from_status VARCHAR(20) COMMENT '이전 상태',
+    to_status VARCHAR(20) NOT NULL COMMENT '변경 상태',
+    note TEXT COMMENT '메모',
+    changed_by VARCHAR(200) COMMENT '변경자',
+    changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '변경 시각',
+    INDEX ix_mcp_status_history_entity (entity_type, entity_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='MCP 서버 정의·배포 상태 변경 이력';
+
+CREATE TABLE IF NOT EXISTS catalog_mcp_sync_log (
+    id INT AUTO_INCREMENT PRIMARY KEY COMMENT 'PK',
+    mcp_server_id INT NOT NULL COMMENT '서버 정의',
+    deployment_id INT NULL COMMENT '배포',
+    kind VARCHAR(30) NOT NULL COMMENT 'collect / health / config_import',
+    source VARCHAR(30) COMMENT 'mcp / forge_rest / config',
+    ok TINYINT(1) NOT NULL COMMENT '성공 여부',
+    message TEXT COMMENT '메시지',
+    diff JSON COMMENT '변경 요약',
+    duration_ms INT COMMENT '소요(ms)',
+    triggered_by VARCHAR(200) COMMENT '실행자',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '실행 시각',
+    INDEX ix_mcp_sync_log_deployment (deployment_id),
+    FOREIGN KEY (mcp_server_id) REFERENCES catalog_mcp_servers(id) ON DELETE CASCADE,
+    FOREIGN KEY (deployment_id) REFERENCES catalog_mcp_deployments(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='MCP 수집·헬스체크·가져오기 실행 이력';
+
+-- AI Agent ↔ MCP 배포 연결 (NULL = 직접 입력한 "미등록 MCP")
+ALTER TABLE catalog_ai_agent_mcp_servers ADD COLUMN IF NOT EXISTS mcp_deployment_id INT NULL
+    COMMENT 'MCP Server 카탈로그 배포 참조 (NULL = 미등록 MCP)';
+ALTER TABLE catalog_ai_agent_mcp_servers ADD COLUMN IF NOT EXISTS allowed_groups JSON
+    COMMENT '이 에이전트에 허용한 도구 그룹 (NULL = 전체)';
+ALTER TABLE catalog_ai_agent_mcp_servers ADD COLUMN IF NOT EXISTS allowed_tools JSON
+    COMMENT '이 에이전트에 허용한 도구 이름 (NULL = 전체)';
+SET @fk_exists = (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'catalog_ai_agent_mcp_servers'
+      AND CONSTRAINT_NAME = 'fk_agent_mcp_deployment');
+SET @sql = IF(@fk_exists = 0,
+    'ALTER TABLE catalog_ai_agent_mcp_servers ADD CONSTRAINT fk_agent_mcp_deployment FOREIGN KEY (mcp_deployment_id) REFERENCES catalog_mcp_deployments(id) ON DELETE SET NULL',
+    'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- ---------------------------------------------------------------------------
+-- Phase 2: 승인 정책 · finding · 감사 이벤트 · 서버 버전
+-- ---------------------------------------------------------------------------
+ALTER TABLE catalog_mcp_deployments ADD COLUMN IF NOT EXISTS approved_limits JSON;
+ALTER TABLE catalog_mcp_deployments ADD COLUMN IF NOT EXISTS approved_version VARCHAR(100);
+ALTER TABLE catalog_mcp_deployments ADD COLUMN IF NOT EXISTS policy_updated_at DATETIME;
+ALTER TABLE catalog_mcp_deployments ADD COLUMN IF NOT EXISTS policy_updated_by VARCHAR(200);
+ALTER TABLE catalog_mcp_deployments ADD COLUMN IF NOT EXISTS ingest_token_hash VARCHAR(64);
+ALTER TABLE catalog_mcp_deployments ADD COLUMN IF NOT EXISTS ingest_token_hint VARCHAR(20);
+ALTER TABLE catalog_mcp_deployments ADD COLUMN IF NOT EXISTS ingest_token_created_at DATETIME;
+ALTER TABLE catalog_mcp_deployments ADD COLUMN IF NOT EXISTS audit_retention_days INT NOT NULL DEFAULT 180;
+ALTER TABLE catalog_mcp_deployments ADD COLUMN IF NOT EXISTS health_fail_count INT NOT NULL DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS catalog_mcp_deployment_findings (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    deployment_id INT NOT NULL,
+    kind VARCHAR(50) NOT NULL,
+    fingerprint VARCHAR(300) NOT NULL,
+    subject VARCHAR(500),
+    severity VARCHAR(20) NOT NULL DEFAULT 'medium',
+    title VARCHAR(500) NOT NULL,
+    detail JSON,
+    status VARCHAR(20) NOT NULL DEFAULT 'open',
+    first_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    resolved_at DATETIME,
+    acknowledged_by VARCHAR(200),
+    acknowledged_at DATETIME,
+    ack_note TEXT,
+    alert_id INT,
+    CONSTRAINT uq_mcp_finding_fp UNIQUE (deployment_id, fingerprint),
+    INDEX ix_mcp_findings_status (status, severity),
+    CONSTRAINT fk_mcp_finding_dep FOREIGN KEY (deployment_id) REFERENCES catalog_mcp_deployments(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='MCP 배포 드리프트·보안 finding';
+
+CREATE TABLE IF NOT EXISTS catalog_mcp_policy_history (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    deployment_id INT NOT NULL,
+    policy_version VARCHAR(100) NOT NULL,
+    snapshot JSON NOT NULL,
+    note TEXT,
+    changed_by VARCHAR(200),
+    changed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    INDEX ix_mcp_policy_history_deployment (deployment_id),
+    CONSTRAINT fk_mcp_policy_hist_dep FOREIGN KEY (deployment_id) REFERENCES catalog_mcp_deployments(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='MCP 배포 승인 정책 저장 이력';
+
+CREATE TABLE IF NOT EXISTS catalog_mcp_audit_events (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    deployment_id INT NOT NULL,
+    ts DATETIME NOT NULL,
+    session_id VARCHAR(200),
+    tool_name VARCHAR(200) NOT NULL,
+    tool_id INT,
+    group_key VARCHAR(100),
+    risk VARCHAR(20),
+    user_name VARCHAR(200),
+    args JSON,
+    ok BOOLEAN NOT NULL DEFAULT TRUE,
+    error VARCHAR(500),
+    result_id VARCHAR(300),
+    resources JSON,
+    policy_decision VARCHAR(20),
+    policy_reason VARCHAR(500),
+    event_hash VARCHAR(64) NOT NULL,
+    received_via VARCHAR(20),
+    received_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_mcp_audit_event UNIQUE (deployment_id, event_hash),
+    INDEX ix_mcp_audit_events_ts (deployment_id, ts),
+    CONSTRAINT fk_mcp_audit_dep FOREIGN KEY (deployment_id) REFERENCES catalog_mcp_deployments(id) ON DELETE CASCADE,
+    CONSTRAINT fk_mcp_audit_tool FOREIGN KEY (tool_id) REFERENCES catalog_mcp_server_tools(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='MCP 변경 도구 호출 감사 이벤트';
+
+CREATE TABLE IF NOT EXISTS catalog_mcp_server_versions (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    mcp_server_id INT NOT NULL,
+    capability_hash VARCHAR(64) NOT NULL,
+    reported_version VARCHAR(100),
+    tool_count INT NOT NULL DEFAULT 0,
+    snapshot JSON NOT NULL,
+    diff JSON,
+    source VARCHAR(30),
+    deployment_id INT,
+    created_by VARCHAR(200),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    INDEX ix_mcp_server_versions_server (mcp_server_id),
+    CONSTRAINT fk_mcp_version_server FOREIGN KEY (mcp_server_id) REFERENCES catalog_mcp_servers(id) ON DELETE CASCADE,
+    CONSTRAINT fk_mcp_version_dep FOREIGN KEY (deployment_id) REFERENCES catalog_mcp_deployments(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='MCP 서버 capability 버전 스냅숏';
+
+-- 알림: 데이터셋이 아닌 엔터티(MCP 배포 등) 알림 지원
+ALTER TABLE argus_lineage_alert MODIFY COLUMN source_dataset_id INT NULL COMMENT '변경 발생 원본 데이터셋 (엔터티 알림이면 NULL)';
+ALTER TABLE argus_lineage_alert ADD COLUMN IF NOT EXISTS entity_type VARCHAR(50);
+ALTER TABLE argus_lineage_alert ADD COLUMN IF NOT EXISTS entity_ref VARCHAR(500);
+CREATE INDEX IF NOT EXISTS idx_lineage_alert_entity ON argus_lineage_alert (entity_type, entity_ref);
+
+-- ---------------------------------------------------------------------------
+-- MLflow 모델 메타 — 대표 flavor (기존 설치 업그레이드용, 재실행 안전)
+-- ---------------------------------------------------------------------------
+ALTER TABLE catalog_models ADD COLUMN IF NOT EXISTS flavor VARCHAR(50) COMMENT '대표 MLflow flavor (python_function 제외 첫 flavor)';
+ALTER TABLE catalog_models ADD COLUMN IF NOT EXISTS flavor_version VARCHAR(50) COMMENT '대표 flavor 라이브러리 버전';
+
+-- ---------------------------------------------------------------------------
+-- MCP Server 카탈로그 Phase 3: 정책 번들 pull 기록 · 감사 이벤트 에이전트/서버 판정 (재실행 안전)
+-- ---------------------------------------------------------------------------
+ALTER TABLE catalog_mcp_deployments ADD COLUMN IF NOT EXISTS policy_pulled_at DATETIME COMMENT '서버가 정책 번들을 마지막으로 받아간 시각 (enforce)';
+ALTER TABLE catalog_mcp_deployments ADD COLUMN IF NOT EXISTS policy_pulled_version VARCHAR(100) COMMENT '마지막으로 받아간 번들 (policy_version@ETag 앞 8자)';
+ALTER TABLE catalog_mcp_deployments ADD COLUMN IF NOT EXISTS policy_pull_instance VARCHAR(200) COMMENT '번들을 받아간 서버 instance_id';
+ALTER TABLE catalog_mcp_audit_events ADD COLUMN IF NOT EXISTS agent_name VARCHAR(300) COMMENT '호출한 에이전트 (세션 토큰 agent 클레임)';
+ALTER TABLE catalog_mcp_audit_events ADD COLUMN IF NOT EXISTS server_decision VARCHAR(20) COMMENT '서버가 카탈로그 정책으로 거부했으면 denied';

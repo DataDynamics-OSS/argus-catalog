@@ -19,10 +19,19 @@ import {
   type Priority,
   createChangeRequest,
 } from "@/features/change-mgmt/api"
+import {
+  type SchemaRow,
+  SchemaChangeEditor,
+  buildSchemaChange,
+  rowsFromFields,
+  suggestChangeType,
+} from "@/features/change-mgmt/schema-change"
 import { fetchDataset, fetchDatasets } from "@/features/datasets/api"
 import { type DatasetSummary } from "@/features/datasets/data/schema"
 import { fetchUsers } from "@/features/users/api"
 import { type User } from "@/features/users/data/schema"
+import { useConfirm } from "@/components/confirm-provider"
+import { errorMessage, notifyError, notifySuccess, toast } from "@/lib/notify"
 
 const userDisplayName = (u: User) => `${u.lastName ?? ""}${u.firstName ?? ""}`.trim() || u.username
 
@@ -65,6 +74,7 @@ const EMPTY_FORM = {
 
 export default function NewChangeRequestPage() {
   const router = useRouter()
+  const askConfirm = useConfirm()
   const searchParams = useSearchParams()
   const [form, setForm] = useState(EMPTY_FORM)
   const [dsSearch, setDsSearch] = useState("")
@@ -78,6 +88,11 @@ export default function NewChangeRequestPage() {
   const [saving, setSaving] = useState(false)
   const editorRef = useRef<Editor | null>(null)
   const [insertingSchema, setInsertingSchema] = useState(false)
+  // 스키마 변경 명세 — 대상 데이터셋의 현재 스키마를 불러와 편집한다(COSMETIC 은 미사용).
+  const [schemaRows, setSchemaRows] = useState<SchemaRow[]>([])
+  const [baseRows, setBaseRows] = useState<SchemaRow[]>([])
+  const [schemaLoading, setSchemaLoading] = useState(false)
+  const [schemaError, setSchemaError] = useState<string | null>(null)
 
   useEffect(() => {
     fetchUsers({ pageSize: 0 }).then((r) => setUsers(r.items)).catch(() => {})
@@ -101,6 +116,32 @@ export default function NewChangeRequestPage() {
       .catch(() => {})
   }, [searchParams])
 
+  // 대상 데이터셋이 바뀌면 현재 스키마를 불러와 편집기를 초기화한다.
+  const datasetId = dataset?.id
+  useEffect(() => {
+    setSchemaRows([]); setBaseRows([]); setSchemaError(null)
+    if (datasetId == null) return
+    let alive = true
+    setSchemaLoading(true)
+    fetchDataset(datasetId)
+      .then((d) => {
+        if (!alive) return
+        const rows = rowsFromFields(
+          [...(d.schema_fields ?? [])]
+            .sort((a, b) => a.ordinal - b.ordinal)
+            .map((f) => ({ field_path: f.field_path, field_type: f.field_type, nullable: f.nullable === "true" })),
+        )
+        setBaseRows(rows); setSchemaRows(rows)
+      })
+      .catch((e) => alive && setSchemaError(errorMessage(e) ?? "스키마를 불러오지 못했습니다."))
+      .finally(() => alive && setSchemaLoading(false))
+    return () => { alive = false }
+  }, [datasetId])
+
+  const isCosmetic = form.change_type === "COSMETIC"
+  const schemaChange = buildSchemaChange(schemaRows)
+  const suggestedType = suggestChangeType(schemaRows)
+
   const goList = () => router.push("/dashboard/changes")
   // 뒤로/취소 — 데이터셋 상세 등 진입한 화면으로 돌아간다.
   // 히스토리가 없으면(직접 URL 진입) 변경 요청 목록으로 폴백.
@@ -111,13 +152,13 @@ export default function NewChangeRequestPage() {
 
   // 선택한 데이터셋의 현재 스키마를 표로 만들어 설명 편집기에 삽입.
   const insertSchemaTable = async () => {
-    if (!dataset) { alert("먼저 대상 데이터셋을 선택하세요."); return }
-    if (!editorRef.current) { alert("편집기가 아직 준비되지 않았습니다. 잠시 후 다시 시도하세요."); return }
+    if (!dataset) { toast.warning("먼저 대상 데이터셋을 선택하세요."); return }
+    if (!editorRef.current) { toast.warning("편집기가 아직 준비되지 않았습니다. 잠시 후 다시 시도하세요."); return }
     setInsertingSchema(true)
     try {
       const detail = await fetchDataset(dataset.id)
       const fields = detail.schema_fields ?? []
-      if (fields.length === 0) { alert("이 데이터셋에 스키마 필드가 없습니다."); return }
+      if (fields.length === 0) { toast.warning("이 데이터셋에 스키마 필드가 없습니다."); return }
       const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
       const head = "<tr><th>컬럼</th><th>타입</th><th>Null</th><th>키</th><th>설명</th></tr>"
       const body = fields
@@ -129,7 +170,7 @@ export default function NewChangeRequestPage() {
       const table = `<p><strong>${esc(dataset.display)} 스키마</strong></p><table><tbody>${head}${body}</tbody></table><p></p>`
       editorRef.current.chain().focus().insertContent(table).run()
     } catch (e) {
-      alert(e instanceof Error ? e.message : "스키마 불러오기 실패")
+      notifyError(e, "스키마를 불러오지 못했습니다.")
     } finally {
       setInsertingSchema(false)
     }
@@ -144,8 +185,23 @@ export default function NewChangeRequestPage() {
 
   const onCreate = async () => {
     if (!form.title.trim() || !dataset || !form.rollback_plan.trim() || !form.business_justification.trim()) {
-      alert("필수 항목(제목·대상 데이터셋·롤백 계획·업무 사유)을 입력하세요.")
+      toast.warning("필수 항목(제목·대상 데이터셋·롤백 계획·업무 사유)을 입력하세요.")
       return
+    }
+    // 스키마 변경 명세(schema_after) — 승인 후 워커가 이 내용을 데이터셋 스키마에 적용한다.
+    let schema_after: string | undefined
+    if (!isCosmetic) {
+      if (schemaChange.error) { toast.warning(schemaChange.error); return }
+      if (schemaChange.spec) {
+        // schema_before 는 서버가 생성 시점의 데이터셋 스키마로 자동 채운다.
+        schema_after = JSON.stringify(schemaChange.spec)
+      } else if (!(await askConfirm({
+        title: "스키마 변경 없이 생성",
+        description: "스키마 변경 내용이 없습니다. 승인 후 적용해도 스키마는 바뀌지 않습니다. 그대로 생성할까요?",
+        confirmText: "생성",
+      }))) {
+        return
+      }
     }
     setSaving(true)
     try {
@@ -160,7 +216,7 @@ export default function NewChangeRequestPage() {
           channel: "EMAIL" as const,
         }))
       // 요청자는 서버가 인증 사용자에서 도출한다
-      await createChangeRequest({
+      const created = await createChangeRequest({
         title: form.title.trim(),
         description: form.description.trim() || undefined,
         dataset_id: dataset.id,
@@ -168,13 +224,18 @@ export default function NewChangeRequestPage() {
         priority: form.priority,
         rollback_plan: form.rollback_plan.trim(),
         business_justification: form.business_justification.trim(),
-        scheduled_at: form.scheduled_at || undefined,
+        // datetime-local 값은 시간대가 없다 — 그대로 보내면 서버가 UTC 로 받아 KST 기준 9시간 늦게
+        // 적용된다. 브라우저 로컬 시각으로 해석해 UTC ISO 문자열(…Z)로 보낸다.
+        scheduled_at: form.scheduled_at ? new Date(form.scheduled_at).toISOString() : undefined,
+        schema_after,
         approval_chain,
         referrers: refPayload.length > 0 ? refPayload : undefined,
       })
+      // 생성 완료 안내 — 예전에는 토스트 없이 목록으로만 이동했다
+      notifySuccess(`변경 요청 '${created?.cr_code || form.title.trim()}' 을(를) 만들었습니다.`)
       goList()
     } catch (e) {
-      alert(e instanceof Error ? e.message : "변경 요청 생성 실패")
+      notifyError(e, "변경 요청을 생성하지 못했습니다.")
     } finally {
       setSaving(false)
     }
@@ -269,6 +330,36 @@ export default function NewChangeRequestPage() {
               </div>
             </div>
           </details>
+
+          {/* 스키마 변경 — 승인 후 적용될 내용. COSMETIC 은 스키마와 무관하므로 숨김 */}
+          {dataset && !isCosmetic && (
+            <div className="grid gap-1.5">
+              <Label className="text-sm">스키마 변경</Label>
+              <p className="text-xs text-muted-foreground">
+                현재 스키마에서 타입·NULL 을 바꾸거나 컬럼을 추가·삭제하세요. 승인되면 이 변경이 데이터셋 스키마에 적용됩니다.
+              </p>
+              {schemaLoading ? (
+                <p className="text-sm text-muted-foreground">스키마 불러오는 중...</p>
+              ) : schemaError ? (
+                <p className="text-sm text-destructive">{schemaError}</p>
+              ) : (
+                <SchemaChangeEditor rows={schemaRows} onChange={setSchemaRows} onReset={() => setSchemaRows(baseRows)} />
+              )}
+              {schemaChange.error && <p className="text-xs text-destructive">{schemaChange.error}</p>}
+              {suggestedType && suggestedType !== form.change_type && (
+                <p className="text-xs text-amber-600 dark:text-amber-400">
+                  변경 내용상 「{CHANGE_TYPE_LABEL[suggestedType]}」 유형으로 보입니다.{" "}
+                  <button
+                    type="button"
+                    className="underline underline-offset-2"
+                    onClick={() => setForm((f) => ({ ...f, change_type: suggestedType }))}
+                  >
+                    변경 유형 바꾸기
+                  </button>
+                </p>
+              )}
+            </div>
+          )}
 
           {/* 설명 — 데이터셋 "상세 설명"과 동일한 리치 편집기(CommentEditor: 서식·색상·이모지) */}
           <div className="grid gap-1.5">

@@ -1,43 +1,121 @@
 = 카탈로그 페더레이션
+:toc: macro
+:toclevels: 2
 
-여러 팀이 각자 운영하는 Argus Catalog 인스턴스를 *하나로 연합(federation)* 해, 한 화면에서
-통합 검색·탐색하는 기능입니다. Trino 가 여러 데이터 소스를 하나의 카탈로그로 연합하듯,
-Argus 는 *메타데이터 카탈로그* 자체를 연합합니다.
+여러 팀이 각자 운영하는 Argus Catalog 인스턴스를 **하나로 연합(federation)** 해, 한 화면에서 모든 팀의 데이터셋을 검색하고 둘러보는 기능입니다.
+Trino 가 여러 데이터 소스를 하나의 카탈로그로 연합하듯, Argus 는 **메타데이터 카탈로그** 자체를 연합합니다.
 
-== 개념
+이 문서는 페더레이션 전체를 처음 접하는 분을 위한 안내입니다. 화면별 사용법은 맨 아래 <<_이_설명서의_구성>> 의 각 문서를 보세요.
+중간중간 나오는 **고급 사용자** 상자는 몰라도 사용에 지장이 없는 심화 내용이니 처음에는 건너뛰어도 됩니다.
 
-먼저 자주 등장하는 용어를 정리해 두겠습니다.
+toc::[]
 
-* *허브(hub)* — 페더레이션을 수행하는 이 인스턴스입니다. peer 를 등록하고 통합 검색·탐색·승격을 담당합니다.
-* *peer* — 연합 대상이 되는 원격 Argus Catalog 인스턴스로, 자신의 메타데이터를 export API 로 노출합니다.
-* *미러(mirror)* — 허브가 peer 에서 가져와 로컬에 보관하는 읽기 전용 복제본
-  (`federation_datasets`)입니다. 허브 임베딩 모델로 *재임베딩* 되어 통합 검색에 편입됩니다.
-* *federated URN* — 허브 안에서 peer 데이터셋을 전역으로 식별하는 키로, `{instance_key}::{remote_urn}` 형태입니다.
+== 시작하기 전에
 
-== 연합 모드
+=== 이런 일을 할 수 있습니다
+
+* **통합 검색** — 이 카탈로그와 다른 팀 카탈로그의 데이터셋을 한 번에 검색합니다.
+* **탐색** — 다른 팀 데이터셋을 인스턴스 → 데이터 소스 트리로 둘러봅니다.
+* **원격 상세와 리니지** — 다른 팀 데이터셋의 스키마 · 샘플과, 팀 경계를 넘는 리니지를 봅니다.
+* **로컬로 가져오기** — 필요한 데이터셋을 이 카탈로그의 데이터셋으로 복사합니다(관리자).
+* **노출 통제** — 이 카탈로그가 다른 팀에 어떤 정보를 내보낼지 정합니다(관리자).
+
+=== 먼저 알아 둘 용어
+
+[cols="1,4",options="header"]
+|===
+| 용어 | 뜻
+
+| 허브(hub)
+| 페더레이션을 수행하는 이 인스턴스입니다. peer 를 등록하고 통합 검색 · 탐색 · 로컬 가져오기를 담당합니다.
+
+| peer
+| 연합 대상이 되는 원격 Argus Catalog 인스턴스로, 자신의 메타데이터를 export API(`/api/v1/federation/export/*`)로 노출합니다.
+모든 Argus Catalog 는 허브이면서 동시에 peer 가 될 수 있습니다.
+
+| 미러(mirror)
+| 허브가 peer 에서 가져와 로컬에 보관하는 읽기 전용 복제본입니다. 허브 임베딩 모델로 **재임베딩** 되어 통합 검색에 편입됩니다.
+
+| federated URN
+| 허브 안에서 peer 데이터셋을 전역으로 식별하는 키로, `{식별 키}::{원격 URN}` 형태입니다
+(예: `it-peer::postgresql-….it_fed.customers.dataset`).
+|===
+
+허브가 각 peer 의 export API 를 통해 메타데이터를 가져와 로컬에 미러로 보관합니다.
+
+.허브·peer·미러의 연결
+image::diagrams/federation-index-01.png[허브·peer·미러의 연결,role="diagram"]
+
+=== 메뉴 위치
+
+좌측 사이드바 **데이터 카탈로그 → 페더레이션** (`/dashboard/federation`) 으로 들어갑니다.
+화면은 다섯 개 탭으로 되어 있고, 고른 탭은 주소의 `?tab=` 에 남아 링크로 공유할 수 있습니다.
+
+[cols="1,1,3",options="header"]
+|===
+| 탭 | 보이는 사람 | 용도
+
+| **통합 검색** | 로그인 사용자 | 이 카탈로그와 연합한 모든 peer 를 한 번에 검색합니다. xref:federation/browse-search.adoc[탐색·통합 검색] 참고.
+| **탐색** | 로그인 사용자 | 가져온 peer 데이터셋을 인스턴스 → 데이터 소스 트리로 둘러봅니다.
+| **인스턴스 관리** | 관리자 | peer 를 등록 · 수정 · 삭제하고 가져오기를 실행합니다. xref:federation/instances.adoc[인스턴스 관리] 참고.
+| **관측성** | 관리자 | peer 별 동기화 상태 · 미러 규모 · 회로 차단 상태를 봅니다. xref:federation/governance.adoc[노출 거버넌스·운영] 참고.
+| **노출 설정** | 관리자 | 이 인스턴스가 다른 허브에 제공할 정보 항목을 고릅니다.
+|===
+
+image::federation/tabs-admin.png[관리자 화면 — 다섯 개 탭과 인스턴스 관리, 900]
+
+=== 누가 무엇을 할 수 있나요
+
+일반 사용자에게는 **통합 검색** 과 **탐색** 탭만 보이며, 주소에 관리자 탭을 직접 넣어도 통합 검색 탭이 열립니다.
+peer 등록, 가져오기, 로컬 승격, 노출 설정은 관리자만 할 수 있습니다. 자세한 표는 xref:federation/governance.adoc#_권한_요약[권한 요약] 을 보세요.
+
+image::federation/tabs-user.png[일반 사용자 화면 — 통합 검색 · 탐색 탭만 표시, 900]
+
+메뉴 자체를 막으려면 권한 관리에서 **페더레이션** 메뉴를 끕니다. 이 메뉴는 서버에서도 검사하므로,
+막힌 사용자는 API(`/api/v1/federation/*`)도 쓸 수 없습니다(xref:ops/permissions.adoc[권한 관리] 참고).
+
+[[_연합_모드]]
+== 연합 모드 고르기
 
 각 peer 는 등록할 때 모드를 고릅니다. 어떤 모드를 고르느냐에 따라 검색과 상세 조회의 데이터 출처가 달라집니다.
+**잘 모르겠다면 기본값인 `HYBRID` 를 쓰세요.**
 
 [cols="1,3,2",options="header"]
 |===
 | 모드 | 동작 | 비고
-| `LIVE`    | 검색을 요청 시점에 각 peer 로 fan-out(scatter-gather) | 항상 최신, 복제 없음
-| `HARVEST` | peer 메타데이터를 주기적으로 가져와 로컬 미러 + *재임베딩* → 통합 검색 | 빠름·일관된 시맨틱·에어갭 친화
-| `HYBRID`  | HARVEST(검색) + LIVE(상세 드릴다운) | *권장*
+| `LIVE`    | 검색을 요청 시점에 각 peer 로 fan-out(scatter-gather) | 항상 최신, 복제 없음. peer 가 꺼지면 그 결과는 빠짐. 탐색 탭에는 나오지 않음
+| `HARVEST` | peer 메타데이터를 주기적으로 가져와 로컬 미러 + **재임베딩** → 통합 검색 | 빠름·일관된 시맨틱·에어갭 친화
+| `HYBRID`  | HARVEST(검색) + LIVE(상세 드릴다운) | **권장**, 등록 화면 기본값
 |===
 
-[NOTE]
+.페더레이션 모드별 조회 경로
+image::diagrams/federation-index-02.png[페더레이션 모드별 조회 경로,role="diagram"]
+
+샘플 데이터는 모드와 관계없이 미러에 저장된 것이 있으면 그것을 먼저 쓰므로, peer 가 꺼져 있어도 볼 수 있습니다.
+
+[TIP]
+.고급 사용자 — 왜 재임베딩하나요?
 ====
 peer 마다 임베딩 provider/모델이 다르면 벡터 공간이 달라져 cross-instance 유사도 비교가
-깨집니다. HARVEST 가 허브 모델로 *재임베딩* 해 일관성을 확보하는 이유입니다.
+깨집니다. HARVEST 가 허브 모델로 **재임베딩** 해 일관성을 확보하는 이유입니다.
 ====
 
-== 구성 요소
+== 처음 연결하기
+
+두 카탈로그를 연합하는 순서는 다음과 같습니다.
+
+. **peer 쪽** — export API 를 보호할 서비스 토큰을 정합니다(환경변수 `ARGUS_FEDERATION_TOKEN` 또는 설정 `federation.export_token`). 필요하면 **노출 설정** 탭에서 제공할 항목을 줄입니다(xref:federation/governance.adoc[노출 거버넌스·운영] 참고).
+. **허브 쪽** — **인스턴스 관리** 탭에서 peer 의 백엔드 주소와 서비스 토큰으로 인스턴스를 등록하고 **점검** 으로 연결을 확인합니다(xref:federation/instances.adoc[인스턴스 관리] 참고).
+. **가져오기** — `HARVEST`/`HYBRID` peer 는 스케줄러가 주기적으로 가져오며, 바로 보려면 행의 **가져오기 (증분)** 을 누릅니다(xref:federation/harvest.adoc[가져오기] 참고).
+. **사용** — **통합 검색** · **탐색** 에서 peer 데이터셋을 찾고, 필요하면 상세에서 **로컬로 가져오기** 로 이 카탈로그의 데이터셋으로 복사합니다(xref:federation/import.adoc[로컬 승격] 참고).
+
+[[_이_설명서의_구성]]
+== 이 설명서의 구성
 
 페더레이션은 다음 기능들로 이루어져 있습니다. 각 항목은 별도 문서에서 자세히 다룹니다.
 
-* xref:federation/instances.adoc[인스턴스 관리] — peer 등록·수정·삭제·상태점검, 노출 항목 선택
-* xref:federation/harvest.adoc[가져오기(HARVEST)] — 미러·재임베딩·샘플·증분/전체·진행률
-* xref:federation/browse-search.adoc[탐색·통합 검색·리니지] — 트리/그리드 탐색, 통합 검색, cross-instance 리니지
-* xref:federation/import.adoc[로컬 승격(import)] — 미러 데이터셋을 로컬 카탈로그로 복사
-* xref:federation/governance.adoc[노출 거버넌스·운영] — visibility 정책·서비스 토큰·circuit breaker·관측성
+* xref:federation/instances.adoc[인스턴스 관리] — peer 등록·수정·삭제·상태점검, 표시 정보 선택, 일시 중지
+* xref:federation/harvest.adoc[가져오기(HARVEST)] — 미러·재임베딩·샘플·증분/전체·진행률·동기화 이력
+* xref:federation/browse-search.adoc[탐색·통합 검색·리니지] — 트리/그리드 탐색, 통합 검색, 원격 상세, cross-instance 리니지
+* xref:federation/import.adoc[로컬 승격(import)] — peer 데이터셋을 로컬 카탈로그로 복사
+* xref:federation/governance.adoc[노출 거버넌스·운영] — 노출 설정·visibility 정책·서비스 토큰·circuit breaker·관측성

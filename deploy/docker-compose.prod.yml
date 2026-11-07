@@ -51,12 +51,16 @@ services:
       # 백엔드가 환경변수로 직접 읽는 운영 시크릿
       ARGUS_SECRET_KEY: ${ARGUS_SECRET_KEY:?deploy/.env 에 ARGUS_SECRET_KEY 를 설정하세요}
       ARGUS_JWT_SECRET: ${ARGUS_JWT_SECRET:?deploy/.env 에 ARGUS_JWT_SECRET 를 설정하세요}
+      # 개발용 기본값·짧은 값(16자 미만)이면 기동 거부 (backend/app/core/secrets.py)
+      ARGUS_REQUIRE_SECRETS: "true"
     restart: always
 
   backend-worker:
     environment:
       ARGUS_SECRET_KEY: ${ARGUS_SECRET_KEY:?deploy/.env 에 ARGUS_SECRET_KEY 를 설정하세요}
       ARGUS_JWT_SECRET: ${ARGUS_JWT_SECRET:?deploy/.env 에 ARGUS_JWT_SECRET 를 설정하세요}
+      # 개발용 기본값·짧은 값(16자 미만)이면 기동 거부 (backend/app/core/secrets.py)
+      ARGUS_REQUIRE_SECRETS: "true"
     restart: always
 
   frontend:

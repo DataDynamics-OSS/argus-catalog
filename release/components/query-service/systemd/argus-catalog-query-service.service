@@ -1,0 +1,22 @@
+[Unit]
+Description=Argus Catalog Query Service (query collection, lineage batch)
+Documentation=file:///opt/argus-catalog-query-service/share/installer/README-INSTALL.md
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=argus
+Group=argus
+EnvironmentFile=/etc/argus-catalog-query-service/query-service.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/argus-catalog-query-service/venv/bin/query-service
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+LimitNOFILE=65536
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

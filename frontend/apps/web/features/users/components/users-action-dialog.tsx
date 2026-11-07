@@ -26,7 +26,7 @@ import { useCallback } from "react"
 import { z } from "zod"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
-import { toast } from "sonner"
+import { errorMessage, notifyError, toast } from "@/lib/notify"
 
 import { Button } from "@workspace/ui/components/button"
 import {
@@ -48,6 +48,7 @@ import {
 import { Input } from "@workspace/ui/components/input"
 import { PasswordInput } from "@/components/password-input"
 import { SelectDropdown } from "@/components/select-dropdown"
+import { useAuth } from "@/features/auth"
 import { changeMyPassword, changeUserRole, checkUserExists, createUser, modifyUser } from "../api"
 import { roles } from "../data/data"
 import { type User } from "../data/schema"
@@ -172,6 +173,10 @@ export function UsersActionDialog({
   onSaved,
 }: UsersActionDialogProps) {
   const isEdit = !!currentRow
+  // Keycloak 모드: 이름·이메일·소속·역할·비밀번호는 Keycloak 이 원천(로그인마다 덮어씀, 서버도 400)
+  // → 수정 화면에서는 전화번호만 바꾼다
+  const { authType, applyTokens } = useAuth()
+  const synced = isEdit && authType === "keycloak"
   const usersCtx = useUsersOptional()
   const refreshUsers = usersCtx?.refreshUsers
 
@@ -282,15 +287,26 @@ export function UsersActionDialog({
         // 계정 설정(본인)에서 새 비밀번호를 입력한 경우 — 현재 비밀번호 검증을
         // 먼저 수행해, 틀렸으면 프로필 저장 전에 중단한다.
         if (hideRole && values.password) {
+          let tokens
           try {
-            await changeMyPassword(values.currentPassword, values.password)
+            tokens = await changeMyPassword(values.currentPassword, values.password)
           } catch (err) {
             form.setError("currentPassword", {
               type: "validate",
-              message: err instanceof Error ? err.message : "비밀번호 변경에 실패했습니다.",
+              message: errorMessage(err) ?? "비밀번호를 변경하지 못했습니다.",
             })
             return
           }
+          // 비밀번호가 바뀌면 이전 토큰은 서버에서 401 — 새 토큰으로 세션을 바꾼 뒤 프로필을 저장한다
+          await applyTokens(tokens)
+        }
+        if (synced) {
+          await modifyUser(currentRow.id, { phone_number: values.phoneNumber })
+          if (refreshUsers) await refreshUsers()
+          if (onSaved) onSaved()
+          form.reset()
+          onOpenChange(false)
+          return
         }
         await modifyUser(currentRow.id, {
           first_name: values.firstName,
@@ -331,7 +347,7 @@ export function UsersActionDialog({
           if (hasDuplicate) return
         } catch {
           // 중복 확인 자체가 실패하면 저장을 막아 데이터 무결성을 우선한다.
-          toast.error("사용자명·이메일 중복 확인에 실패했습니다. 다시 시도해주세요.")
+          toast.error("사용자명·이메일 중복 여부를 확인하지 못했습니다. 다시 시도해주세요.")
           return
         }
 
@@ -352,8 +368,7 @@ export function UsersActionDialog({
       form.reset()
       onOpenChange(false)
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "사용자 저장에 실패했습니다."
-      toast.error(msg)
+      notifyError(err, "사용자를 저장하지 못했습니다.")
     }
   }
 
@@ -417,7 +432,7 @@ export function UsersActionDialog({
                     <FormItem>
                       <RequiredLabel>이름</RequiredLabel>
                       <FormControl>
-                        <Input placeholder="John" autoComplete="off" {...field} />
+                        <Input placeholder="John" autoComplete="off" {...field} disabled={synced} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -430,7 +445,7 @@ export function UsersActionDialog({
                     <FormItem>
                       <RequiredLabel>성</RequiredLabel>
                       <FormControl>
-                        <Input placeholder="Doe" autoComplete="off" {...field} />
+                        <Input placeholder="Doe" autoComplete="off" {...field} disabled={synced} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -470,7 +485,7 @@ export function UsersActionDialog({
                     <FormItem>
                       <FormLabel>소속</FormLabel>
                       <FormControl>
-                        <Input placeholder="예: 데이터다이나믹스" {...field} />
+                        <Input placeholder="예: 데이터다이나믹스" {...field} disabled={synced} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -483,7 +498,7 @@ export function UsersActionDialog({
                     <FormItem>
                       <FormLabel>소속 부서</FormLabel>
                       <FormControl>
-                        <Input placeholder="예: 데이터 플랫폼팀" {...field} />
+                        <Input placeholder="예: 데이터 플랫폼팀" {...field} disabled={synced} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -502,6 +517,7 @@ export function UsersActionDialog({
                       <Input
                         placeholder="john.doe@gmail.com"
                         {...field}
+                        disabled={synced}
                         onBlur={(e) => {
                           field.onBlur()
                           handleCheckEmail(e.target.value)
@@ -528,7 +544,7 @@ export function UsersActionDialog({
                     </FormItem>
                   )}
                 />
-                {!hideRole && (
+                {!hideRole && !synced && (
                   <FormField
                     control={form.control}
                     name="role"
@@ -551,7 +567,7 @@ export function UsersActionDialog({
 
               {/* 비밀번호 — 추가 모드(필수)와 계정 설정(본인, 선택)에서만 표시.
                   관리자 편집 모드에서는 비밀번호를 변경할 수 없어 숨긴다. */}
-              {hideRole && isEdit && (
+              {hideRole && isEdit && !synced && (
                 <FormField
                   control={form.control}
                   name="currentPassword"
@@ -566,7 +582,7 @@ export function UsersActionDialog({
                   )}
                 />
               )}
-              {(!isEdit || hideRole) && (
+              {(!isEdit || hideRole) && !synced && (
                 <>
                   <FormField
                     control={form.control}
@@ -579,7 +595,8 @@ export function UsersActionDialog({
                           <RequiredLabel>비밀번호</RequiredLabel>
                         )}
                         <FormControl>
-                          <PasswordInput defaultVisible placeholder="e.g., S3cur3P@ssw0rd" {...field} />
+                          {/* 계정 설정(본인 변경)은 기본 가림 — 관리자 사용자 추가는 전달 확인용으로 평문 표시 */}
+                          <PasswordInput defaultVisible={!isEdit} autoComplete="new-password" placeholder="e.g., S3cur3P@ssw0rd" {...field} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -599,7 +616,8 @@ export function UsersActionDialog({
                         )}
                         <FormControl>
                           <PasswordInput
-                            defaultVisible
+                            defaultVisible={!isEdit}
+                            autoComplete="new-password"
                             disabled={!isPasswordTouched}
                             placeholder="e.g., S3cur3P@ssw0rd"
                             {...field}

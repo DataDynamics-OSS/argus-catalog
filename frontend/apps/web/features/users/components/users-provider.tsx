@@ -21,6 +21,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react"
 
 import useDialogState from "@/hooks/use-dialog-state"
+import { notifyError } from "@/lib/notify"
 import { fetchUsers, type PaginatedUsers } from "../api"
 import { type User } from "../data/schema"
 
@@ -45,6 +46,22 @@ type SearchParams = {
   search: string
   /** Organization filter (exact), or empty string for no filter. */
   organization: string
+}
+
+/** 서버 정렬 상태 — 표 열 id 와 방향. null 이면 서버 기본(생성일 최신순). */
+export type UsersSort = { id: string; desc: boolean } | null
+
+/** 표 열 id → 서버 sort 파라미터. 여기에 없는 열은 정렬할 수 없다. */
+export const USERS_SORT_FIELDS: Record<string, string> = {
+  username: "username",
+  fullName: "name",
+  email: "email",
+  organization: "organization",
+  department: "department",
+  status: "status",
+  role: "role",
+  createdAt: "created_at",
+  lastLoginAt: "last_login_at",
 }
 
 /** Shape of the context value exposed to all consumers via `useUsers()`. */
@@ -79,9 +96,15 @@ type UsersContextType = {
   searchUsers: (params: SearchParams) => void
   /** Re-fetch the current page with the last applied filters. */
   refreshUsers: () => Promise<void>
+  /** 현재 서버 정렬. */
+  sort: UsersSort
+  /** 정렬 변경 — 전체 결과 기준으로 서버에서 다시 정렬해 1페이지부터 보여 준다. */
+  setSort: (sort: UsersSort) => void
 }
 
 const UsersContext = React.createContext<UsersContextType | null>(null)
+
+const DEFAULT_PAGE_SIZE = 10
 
 /**
  * Provider component that manages all user-related state.
@@ -96,8 +119,11 @@ export function UsersProvider({ children }: { children: React.ReactNode }) {
   const [users, setUsers] = useState<User[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(10)
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [isLoading, setIsLoading] = useState(true)
+  const [sort, setSortState] = useState<UsersSort>(null)
+  // loadUsers 가 항상 최신 정렬을 쓰도록 ref 로도 들고 있는다 (페이지 이동·검색·새로 고침 공통).
+  const sortRef = useRef<UsersSort>(null)
 
   /**
    * Ref to persist the last applied filter values.
@@ -115,6 +141,9 @@ export function UsersProvider({ children }: { children: React.ReactNode }) {
    * then updates the local state with the response data. Wrapped in useCallback
    * to provide a stable reference for dependent hooks.
    */
+  // 마지막 요청 번호 — 요청이 겹치면(페이지 크기 변경·검색·페이지 이동 연속) 가장 마지막 요청의 응답만 반영.
+  const requestSeqRef = useRef(0)
+
   const loadUsers = useCallback(async (params: {
     page: number
     pageSize: number
@@ -123,6 +152,7 @@ export function UsersProvider({ children }: { children: React.ReactNode }) {
     search: string
     organization: string
   }) => {
+    const seq = ++requestSeqRef.current
     try {
       setIsLoading(true)
       const data: PaginatedUsers = await fetchUsers({
@@ -132,20 +162,26 @@ export function UsersProvider({ children }: { children: React.ReactNode }) {
         role: params.role || undefined,
         search: params.search || undefined,
         organization: params.organization || undefined,
+        sort: sortRef.current ? USERS_SORT_FIELDS[sortRef.current.id] : undefined,
+        order: sortRef.current?.desc ? "desc" : "asc",
       })
+      if (seq !== requestSeqRef.current) return
       setUsers(data.items)
       setTotal(data.total)
     } catch (err) {
+      if (seq !== requestSeqRef.current) return
       console.error("Failed to fetch users:", err)
+      notifyError(err, "사용자 목록을 불러오지 못했습니다.")
     } finally {
-      setIsLoading(false)
+      if (seq === requestSeqRef.current) setIsLoading(false)
     }
   }, [])
 
-  // Fetch the first page of users on initial mount.
+  // Fetch the first page of users on initial mount only. pageSize 를 의존성에 두면 페이지 크기 변경 시
+  // 필터 없는 조회가 한 번 더 나가 handleSetPageSize 의 (필터 유지) 조회 결과를 덮어쓸 수 있다.
   useEffect(() => {
-    loadUsers({ page: 1, pageSize, status: null, role: "", search: "", organization: "" })
-  }, [loadUsers, pageSize])
+    loadUsers({ page: 1, pageSize: DEFAULT_PAGE_SIZE, status: null, role: "", search: "", organization: "" })
+  }, [loadUsers])
 
   /**
    * Handle page navigation.
@@ -192,6 +228,14 @@ export function UsersProvider({ children }: { children: React.ReactNode }) {
     await loadUsers({ page, pageSize, status: f.status, role: f.role, search: f.search, organization: f.organization })
   }, [loadUsers, page, pageSize])
 
+  const handleSetSort = useCallback((next: UsersSort) => {
+    sortRef.current = next && USERS_SORT_FIELDS[next.id] ? next : null
+    setSortState(sortRef.current)
+    setPage(1)
+    const f = appliedFiltersRef.current
+    loadUsers({ page: 1, pageSize, status: f.status, role: f.role, search: f.search, organization: f.organization })
+  }, [loadUsers, pageSize])
+
   return (
     <UsersContext value={{
       open, setOpen,
@@ -201,6 +245,7 @@ export function UsersProvider({ children }: { children: React.ReactNode }) {
       setPage: handleSetPage, setPageSize: handleSetPageSize,
       searchUsers,
       refreshUsers,
+      sort, setSort: handleSetSort,
     }}>
       {children}
     </UsersContext>

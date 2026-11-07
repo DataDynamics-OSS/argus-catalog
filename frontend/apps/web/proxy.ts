@@ -7,8 +7,10 @@ export async function proxy(request: NextRequest) {
 
   // Next 16 의 새 proxy 컨벤션에서 ``export const config.matcher`` 가 모든 경로(``/:path*``)
   // 로 등록되는 현상이 있어, 백엔드로 보낼 경로가 아니면 다음 핸들러로 넘긴다.
-  // ``/api/v1/*`` 는 일반 API, ``/health`` 는 페더레이션 peer 상태점검(루트 경로)용으로 프록시한다.
-  if (!pathname.startsWith("/api/v1/") && pathname !== "/health") {
+  // ``/api/v1/*`` 는 일반 API, ``/health`` 는 페더레이션 peer 상태점검(루트 경로)용,
+  // ``/api/2.1/*`` 는 Unity Catalog 호환 API — MLflow 클라이언트가 UI 주소 하나로
+  // (``mlflow.set_registry_uri("uc:<UI 주소>")``) 모델을 등록·로드할 수 있게 한다.
+  if (!pathname.startsWith("/api/v1/") && !pathname.startsWith("/api/2.1/") && pathname !== "/health") {
     return NextResponse.next()
   }
 
@@ -40,5 +42,5 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/api/v1/:path*", "/health"],
+  matcher: ["/api/v1/:path*", "/api/2.1/:path*", "/health"],
 }

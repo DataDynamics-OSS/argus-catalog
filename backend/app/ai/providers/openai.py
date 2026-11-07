@@ -35,11 +35,19 @@ class OpenAILLMProvider(LLMProvider):
         temperature: float = 0.3,
         max_tokens: int = 1024,
     ) -> dict:
+        """`/chat/completions` 를 호출해 첫 번째 choice 의 메시지 내용을 반환한다.
+
+        HTTP 오류는 ``httpx.HTTPStatusError`` 로 그대로 전파된다.
+        """
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
+        logger.debug(
+            "OpenAI 생성 요청: model=%s prompt_len=%d max_tokens=%d",
+            self._model_id, len(prompt), max_tokens,
+        )
         resp = await self._client.post(
             f"{self._base_url}/chat/completions",
             headers={"Authorization": f"Bearer {self._api_key}"},
@@ -54,6 +62,10 @@ class OpenAILLMProvider(LLMProvider):
         data = resp.json()
 
         usage = data.get("usage", {})
+        logger.debug(
+            "OpenAI 생성 응답: model=%s prompt_tokens=%s completion_tokens=%s",
+            self._model_id, usage.get("prompt_tokens"), usage.get("completion_tokens"),
+        )
         return {
             "text": data["choices"][0]["message"]["content"],
             "prompt_tokens": usage.get("prompt_tokens"),

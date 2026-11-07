@@ -25,8 +25,8 @@ import {
 import {
   AlertTriangle, ArrowRight, Check, ChevronsUpDown, RotateCcw, Shield, X, Zap,
 } from "lucide-react"
-import { toast } from "sonner"
-import { authFetch } from "@/features/auth/auth-fetch"
+import { errorMessage, toast } from "@/lib/notify"
+import { authFetch, throwOnError } from "@/features/auth/auth-fetch"
 
 const BASE = "/api/v1/standards"
 
@@ -69,7 +69,7 @@ type DatasetTermMapping = {
 }
 
 type AutoMapResult = {
-  created: number; updated: number; matched: number
+  created: number; updated: number; removed: number; matched: number
   similar: number; violation: number; unmapped: number
 }
 
@@ -80,14 +80,20 @@ type TermSummary = {
 
 type Props = {
   datasetId: number
+  /** 매핑 변경(자동·수동 매핑, 초기화, 기본 사전 저장) 가능 여부 — 데이터셋 생성자 또는 관리자 */
+  canEdit?: boolean
+}
+
+function errMsg(e: unknown, fallback: string): string {
+  return errorMessage(e) ?? fallback
 }
 
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
-export function TermsTab({ datasetId }: Props) {
-  const [dictionaries, setDictionaries] = useState<Dictionary[]>([])
+export function TermsTab({ datasetId, canEdit = false }: Props) {
+  const [dictionaries, setDictionaries] = useState<Dictionary[] | null>(null)
   const [selectedDictId, setSelectedDictId] = useState<number | null>(null)
   const [mapping, setMapping] = useState<DatasetTermMapping | null>(null)
   const [loading, setLoading] = useState(false)
@@ -100,7 +106,10 @@ export function TermsTab({ datasetId }: Props) {
   // 저장된 선택이 유효하면 우선 적용, 없으면 첫 번째 사전을 기본으로 지정.
   useEffect(() => {
     Promise.all([
-      authFetch(`${BASE}/dictionaries`).then(r => r.json()),
+      authFetch(`${BASE}/dictionaries`).then(async (r) => {
+        if (!r.ok) await throwOnError(r, "사전 목록을 불러오지 못했습니다.")
+        return r.json()
+      }),
       authFetch(`${BASE}/datasets/${datasetId}/dictionary`)
         .then(r => (r.ok ? r.json() : { dictionary_id: null }))
         .catch(() => ({ dictionary_id: null })),
@@ -115,7 +124,8 @@ export function TermsTab({ datasetId }: Props) {
         }
       })
       .catch((err) => {
-        console.error("Failed to load dictionaries", err)
+        setDictionaries([])
+        toast.error(errMsg(err, "사전 목록을 불러오지 못했습니다."))
       })
   }, [datasetId])
 
@@ -127,9 +137,10 @@ export function TermsTab({ datasetId }: Props) {
       const resp = await authFetch(
         `${BASE}/mappings/dataset?dictionary_id=${selectedDictId}&dataset_id=${datasetId}`
       )
-      if (resp.ok) setMapping(await resp.json())
+      if (!resp.ok) await throwOnError(resp, "용어 매핑을 불러오지 못했습니다.")
+      setMapping(await resp.json())
     } catch (err) {
-      console.error("Failed to load term mappings", { datasetId, selectedDictId, err })
+      toast.error(errMsg(err, "용어 매핑을 불러오지 못했습니다."))
     } finally {
       setLoading(false)
     }
@@ -137,22 +148,22 @@ export function TermsTab({ datasetId }: Props) {
 
   useEffect(() => { loadMapping() }, [loadMapping])
 
-  // 매핑 초기화 — dataset_id 기준 일괄 삭제. 되돌릴 수 없음.
+  // 매핑 초기화 — 선택한 사전의 매핑만 일괄 삭제(다른 사전 매핑은 유지). 되돌릴 수 없음.
   const handleResetMappings = async () => {
+    if (!selectedDictId) return
     setResetting(true)
     try {
-      const resp = await authFetch(`${BASE}/datasets/${datasetId}/mappings`, { method: "DELETE" })
-      if (!resp.ok) {
-        console.error("Failed to reset term mappings", { datasetId, status: resp.status })
-        toast.error("매핑 초기화에 실패했습니다.")
-        return
-      }
+      const resp = await authFetch(
+        `${BASE}/datasets/${datasetId}/mappings?dictionary_id=${selectedDictId}`, { method: "DELETE" },
+      )
+      if (!resp.ok) await throwOnError(resp, "용어 매핑을 초기화하지 못했습니다.")
       const r = await resp.json().catch(() => ({ deleted: 0 }))
-      console.info("Term mappings reset", { datasetId, deleted: r.deleted ?? 0 })
       toast.success(`매핑 ${r.deleted ?? 0}건을 초기화했습니다.`)
       setAutoMapResult(null)
       setResetOpen(false)
       await loadMapping()
+    } catch (err) {
+      toast.error(errMsg(err, "용어 매핑을 초기화하지 못했습니다."))
     } finally {
       setResetting(false)
     }
@@ -168,15 +179,11 @@ export function TermsTab({ datasetId }: Props) {
         `${BASE}/mappings/auto-map?dictionary_id=${selectedDictId}&dataset_id=${datasetId}`,
         { method: "POST" },
       )
-      if (resp.ok) {
-        const result = await resp.json()
-        setAutoMapResult(result)
-        await loadMapping()
-      } else {
-        console.error("Failed to auto-map terms", { datasetId, selectedDictId, status: resp.status })
-      }
+      if (!resp.ok) await throwOnError(resp, "용어를 자동 매핑하지 못했습니다.")
+      setAutoMapResult(await resp.json())
+      await loadMapping()
     } catch (err) {
-      console.error("Failed to auto-map terms", { datasetId, selectedDictId, err })
+      toast.error(errMsg(err, "용어를 자동 매핑하지 못했습니다."))
     } finally {
       setAutoMapping(false)
     }
@@ -185,7 +192,7 @@ export function TermsTab({ datasetId }: Props) {
   // 사용자가 popover 에서 직접 선택한 용어를 컬럼(schema_id) 에 SIMILAR 로 연결.
   const handleManualMap = async (schemaId: number, termId: number) => {
     try {
-      await authFetch(`${BASE}/mappings`, {
+      const resp = await authFetch(`${BASE}/mappings`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -195,17 +202,19 @@ export function TermsTab({ datasetId }: Props) {
           mapping_type: "SIMILAR",
         }),
       })
+      if (!resp.ok) await throwOnError(resp, "용어를 매핑하지 못했습니다.")
     } catch (err) {
-      console.error("Failed to create manual term mapping", { schemaId, termId, err })
+      toast.error(errMsg(err, "용어를 매핑하지 못했습니다."))
     }
     await loadMapping()
   }
 
   const handleDeleteMapping = async (mappingId: number) => {
     try {
-      await authFetch(`${BASE}/mappings/${mappingId}`, { method: "DELETE" })
+      const resp = await authFetch(`${BASE}/mappings/${mappingId}`, { method: "DELETE" })
+      if (!resp.ok) await throwOnError(resp, "용어 매핑을 제거하지 못했습니다.")
     } catch (err) {
-      console.error("Failed to delete term mapping", { mappingId, err })
+      toast.error(errMsg(err, "용어 매핑을 제거하지 못했습니다."))
     }
     await loadMapping()
   }
@@ -223,19 +232,22 @@ export function TermsTab({ datasetId }: Props) {
             const id = Number(v)
             setSelectedDictId(id)
             setAutoMapResult(null)
-            // 선택을 데이터셋에 영속화 — 실패해도 화면 선택은 유지(다음 방문 때 이전 값으로 복원될 뿐).
+            // 선택을 데이터셋 기본 사전으로 저장(편집 권한이 있을 때만) — 실패해도 화면 선택은 유지.
+            if (!canEdit) return
             authFetch(`${BASE}/datasets/${datasetId}/dictionary`, {
               method: "PUT",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ dictionary_id: id }),
-            }).catch((err) => console.error("Failed to save dictionary selection", err))
+            }).then(async (r) => {
+              if (!r.ok) await throwOnError(r, "기본 사전을 저장하지 못했습니다.")
+            }).catch((err) => toast.error(errMsg(err, "기본 사전 선택을 저장하지 못했습니다.")))
           }}
         >
           <SelectTrigger className="w-64 h-9">
             <SelectValue placeholder="사전 선택..." />
           </SelectTrigger>
           <SelectContent>
-            {dictionaries.map(d => (
+            {(dictionaries ?? []).map(d => (
               <SelectItem key={d.id} value={String(d.id)}>
                 {d.dict_name} {d.version && `(${d.version})`}
               </SelectItem>
@@ -243,6 +255,7 @@ export function TermsTab({ datasetId }: Props) {
           </SelectContent>
         </Select>
 
+        {canEdit && (<>
         <Button
           variant="outline"
           size="sm"
@@ -264,11 +277,14 @@ export function TermsTab({ datasetId }: Props) {
           <Zap className="h-3.5 w-3.5" />
           {autoMapping ? "매핑 중..." : "자동 매핑"}
         </Button>
+        </>)}
 
         {autoMapResult && (
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Check className="h-3.5 w-3.5 text-green-500" />
             신규 {autoMapResult.created}건, 갱신 {autoMapResult.updated}건
+            {autoMapResult.removed > 0 && `, 제거 ${autoMapResult.removed}건`}
+            {" "}· 일치 {autoMapResult.matched} · 위반 {autoMapResult.violation} · 미매핑 {autoMapResult.unmapped}
           </div>
         )}
       </div>
@@ -335,7 +351,9 @@ export function TermsTab({ datasetId }: Props) {
             <p className="text-sm text-muted-foreground">
               {selectedDictId
                 ? "스키마 컬럼이 없습니다. 스키마를 추가한 뒤 자동 매핑을 실행하세요."
-                : "용어 매핑을 보려면 사전을 선택하세요."}
+                : dictionaries && dictionaries.length === 0
+                  ? "등록된 표준 사전이 없습니다. '데이터 표준' 메뉴에서 사전을 먼저 만드세요."
+                  : "용어 매핑을 보려면 사전을 선택하세요."}
             </p>
           </CardContent>
         </Card>
@@ -390,6 +408,8 @@ export function TermsTab({ datasetId }: Props) {
                             ({col.term_physical_name})
                           </span>
                         </div>
+                      ) : !canEdit ? (
+                        <span className="text-sm text-muted-foreground">—</span>
                       ) : (
                         <ManualMapPicker
                           dictionaryId={selectedDictId!}
@@ -414,7 +434,7 @@ export function TermsTab({ datasetId }: Props) {
                     <TableCell>
                       <div className="flex items-center gap-1.5">
                         <MappingBadge type={col.mapping_type} />
-                        {col.mapping_id && (
+                        {canEdit && col.mapping_id && (
                           <Button
                             variant="ghost"
                             size="icon"
@@ -443,7 +463,7 @@ export function TermsTab({ datasetId }: Props) {
             <div className="flex items-center gap-2 mb-2">
               <AlertTriangle className="h-4 w-4 text-red-500" />
               <span className="text-sm font-medium text-red-600 dark:text-red-400">
-                Standard Violations
+                표준 위반
               </span>
             </div>
             <div className="space-y-1">
@@ -452,11 +472,11 @@ export function TermsTab({ datasetId }: Props) {
                 .map(c => (
                   <p key={c.schema_id} className="text-xs text-muted-foreground">
                     <code className="font-mono text-red-600 dark:text-red-400">{c.column_name}</code>
-                    : {c.native_type || c.column_type} → standard{" "}
+                    : 실제 {c.native_type || c.column_type} → 표준{" "}
                     <code className="font-mono">
                       {c.term_data_type}{c.term_data_length && `(${c.term_data_length})`}
                     </code>
-                    . Type mismatch with term &quot;{c.term_name}&quot;.
+                    {" "}— 용어 &quot;{c.term_name}&quot; 의 도메인 타입과 다릅니다.
                   </p>
                 ))}
             </div>
@@ -473,7 +493,7 @@ export function TermsTab({ datasetId }: Props) {
               매핑 초기화
             </DialogTitle>
             <DialogDescription>
-              매핑 정보가 초기화됩니다. 다시 되돌릴 수 없습니다.
+              {`'${dictionaries?.find((d) => d.id === selectedDictId)?.dict_name ?? "선택한 사전"}' 기준 매핑이 모두 삭제됩니다(다른 사전의 매핑은 유지). 되돌릴 수 없습니다.`}
             </DialogDescription>
           </DialogHeader>
           <div className="flex justify-end gap-2 pt-2">
@@ -509,17 +529,22 @@ function ManualMapPicker({
   const [search, setSearch] = useState("")
   const [terms, setTerms] = useState<TermSummary[]>([])
 
-  // popover 열림/검색어 변경 시 용어 검색 (사전 범위로 한정).
+  // popover 열림/검색어 변경 시 용어 검색 (사전 범위로 한정, 입력 300ms 디바운스).
   useEffect(() => {
     if (!open) return
-    const params = new URLSearchParams({ dictionary_id: String(dictionaryId) })
-    if (search) params.set("search", search)
-    authFetch(`${BASE}/terms?${params}`)
-      .then(r => r.json())
-      .then(setTerms)
-      .catch((err) => {
-        console.error("Failed to search terms", { dictionaryId, err })
-      })
+    let alive = true
+    const t = setTimeout(() => {
+      const params = new URLSearchParams({ dictionary_id: String(dictionaryId) })
+      if (search.trim()) params.set("search", search.trim())
+      authFetch(`${BASE}/terms?${params}`)
+        .then(async (r) => {
+          if (!r.ok) await throwOnError(r, "용어를 검색하지 못했습니다.")
+          return r.json()
+        })
+        .then((d) => { if (alive) setTerms(d) })
+        .catch((err) => toast.error(errMsg(err, "용어를 검색하지 못했습니다.")))
+    }, search ? 300 : 0)
+    return () => { alive = false; clearTimeout(t) }
   }, [open, search, dictionaryId])
 
   return (
