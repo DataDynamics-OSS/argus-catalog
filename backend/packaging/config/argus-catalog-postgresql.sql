@@ -3620,3 +3620,101 @@ CREATE INDEX IF NOT EXISTS idx_catalog_term_column_mapping_schema ON catalog_ter
 CREATE INDEX IF NOT EXISTS idx_argus_change_request_dataset ON argus_change_request (dataset_id);
 CREATE INDEX IF NOT EXISTS idx_catalog_registered_models_datasource ON catalog_registered_models (datasource_id);
 CREATE INDEX IF NOT EXISTS idx_catalog_mcp_deployments_datasource ON catalog_mcp_deployments (datasource_id);
+
+-- ---------------------------------------------------------------------------
+-- 카탈로그 엔티티 1단계 (design/catalog-entity-design.md, 재실행 안전)
+-- 카탈로그 = 데이터셋을 묶는 거버넌스 단위, 데이터 소스 = 접속 정보. 둘을 연결 테이블로 잇는다.
+-- 1단계는 데이터 소스마다 자동 카탈로그(catalog_key = datasource_id)를 1:1 로 만든다.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS catalog_catalogs (
+    id SERIAL PRIMARY KEY,
+    catalog_key VARCHAR(100) NOT NULL UNIQUE,
+    name VARCHAR(200) NOT NULL,
+    kind VARCHAR(100),
+    source_type VARCHAR(20) NOT NULL DEFAULT 'EXTERNAL',
+    auto_created BOOLEAN NOT NULL DEFAULT false,
+    source_metadata TEXT,
+    summary VARCHAR(200),
+    description TEXT,
+    owner VARCHAR(200),
+    status VARCHAR(20) NOT NULL DEFAULT 'active',
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS catalog_catalog_connections (
+    id SERIAL PRIMARY KEY,
+    catalog_id INTEGER NOT NULL REFERENCES catalog_catalogs(id) ON DELETE CASCADE,
+    datasource_id INTEGER NOT NULL REFERENCES catalog_datasources(id) ON DELETE CASCADE,
+    role VARCHAR(20) NOT NULL DEFAULT 'SYNC',
+    remote_name VARCHAR(255),
+    created_at TIMESTAMPTZ DEFAULT now(),
+    CONSTRAINT uq_catalog_connection UNIQUE (catalog_id, datasource_id)
+);
+CREATE INDEX IF NOT EXISTS ix_catalog_catalog_connections_catalog_id ON catalog_catalog_connections (catalog_id);
+CREATE INDEX IF NOT EXISTS ix_catalog_catalog_connections_datasource_id ON catalog_catalog_connections (datasource_id);
+
+ALTER TABLE catalog_datasets ADD COLUMN IF NOT EXISTS catalog_id INTEGER REFERENCES catalog_catalogs(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS ix_catalog_datasets_catalog_id ON catalog_datasets (catalog_id);
+
+-- 백필: 기존 데이터 소스마다 자동 카탈로그 + SYNC 연결, 데이터셋 catalog_id 채우기 (이미 있으면 건너뜀)
+-- 엔진(impala/trino)은 2단계부터 자체 카탈로그를 만들지 않는다 (datasource_metadata.DATASOURCE_ROLES).
+-- 단, 이미 데이터셋을 가진 엔진(예전 Trino 동기화)은 "엔진 경유 수집" 카탈로그로 만든다.
+INSERT INTO catalog_catalogs (catalog_key, name, kind, source_type, auto_created, status)
+SELECT d.datasource_id, d.name, d.type, 'EXTERNAL', true, 'active'
+FROM catalog_datasources d
+WHERE (d.type NOT IN ('impala', 'trino')
+       OR EXISTS (SELECT 1 FROM catalog_datasets ds WHERE ds.datasource_id = d.id))
+  AND NOT EXISTS (SELECT 1 FROM catalog_catalogs c WHERE c.catalog_key = d.datasource_id)
+  AND NOT EXISTS (SELECT 1 FROM catalog_catalog_connections x WHERE x.datasource_id = d.id AND x.role = 'SYNC');
+
+INSERT INTO catalog_catalog_connections (catalog_id, datasource_id, role)
+SELECT c.id, d.id, 'SYNC'
+FROM catalog_datasources d
+JOIN catalog_catalogs c ON c.catalog_key = d.datasource_id
+WHERE NOT EXISTS (
+    SELECT 1 FROM catalog_catalog_connections x
+    WHERE x.datasource_id = d.id AND x.role = 'SYNC'
+);
+
+UPDATE catalog_datasets ds
+SET catalog_id = x.catalog_id
+FROM catalog_catalog_connections x
+WHERE ds.catalog_id IS NULL
+  AND x.datasource_id = ds.datasource_id
+  AND x.role = 'SYNC';
+
+-- 2단계: 1단계에서 엔진(impala/trino)에 만들어진 자동 카탈로그 중 데이터셋이 없고 엔진 외 연결도 없는 것 정리
+-- (데이터셋이 있으면 "엔진 경유 수집" 카탈로그로 남긴다). 연결 행은 FK CASCADE.
+DELETE FROM catalog_catalogs c
+WHERE c.auto_created = true
+  AND c.kind IN ('impala', 'trino')
+  AND NOT EXISTS (SELECT 1 FROM catalog_datasets d WHERE d.catalog_id = c.id)
+  AND NOT EXISTS (
+      SELECT 1 FROM catalog_catalog_connections x
+      JOIN catalog_datasources s ON s.id = x.datasource_id
+      WHERE x.catalog_id = c.id AND s.type NOT IN ('impala', 'trino')
+  );
+
+COMMENT ON TABLE catalog_catalogs IS '카탈로그 — 데이터셋을 묶는 거버넌스 단위 (외부 카탈로그는 읽기 전용 미러)';
+COMMENT ON COLUMN catalog_catalogs.id IS 'PK';
+COMMENT ON COLUMN catalog_catalogs.catalog_key IS '외부 노출 고정 식별자 (자동 생성 카탈로그는 데이터 소스 datasource_id)';
+COMMENT ON COLUMN catalog_catalogs.name IS '카탈로그 표시 이름';
+COMMENT ON COLUMN catalog_catalogs.kind IS '기술 종류 (hive/iceberg-rest/unity_catalog/postgresql 등)';
+COMMENT ON COLUMN catalog_catalogs.source_type IS 'EXTERNAL(외부 카탈로그 미러) / ARGUS(Argus 전용 논리 카탈로그)';
+COMMENT ON COLUMN catalog_catalogs.auto_created IS '데이터 소스 생성 시 1:1 로 자동 생성된 카탈로그 여부';
+COMMENT ON COLUMN catalog_catalogs.source_metadata IS '원본 메타 JSON (소유자·권한·태그 등, sync 가 매번 덮어씀)';
+COMMENT ON COLUMN catalog_catalogs.summary IS '한 줄 요약 (큐레이션, sync 가 덮어쓰지 않음)';
+COMMENT ON COLUMN catalog_catalogs.description IS '상세 설명 (큐레이션, sync 가 덮어쓰지 않음)';
+COMMENT ON COLUMN catalog_catalogs.owner IS '담당자 (큐레이션, sync 가 덮어쓰지 않음)';
+COMMENT ON COLUMN catalog_catalogs.status IS '상태 (active/removed)';
+COMMENT ON COLUMN catalog_catalogs.created_at IS '생성 시각';
+COMMENT ON COLUMN catalog_catalogs.updated_at IS '수정 시각';
+COMMENT ON TABLE catalog_catalog_connections IS '카탈로그 ↔ 데이터 소스 연결 (SYNC=메타 수집, QUERY=엔진 쿼리 이력·리니지)';
+COMMENT ON COLUMN catalog_catalog_connections.id IS 'PK';
+COMMENT ON COLUMN catalog_catalog_connections.catalog_id IS '카탈로그 catalog_catalogs(id) 참조';
+COMMENT ON COLUMN catalog_catalog_connections.datasource_id IS '데이터 소스 catalog_datasources(id) 참조';
+COMMENT ON COLUMN catalog_catalog_connections.role IS '연결 역할 (SYNC/QUERY)';
+COMMENT ON COLUMN catalog_catalog_connections.remote_name IS '데이터 소스 쪽에서 이 카탈로그를 부르는 이름 (Trino 카탈로그명, UC catalog 등)';
+COMMENT ON COLUMN catalog_catalog_connections.created_at IS '생성 시각';
+COMMENT ON COLUMN catalog_datasets.catalog_id IS '소속 카탈로그 catalog_catalogs(id) 참조 (NULL=미배정)';

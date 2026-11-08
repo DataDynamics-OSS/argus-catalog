@@ -1,4 +1,4 @@
-import Link from "next/link"
+import pkg from "../package.json"
 
 import {
   Sidebar,
@@ -27,14 +27,21 @@ export async function AppSidebar() {
         <SidebarMenu className="relative">
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" asChild className="pr-6 group-data-[collapsible=icon]:pr-0">
-              <Link href="/dashboard">
+              {/* 브랜드 클릭 → 회사 사이트(새 탭). 대시보드 이동은 메뉴로 충분. */}
+              <a href="https://www.data-dynamics.io" target="_blank" rel="noopener noreferrer">
                 <div className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground group-data-[collapsible=icon]:flex">
                   <Logo className="size-5" />
                 </div>
-                <span className="truncate text-base font-bold group-data-[collapsible=icon]:hidden">
-                  Argus Catalog
-                </span>
-              </Link>
+                {/* 자매 제품(RAG Studio 등) 헤더와 같은 2줄 구성 — 브랜드 글꼴(Roboto Condensed) 제품명 + 회사명 */}
+                <div className="flex min-w-0 flex-col group-data-[collapsible=icon]:hidden">
+                  <span className="font-display truncate text-xl font-semibold leading-none tracking-wide text-sidebar-accent-foreground">
+                    Argus Catalog
+                  </span>
+                  <span className="mt-1 truncate text-xs text-sidebar-foreground/60">
+                    Data Dynamics Inc
+                  </span>
+                </div>
+              </a>
             </SidebarMenuButton>
           </SidebarMenuItem>
           {/* 사이드바 접기/펼치기 — 펼침: 브랜드 옆 ‹, 접힘: 로고 아래 › */}
@@ -51,14 +58,14 @@ export async function AppSidebar() {
         <SidebarUser />
         {/* 매우 옅은 구분선 — opacity 로 거의 안 보이게만. 접힘(icon) 시 숨김. */}
         <Separator className="my-1 bg-border/30 group-data-[collapsible=icon]:hidden" />
-        {/* 회사 정보 — 외부 사이트로 새 탭 이동. height 30px 고정. 접힘(icon) 시 숨김. */}
+        {/* 버전 표기(package.json — 루트 VERSION 과 락스텝) — 클릭 시 GitHub 리포로 새 탭 이동. 접힘(icon) 시 숨김. */}
         <a
-          href="https://www.data-dynamics.io"
+          href="https://github.com/DataDynamics-OSS/argus-catalog"
           target="_blank"
           rel="noopener noreferrer"
-          className="flex h-[20px] items-center justify-center text-[11px] text-muted-foreground hover:text-foreground transition-colors group-data-[collapsible=icon]:hidden"
+          className="flex h-[22px] items-center justify-center text-xs text-sidebar-accent-foreground transition-colors hover:underline group-data-[collapsible=icon]:hidden"
         >
-          Data Dynamics Inc.
+          Version {pkg.version}
         </a>
       </SidebarFooter>
 

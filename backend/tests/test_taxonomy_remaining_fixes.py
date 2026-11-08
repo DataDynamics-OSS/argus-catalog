@@ -19,7 +19,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 import app.catalog.models as cm
 from app.catalog import schemas as s
 
-_TABLES = (cm.System, cm.Datasource, cm.Dataset, cm.Taxonomy, cm.Category, cm.DatasetCategory)
+_TABLES = (
+    cm.System, cm.Datasource, cm.Catalog, cm.CatalogConnection, cm.Dataset,
+    cm.Taxonomy, cm.Category, cm.DatasetCategory,
+)
 
 
 async def _make_session():

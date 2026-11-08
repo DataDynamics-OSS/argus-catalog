@@ -30,6 +30,7 @@ from app.apis.router import router as apis_router
 from app.audit.router import router as audit_router
 from app.audit.service import ClientIpMiddleware
 from app.auth.router import router as auth_router  # SSO 인증용 추가
+from app.catalog.catalogs_router import router as catalogs_router
 from app.catalog.impala_profile_router import router as impala_profile_router
 from app.catalog.router import router as catalog_router
 from app.catalog.taxonomy_router import router as taxonomy_router
@@ -377,6 +378,7 @@ app.include_router(apis_router, prefix="/api/v1", dependencies=_menu_guard("apis
 app.include_router(mcp_servers_router, prefix="/api/v1", dependencies=_menu_guard("mcp-servers"))
 app.include_router(mcp_deployments_router, prefix="/api/v1", dependencies=_menu_guard("mcp-servers"))
 app.include_router(topology_router, prefix="/api/v1")
+app.include_router(catalogs_router, prefix="/api/v1")
 app.include_router(taxonomy_router, prefix="/api/v1")
 app.include_router(comments_router, prefix="/api/v1")
 app.include_router(filesystem_router, prefix="/api/v1")

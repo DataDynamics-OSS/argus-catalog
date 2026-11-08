@@ -9,32 +9,52 @@
 // (HDFS = 파일시스템 스캔, Java/Python Source = 빌드 산출물 분석)을 가린다. 기존
 // 데이터셋의 datasource.type 표시·필터링은 그대로 동작해야 하므로 DATASOURCE_TYPES 자체
 // 에서 제거하지는 않는다.
-export const DATASOURCE_TYPES: { name: string; display: string; implemented: boolean; hiddenFromAddDialog?: boolean }[] = [
-  { name: "postgresql", display: "PostgreSQL", implemented: true },
-  { name: "mysql", display: "MySQL", implemented: true },
-  { name: "hive", display: "Apache Hive", implemented: true },
-  { name: "impala", display: "Apache Impala", implemented: true },
-  { name: "kafka", display: "Apache Kafka", implemented: false },
-  { name: "s3", display: "Amazon S3", implemented: false },
-  { name: "hdfs", display: "HDFS", implemented: false, hiddenFromAddDialog: true },
-  { name: "snowflake", display: "Snowflake", implemented: false },
-  { name: "bigquery", display: "Google BigQuery", implemented: false },
-  { name: "redshift", display: "Amazon Redshift", implemented: false },
-  { name: "elasticsearch", display: "Elasticsearch", implemented: false },
-  { name: "mongodb", display: "MongoDB", implemented: false },
-  { name: "trino", display: "Trino", implemented: true },
-  { name: "starrocks", display: "StarRocks", implemented: true },
-  { name: "greenplum", display: "Greenplum", implemented: true },
-  { name: "kudu", display: "Apache Kudu", implemented: true },
-  { name: "iceberg-rest", display: "Iceberg REST Catalog", implemented: true },
-  { name: "unity_catalog", display: "Unity Catalog", implemented: false },
-  { name: "java", display: "Java Source", implemented: true, hiddenFromAddDialog: true },
-  { name: "python", display: "Python Source", implemented: true, hiddenFromAddDialog: true },
+// 데이터 소스 역할 (design/catalog-entity-design.md 2단계) — 백엔드 datasource_metadata.DATASOURCE_ROLES 와 맞춘다.
+// CATALOG: 메타데이터 원본(카탈로그 서비스) · DATABASE: DB 자체가 카탈로그 · ENGINE: 쿼리 엔진(카탈로그에 연결)
+export type DatasourceRole = "CATALOG" | "DATABASE" | "ENGINE"
+
+export const DATASOURCE_ROLE_LABELS: Record<DatasourceRole, { title: string; desc: string }> = {
+  CATALOG: { title: "카탈로그", desc: "테이블 메타데이터를 가진 카탈로그 서비스 — 메타데이터를 수집합니다." },
+  DATABASE: { title: "데이터베이스", desc: "데이터베이스 자체가 카탈로그입니다 — 메타데이터를 수집합니다." },
+  ENGINE: { title: "쿼리 엔진", desc: "자체 카탈로그가 없습니다 — 등록된 카탈로그에 연결해 쿼리 이력·리니지를 수집합니다." },
+}
+
+export const DATASOURCE_TYPES: {
+  name: string
+  display: string
+  implemented: boolean
+  role: DatasourceRole
+  hiddenFromAddDialog?: boolean
+}[] = [
+  { name: "postgresql", display: "PostgreSQL", role: "DATABASE", implemented: true },
+  { name: "mysql", display: "MySQL", role: "DATABASE", implemented: true },
+  { name: "hive", display: "Apache Hive", role: "CATALOG", implemented: true },
+  { name: "impala", display: "Apache Impala", role: "ENGINE", implemented: true },
+  { name: "kafka", display: "Apache Kafka", role: "DATABASE", implemented: false },
+  { name: "s3", display: "Amazon S3", role: "DATABASE", implemented: false },
+  { name: "hdfs", display: "HDFS", role: "DATABASE", implemented: false, hiddenFromAddDialog: true },
+  { name: "snowflake", display: "Snowflake", role: "DATABASE", implemented: false },
+  { name: "bigquery", display: "Google BigQuery", role: "DATABASE", implemented: false },
+  { name: "redshift", display: "Amazon Redshift", role: "DATABASE", implemented: false },
+  { name: "elasticsearch", display: "Elasticsearch", role: "DATABASE", implemented: false },
+  { name: "mongodb", display: "MongoDB", role: "DATABASE", implemented: false },
+  { name: "trino", display: "Trino", role: "ENGINE", implemented: true },
+  { name: "starrocks", display: "StarRocks", role: "DATABASE", implemented: true },
+  { name: "greenplum", display: "Greenplum", role: "DATABASE", implemented: true },
+  { name: "kudu", display: "Apache Kudu", role: "CATALOG", implemented: true },
+  { name: "iceberg-rest", display: "Iceberg REST Catalog", role: "CATALOG", implemented: true },
+  { name: "unity_catalog", display: "Unity Catalog", role: "CATALOG", implemented: false },
+  { name: "java", display: "Java Source", role: "DATABASE", implemented: true, hiddenFromAddDialog: true },
+  { name: "python", display: "Python Source", role: "DATABASE", implemented: true, hiddenFromAddDialog: true },
 ]
 
 export const IMPLEMENTED_DATASOURCE_TYPES: ReadonlySet<string> = new Set(
   DATASOURCE_TYPES.filter((p) => p.implemented).map((p) => p.name),
 )
+
+export function datasourceRole(type: string | null | undefined): DatasourceRole {
+  return DATASOURCE_TYPES.find((t) => t.name === type)?.role ?? "DATABASE"
+}
 
 export function isDatasourceTypeImplemented(type: string | null | undefined): boolean {
   if (!type) return false
@@ -153,7 +173,8 @@ export const DATASOURCE_CONFIGS: Record<string, DatasourceFieldDef[]> = {
   // ---- Trino -------------------------------------------------------------
   trino: [
     ...hostField(8443),
-    { key: 'catalog', label: 'Catalog', type: 'text', required: true },
+    // 엔진은 여러 카탈로그에 연결된다(카탈로그 연결에서 관리). 이 값은 엔진 경유 수집 시 기본 카탈로그로만 쓴다.
+    { key: 'catalog', label: 'Catalog (엔진 경유 수집 시)', type: 'text' },
     { key: 'schema', label: 'Schema', type: 'text' },
     { key: 'username', label: 'Username', type: 'text', required: true },
     { key: 'password', label: 'Password', type: 'password' },

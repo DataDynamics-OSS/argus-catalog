@@ -37,7 +37,8 @@ from app.quality.models import DataProfile, QualityResult, QualityRule, QualityS
 from app.quality.schemas import ColumnProfile, ProfileResponse, QualityRuleCreate, QualityRuleUpdate
 
 _TABLES = (
-    cm.Organization, cm.System, cm.Datasource, cm.DatasourceConfiguration, cm.Dataset,
+    cm.Organization, cm.System, cm.Datasource, cm.Catalog, cm.CatalogConnection,
+    cm.DatasourceConfiguration, cm.Dataset,
     cm.DatasetSchema, cm.DatasetProperty, QualityRule, QualityResult, QualityScore, DataProfile,
 )
 

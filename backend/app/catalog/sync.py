@@ -917,7 +917,9 @@ async def sync_datasource_metadata(
     logger.info("데이터베이스 전반에서 테이블 %d개 발견: %s",
                 len(tables), result.databases_scanned)
 
-    # 4. 데이터셋 + 스키마 필드 upsert
+    # 4. 데이터셋 + 스키마 필드 upsert (신규 데이터셋은 데이터 소스의 SYNC 카탈로그에 소속)
+    from app.catalog.catalogs_service import sync_catalog_id
+    catalog_id = await sync_catalog_id(session, datasource.id)
     for table in tables:
         path = f"{table.database}.{table.name}"
         urn = _generate_urn(datasource_id_str, path)
@@ -961,6 +963,8 @@ async def sync_datasource_metadata(
                 dataset.ddl = ddl
             dataset.is_synced = "true"
             dataset.status = "active"
+            if dataset.catalog_id is None:
+                dataset.catalog_id = catalog_id
             result.tables_updated += 1
         else:
             # 신규 생성
@@ -968,6 +972,7 @@ async def sync_datasource_metadata(
                 urn=urn,
                 name=f"{table.database}.{table.name}",
                 datasource_id=datasource.id,
+                catalog_id=catalog_id,
                 description=table.table_comment or None,
                 origin=origin,
                 qualified_name=qualified_name,

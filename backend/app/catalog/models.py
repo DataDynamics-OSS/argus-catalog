@@ -3,6 +3,7 @@
 
 DataHub 를 본떠 모델링한 핵심 엔티티 유형:
 - Organization → System → Datasource: 데이터셋이 속하는 조직·시스템·데이터 소스 계층
+- Catalog / CatalogConnection: 데이터셋을 묶는 카탈로그(거버넌스 단위)와 데이터 소스(접속) 연결
 - Dataset: 테이블, 뷰, 토픽, 파일
 - Tag: 분류용 라벨
 - GlossaryTerm: 비즈니스 용어집 용어
@@ -15,6 +16,7 @@ DataHub 를 본떠 모델링한 핵심 엔티티 유형:
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     Column,
     DateTime,
     ForeignKey,
@@ -104,6 +106,67 @@ class Datasource(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
+class Catalog(Base):
+    """카탈로그 — 데이터셋을 묶는 거버넌스 단위(HMS, Iceberg REST, Unity Catalog 의 catalog 등).
+
+    데이터 소스는 "어떻게 접속하는가"(접속 정보), 카탈로그는 "무엇을 관리하는가"다. 둘은
+    ``CatalogConnection`` 으로 연결한다. 외부 카탈로그는 미러링만 하며(Argus → 원본 역동기화 없음),
+    ``source_metadata`` 는 sync 가 매번 덮어쓰고 ``summary``/``description``/``owner`` 는
+    사용자가 큐레이션하는 값이라 sync 가 건드리지 않는다.
+
+    1단계(design/catalog-entity-design.md)에서는 데이터 소스마다 카탈로그를 하나씩 자동으로
+    만든다(``auto_created=True``, ``catalog_key`` = 데이터 소스의 ``datasource_id``). 그래서
+    카탈로그 기준 URN ``{catalog_key}.{path}.dataset`` 이 지금의 URN 과 같다.
+    """
+
+    __tablename__ = "catalog_catalogs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # 외부에 노출되는 고정 식별자. 자동 생성 카탈로그는 데이터 소스의 datasource_id 를 그대로 쓴다.
+    catalog_key = Column(String(100), nullable=False, unique=True)
+    name = Column(String(200), nullable=False)
+    # 기술 종류 (hive / iceberg-rest / unity_catalog / postgresql …). 자동 생성은 데이터 소스 type.
+    kind = Column(String(100))
+    # EXTERNAL = 외부 시스템의 카탈로그를 미러링, ARGUS = 원본 없이 Argus 에서만 관리하는 논리 카탈로그
+    source_type = Column(String(20), nullable=False, default="EXTERNAL")
+    # 데이터 소스 생성 시 1:1 로 자동 생성된 카탈로그인지 (데이터 소스 삭제·이름 변경을 따라간다)
+    auto_created = Column(Boolean, nullable=False, default=False)
+    # --- 원본 메타 (sync 소유, 매번 덮어씀) ---
+    source_metadata = Column(Text)  # JSON: 원본 소유자·권한·태그·comment 등
+    # --- 큐레이션 메타 (사용자 소유, sync 가 덮어쓰지 않음) ---
+    summary = Column(String(200))
+    description = Column(Text)
+    owner = Column(String(200))
+    status = Column(String(20), nullable=False, default="active")  # active / removed
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class CatalogConnection(Base):
+    """카탈로그 ↔ 데이터 소스 연결.
+
+    ``role`` 은 SYNC(이 데이터 소스로 카탈로그의 메타데이터를 수집) 또는 QUERY(이 카탈로그를
+    조회하는 엔진 — 쿼리 이력·리니지만 수집). ``remote_name`` 은 데이터 소스 쪽에서 이 카탈로그를
+    부르는 이름(Trino 커넥터 카탈로그명 'hive', UC 의 'main' 등)이다.
+    """
+
+    __tablename__ = "catalog_catalog_connections"
+    __table_args__ = (
+        UniqueConstraint("catalog_id", "datasource_id", name="uq_catalog_connection"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    catalog_id = Column(
+        Integer, ForeignKey("catalog_catalogs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    datasource_id = Column(
+        Integer, ForeignKey("catalog_datasources.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    role = Column(String(20), nullable=False, default="SYNC")  # SYNC / QUERY
+    remote_name = Column(String(255))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
 class DatasourceConfiguration(Base):
     """데이터 소스 인스턴스의 접속 및 설정 정보(데이터 소스당 1행).
 
@@ -132,6 +195,10 @@ class Dataset(Base):
     # NULL 이면 UI 는 name 으로 fallback. sync 어댑터는 절대 덮어쓰지 않는다.
     display_name = Column(String(255))
     datasource_id = Column(Integer, ForeignKey("catalog_datasources.id"), nullable=False)
+    # 소속 카탈로그. 생성 시 데이터 소스의 SYNC 카탈로그로 채운다(NULL = 아직 배정 전 데이터).
+    catalog_id = Column(
+        Integer, ForeignKey("catalog_catalogs.id", ondelete="SET NULL"), index=True
+    )
     # 한 줄 요약 — 목록/검색/대시보드의 카드·테이블에서 노출되는 짧은 설명.
     # 본문(description) 보다 짧고 명확해야 하며 NULL 허용 (점진적으로 채움).
     summary = Column(String(200))

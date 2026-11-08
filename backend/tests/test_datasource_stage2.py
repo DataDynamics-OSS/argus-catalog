@@ -37,6 +37,7 @@ from app.permissions.router import DEFAULT_DENY_FEATURES
 
 _CATALOG_TABLES = [
     "catalog_organizations", "catalog_systems", "catalog_datasources",
+    "catalog_catalogs", "catalog_catalog_connections",
     "catalog_datasource_configurations", "catalog_datasets", "catalog_dataset_schemas",
     "catalog_schema_snapshots", "argus_data_pipeline", "argus_dataset_lineage",
     "catalog_datasource_data_types", "catalog_datasource_table_types",

@@ -71,9 +71,17 @@ class DatasourceResponse(BaseModel):
     origin: str = "DEV"
     system_id: int | None = None
     system_name: str | None = None   # 조회 편의 (조인으로 채움)
+    # 역할(CATALOG / DATABASE / ENGINE) — 유형에서 정해진다(datasource_metadata.datasource_role)
+    role: str = "DATABASE"
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @model_validator(mode="after")
+    def _fill_role(self) -> "DatasourceResponse":
+        from app.catalog.datasource_metadata import datasource_role
+        self.role = datasource_role(self.type)
+        return self
 
 
 class DatasourceConfigurationSave(BaseModel):
@@ -272,6 +280,81 @@ class TopologyResponse(BaseModel):
     """사이드바 토폴로지 — 조직 트리와 미분류 버킷."""
     organizations: list[TopologyOrganization] = Field(default_factory=list)
     unassigned: TopologyUnassigned = Field(default_factory=TopologyUnassigned)
+
+
+# ---------------------------------------------------------------------------
+# Catalog (카탈로그 엔티티 — design/catalog-entity-design.md)
+# ---------------------------------------------------------------------------
+
+CatalogConnectionRole = Literal["SYNC", "QUERY"]
+
+
+class CatalogConnectionResponse(BaseModel):
+    """카탈로그에 연결된 데이터 소스 하나."""
+    datasource_id: int
+    datasource_key: str            # 데이터 소스의 문자열 식별자(datasource_id 컬럼)
+    datasource_name: str
+    datasource_type: str
+    role: CatalogConnectionRole
+    remote_name: str | None = None
+
+
+class CatalogCreate(BaseModel):
+    """카탈로그 수동 생성 — 엔진을 통해서만 닿는 카탈로그 등(데이터 소스 자동 생성분이 아닌 것)."""
+    name: str = Field(..., min_length=1, max_length=200)
+    kind: str | None = Field(default=None, max_length=100)
+    source_type: Literal["EXTERNAL", "ARGUS"] = "EXTERNAL"
+    summary: str | None = Field(default=None, max_length=200)
+    description: str | None = None
+    owner: str | None = Field(default=None, max_length=200)
+
+
+class CatalogUpdate(BaseModel):
+    """카탈로그 큐레이션 필드 수정 (sync 가 덮어쓰지 않는 값만)."""
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    summary: str | None = Field(default=None, max_length=200)
+    description: str | None = None
+    owner: str | None = Field(default=None, max_length=200)
+
+
+class CatalogConnectionCreate(BaseModel):
+    """카탈로그에 데이터 소스 연결."""
+    datasource_id: int
+    role: CatalogConnectionRole = "QUERY"
+    remote_name: str | None = Field(default=None, max_length=255)
+
+
+class EngineCatalogEntry(BaseModel):
+    """엔진(예: Trino)이 노출하는 카탈로그 하나와 연결 후보."""
+    remote_name: str                       # 엔진 쪽 카탈로그 이름
+    connector: str | None = None           # 커넥터 종류 (hive / iceberg / postgresql …)
+    connected_catalog_id: int | None = None  # 이미 연결된 Argus 카탈로그
+    suggested_catalog_ids: list[int] = Field(default_factory=list)  # 종류가 맞는 Argus 카탈로그
+
+
+class EngineCatalogsResponse(BaseModel):
+    """엔진 카탈로그 탐색 결과. supported=False 면 이 유형은 자동 탐색을 지원하지 않는다."""
+    supported: bool = True
+    message: str | None = None
+    catalogs: list[EngineCatalogEntry] = Field(default_factory=list)
+
+
+class CatalogResponse(BaseModel):
+    """카탈로그 응답 — 연결된 데이터 소스와 활성 데이터셋 수 포함."""
+    id: int
+    catalog_key: str
+    name: str
+    kind: str | None = None
+    source_type: Literal["EXTERNAL", "ARGUS"] = "EXTERNAL"
+    auto_created: bool = False
+    summary: str | None = None
+    description: str | None = None
+    owner: str | None = None
+    status: str = "active"
+    dataset_count: int = 0
+    connections: list[CatalogConnectionResponse] = Field(default_factory=list)
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 # 자기참조(children) forward ref 해소

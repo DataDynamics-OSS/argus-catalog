@@ -7,6 +7,7 @@ import {
   DatasourceDetail,
   type SaveDatasourceHandler,
 } from "@/features/datasources/components/datasource-detail"
+import { CatalogBindings } from "@/features/catalogs/components/catalog-bindings"
 import { InfoTable, DatasourcesTable } from "@/features/datasources/components/detail-tables"
 import { SystemDetail, type SystemSavePayload } from "@/features/datasources/components/system-detail"
 import type { Topology } from "@/features/topology/api"
@@ -53,6 +54,9 @@ export function DetailPanel(props: DetailProps) {
           onSave={props.onSaveDatasource}
           canManage={props.canManage}
         />
+        <div className="max-w-xl border-t pt-4">
+          <CatalogBindings key={p.id} datasource={p} canManage={props.canManage} />
+        </div>
         {RDBMS_TYPES.includes(p.type) && (
           <div className="grid gap-2">
             <h3 className="text-sm font-semibold">ER 다이어그램 (전체)</h3>

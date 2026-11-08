@@ -686,3 +686,29 @@ DATASOURCE_METADATA = {
         ],
     },
 }
+
+
+# ---------------------------------------------------------------------------
+# 데이터 소스 역할 (design/catalog-entity-design.md 2단계)
+# ---------------------------------------------------------------------------
+# CATALOG  — 메타데이터 원본(카탈로그 서비스). 데이터 소스 = SYNC 접속, 카탈로그를 자동 생성한다.
+# DATABASE — 데이터베이스 자체가 카탈로그. 지금처럼 데이터 소스 ↔ 카탈로그 1:1 자동 생성.
+# ENGINE   — 쿼리 엔진. 자기 카탈로그가 없고 기존 카탈로그에 QUERY 로 연결한다(쿼리 이력·리니지).
+#            엔진을 통해서만 닿는 카탈로그는 SYNC 로 연결해 엔진 경유로 수집할 수 있다.
+# 표에 없는 유형은 DATABASE 다. 프론트엔드 DATASOURCE_TYPES 의 role 과 맞춘다.
+DATASOURCE_ROLES: dict[str, str] = {
+    "hive": "CATALOG",
+    "iceberg-rest": "CATALOG",
+    "kudu": "CATALOG",
+    "unity_catalog": "CATALOG",
+    "impala": "ENGINE",
+    "trino": "ENGINE",
+}
+
+# 카탈로그에 QUERY 로 연결할 수 있는 유형 — 엔진 + 외부 카탈로그를 붙여 조회하는 DB(StarRocks external catalog).
+QUERY_CAPABLE_TYPES: frozenset[str] = frozenset({"impala", "trino", "starrocks"})
+
+
+def datasource_role(datasource_type: str | None) -> str:
+    """데이터 소스 유형의 역할(CATALOG / DATABASE / ENGINE). 모르는 유형은 DATABASE."""
+    return DATASOURCE_ROLES.get((datasource_type or "").lower(), "DATABASE")

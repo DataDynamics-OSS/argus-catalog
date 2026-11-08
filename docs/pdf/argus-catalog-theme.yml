@@ -69,9 +69,14 @@ admonition:
   label:
     font_family: Noto Sans KR
 
+# 표 테두리 — 기본 회색(#DDDDDD)은 인쇄·화면에서 잘 안 보이므로 검정 톤으로 진하게 한다.
 table:
   font_family: Noto Sans KR
   font_size: 9
+  border_color: '#333333'
+  grid_color: '#333333'
+  border_width: 0.75
+  grid_width: 0.5
   head:
     font_family: Noto Sans KR
 

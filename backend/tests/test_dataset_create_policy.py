@@ -37,6 +37,7 @@ from app.settings.router import router as settings_router
 
 _TABLES = [
     "catalog_organizations", "catalog_systems", "catalog_datasources",
+    "catalog_catalogs", "catalog_catalog_connections",
     "catalog_datasets", "catalog_dataset_properties", "catalog_dataset_schemas",
     "catalog_schema_snapshots", "catalog_tags", "catalog_dataset_tags", "catalog_owners",
     "catalog_glossary_terms", "catalog_dataset_glossary_terms",

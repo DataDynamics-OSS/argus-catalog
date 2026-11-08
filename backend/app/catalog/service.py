@@ -153,6 +153,11 @@ async def create_datasource(session: AsyncSession, req: DatasourceCreate) -> Dat
     # 유형별 메타데이터(데이터 타입·테이블 타입 등)를 같은 트랜잭션으로 채운다 — 예전에는
     # 서버 기동 시 유형별 첫 데이터 소스에만 시드되어 새 데이터 소스는 비어 있었다.
     await _seed_metadata_for(session, datasource)
+    # 카탈로그 엔티티: 카탈로그·DB 유형은 자동 카탈로그 + SYNC 연결(같은 트랜잭션).
+    # 엔진(Impala·Trino)은 만들지 않고 이후 기존 카탈로그에 연결한다.
+    from app.catalog.catalogs_service import creates_own_catalog, ensure_datasource_catalog
+    if creates_own_catalog(datasource.type):
+        await ensure_datasource_catalog(session, datasource)
     await session.commit()
     await session.refresh(datasource)
     logger.info("데이터 소스 생성: %s (id=%d)", datasource.name, datasource.id)
@@ -182,6 +187,8 @@ async def update_datasource(
         return None
     if req.name is not None:
         datasource.name = req.name
+        from app.catalog.catalogs_service import rename_auto_catalog
+        await rename_auto_catalog(session, datasource)
     if req.origin is not None and req.origin.value != datasource.origin:
         # 환경 변경 → 소속 데이터셋 origin 도 함께 갱신 (dataset.origin 은 datasource origin 을 미러).
         # URN 에는 origin 이 없으므로 식별자는 불변.
@@ -454,6 +461,9 @@ async def delete_datasource(
     if res.rowcount:
         logger.info("데이터 소스 id=%d 의 데이터셋 %d개 연쇄 삭제 (force=%s)",
                     datasource_id, res.rowcount, force)
+    # 남은 데이터셋이 없는 자동 카탈로그 정리 (연결 행은 FK CASCADE)
+    from app.catalog.catalogs_service import cleanup_datasource_catalogs
+    await cleanup_datasource_catalogs(session, datasource_id)
     await session.delete(datasource)
     await session.commit()
     logger.info("데이터 소스 삭제: %s (id=%d, force=%s)", datasource.name, datasource.id, force)
@@ -1140,16 +1150,23 @@ async def create_dataset(session: AsyncSession, req: DatasetCreate, created_by: 
         logger.warning("데이터셋 생성 거부 — 데이터 소스 없음: datasource_id=%d name=%s", req.datasource_id, req.name)
         raise ValueError(f"Datasource with id {req.datasource_id} not found")
 
+    # 엔진 데이터 소스는 SYNC 연결(엔진 경유 수집)이 있어야 데이터셋을 가진다 — 없으면 CatalogConflictError(409)
+    from app.catalog.catalogs_service import ensure_can_own_datasets
+    await ensure_can_own_datasets(session, datasource)
+
     path = req.qualified_name or req.name
     urn = _generate_urn(datasource.datasource_id, path)
     qualified_name = f"{datasource.datasource_id}.{path}"
 
     import json as _json
+
+    from app.catalog.catalogs_service import sync_catalog_id
     dataset = Dataset(
         urn=urn,
         name=req.name,
         display_name=req.display_name,
         datasource_id=req.datasource_id,
+        catalog_id=await sync_catalog_id(session, req.datasource_id),
         summary=req.summary,
         description=req.description,
         created_by=created_by,

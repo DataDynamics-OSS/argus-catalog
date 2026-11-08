@@ -2416,3 +2416,78 @@ ALTER TABLE catalog_mcp_deployments ADD COLUMN IF NOT EXISTS policy_pulled_versi
 ALTER TABLE catalog_mcp_deployments ADD COLUMN IF NOT EXISTS policy_pull_instance VARCHAR(200) COMMENT '번들을 받아간 서버 instance_id';
 ALTER TABLE catalog_mcp_audit_events ADD COLUMN IF NOT EXISTS agent_name VARCHAR(300) COMMENT '호출한 에이전트 (세션 토큰 agent 클레임)';
 ALTER TABLE catalog_mcp_audit_events ADD COLUMN IF NOT EXISTS server_decision VARCHAR(20) COMMENT '서버가 카탈로그 정책으로 거부했으면 denied';
+
+-- ---------------------------------------------------------------------------
+-- 카탈로그 엔티티 1단계 (design/catalog-entity-design.md, 재실행 안전)
+-- 카탈로그 = 데이터셋을 묶는 거버넌스 단위, 데이터 소스 = 접속 정보. 둘을 연결 테이블로 잇는다.
+-- 1단계는 데이터 소스마다 자동 카탈로그(catalog_key = datasource_id)를 1:1 로 만든다.
+-- (MariaDB 는 컬럼 인라인 REFERENCES 를 무시하므로 FK 는 테이블 수준으로 선언한다)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS catalog_catalogs (
+    id INT AUTO_INCREMENT PRIMARY KEY COMMENT 'PK',
+    catalog_key VARCHAR(100) NOT NULL UNIQUE COMMENT '외부 노출 고정 식별자 (자동 생성 카탈로그는 데이터 소스 datasource_id)',
+    name VARCHAR(200) NOT NULL COMMENT '카탈로그 표시 이름',
+    kind VARCHAR(100) COMMENT '기술 종류 (hive/iceberg-rest/unity_catalog/postgresql 등)',
+    source_type VARCHAR(20) NOT NULL DEFAULT 'EXTERNAL' COMMENT 'EXTERNAL(외부 카탈로그 미러) / ARGUS(Argus 전용 논리 카탈로그)',
+    auto_created BOOLEAN NOT NULL DEFAULT false COMMENT '데이터 소스 생성 시 1:1 로 자동 생성된 카탈로그 여부',
+    source_metadata TEXT COMMENT '원본 메타 JSON (소유자·권한·태그 등, sync 가 매번 덮어씀)',
+    summary VARCHAR(200) COMMENT '한 줄 요약 (큐레이션, sync 가 덮어쓰지 않음)',
+    description TEXT COMMENT '상세 설명 (큐레이션, sync 가 덮어쓰지 않음)',
+    owner VARCHAR(200) COMMENT '담당자 (큐레이션, sync 가 덮어쓰지 않음)',
+    status VARCHAR(20) NOT NULL DEFAULT 'active' COMMENT '상태 (active/removed)',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '생성 시각',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '수정 시각'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='카탈로그 — 데이터셋을 묶는 거버넌스 단위 (외부 카탈로그는 읽기 전용 미러)';
+
+CREATE TABLE IF NOT EXISTS catalog_catalog_connections (
+    id INT AUTO_INCREMENT PRIMARY KEY COMMENT 'PK',
+    catalog_id INT NOT NULL COMMENT '카탈로그 catalog_catalogs(id) 참조',
+    datasource_id INT NOT NULL COMMENT '데이터 소스 catalog_datasources(id) 참조',
+    role VARCHAR(20) NOT NULL DEFAULT 'SYNC' COMMENT '연결 역할 (SYNC/QUERY)',
+    remote_name VARCHAR(255) COMMENT '데이터 소스 쪽에서 이 카탈로그를 부르는 이름 (Trino 카탈로그명, UC catalog 등)',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '생성 시각',
+    CONSTRAINT uq_catalog_connection UNIQUE (catalog_id, datasource_id),
+    FOREIGN KEY (catalog_id) REFERENCES catalog_catalogs(id) ON DELETE CASCADE,
+    FOREIGN KEY (datasource_id) REFERENCES catalog_datasources(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='카탈로그 ↔ 데이터 소스 연결 (SYNC=메타 수집, QUERY=엔진 쿼리 이력·리니지)';
+CREATE INDEX IF NOT EXISTS ix_catalog_catalog_connections_datasource_id ON catalog_catalog_connections (datasource_id);
+
+ALTER TABLE catalog_datasets ADD COLUMN IF NOT EXISTS catalog_id INT NULL COMMENT '소속 카탈로그 catalog_catalogs(id) 참조 (NULL=미배정)';
+ALTER TABLE catalog_datasets ADD CONSTRAINT fk_catalog_datasets_catalog_id FOREIGN KEY IF NOT EXISTS (catalog_id) REFERENCES catalog_catalogs(id) ON DELETE SET NULL;
+
+-- 백필: 기존 데이터 소스마다 자동 카탈로그 + SYNC 연결, 데이터셋 catalog_id 채우기 (이미 있으면 건너뜀)
+-- 엔진(impala/trino)은 2단계부터 자체 카탈로그를 만들지 않는다 (datasource_metadata.DATASOURCE_ROLES).
+-- 단, 이미 데이터셋을 가진 엔진(예전 Trino 동기화)은 "엔진 경유 수집" 카탈로그로 만든다.
+INSERT INTO catalog_catalogs (catalog_key, name, kind, source_type, auto_created, status)
+SELECT d.datasource_id, d.name, d.type, 'EXTERNAL', true, 'active'
+FROM catalog_datasources d
+WHERE (d.type NOT IN ('impala', 'trino')
+       OR EXISTS (SELECT 1 FROM catalog_datasets ds WHERE ds.datasource_id = d.id))
+  AND NOT EXISTS (SELECT 1 FROM catalog_catalogs c WHERE c.catalog_key = d.datasource_id)
+  AND NOT EXISTS (SELECT 1 FROM catalog_catalog_connections x WHERE x.datasource_id = d.id AND x.role = 'SYNC');
+
+INSERT INTO catalog_catalog_connections (catalog_id, datasource_id, role)
+SELECT c.id, d.id, 'SYNC'
+FROM catalog_datasources d
+JOIN catalog_catalogs c ON c.catalog_key = d.datasource_id
+WHERE NOT EXISTS (
+    SELECT 1 FROM catalog_catalog_connections x
+    WHERE x.datasource_id = d.id AND x.role = 'SYNC'
+);
+
+UPDATE catalog_datasets ds
+JOIN catalog_catalog_connections x ON x.datasource_id = ds.datasource_id AND x.role = 'SYNC'
+SET ds.catalog_id = x.catalog_id
+WHERE ds.catalog_id IS NULL;
+
+-- 2단계: 1단계에서 엔진(impala/trino)에 만들어진 자동 카탈로그 중 데이터셋이 없고 엔진 외 연결도 없는 것 정리
+-- (데이터셋이 있으면 "엔진 경유 수집" 카탈로그로 남긴다). 연결 행은 FK CASCADE.
+DELETE c FROM catalog_catalogs c
+WHERE c.auto_created = true
+  AND c.kind IN ('impala', 'trino')
+  AND NOT EXISTS (SELECT 1 FROM catalog_datasets d WHERE d.catalog_id = c.id)
+  AND NOT EXISTS (
+      SELECT 1 FROM catalog_catalog_connections x
+      JOIN catalog_datasources s ON s.id = x.datasource_id
+      WHERE x.catalog_id = c.id AND s.type NOT IN ('impala', 'trino')
+  );

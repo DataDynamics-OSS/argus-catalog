@@ -472,8 +472,12 @@ async def list_datasets(
 async def create_dataset(req: DatasetCreate, current: CurrentUser, _perm=Depends(require_dataset_create), session: AsyncSession = Depends(get_session)):
     """데이터셋 직접 등록 — 관리자·동기화 계정(datasources.sync), 또는 설정에서 허용한 경우 일반 사용자
     (기능 권한 datasets.create 적용). 생성자(created_by)가 소유자가 된다."""
+    from app.catalog.catalogs_service import CatalogConflictError
     try:
         return await service.create_dataset(session, req, created_by=current.username)
+    except CatalogConflictError as e:
+        logger.warning("데이터셋 생성 거부(카탈로그): user=%s reason=%s", current.username, e)
+        raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         logger.warning("데이터셋 생성 거부: user=%s reason=%s", current.username, e)
         raise HTTPException(status_code=400, detail=str(e))
