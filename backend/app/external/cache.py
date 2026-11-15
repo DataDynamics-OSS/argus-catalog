@@ -100,6 +100,17 @@ class MetadataCache:
                 return True
             return False
 
+    def discard(self, key: str) -> bool:
+        """항목 하나를 잠금 없이 즉시 제거한다 — ``await`` 할 수 없는 곳(SQLAlchemy 커밋 이벤트)용.
+
+        다른 메서드는 잠금 구간 안에서 ``await`` 하지 않으므로, 같은 이벤트 루프 스레드에서 부르는 한
+        이 동기 호출이 그 구간 중간에 끼어들 수 없다(스레드에서 부르면 안 됨).
+        """
+        if self._cache.pop(key, None) is not None:
+            logger.debug("캐시 무효화(동기): key=%s", key)
+            return True
+        return False
+
     async def invalidate_prefix(self, prefix: str) -> int:
         """키가 prefix 로 시작하는 모든 항목을 제거. 제거 개수를 반환."""
         async with self._lock:

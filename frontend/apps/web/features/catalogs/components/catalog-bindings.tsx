@@ -1,5 +1,6 @@
 "use client"
 
+import { Tip } from "@/components/tip"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { Link2, RefreshCw, Unlink } from "lucide-react"
 
@@ -24,8 +25,9 @@ import {
   type CatalogConnectionRole,
   type EngineCatalogs,
 } from "@/features/catalogs/api"
+import { DetailSection } from "@/components/detail-section"
 import { datasourceRole } from "@/features/datasources/datasource-configs"
-import { errorMessage, toast } from "@/lib/notify"
+import { toast, notifyError } from "@/lib/notify"
 
 // 카탈로그에 QUERY 로 연결할 수 있는 유형 — 백엔드 datasource_metadata.QUERY_CAPABLE_TYPES 와 맞춘다
 const QUERY_CAPABLE = new Set(["impala", "trino", "starrocks"])
@@ -79,7 +81,7 @@ export function CatalogBindings({
       setLinked(l)
       setAll(a)
     } catch (err) {
-      toast.error(errorMessage(err) ?? "카탈로그 연결을 불러오지 못했습니다.")
+      notifyError(err, "카탈로그 연결을 불러오지 못했습니다.")
     } finally {
       setLoading(false)
     }
@@ -94,7 +96,7 @@ export function CatalogBindings({
   const catalogById = useMemo(() => new Map(all.map((c) => [c.id, c])), [all])
   const myConnection = (c: Catalog) => c.connections.find((x) => x.datasource_id === datasource.id)
 
-  const run = async (fn: () => Promise<unknown>, ok: string) => {
+  const run = async (fn: () => Promise<unknown>, ok: string, fail: string) => {
     setBusy(true)
     try {
       await fn()
@@ -102,7 +104,7 @@ export function CatalogBindings({
       await reload()
       return true
     } catch (err) {
-      toast.error(errorMessage(err) ?? "요청을 처리하지 못했습니다.")
+      notifyError(err, fail)
       return false
     } finally {
       setBusy(false)
@@ -113,6 +115,7 @@ export function CatalogBindings({
     run(
       () => addCatalogConnection(catalogId, { datasource_id: datasource.id, role: r, remote_name: remote }),
       `카탈로그 "${catalogById.get(catalogId)?.name ?? catalogId}" 에 연결했습니다.`,
+      `카탈로그 "${catalogById.get(catalogId)?.name ?? catalogId}" 에 연결하지 못했습니다.`,
     )
 
   const connectNewSync = async (remote: string, connector: string | null) =>
@@ -122,7 +125,7 @@ export function CatalogBindings({
         kind: CONNECTOR_KIND[(connector ?? "").toLowerCase()] ?? connector,
       })
       await addCatalogConnection(cat.id, { datasource_id: datasource.id, role: "SYNC", remote_name: remote })
-    }, `카탈로그 "${remote}" 를 만들고 이 엔진으로 수집하도록 연결했습니다.`)
+    }, `카탈로그 "${remote}" 를 만들고 이 엔진으로 수집하도록 연결했습니다.`, `카탈로그 "${remote}" 를 만들어 연결하지 못했습니다.`)
 
   const handleManualConnect = async () => {
     if (!pickCatalog) return
@@ -146,27 +149,24 @@ export function CatalogBindings({
             .map((e) => [e.remote_name, String(e.suggested_catalog_ids[0])]),
         ),
       )
-      if (res.message) toast.warning(res.message)
+      if (res.message) toast.warning("엔진 카탈로그를 자동으로 찾지 못했습니다.", { description: res.message })
     } catch (err) {
-      toast.error(errorMessage(err) ?? "엔진 카탈로그를 불러오지 못했습니다.")
+      notifyError(err, "엔진 카탈로그를 불러오지 못했습니다.")
     } finally {
       setDiscovering(false)
     }
   }
 
   return (
-    <div className="grid gap-3">
-      <div>
-        <h3 className="text-sm font-semibold">카탈로그 연결</h3>
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          {role === "ENGINE"
-            ? "이 엔진이 조회하는 카탈로그를 연결하세요. 쿼리 리니지가 연결된 카탈로그의 데이터셋으로 이어집니다. 엔진으로만 닿는 카탈로그는 ‘수집’으로 연결하면 이 엔진을 통해 메타데이터를 수집합니다."
-            : "이 데이터 소스가 메타데이터를 수집하는 카탈로그입니다."}
-        </p>
-      </div>
+    <DetailSection
+      title="카탈로그 연결"
+      description={role === "ENGINE"
+        ? "이 엔진이 조회하는 카탈로그를 연결하세요. 쿼리 리니지가 연결된 카탈로그의 데이터셋으로 이어집니다. 엔진으로만 닿는 카탈로그는 ‘수집’으로 연결하면 이 엔진을 통해 메타데이터를 수집합니다."
+        : "이 데이터 소스가 메타데이터를 수집하는 카탈로그입니다."}
+    >
 
       {loading ? (
-        <p className="text-sm text-muted-foreground">불러오는 중...</p>
+        <p className="text-sm text-muted-foreground">불러오는 중…</p>
       ) : linked.length === 0 ? (
         <p className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">
           연결된 카탈로그가 없습니다.
@@ -181,9 +181,9 @@ export function CatalogBindings({
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5">
                     <span className="truncate font-medium">{c.name}</span>
-                    {c.kind && <span className="font-mono text-xs text-muted-foreground">{c.kind}</span>}
+                    {c.kind && <span className="font-mono text-xs">{c.kind}</span>}
                   </div>
-                  <div className="text-xs text-muted-foreground">
+                  <div className="text-xs">
                     데이터셋 {c.dataset_count}개
                     {conn?.remote_name && (
                       <>
@@ -193,21 +193,21 @@ export function CatalogBindings({
                   </div>
                 </div>
                 {conn && (
-                  <Badge variant={conn.role === "SYNC" ? "default" : "secondary"} className="shrink-0">
+                  <Badge variant="outline" className="shrink-0">
                     {ROLE_LABEL[conn.role]}
                   </Badge>
                 )}
                 {canManage && !locked && (
-                  <Button
+                  <Tip label="연결 해제"><Button
                     size="icon"
                     variant="ghost"
                     className="h-7 w-7 shrink-0"
-                    title="연결 해제"
+                    aria-label="연결 해제"
                     disabled={busy}
-                    onClick={() => void run(() => removeCatalogConnection(c.id, datasource.id), `카탈로그 "${c.name}" 연결을 해제했습니다.`)}
+                    onClick={() => void run(() => removeCatalogConnection(c.id, datasource.id), `카탈로그 "${c.name}" 연결을 해제했습니다.`, `카탈로그 "${c.name}" 연결을 해제하지 못했습니다.`)}
                   >
                     <Unlink className="h-3.5 w-3.5" />
-                  </Button>
+                  </Button></Tip>
                 )}
               </li>
             )
@@ -216,23 +216,24 @@ export function CatalogBindings({
       )}
 
       {canManage && canQuery && (
-        <div className="grid gap-2 rounded-md border p-3">
-          <p className="text-xs font-medium">카탈로그 연결 추가</p>
-          <div className="grid grid-cols-[1fr_auto] gap-2">
+        // 연결 추가 — 박스 없이 한 줄(좁으면 줄바꿈): 카탈로그 · 역할 · 엔진 쪽 이름 · 연결
+        <div className="grid gap-1.5">
+          <p className="text-xs font-medium">연결 추가</p>
+          <div className="flex flex-wrap gap-2">
             <Select value={pickCatalog} onValueChange={setPickCatalog}>
-              <SelectTrigger className="h-8 text-sm">
+              <SelectTrigger className="h-8 min-w-48 flex-1 text-sm" aria-label="연결할 카탈로그">
                 <SelectValue placeholder={candidates.length ? "카탈로그 선택" : "연결할 수 있는 카탈로그가 없습니다"} />
               </SelectTrigger>
               <SelectContent>
                 {candidates.map((c) => (
                   <SelectItem key={c.id} value={String(c.id)} className="text-sm">
-                    {c.name} <span className="text-muted-foreground">· {c.kind ?? "-"}</span>
+                    {c.name} <span >· {c.kind ?? "-"}</span>
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
             <Select value={pickRole} onValueChange={(v) => setPickRole(v as CatalogConnectionRole)}>
-              <SelectTrigger className="h-8 w-[110px] text-sm">
+              <SelectTrigger className="h-8 w-[90px] text-sm" aria-label="역할">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -240,13 +241,12 @@ export function CatalogBindings({
                 <SelectItem value="SYNC" className="text-sm">수집</SelectItem>
               </SelectContent>
             </Select>
-          </div>
-          <div className="grid grid-cols-[1fr_auto] gap-2">
             <Input
               value={pickRemote}
               onChange={(e) => setPickRemote(e.target.value)}
-              placeholder={datasource.type === "trino" ? "엔진 쪽 카탈로그 이름 (예: hive, iceberg)" : "엔진 쪽 이름 (선택)"}
-              className="h-8 text-sm"
+              placeholder={datasource.type === "trino" ? "엔진 쪽 카탈로그 이름 (예: hive)" : "엔진 쪽 이름 (선택)"}
+              aria-label="엔진 쪽 이름"
+              className="h-8 min-w-40 flex-1 text-sm"
             />
             <Button size="sm" className="h-8" disabled={busy || !pickCatalog} onClick={() => void handleManualConnect()}>
               <Link2 className="mr-1 h-3.5 w-3.5" />
@@ -260,7 +260,7 @@ export function CatalogBindings({
         <div className="grid gap-2">
           <Button size="sm" variant="outline" className="justify-self-start" disabled={discovering} onClick={() => void handleDiscover()}>
             <RefreshCw className={`mr-1 h-3.5 w-3.5 ${discovering ? "animate-spin" : ""}`} />
-            {discovering ? "불러오는 중..." : "Trino 에서 카탈로그 불러오기"}
+            {discovering ? "불러오는 중…" : "Trino 에서 카탈로그 불러오기"}
           </Button>
           {discovered && discovered.catalogs.length > 0 && (
             <ul className="divide-y rounded-md border">
@@ -273,10 +273,10 @@ export function CatalogBindings({
                   <li key={e.remote_name} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_auto] items-center gap-2 px-3 py-2 text-sm">
                     <div className="min-w-0">
                       <div className="truncate font-mono">{e.remote_name}</div>
-                      <div className="text-xs text-muted-foreground">{e.connector ?? "-"}</div>
+                      <div className="text-xs">{e.connector ?? "-"}</div>
                     </div>
                     {connected ? (
-                      <span className="col-span-2 text-xs text-muted-foreground">
+                      <span className="col-span-2 text-xs">
                         연결됨 → {connected.name}
                       </span>
                     ) : (
@@ -288,12 +288,12 @@ export function CatalogBindings({
                           <SelectContent>
                             {suggested.map((id) => (
                               <SelectItem key={id} value={String(id)} className="text-sm">
-                                {catalogById.get(id)?.name ?? id} <span className="text-muted-foreground">· 추천</span>
+                                {catalogById.get(id)?.name ?? id} <span >· 추천</span>
                               </SelectItem>
                             ))}
                             {others.map((c) => (
                               <SelectItem key={c.id} value={String(c.id)} className="text-sm">
-                                {c.name} <span className="text-muted-foreground">· {c.kind ?? "-"}</span>
+                                {c.name} <span >· {c.kind ?? "-"}</span>
                               </SelectItem>
                             ))}
                             <SelectItem value={NEW_SYNC} className="text-sm">
@@ -326,6 +326,6 @@ export function CatalogBindings({
           )}
         </div>
       )}
-    </div>
+    </DetailSection>
   )
 }

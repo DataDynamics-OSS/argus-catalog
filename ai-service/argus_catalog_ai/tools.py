@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -125,22 +126,23 @@ def get_quality(ctx: ToolContext, dataset_id: int) -> dict:
 
 
 def get_lineage(ctx: ToolContext, dataset_id: int) -> dict:
-    """리니지 — 업스트림(원천)/다운스트림(영향 범위) 관계."""
+    """리니지 — 업스트림(원천)/다운스트림(영향 범위) 관계. ``id`` 는 화면이 미니 그래프·링크에 쓴다."""
     d = ctx.get(f"/catalog/datasets/{dataset_id}/lineage?depth=1")
     names = {n["id"]: n["name"] for n in d.get("nodes", [])}
     upstream, downstream = [], []
     for e in d.get("edges", []):
         rel = e.get("relationType") or ""
         if e.get("target") == dataset_id:
-            upstream.append({"name": names.get(e.get("source")), "relation": rel})
+            upstream.append({"id": e.get("source"), "name": names.get(e.get("source")), "relation": rel})
         elif e.get("source") == dataset_id:
-            downstream.append({"name": names.get(e.get("target")), "relation": rel})
+            downstream.append({"id": e.get("target"), "name": names.get(e.get("target")), "relation": rel})
     quality_warn = [
         {"name": n["name"], "status": n.get("qualityStatus")}
         for n in d.get("nodes", [])
         if n.get("qualityStatus") in ("WARN", "BAD")
     ]
-    return {"upstream": upstream, "downstream": downstream,
+    return {"dataset": {"id": dataset_id, "name": names.get(dataset_id)},
+            "upstream": upstream, "downstream": downstream,
             "quality_warnings": quality_warn}
 
 
@@ -244,16 +246,23 @@ _FORBIDDEN_SQL = re.compile(
 )
 
 
+# 작은따옴표 문자열('' 이스케이프 포함)·큰따옴표/백틱 인용 식별자·주석(-- , /* */)
+_SQL_LITERAL_OR_COMMENT = re.compile(
+    r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"|`[^`]*`|--[^\n]*|/\*.*?\*/", re.S)
+
+
 def validate_sql(ctx: ToolContext, sql: str) -> dict:
     """생성한 SQL 의 안전성 자가 점검 — SELECT/WITH 단일 문장만 통과.
 
-    주석(--, /* */)을 지운 뒤 다중 문장·선두 키워드·변경 키워드를 차례로 검사한다.
+    주석·문자열 값·인용 식별자를 지운 뒤 다중 문장·선두 키워드·변경 키워드를 차례로 검사한다.
 
     어시스턴트가 SQL 을 사용자에게 제시하기 전에 스스로 호출하도록
     시스템 프롬프트에서 유도한다 (실행 기능은 없음 — 검증만).
     """
-    stripped = re.sub(r"--[^\n]*", "", sql)
-    stripped = re.sub(r"/\*.*?\*/", "", stripped, flags=re.S)
+    # 주석·문자열 값·인용 식별자를 한 번에 지운다 — 값 속 'delete'·';' 를 문장으로 오인하지 않게 (DEF-039).
+    # 문자열은 빈 값('')으로 남겨 문장 구조는 유지한다.
+    stripped = _SQL_LITERAL_OR_COMMENT.sub(
+        lambda m: "''" if m.group(0)[0] in "'\"`" else " ", sql)
     stripped = stripped.strip().rstrip(";").strip()
     if not stripped:
         return {"valid": False, "reason": "SQL 이 비어 있습니다"}
@@ -419,6 +428,20 @@ def tool_schemas() -> list[dict]:
     return [t["schema"] for t in TOOLS.values()]
 
 
+def _http_error_message(code: int, args: dict) -> str:
+    """카탈로그 API 오류를 모델 · 사용자가 다음 행동을 알 수 있는 문구로 — "HTTP Error 404: Not Found" 원문 대신.
+    모델이 검색 결과에 없는 id 를 지어내 부르면 404 가 나므로, 그때는 검색부터 다시 하도록 알린다."""
+    ds = args.get("dataset_id")
+    if code == 404:
+        if ds is not None:
+            return (f"데이터셋 id {ds} 는 카탈로그에 없습니다(404). id 를 추측하지 말고 "
+                    "search_datasets 로 다시 찾아 결과의 id 를 쓰세요.")
+        return "카탈로그에서 찾을 수 없습니다(404). 검색으로 대상을 다시 확인하세요."
+    if code in (401, 403):
+        return f"이 사용자 권한으로는 볼 수 없습니다({code}). 볼 수 있는 자료로만 답하세요."
+    return f"카탈로그 API 오류({code}) — 잠시 뒤 다시 시도하거나 다른 도구로 확인하세요."
+
+
 def run_tool(ctx: ToolContext, name: str, args: dict) -> dict:
     """도구 실행 — 모든 예외를 결과(오류)로 변환해 루프가 끊기지 않게 한다."""
     tool = TOOLS.get(name)
@@ -428,6 +451,9 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> dict:
     logger.debug("도구 실행: name=%s args=%s", name, sorted(args))
     try:
         return tool["fn"](ctx, **args)
+    except urllib.error.HTTPError as e:
+        logger.warning("도구 실행 실패: %s(%s) — HTTP %s", name, args, e.code)
+        return {"error": _http_error_message(e.code, args)}
     except TypeError as e:
         logger.warning("도구 인자 오류: name=%s error=%s", name, e)
         return {"error": f"잘못된 인자: {e}"}

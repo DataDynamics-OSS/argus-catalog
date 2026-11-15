@@ -1,18 +1,21 @@
 "use client"
 
+import { Tip } from "@/components/tip"
 import { useCallback, useState } from "react"
 import { useRouter } from "next/navigation"
 import { Brain, Loader2, Search, X } from "lucide-react"
 
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
-import { Input } from "@workspace/ui/components/input"
 import {
   Tooltip, TooltipContent, TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
 
 import { hybridSearch, type SemanticSearchResult, type SemanticSearchResponse } from "../api"
 import { errorMessage } from "@/lib/notify"
+import { MatchTypeBadge } from "@/components/match-type-badge"
+import { OriginText } from "./origin-text"
+import { SearchInput } from "@/components/search-input"
 
 export function DatasetsSmartSearch() {
   const router = useRouter()
@@ -60,37 +63,28 @@ export function DatasetsSmartSearch() {
     return "bg-muted/50 border-muted"
   }
 
-  function matchBadge(type: string) {
-    if (type === "hybrid") return <Badge variant="outline" className="text-[10px] px-1 py-0 text-purple-600 border-purple-200">hybrid</Badge>
-    if (type === "semantic") return <Badge variant="outline" className="text-[10px] px-1 py-0 text-blue-600 border-blue-200">semantic</Badge>
-    return <Badge variant="outline" className="text-[10px] px-1 py-0">keyword</Badge>
-  }
-
   return (
     <div className="space-y-3">
       {/* Search bar */}
       <div className="flex items-center gap-2">
-        <div className="relative flex-1">
-          <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="Search datasets by name, description, or meaning..."
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-            className="pl-8 h-9"
-          />
-        </div>
-        <Button size="sm" className="h-9" onClick={handleSearch} disabled={loading || !query.trim()}>
+        <SearchInput
+          className="flex-1"
+          placeholder="이름·설명·의미로 데이터셋 검색…"
+          value={query}
+          onValueChange={setQuery}
+          onSearch={handleSearch}
+        />
+        <Tip label="검색"><Button aria-label="검색" size="sm" className="h-9" onClick={handleSearch} disabled={loading || !query.trim()}>
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-        </Button>
+        </Button></Tip>
         {results && (
           <Button variant="ghost" size="sm" className="h-9" onClick={handleClear}>
-            <X className="h-4 w-4 mr-1" />Clear
+            <X className="h-4 w-4 mr-1" />지우기
           </Button>
         )}
         <Tooltip>
           <TooltipTrigger asChild>
-            <div className="flex items-center text-muted-foreground">
+            <div className="flex items-center">
               <Brain className={`h-4 w-4 ${meta?.provider ? "text-purple-500" : "text-muted-foreground/40"}`} />
             </div>
           </TooltipTrigger>
@@ -113,13 +107,13 @@ export function DatasetsSmartSearch() {
       {/* Results */}
       {results && (
         <div className="space-y-2">
-          <div className="flex items-center gap-3 text-xs text-muted-foreground">
+          <div className="flex items-center gap-3 text-xs">
             <span>{meta?.total ?? 0} results</span>
             {meta?.provider && (
-              <Badge variant="outline" className="text-[10px] px-1.5 py-0">{meta.provider}/{meta.model}</Badge>
+              <Badge size="sm" variant="outline">{meta.provider}/{meta.model}</Badge>
             )}
             {!meta?.provider && (
-              <Badge variant="outline" className="text-[10px] px-1.5 py-0">keyword only</Badge>
+              <Badge size="sm" variant="outline">keyword only</Badge>
             )}
           </div>
 
@@ -146,17 +140,17 @@ export function DatasetsSmartSearch() {
                       <td className="px-3 py-2">
                         <div className="font-medium text-sm">{r.dataset.name}</div>
                         {r.dataset.description && (
-                          <p className="text-xs text-muted-foreground truncate max-w-[500px]">
+                          <p className="text-xs truncate max-w-[500px]">
                             {r.dataset.description}
                           </p>
                         )}
                       </td>
-                      <td className="px-3 py-2 text-muted-foreground text-sm">{r.dataset.datasource_name}</td>
+                      <td className="px-3 py-2 text-sm">{r.dataset.datasource_name}</td>
                       <td className="px-3 py-2 text-center">
-                        <Badge variant="outline" className="text-xs">{r.dataset.origin}</Badge>
+                        <OriginText origin={r.dataset.origin} />
                       </td>
-                      <td className="px-3 py-2 text-center text-muted-foreground">{r.dataset.tag_count}</td>
-                      <td className="px-3 py-2 text-center">{matchBadge(r.match_type)}</td>
+                      <td className="px-3 py-2 text-center">{r.dataset.tag_count}</td>
+                      <td className="px-3 py-2 text-center"><MatchTypeBadge type={r.match_type} /></td>
                       <td className="px-3 py-2 text-center">
                         <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold ${scoreBg(r.score)} ${scoreColor(r.score)}`}>
                           {(r.score * 100).toFixed(0)}%
@@ -168,7 +162,7 @@ export function DatasetsSmartSearch() {
               </table>
             </div>
           ) : (
-            <div className="text-center py-8 text-sm text-muted-foreground">
+            <div className="text-center py-8 text-sm">
               No matching datasets found.
             </div>
           )}

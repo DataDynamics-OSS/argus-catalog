@@ -9,7 +9,7 @@ import { StatCard } from "@/components/stat-card"
 import { ActivityTrendCard } from "@/components/model-hub/activity-trend-card"
 import { DistributionCard } from "@/components/model-hub/distribution-card"
 import { TopBarCard } from "@/components/model-hub/top-bar-card"
-import { formatBytes, formatBytesAxis } from "@/components/model-hub/format"
+import { formatBytes } from "@/components/model-hub/format"
 
 import { fetchModelStats, type ModelStats } from "../api"
 import { errorMessage } from "@/lib/notify"
@@ -108,20 +108,20 @@ export function ModelsDashboard() {
 
       <div className="grid gap-4 lg:grid-cols-3">
         <TopBarCard
-          title="다운로드 상위 모델" color="#10b981" empty="아직 다운로드된 모델이 없습니다."
+          title="다운로드 상위 모델" empty="아직 다운로드된 모델이 없습니다."
           items={Object.entries(stats.download_by_model).map(([n, c]) => ({
             name: n, label: labelOf(n), value: c, display: `다운로드 ${c.toLocaleString()}회`, href: href(n),
           }))}
         />
         <TopBarCard
-          title="크기 상위 모델" color="#3b82f6" empty="크기 정보가 있는 모델이 없습니다." axisFormat={formatBytesAxis}
+          title="크기 상위 모델" empty="크기 정보가 있는 모델이 없습니다."
           items={stats.model_sizes.map((m) => ({
             name: m.model_name, label: labelOf(m.model_name), value: m.model_size_bytes,
             display: formatBytes(m.model_size_bytes), href: href(m.model_name),
           }))}
         />
         <TopBarCard
-          title="버전이 많은 모델" color="#8b5cf6" empty="버전이 없습니다."
+          title="버전이 많은 모델" empty="버전이 없습니다."
           items={stats.versions_per_model.map((m) => ({
             name: m.model_name, label: labelOf(m.model_name), value: m.version_count,
             display: `버전 ${m.version_count}개`, href: href(m.model_name),

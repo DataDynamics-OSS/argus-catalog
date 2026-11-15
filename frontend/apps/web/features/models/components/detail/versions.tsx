@@ -99,9 +99,9 @@ export function VersionsTab({
                       <span className="inline-flex items-center gap-1 text-xs text-amber-700"><AlertTriangle className="h-3 w-3" />파일 없음</span>
                     )}
                   </div>
-                  {v.description && <p className="text-sm text-muted-foreground">{v.description}</p>}
+                  {v.description && <p className="text-sm">{v.description}</p>}
                   {v.status_message && v.status !== "READY" && <p className="text-xs text-destructive">{v.status_message}</p>}
-                  <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+                  <p className="flex flex-wrap items-center gap-x-2 text-xs">
                     <span title={formatDateTime(v.finished_at ?? v.created_at)}>{timeAgo(v.finished_at ?? v.created_at)} 등록</span>
                     <span>·</span>
                     <span>{formatBytes(v.artifact_size)} · 파일 {v.artifact_count}개</span>
@@ -144,7 +144,7 @@ export function VersionsTab({
                     </Select>
                   ) : null}
                   {v.stage_changed_at && (
-                    <p className="mt-1 text-[11px] text-muted-foreground" title={formatDateTime(v.stage_changed_at)}>
+                    <p className="mt-1 text-[11px]" title={formatDateTime(v.stage_changed_at)}>
                       {timeAgo(v.stage_changed_at)} 변경{v.stage_changed_by ? ` · ${v.stage_changed_by}` : ""}
                     </p>
                   )}

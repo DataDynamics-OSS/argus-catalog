@@ -78,7 +78,7 @@ from app.mcp_servers.schemas import (
     ToolUpdate,
     UnregisteredMcp,
 )
-from app.permissions.router import require_feature, require_feature_granted
+from app.permissions.router import check_feature, require_feature, require_feature_granted
 
 logger = logging.getLogger(__name__)
 
@@ -100,20 +100,29 @@ def _who(user) -> str:
     return user.username or user.email
 
 
-async def _guard_server(current, session, name: str) -> None:
-    """서버 정의가 없으면 404, 있으면 소유자(created_by)·관리자만 통과(아니면 403)."""
+async def _require_mcp_feature(current, session, feature: str | None) -> None:
+    """소유자 확인을 통과한 뒤 역할의 기능 권한(기본 허용형)도 본다 — 수정 · 폐기 · 수집 · 감사(TODO-122)."""
+    if feature and not await check_feature(session, current, feature):
+        logger.warning("MCP 기능 권한 거부(403): user=%s feature=%s", _who(current), feature)
+        raise HTTPException(status_code=403, detail=f"기능 권한이 없습니다: {feature}")
+
+
+async def _guard_server(current, session, name: str, feature: str | None = None) -> None:
+    """서버 정의가 없으면 404, 있으면 소유자(created_by)·관리자만 통과(아니면 403). ``feature`` 를 주면 그 기능 권한도."""
     created_by = await service.get_server_created_by(session, name)
     if created_by is None and not await service.server_exists(session, name):
         _404(_SERVER_404.format(name=name))
     assert_owner_or_admin(current, created_by, "MCP 서버")
+    await _require_mcp_feature(current, session, feature)
 
 
-async def _guard_deployment(current, session, name: str) -> None:
-    """배포가 없으면 404, 있으면 소유자(created_by)·관리자만 통과(아니면 403)."""
+async def _guard_deployment(current, session, name: str, feature: str | None = None) -> None:
+    """배포가 없으면 404, 있으면 소유자(created_by)·관리자만 통과(아니면 403). ``feature`` 를 주면 그 기능 권한도."""
     created_by = await service.get_deployment_created_by(session, name)
     if created_by is None and not await service.deployment_exists(session, name):
         _404(_DEP_404.format(name=name))
     assert_owner_or_admin(current, created_by, "MCP 배포")
+    await _require_mcp_feature(current, session, feature)
 
 
 POLICY_FEATURE = "mcp.policy"
@@ -152,9 +161,24 @@ async def get_field_origins():
 
 
 @servers_router.get("/control-overview", response_model=ControlOverview)
-async def control_overview(session: AsyncSession = Depends(get_session)):
-    """통제 현황: 환경×서버 매트릭스, 위험 배포, finding 분포·추이, 최근 변경 호출, 정책 커버리지."""
-    return await service.get_control_overview(session)
+async def control_overview(current: CurrentUser, session: AsyncSession = Depends(get_session)):
+    """통제 현황: 환경×서버 매트릭스, 위험 배포, finding 분포·추이, 최근 변경 호출, 정책 커버리지.
+
+    최근 호출은 감사 이벤트(호출 인자 포함)라 감사 이벤트 조회와 같은 기준으로 거른다 — 관리자는 전부,
+    그 밖에는 감사 이벤트 조회 권한(``mcp.audit-view``)이 있을 때 자기 배포의 호출만(DEF-131).
+    """
+    overview = await service.get_control_overview(session)
+    if current.is_admin:
+        return overview
+    if not await check_feature(session, current, "mcp.audit-view"):
+        return overview.model_copy(update={"recent_calls": []})
+    from sqlalchemy import select
+
+    from app.mcp_servers.models import McpDeployment
+
+    mine = set((await session.execute(
+        select(McpDeployment.name).where(McpDeployment.created_by == current.username))).scalars().all())
+    return overview.model_copy(update={"recent_calls": [c for c in overview.recent_calls if c.deployment_name in mine]})
 
 
 @servers_router.get("/findings", response_model=PaginatedFindings)
@@ -181,7 +205,10 @@ async def list_all_audit_events(
     page_size: int = Query(50, ge=1, le=200),
     session: AsyncSession = Depends(get_session),
 ):
-    """전체 배포의 감사 이벤트 (로그인 필요 — 호출 인자가 포함됨)."""
+    """전체 배포의 감사 이벤트 — 호출 인자가 들어 있어 관리자만(DEF-124). 배포별 조회는 소유자도 된다."""
+    if not current.is_admin:
+        logger.warning("전체 감사 이벤트 조회 거부(403): user=%s", _who(current))
+        raise HTTPException(status_code=403, detail="전체 배포의 감사 이벤트는 관리자만 볼 수 있습니다.")
     return await audit.list_events(session, None, tool=tool, user=user, decision=decision, page=page,
                                    page_size=page_size)
 
@@ -248,7 +275,7 @@ async def get_server(name: str, session: AsyncSession = Depends(get_session)):
 @servers_router.patch("/{name}", response_model=McpServerSummary)
 async def update_server(current: CurrentUser, name: str, req: McpServerUpdate,
                         session: AsyncSession = Depends(get_session)):
-    await _guard_server(current, session, name)
+    await _guard_server(current, session, name, feature="mcp.edit")
     result = await service.update_server(session, name, req, changed_by=_who(current))
     if not result:
         _404(_SERVER_404.format(name=name))
@@ -258,7 +285,7 @@ async def update_server(current: CurrentUser, name: str, req: McpServerUpdate,
 @servers_router.delete("/{name}")
 async def delete_server(current: CurrentUser, name: str, session: AsyncSession = Depends(get_session)):
     """소프트 삭제(status=retired). retired 가 아닌 배포가 있으면 409."""
-    await _guard_server(current, session, name)
+    await _guard_server(current, session, name, feature="mcp.delete")
     try:
         if not await service.retire_server(session, name, by=_who(current)):
             _404(_SERVER_404.format(name=name))
@@ -288,7 +315,7 @@ async def server_sync_log(name: str, limit: int = Query(50, ge=1, le=500),
 async def server_manifest_import(current: CurrentUser, name: str, req: ManifestImportRequest,
                                  session: AsyncSession = Depends(get_session)):
     """정적 manifest(릴리즈 산출물) 가져오기 — 정의(도구·그룹)만 갱신."""
-    await _guard_server(current, session, name)
+    await _guard_server(current, session, name, feature="mcp.collect")
     try:
         result = await service.import_manifest(session, server_name=name, req=req, by=_who(current))
     except ValueError as e:
@@ -330,7 +357,7 @@ async def export_server_json(name: str, session: AsyncSession = Depends(get_sess
 
 @servers_router.post("/{name}/tools", response_model=ToolResponse)
 async def add_tool(current: CurrentUser, name: str, req: ToolCreate, session: AsyncSession = Depends(get_session)):
-    await _guard_server(current, session, name)
+    await _guard_server(current, session, name, feature="mcp.edit")
     try:
         tool = await service.add_tool(session, name, req)
     except service.ConflictError as e:
@@ -345,7 +372,7 @@ async def add_tool(current: CurrentUser, name: str, req: ToolCreate, session: As
 @servers_router.patch("/{name}/tools/{tool_id}", response_model=ToolResponse)
 async def update_tool(current: CurrentUser, name: str, tool_id: int, req: ToolUpdate,
                       session: AsyncSession = Depends(get_session)):
-    await _guard_server(current, session, name)
+    await _guard_server(current, session, name, feature="mcp.edit")
     try:
         tool = await service.update_tool(session, name, tool_id, req)
     except ValueError as e:
@@ -357,7 +384,7 @@ async def update_tool(current: CurrentUser, name: str, tool_id: int, req: ToolUp
 
 @servers_router.delete("/{name}/tools/{tool_id}")
 async def delete_tool(current: CurrentUser, name: str, tool_id: int, session: AsyncSession = Depends(get_session)):
-    await _guard_server(current, session, name)
+    await _guard_server(current, session, name, feature="mcp.edit")
     if not await service.delete_tool(session, name, tool_id):
         _404("도구를 찾을 수 없습니다.")
     return {"status": "deleted"}
@@ -366,7 +393,7 @@ async def delete_tool(current: CurrentUser, name: str, tool_id: int, session: As
 @servers_router.post("/{name}/resources", response_model=ResourceResponse)
 async def add_resource(current: CurrentUser, name: str, req: ResourceCreate,
                        session: AsyncSession = Depends(get_session)):
-    await _guard_server(current, session, name)
+    await _guard_server(current, session, name, feature="mcp.edit")
     row = await service.add_resource(session, name, req)
     if not row:
         _404(_SERVER_404.format(name=name))
@@ -376,7 +403,7 @@ async def add_resource(current: CurrentUser, name: str, req: ResourceCreate,
 @servers_router.delete("/{name}/resources/{resource_id}")
 async def delete_resource(current: CurrentUser, name: str, resource_id: int,
                           session: AsyncSession = Depends(get_session)):
-    await _guard_server(current, session, name)
+    await _guard_server(current, session, name, feature="mcp.edit")
     if not await service.delete_resource(session, name, resource_id):
         _404("리소스를 찾을 수 없습니다.")
     return {"status": "deleted"}
@@ -384,7 +411,7 @@ async def delete_resource(current: CurrentUser, name: str, resource_id: int,
 
 @servers_router.post("/{name}/prompts", response_model=PromptResponse)
 async def add_prompt(current: CurrentUser, name: str, req: PromptCreate, session: AsyncSession = Depends(get_session)):
-    await _guard_server(current, session, name)
+    await _guard_server(current, session, name, feature="mcp.edit")
     row = await service.add_prompt(session, name, req)
     if not row:
         _404(_SERVER_404.format(name=name))
@@ -394,7 +421,7 @@ async def add_prompt(current: CurrentUser, name: str, req: PromptCreate, session
 @servers_router.delete("/{name}/prompts/{prompt_id}")
 async def delete_prompt(current: CurrentUser, name: str, prompt_id: int,
                         session: AsyncSession = Depends(get_session)):
-    await _guard_server(current, session, name)
+    await _guard_server(current, session, name, feature="mcp.edit")
     if not await service.delete_prompt(session, name, prompt_id):
         _404("프롬프트를 찾을 수 없습니다.")
     return {"status": "deleted"}
@@ -444,7 +471,7 @@ async def get_deployment(name: str, session: AsyncSession = Depends(get_session)
 @deployments_router.patch("/{name}", response_model=DeploymentSummary)
 async def update_deployment(current: CurrentUser, name: str, req: DeploymentUpdate,
                             session: AsyncSession = Depends(get_session)):
-    await _guard_deployment(current, session, name)
+    await _guard_deployment(current, session, name, feature="mcp.edit")
     try:
         result = await service.update_deployment(session, name, req, changed_by=_who(current))
     except ValueError as e:
@@ -457,7 +484,7 @@ async def update_deployment(current: CurrentUser, name: str, req: DeploymentUpda
 @deployments_router.delete("/{name}")
 async def delete_deployment(current: CurrentUser, name: str, session: AsyncSession = Depends(get_session)):
     """소프트 삭제(status=retired). 사용 중인 에이전트가 있으면 409."""
-    await _guard_deployment(current, session, name)
+    await _guard_deployment(current, session, name, feature="mcp.delete")
     try:
         if not await service.retire_deployment(session, name, by=_who(current)):
             _404(_DEP_404.format(name=name))
@@ -503,7 +530,7 @@ async def delete_credential(current: CurrentUser, name: str, _perm=Depends(requi
 async def collect(current: CurrentUser, name: str, req: CollectRequest = Body(default_factory=CollectRequest),
                   session: AsyncSession = Depends(get_session)):
     """도구·리소스·프롬프트 수집 (source=auto 면 Forge 는 manifest → 없으면 도구 REST, 그 밖은 MCP 프로토콜)."""
-    await _guard_deployment(current, session, name)
+    await _guard_deployment(current, session, name, feature="mcp.collect")
     logger.info("POST /mcp-deployments/%s/collect: source=%s dry_run=%s", name, req.source, req.dry_run)
     result = await service.collect_deployment(session, name, req, by=_who(current))
     if not result:
@@ -513,7 +540,7 @@ async def collect(current: CurrentUser, name: str, req: CollectRequest = Body(de
 
 @deployments_router.post("/{name}/health-check", response_model=DeploymentSummary)
 async def health_check(current: CurrentUser, name: str, session: AsyncSession = Depends(get_session)):
-    await _guard_deployment(current, session, name)
+    await _guard_deployment(current, session, name, feature="mcp.collect")
     result = await service.health_check(session, name, by=_who(current))
     if not result:
         _404(_DEP_404.format(name=name))
@@ -524,7 +551,7 @@ async def health_check(current: CurrentUser, name: str, session: AsyncSession = 
 async def config_import(current: CurrentUser, name: str, req: ConfigImportRequest,
                         session: AsyncSession = Depends(get_session)):
     """Forge 서버 config.yaml 가져오기 (그룹 on/off·리소스 범위·limits·실행 계정)."""
-    await _guard_deployment(current, session, name)
+    await _guard_deployment(current, session, name, feature="mcp.collect")
     try:
         result = await service.import_config(session, name, req, by=_who(current))
     except ValueError as e:
@@ -539,7 +566,7 @@ async def config_import(current: CurrentUser, name: str, req: ConfigImportReques
 async def deployment_manifest_import(current: CurrentUser, name: str, req: ManifestImportRequest,
                                      session: AsyncSession = Depends(get_session)):
     """배포 manifest 가져오기 — 정의 + 노출·그룹·범위·limits·보안 경고 관측값."""
-    await _guard_deployment(current, session, name)
+    await _guard_deployment(current, session, name, feature="mcp.collect")
     try:
         result = await service.import_manifest(session, deployment_name=name, req=req, by=_who(current))
     except ValueError as e:
@@ -571,7 +598,7 @@ async def effective(name: str, session: AsyncSession = Depends(get_session)):
 @deployments_router.post("/{name}/scopes", response_model=ResourceScopeResponse)
 async def add_scope(current: CurrentUser, name: str, req: ResourceScopeCreate,
                     session: AsyncSession = Depends(get_session)):
-    await _guard_deployment(current, session, name)
+    await _guard_deployment(current, session, name, feature="mcp.edit")
     try:
         row = await service.add_scope(session, name, req)
     except ValueError as e:
@@ -583,7 +610,7 @@ async def add_scope(current: CurrentUser, name: str, req: ResourceScopeCreate,
 
 @deployments_router.delete("/{name}/scopes/{scope_id}")
 async def delete_scope(current: CurrentUser, name: str, scope_id: int, session: AsyncSession = Depends(get_session)):
-    await _guard_deployment(current, session, name)
+    await _guard_deployment(current, session, name, feature="mcp.edit")
     try:
         deleted = await service.delete_scope(session, name, scope_id)
     except ValueError as e:
@@ -757,7 +784,7 @@ async def list_findings(
 @deployments_router.post("/{name}/findings/evaluate", response_model=PaginatedFindings)
 async def evaluate_findings(current: CurrentUser, name: str, session: AsyncSession = Depends(get_session)):
     """finding 즉시 재계산."""
-    await _guard_deployment(current, session, name)
+    await _guard_deployment(current, session, name, feature="mcp.edit")
     logger.info("POST /mcp-deployments/%s/findings/evaluate by=%s", name, _who(current))
     dep = await service._get_deployment(session, name)
     await policy.evaluate_findings(session, dep)
@@ -769,7 +796,7 @@ async def evaluate_findings(current: CurrentUser, name: str, session: AsyncSessi
 async def update_finding(current: CurrentUser, name: str, finding_id: int, req: FindingUpdate,
                          session: AsyncSession = Depends(get_session)):
     """finding 확인(acknowledged) / 다시 열기(open). 해소는 조건이 사라지면 자동."""
-    await _guard_deployment(current, session, name)
+    await _guard_deployment(current, session, name, feature="mcp.edit")
     try:
         result = await policy.update_finding(session, name, finding_id, req, by=_who(current))
     except ValueError as e:
@@ -797,7 +824,7 @@ async def ingest_audit_events(name: str, req: AuditIngestRequest, request: Reque
         via, by = "token", None
     else:
         current = await get_current_user(request)
-        await _guard_deployment(current, session, name)
+        await _guard_deployment(current, session, name, feature="mcp.audit-ingest")
         dep = dep or await service._get_deployment(session, name)
         via, by = "upload", _who(current)
     try:
@@ -824,7 +851,8 @@ async def list_audit_events(
     page_size: int = Query(50, ge=1, le=200),
     session: AsyncSession = Depends(get_session),
 ):
-    """감사 이벤트 조회 (로그인 필요 — 호출 인자가 포함됨)."""
+    """감사 이벤트 조회 — 호출 인자가 들어 있어 배포 소유자 · 관리자만(DEF-124). 없는 배포는 404."""
+    await _guard_deployment(current, session, name, feature="mcp.audit-view")
     dep = await service._get_deployment(session, name)
     if not dep:
         _404(_DEP_404.format(name=name))
@@ -835,7 +863,7 @@ async def list_audit_events(
 @deployments_router.get("/{name}/ingest-token", response_model=IngestTokenResponse)
 async def get_ingest_token(current: CurrentUser, name: str, session: AsyncSession = Depends(get_session)):
     """수집 토큰 메타데이터 (원문은 발급 시에만)."""
-    await _guard_deployment(current, session, name)
+    await _guard_deployment(current, session, name, feature="mcp.audit-ingest")
     dep = await service._get_deployment(session, name)
     return IngestTokenResponse(hint=dep.ingest_token_hint, created_at=dep.ingest_token_created_at,
                                ingest_url=f"/api/v1/mcp-deployments/{dep.name}/audit-events")
@@ -844,7 +872,7 @@ async def get_ingest_token(current: CurrentUser, name: str, session: AsyncSessio
 @deployments_router.post("/{name}/ingest-token", response_model=IngestTokenResponse)
 async def issue_ingest_token(current: CurrentUser, name: str, session: AsyncSession = Depends(get_session)):
     """수집 토큰 발급(또는 재발급 — 이전 토큰은 즉시 무효)."""
-    await _guard_deployment(current, session, name)
+    await _guard_deployment(current, session, name, feature="mcp.audit-ingest")
     dep = await service._get_deployment(session, name)
     return await audit.issue_token(session, dep, by=_who(current))
 
@@ -852,7 +880,7 @@ async def issue_ingest_token(current: CurrentUser, name: str, session: AsyncSess
 @deployments_router.delete("/{name}/ingest-token")
 async def revoke_ingest_token(current: CurrentUser, name: str, session: AsyncSession = Depends(get_session)):
     """수집 토큰 폐기 — 이후 이 토큰으로 수집·번들 요청은 401."""
-    await _guard_deployment(current, session, name)
+    await _guard_deployment(current, session, name, feature="mcp.audit-ingest")
     dep = await service._get_deployment(session, name)
     await audit.revoke_token(session, dep)
     return {"status": "revoked"}

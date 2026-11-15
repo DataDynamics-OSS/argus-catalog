@@ -13,7 +13,8 @@
 ``pull``·``list_files`` 는 두 저장소 공통이며, MLflow 클라이언트로 기록해 파일이 서버 디스크에 있는 버전은
 서버의 파일 브라우저 API 로 대신 찾는다.
 
-인증: 조회는 대부분 익명으로 되지만 내려받기·쓰기는 로그인(``token=`` 또는 ``username=``/``password=``)이 필요하다.
+인증: 서버 API 는 로그인이 필요하다. 프로그램은 API 키(``api_key=`` 또는 환경변수 ``ARGUS_CATALOG_API_KEY``)를 쓴다.
+사람이 쓰는 노트북 등에서는 ``token=`` 또는 ``username=``/``password=`` 로그인도 된다.
 서버 오류는 모두 ``ApiError`` (``status_code``·``detail``)로 올라온다.
 
 사용 예::
@@ -129,17 +130,19 @@ class ModelClient:
     def __init__(self, base_url: str, timeout: float = 300.0,
                  token: str | None = None,
                  username: str | None = None, password: str | None = None,
-                 http_client: httpx.Client | None = None):
+                 http_client: httpx.Client | None = None, *, api_key: str | None = None):
         """클라이언트를 초기화한다.
 
         Args:
             base_url: 카탈로그 서버 URL (예: "http://localhost:4600")
             timeout: 요청 타임아웃(초). 대용량 업로드를 위해 기본 300초.
-            token: 액세스 토큰(Bearer). 모델 등록/삭제 등 변이 작업에 필요.
+            api_key: 카탈로그 API 키(``argus_sk_…``, 설정 > API 키에서 발급) — 프로그램은 이것을 쓴다.
+                만료·갱신이 없어 그대로 Bearer 로 보낸다.
+            token: 액세스 토큰(Bearer, 로그인해 받은 값).
             username/password: 토큰 대신 자격증명을 주면 생성 시 자동 로그인한다.
 
-        인증 우선순위: token > (username, password 로그인). 둘 다 없으면
-        조회는 가능하지만 변이 작업은 서버에서 401 로 거부된다.
+        인증 우선순위: api_key > token > (username, password 로그인) > 환경변수 ``ARGUS_CATALOG_API_KEY``.
+        모두 없으면 서버가 401 로 거부한다.
 
         http_client: 요청에 쓸 ``httpx.Client`` (프록시·인증서·테스트용 transport 등). 없으면 만들어
             연결을 재사용하고, ``close()`` 나 ``with`` 블록이 끝날 때 닫는다. 넘겨받은 클라이언트는 닫지 않는다.
@@ -148,7 +151,9 @@ class ModelClient:
         self.timeout = timeout
         self._owns_http = http_client is None
         self._http = http_client if http_client is not None else httpx.Client(timeout=timeout)
-        self.token = token
+        self.token = api_key or token
+        if not self.token and not (username and password):
+            self.token = os.environ.get("ARGUS_CATALOG_API_KEY") or None
         if not self.token and username and password:
             try:
                 self.token = self._login(username, password)

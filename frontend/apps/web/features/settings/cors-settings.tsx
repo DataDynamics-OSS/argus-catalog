@@ -6,10 +6,11 @@ import { Loader2, Save, X } from "lucide-react"
 import { Button } from "@workspace/ui/components/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@workspace/ui/components/card"
 import { Label } from "@workspace/ui/components/label"
-import { Textarea } from "@workspace/ui/components/textarea"
 
 import { fetchCorsConfig, updateCorsConfig } from "./api"
 import { notifyError, notifySuccess } from "@/lib/notify"
+import { TagInput } from "@/components/tag-input"
+import { joinCsv, splitCsv } from "@/lib/text-list"
 
 export function CorsSettings() {
   const [loading, setLoading] = useState(true)
@@ -67,14 +68,17 @@ export function CorsSettings() {
         <CardContent className="space-y-4">
           <div className="space-y-1.5">
             <Label>허용 출처</Label>
-            <Textarea
-              value={origins}
-              onChange={(e) => setOrigins(e.target.value)}
-              placeholder="http://localhost:3000, https://catalog.example.com"
-              rows={3}
+            {/* 서버는 출처를 쉼표로 이어 저장 — URL 에는 쉼표가 없어 화면에서만 목록으로 다룬다(TODO-144) */}
+            <TagInput
+              commaSeparates
+              mono
+              aria-label="허용 출처"
+              value={splitCsv(origins)}
+              onChange={(v) => setOrigins(joinCsv(v, ","))}
+              placeholder="예: https://catalog.example.com 입력 후 Enter"
             />
-            <p className="text-xs text-muted-foreground">
-              쉼표로 구분된 허용 출처 목록입니다. <code className="bg-muted px-1 rounded">*</code> 는 모든 출처를 허용 (운영 환경 비권장).
+            <p className="text-xs">
+              허용할 출처를 하나씩 넣습니다. <code className="bg-muted px-1 rounded">*</code> 는 모든 출처를 허용 (운영 환경 비권장).
             </p>
           </div>
 

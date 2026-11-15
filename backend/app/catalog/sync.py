@@ -12,6 +12,7 @@ import io
 import json
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -29,6 +30,7 @@ from app.catalog.models import (
     DatasourceConfiguration,
 )
 from app.core.config import settings
+from app.core.html_sanitize import sanitize_rich_html
 
 logger = logging.getLogger(__name__)
 
@@ -821,6 +823,7 @@ async def sync_datasource_metadata(
     session: AsyncSession,
     datasource_id_str: str,
     database: str | None = None,
+    table_filter: Callable[[str, str], bool] | None = None,
 ) -> SyncResult:
     """외부 데이터 소스의 메타데이터를 카탈로그로 동기화한다.
 
@@ -830,6 +833,8 @@ async def sync_datasource_metadata(
         session: DB 세션
         datasource_id_str: datasource_id 문자열 (예: "mysql-19d0bfe954e2cfdaa")
         database: MySQL 은 데이터베이스명, PostgreSQL 은 스키마명. 선택.
+        table_filter: ``(database 또는 스키마, 테이블) → 수집 여부`` — 수집 범위의 일부 테이블·제외 패턴.
+            걸러진 테이블은 갱신하지 않고, 원본에 있는지도 확인하지 않은 것이므로 제거로도 표시하지 않는다.
 
     Returns:
         요약 통계를 담은 SyncResult. 사전 검증·접속 실패는 예외 대신 ``errors`` 에 담아 반환한다.
@@ -912,6 +917,10 @@ async def sync_datasource_metadata(
         result.errors.append(f"원격 DB 메타데이터 조회 실패: {_classify_connection_error(e, _CONNECT_TIMEOUT)}")
         return result
 
+    if table_filter is not None:
+        before = len(tables)
+        tables = [t for t in tables if table_filter(t.database, t.name)]
+        logger.debug("수집 범위 테이블 필터: datasource=%s %d → %d", datasource_id_str, before, len(tables))
     result.databases_scanned = sorted({t.database for t in tables})
     result.tables_total = len(tables)
     logger.info("데이터베이스 전반에서 테이블 %d개 발견: %s",
@@ -954,7 +963,8 @@ async def sync_datasource_metadata(
             dataset.urn = urn
             dataset.name = f"{table.database}.{table.name}"
             dataset.qualified_name = qualified_name
-            dataset.description = table.table_comment or dataset.description
+            # 원본 테이블 코멘트 — 태그가 있으면 저장 전 정화(TODO-027), 일반 텍스트는 그대로
+            dataset.description = sanitize_rich_html(table.table_comment) or dataset.description
             dataset.table_type = table_type
             dataset.origin = origin
             dataset.datasource_properties = json.dumps(
@@ -973,7 +983,7 @@ async def sync_datasource_metadata(
                 name=f"{table.database}.{table.name}",
                 datasource_id=datasource.id,
                 catalog_id=catalog_id,
-                description=table.table_comment or None,
+                description=sanitize_rich_html(table.table_comment) or None,
                 origin=origin,
                 qualified_name=qualified_name,
                 table_type=table_type,
@@ -1034,14 +1044,28 @@ async def sync_datasource_metadata(
         logger.warning("원본 테이블 0개 — 제거 반영 생략 (datasource=%s, 기존 %d개)",
                        datasource_id_str, len(active))
     else:
+        newly_removed: list[int] = []
         for ds in active:
             if ds.name in synced_names:
                 continue
             # 이번 스캔 범위 밖(다른 DB/스키마) 데이터셋은 원본 존재 여부를 알 수 없으므로 그대로 둔다
+            if table_filter is not None:
+                container, _, rel = ds.name.rpartition(".")
+                if database and ds.name.startswith(f"{database}."):
+                    container, rel = database, ds.name[len(database) + 1:]
+                if not table_filter(container, rel):
+                    continue
             if _in_sync_scope(ds.name, database):
                 ds.status = "removed"
                 result.tables_removed += 1
+                newly_removed.append(ds.id)
                 logger.info("제거됨으로 표시: %s", ds.urn)
+        if newly_removed:
+            # 테이블이 사라진 것을 모든 컬럼 DROP 으로 보고 알림 규칙을 평가한다(DEF-055).
+            # 실패는 함수 안에서 로그만 남긴다 — 동기화는 계속.
+            from app.catalog.service import evaluate_dataset_removed_alerts
+            for removed_id in newly_removed:
+                await evaluate_dataset_removed_alerts(session, removed_id)
 
     await session.commit()
     logger.info("동기화 완료: datasource=%s created=%d, updated=%d, removed=%d, total=%d, elapsed=%.1fs",

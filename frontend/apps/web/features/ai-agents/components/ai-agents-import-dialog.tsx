@@ -5,11 +5,13 @@
 // 외부 에이전트 주소를 주면 소개 정보(에이전트 카드)를 읽어 정의 내용으로 채운다(POST /ai-agents/import/card).
 // 설계: design/ai-agent-bulk-registration-design.md §4.5
 
+import { CodeEditor } from "@/components/code-editor"
 import { useCallback, useRef, useState } from "react"
 import { Download, FileUp, Globe, Loader2 } from "lucide-react"
 import { errorMessage, toast } from "@/lib/notify"
 
 import { Badge } from "@workspace/ui/components/badge"
+import { StatusBadge, type StatusTone } from "@workspace/ui/components/status-badge"
 import { Button } from "@workspace/ui/components/button"
 import {
   Dialog,
@@ -28,7 +30,6 @@ import {
   TableRow,
 } from "@workspace/ui/components/table"
 import { Input } from "@workspace/ui/components/input"
-import { Textarea } from "@workspace/ui/components/textarea"
 
 import { applyAgentManifests, importAgentCard, type ApplyAction, type ApplyResult } from "../api"
 import { CSV_COLUMNS, csvTemplate, csvToDocs, mergeResults } from "../manifest-import"
@@ -37,11 +38,8 @@ import { useAIAgents } from "./ai-agents-provider"
 const ACTION_LABEL: Record<ApplyAction, string> = {
   created: "생성", updated: "갱신", unchanged: "변경 없음", failed: "실패",
 }
-const ACTION_CLASS: Record<ApplyAction, string> = {
-  created: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300",
-  updated: "bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300",
-  unchanged: "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300",
-  failed: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300",
+const ACTION_TONE: Record<ApplyAction, StatusTone> = {
+  created: "success", updated: "info", unchanged: "neutral", failed: "danger",
 }
 
 function downloadCsvTemplate() {
@@ -129,7 +127,7 @@ export function AIAgentsImportDialog() {
       }
       setCardNotes(notes)
       setCardUrl("")
-      toast.success(`'${card.name}' 소개 정보를 불러왔습니다 — ${card.source_url}`)
+      toast.success(`'${card.name}' 소개 정보를 불러왔습니다.`, { description: card.source_url })
     } catch (e) {
       setError(errorMessage(e) ?? String(e))
     } finally {
@@ -153,8 +151,8 @@ export function AIAgentsImportDialog() {
         setPreviewed(true)
       } else {
         const { created, updated, failed } = merged.summary
-        if (failed) toast.warning(`반영 완료 — 생성 ${created} · 갱신 ${updated} · 실패 ${failed}`)
-        else toast.success(`반영 완료 — 생성 ${created} · 갱신 ${updated}`)
+        if (failed) toast.warning("일부 항목을 반영하지 못했습니다.", { description: `생성 ${created} · 갱신 ${updated} · 실패 ${failed}` })
+        else toast.success("가져온 내용을 반영했습니다.", { description: `생성 ${created} · 갱신 ${updated}` })
         setPreviewed(false)
         await refreshAgents()
       }
@@ -196,7 +194,7 @@ export function AIAgentsImportDialog() {
               <Download className="mr-1 h-4 w-4" /> 표 형식 양식 내려받기
             </Button>
             {fileNames.length > 0 && (
-              <span className="text-xs text-muted-foreground">
+              <span className="text-xs">
                 {fileNames.join(", ")}
                 {csvDocs.length > 0 && ` · 표 형식 ${csvDocs.length}행`}
               </span>
@@ -229,16 +227,18 @@ export function AIAgentsImportDialog() {
             </ul>
           )}
 
-          <Textarea
+          <CodeEditor
+            language="yaml"
+            aria-label="정의 파일 내용"
             value={yamlText}
-            onChange={(e) => {
-              setYamlText(e.target.value)
+            onChange={(v) => {
+              setYamlText(v)
               invalidate()
             }}
             placeholder={"정의 파일 내용을 직접 붙여 넣을 수도 있습니다.\napiVersion: argus.catalog/v1\nkind: Agent\nmetadata:\n  name: cs.refund-helper\n  owner: hong@corp.example\n  department: 고객지원팀\n  category: customer-service\nspec:\n  version: 1.0.0\n  status: active"}
-            className="min-h-[160px] font-mono text-xs"
+            minHeight={160}
           />
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs">
             표 형식 파일은 기본 항목만 받습니다({CSV_COLUMNS.join(", ")} — tags 는 세미콜론 구분). 도구·도구 서버·계보는
             정의 파일로 올리세요. 정의 파일로 반영한 에이전트는 이후에도 정의 파일 기준으로 맞춰집니다. 소개 정보 불러오기는
             그 주소의 <code>/.well-known/agent-card.json</code>(또는 <code>agent.json</code>)을 읽어 내용을 채우기만 하며, 저장은 반영 때 합니다.
@@ -251,9 +251,9 @@ export function AIAgentsImportDialog() {
               <div className="flex flex-wrap items-center gap-2 text-sm">
                 <span className="font-medium">{result.dry_run ? "미리 보기 결과" : "반영 결과"}</span>
                 {(Object.keys(ACTION_LABEL) as ApplyAction[]).map((k) => (
-                  <span key={k} className={`rounded-full px-2 py-0.5 text-xs ${ACTION_CLASS[k]}`}>
+                  <StatusBadge key={k} tone={ACTION_TONE[k]}>
                     {ACTION_LABEL[k]} {result.summary[k] ?? 0}
-                  </span>
+                  </StatusBadge>
                 ))}
               </div>
               <div className="rounded-md border">
@@ -270,9 +270,7 @@ export function AIAgentsImportDialog() {
                       <TableRow key={`${r.name}-${i}`}>
                         <TableCell className="font-mono text-xs">{r.name}</TableCell>
                         <TableCell>
-                          <span className={`rounded-full px-2 py-0.5 text-xs ${ACTION_CLASS[r.action]}`}>
-                            {ACTION_LABEL[r.action]}
-                          </span>
+                          <StatusBadge tone={ACTION_TONE[r.action]}>{ACTION_LABEL[r.action]}</StatusBadge>
                         </TableCell>
                         <TableCell className="text-xs">
                           {r.error ? (
@@ -298,7 +296,7 @@ export function AIAgentsImportDialog() {
 
         <DialogFooter className="gap-2">
           {previewed && !applied && (
-            <Badge variant="outline" className="mr-auto self-center text-xs">
+            <Badge variant="outline" className="mr-auto self-center">
               미리 보기 완료 — 반영할 수 있습니다
             </Badge>
           )}
@@ -307,7 +305,7 @@ export function AIAgentsImportDialog() {
           </Button>
           <Button variant="secondary" disabled={!hasInput || !!busy} onClick={() => run(true)}>
             {busy === "preview" && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
-            미리 보기
+            미리보기
           </Button>
           <Button disabled={!hasInput || !previewed || !!busy} onClick={() => run(false)}>
             {busy === "apply" && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}

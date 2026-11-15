@@ -60,7 +60,7 @@ export function HexViewer({ data }: HexViewerProps) {
         <tbody className="divide-y divide-border/50">
           {rows.map((row) => (
             <tr key={row.offset} className="hover:bg-muted/30">
-              <td className="px-3 py-0.5 text-muted-foreground tabular-nums">
+              <td className="px-3 py-0.5 tabular-nums">
                 {row.offset.toString(16).padStart(8, "0").toUpperCase()}
               </td>
               <td className="px-3 py-0.5">
@@ -75,7 +75,7 @@ export function HexViewer({ data }: HexViewerProps) {
                   ))}
                 </div>
               </td>
-              <td className="px-3 py-0.5 border-l whitespace-pre text-muted-foreground">
+              <td className="px-3 py-0.5 border-l whitespace-pre">
                 {row.ascii}
               </td>
             </tr>

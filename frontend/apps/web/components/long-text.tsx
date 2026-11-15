@@ -7,7 +7,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@workspace/ui/component
 import {
   Tooltip,
   TooltipContent,
-  TooltipProvider,
+
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
 
@@ -42,7 +42,6 @@ export function LongText({
   return (
     <>
       <div className="hidden sm:block">
-        <TooltipProvider delayDuration={0}>
           <Tooltip>
             <TooltipTrigger asChild>
               <div ref={refCallback} className={cn("truncate", className)}>
@@ -53,7 +52,6 @@ export function LongText({
               <p className={contentClassName}>{children}</p>
             </TooltipContent>
           </Tooltip>
-        </TooltipProvider>
       </div>
       <div className="sm:hidden">
         <Popover>

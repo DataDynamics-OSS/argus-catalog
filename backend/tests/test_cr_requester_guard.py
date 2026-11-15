@@ -30,8 +30,10 @@ def _tu(name: str, admin: bool = False) -> TokenUser:
 
 def test_cr_requester_guard() -> None:
     crs = {
-        1: SimpleNamespace(id=1, cr_code="CR-2026-0001", requested_by="alice", status="DRAFT", workflow_id=None),
-        2: SimpleNamespace(id=2, cr_code="CR-2026-0002", requested_by="alice", status="APPROVING", workflow_id="wf-2"),
+        1: SimpleNamespace(id=1, cr_code="CR-2026-0001", requested_by="alice", status="DRAFT", workflow_id=None,
+                             dataset_id=10),
+        2: SimpleNamespace(id=2, cr_code="CR-2026-0002", requested_by="alice", status="APPROVING", workflow_id="wf-2",
+                             dataset_id=10),
     }
     calls: list[tuple[str, int | str]] = []
 
@@ -64,9 +66,14 @@ def test_cr_requester_guard() -> None:
             raise HTTPException(status_code=401, detail="인증이 필요합니다.")
         return who["user"]
 
+    async def list_steps(_s, _cr_id):
+        # 상신 때 결재선 검사(DEF-050) — 요청자가 아닌 결재자가 있어 통과
+        return [SimpleNamespace(approver="carol")]
+
     saved = (service.get_cr, service.submit_cr, service.cancel_cr, service.cancel_draft_cr,
-             temporal_client.is_connected)
+             temporal_client.is_connected, service.list_approval_steps)
     service.get_cr, service.submit_cr, service.cancel_cr = get_cr, submit_cr, cancel_cr
+    service.list_approval_steps = list_steps
     service.cancel_draft_cr = cancel_draft_cr
     temporal_client.is_connected = lambda: True
     try:
@@ -102,14 +109,15 @@ def test_cr_requester_guard() -> None:
         who["user"] = _tu("root", admin=True)
         assert post("/2/cancel")[0] == 202
         # DRAFT(워크플로우 없음) 취소 — 요청자는 바로 취소(202), 타인은 403
-        crs[3] = SimpleNamespace(id=3, cr_code="CR-3", requested_by="alice", status="DRAFT", workflow_id=None)
+        crs[3] = SimpleNamespace(id=3, cr_code="CR-3", requested_by="alice", status="DRAFT", workflow_id=None,
+                             dataset_id=10)
         who["user"] = _tu("alice")
         assert post("/3/cancel")[0] == 202 and calls[-1] == ("cancel-draft", 3)
         who["user"] = _tu("bob")
         assert post("/3/cancel") == (403, OWNER_ONLY)
     finally:
         (service.get_cr, service.submit_cr, service.cancel_cr, service.cancel_draft_cr,
-         temporal_client.is_connected) = saved
+         temporal_client.is_connected, service.list_approval_steps) = saved
 
 
 if __name__ == "__main__":

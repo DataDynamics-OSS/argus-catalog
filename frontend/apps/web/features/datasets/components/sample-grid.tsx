@@ -55,7 +55,7 @@ export function SampleGrid({ columns, rows }: SampleGridProps) {
   if (rows.length === 0) {
     return (
       <div className="flex items-center justify-center h-[200px]">
-        <p className="text-sm text-muted-foreground">No data</p>
+        <p className="text-sm">No data</p>
       </div>
     )
   }

@@ -4,7 +4,7 @@
 
 이 페이지는 xref:ops/authentication.adoc[인증] 의 심화 내용입니다. Keycloak 을 직접 설치·구성하거나,
 토큰이 오가는 방식과 OIDC 엔드포인트를 알아야 하는 운영자·개발자를 위한 내용입니다.
-화면에서 인증 방식을 바꾸고 **초기화** 버튼으로 Keycloak 을 준비하는 방법은 xref:ops/authentication.adoc[인증] 을 보세요.
+화면에서 인증 방식을 바꾸고 **초기 설정** 버튼으로 Keycloak 을 준비하는 방법은 xref:ops/authentication.adoc[인증] 을 보세요.
 
 toc::[]
 
@@ -96,8 +96,8 @@ Keycloak 이 떠 있으면 xref:ops/authentication.adoc#_keycloak_으로_바꾸�
 . Next → *Valid redirect URIs* · *Web origins* 는 비워 둡니다
 . Save → *Credentials* 탭의 Client Secret 을 복사해 *설정 → 인증* 의 Client Secret 에 입력
 
-자동 설정(*초기화*)과 개발용 realm 가져오기 파일(`deploy/config/keycloak/argus-realm.json`)도 같은 구성으로 client 를 만듭니다.
-예전 안내대로 Standard flow · Service accounts · redirect URI(`*` 등)를 켜 둔 client 는 *초기화* 를 다시 누르면 이 구성으로 좁혀집니다.
+자동 설정(*초기 설정*)과 개발용 realm 가져오기 파일(`deploy/config/keycloak/argus-realm.json`)도 같은 구성으로 client 를 만듭니다.
+예전 안내대로 Standard flow · Service accounts · redirect URI(`*` 등)를 켜 둔 client 는 *초기 설정* 을 다시 누르면 이 구성으로 좁혀집니다.
 
 [TIP]
 .왜 Direct access grants 만 켜나요?

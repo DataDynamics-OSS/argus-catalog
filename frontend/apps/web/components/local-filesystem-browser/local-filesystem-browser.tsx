@@ -26,6 +26,7 @@ import { UploadProgressDialog, type FileUploadStatus } from "./upload-progress-d
 import { FileViewerDialog, isViewableFile } from "./file-viewer-dialog"
 import { CatViewerDialog } from "./cat-viewer-dialog"
 import { entryId } from "./utils"
+import { createRequestGate } from "./request-gate"
 
 type LocalFilesystemBrowserProps = {
   /** Initial path to browse. Defaults to "/". */
@@ -40,6 +41,8 @@ type LocalFilesystemBrowserProps = {
   emptyState?: React.ReactNode
   /** 이 경로 위로는 이동할 수 없다(일반 사용자가 보는 모델 폴더 등). 없으면 "/" 까지. */
   rootPath?: string
+  /** 내려받기 버튼 · 메뉴를 보일지 — 역할의 내려받기 기능 권한(models.download · oci.download, TODO-122). 기본 true. */
+  canDownload?: boolean
 }
 
 /** fetch 의 네트워크 오류("Failed to fetch")는 사용자에게 뜻이 통하는 문구로 바꾼다. */
@@ -55,6 +58,7 @@ export function LocalFilesystemBrowser({
   readOnly = false,
   emptyState,
   rootPath,
+  canDownload = true,
 }: LocalFilesystemBrowserProps) {
   // 파일 변경 작업(업로드/생성/삭제/이름변경)은 관리자만 — MinIO 사용자 연동이
   // 없어 스토리지 단 권한을 못 거는 대신, 파일 브라우저 진입점을 admin 으로 통제.
@@ -107,15 +111,25 @@ export function LocalFilesystemBrowser({
   const uploadNeedsRefresh = useRef(false)
 
   // --- Data fetching ---
+  // 요청이 겹치면 마지막 요청의 결과만 반영한다 — 늦게 온 이전 요청의 오류가 성공한 목록 위에 배너로 남거나
+  // 이전 폴더 목록이 현재 폴더를 덮어쓰지 않도록 (DEF-008)
+  const listGate = useRef(createRequestGate()).current
   const fetchData = useCallback(
     async (targetPath: string) => {
+      const isLatest = listGate.begin()
       setIsLoading(true)
       setLoadError(null)
       try {
         const response = await dataSource.listDirectory(targetPath)
+        if (!isLatest()) return
         setFolders(response.folders)
         setFiles(response.files)
+        setLoadError(null)
       } catch (err) {
+        if (!isLatest()) {
+          console.warn("Ignored stale directory listing error", { targetPath, err })
+          return
+        }
         // 오브젝트 스토리지(MinIO) 연결 실패 등 — 페이지를 깨뜨리지 않고
         // 화면 경고 배너로 안내하고 빈 목록을 보여준다. 의도된 처리라 warn 으로
         // 둔다 (console.error 면 Next dev 오버레이가 가로채 빨간 에러 화면을 띄움).
@@ -128,10 +142,10 @@ export function LocalFilesystemBrowser({
         setFolders([])
         setFiles([])
       } finally {
-        setIsLoading(false)
+        if (isLatest()) setIsLoading(false)
       }
     },
-    [dataSource],
+    [dataSource, listGate],
   )
 
   // Fetch on path change
@@ -472,7 +486,7 @@ export function LocalFilesystemBrowser({
           <div className="flex flex-col items-center gap-3 text-primary">
             <Upload className="h-12 w-12" />
             <p className="text-lg font-medium">파일을 놓아 업로드</p>
-            <p className="text-sm text-muted-foreground">
+            <p className="text-sm">
               파일은 현재 디렉터리에 업로드됩니다
             </p>
           </div>
@@ -532,6 +546,7 @@ export function LocalFilesystemBrowser({
           onRefresh={() => fetchData(currentPath)}
           isLoading={isLoading}
           canManage={canManage}
+          canDownload={canDownload}
         />
 
         {/* 스토리지 연결 실패 등 — 친절한 배너 (페이지 크래시 대신) */}
@@ -566,6 +581,7 @@ export function LocalFilesystemBrowser({
           onEntryDoubleClick={handleEntryDoubleClick}
           onContextAction={handleContextAction}
           canManage={canManage}
+          canDownload={canDownload}
           sort={sort}
           onSortChange={setSort}
           isLoading={isLoading}
@@ -573,7 +589,7 @@ export function LocalFilesystemBrowser({
         )}
 
         {/* Status bar */}
-        <div className="flex items-center justify-between text-sm text-muted-foreground px-1">
+        <div className="flex items-center justify-between text-sm px-1">
           <span>
             {folders.length} 폴더, {files.length} 파일
             {searchValue && ` (filtered: ${entries.length})`}

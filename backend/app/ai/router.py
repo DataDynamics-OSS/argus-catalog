@@ -12,11 +12,17 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai import service
+from app.ai.conversations import ConversationStore
+from app.ai import ai_ready_drafts
 from app.ai.schemas import (
+    AiReadyDraftRequest,
+    AiReadyDraftResponse,
     AIStatsResponse,
     ApplyRejectResponse,
     ApplySuggestionsRequest,
     ApplySuggestionsResponse,
+    AssistantFeedbackRequest,
+    AssistantFeedbackResponse,
     BulkGenerateRequest,
     BulkGenerateResponse,
     GenerateAllResponse,
@@ -100,12 +106,9 @@ _ASSISTANT_SYSTEM_PROMPT = (
     "한국어로 간결하고 정확하게 답합니다. 모르는 내용은 모른다고 답하세요."
 )
 
-# conversation_id → [{"role": "user"|"assistant", "text": ...}]
-# 최근 _MAX_TURNS(20)개 메시지(= 사용자/어시스턴트 10회 왕복)만 유지한다.
-# 대화 수가 _MAX_CONVERSATIONS 를 넘으면 전체를 비운다(단순 용량 가드).
-_conversations: dict[str, list[dict]] = {}
-_MAX_TURNS = 20
-_MAX_CONVERSATIONS = 200
+# (사용자, conversation_id) → 이력. 최근 20개 메시지(= 사용자/어시스턴트 10회 왕복)만 유지하고,
+# 대화 수가 200 을 넘으면 가장 오래 쓰지 않은 대화부터 지운다(DEF-002).
+_conversations = ConversationStore(max_conversations=200, max_turns=20)
 
 
 def _sse(event: dict) -> str:
@@ -133,7 +136,10 @@ async def assistant_chat(body: dict, _user: CurrentUser, request: Request,
     from app.settings.service import get_config_by_category
 
     message = str(body.get("message") or "").strip()
-    conv_id = body.get("conversation_id") or str(uuid.uuid4())
+    conv_id = str(body.get("conversation_id") or uuid.uuid4())
+    owner = _user.sub or _user.username  # 대화 이력은 사용자별 — 다른 사용자의 conversation_id 로는 이력을 못 본다
+    # 답변 다시 생성 — 같은 질문을 다시 보내되, 이력의 마지막 질문·답변 한 쌍을 지우고 답한다(TODO-068)
+    regenerate = body.get("regenerate") is True
 
     # ── 에이전트 프록시 경로 ──
     # DB 설정(설정 > AI 어시스턴트)을 우선 적용, URL 이 비어 있으면 config.properties 로 폴백.
@@ -144,7 +150,9 @@ async def assistant_chat(body: dict, _user: CurrentUser, request: Request,
     if a_enabled and agent_url:
         import httpx
 
-        token = (request.headers.get("Authorization") or "").removeprefix("Bearer ").strip()
+        # 스킴 이름은 대소문자를 구분하지 않는다(DEF-033)
+        scheme, _, token = (request.headers.get("Authorization") or "").strip().partition(" ")
+        token = token.strip() if scheme.lower() == "bearer" else ""
         logger.debug("어시스턴트 채팅을 외부 에이전트로 프록시: conv=%s msg_len=%d", conv_id, len(message))
 
         async def proxy_stream():
@@ -152,7 +160,8 @@ async def assistant_chat(body: dict, _user: CurrentUser, request: Request,
                 async with httpx.AsyncClient(timeout=httpx.Timeout(600, connect=10)) as client:
                     async with client.stream(
                         "POST", agent_url.rstrip("/") + "/chat",
-                        json={"message": message, "conversation_id": body.get("conversation_id")},
+                        # 백엔드가 정한 conv_id 를 넘겨 두 서버 로그의 대화 id 를 맞춘다(DEF-034)
+                        json={"message": message, "conversation_id": conv_id, "regenerate": regenerate},
                         headers={"Authorization": f"Bearer {token}"},
                     ) as resp:
                         if resp.status_code != 200:
@@ -186,8 +195,11 @@ async def assistant_chat(body: dict, _user: CurrentUser, request: Request,
                 "reason": "LLM 제공자가 활성화되어 있지 않습니다 — 설정 > AI 에서 제공자를 구성하세요."}})
             return
 
+        if regenerate:
+            dropped = _conversations.drop_last_exchange(owner, conv_id, message)
+            logger.debug("어시스턴트 답변 다시 생성: conv=%s 이전 답변 제거=%s", conv_id, dropped)
         # 대화 이력을 프롬프트로 직렬화 (generate 는 단일 프롬프트 인터페이스)
-        history = _conversations.get(conv_id, [])
+        history = _conversations.get(owner, conv_id)
         lines = [f"{'사용자' if t['role'] == 'user' else '어시스턴트'}: {t['text']}" for t in history]
         lines.append(f"사용자: {message}")
         prompt = "\n".join(lines)
@@ -205,14 +217,7 @@ async def assistant_chat(body: dict, _user: CurrentUser, request: Request,
             return
 
         text = result.get("text") or ""
-        # 이력 갱신 (간단한 용량 가드 포함)
-        if len(_conversations) > _MAX_CONVERSATIONS:
-            _conversations.clear()
-        history = (history + [
-            {"role": "user", "text": message},
-            {"role": "assistant", "text": text},
-        ])[-_MAX_TURNS:]
-        _conversations[conv_id] = history
+        _conversations.append(owner, conv_id, message, text)
 
         # 의사 스트리밍 — 80자 단위로 끊어 점진 표시
         for i in range(0, len(text), 80):
@@ -229,6 +234,51 @@ async def assistant_chat(body: dict, _user: CurrentUser, request: Request,
 
     return StreamingResponse(stream(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+# ---------------------------------------------------------------------------
+# 답변 평가 (👍/👎) — 답변 하나에 사용자당 한 건, 다시 보내면 바꾸고 rating=null 이면 지운다 (TODO-068)
+# ---------------------------------------------------------------------------
+
+_FEEDBACK_QUESTION_MAX = 2000
+_FEEDBACK_ANSWER_MAX = 8000
+
+
+@router.post("/assistant/feedback", response_model=AssistantFeedbackResponse,
+             dependencies=[Depends(require_feature("ai.assistant"))])
+async def assistant_feedback(req: AssistantFeedbackRequest, _user: CurrentUser,
+                             session: AsyncSession = Depends(get_session)):
+    """어시스턴트 답변 평가를 저장한다. 저장 실패는 500 — 화면은 평가 표시를 되돌린다."""
+    from sqlalchemy import delete, select
+
+    from app.ai.models import AssistantFeedback
+
+    owner = _user.sub or _user.username
+    if req.rating is None:
+        await session.execute(delete(AssistantFeedback).where(
+            AssistantFeedback.user_sub == owner, AssistantFeedback.answer_id == req.answer_id))
+        await session.commit()
+        logger.info("어시스턴트 답변 평가 취소: user=%s answer=%s", owner, req.answer_id)
+        return AssistantFeedbackResponse(answer_id=req.answer_id, rating=None)
+
+    row = (await session.execute(select(AssistantFeedback).where(
+        AssistantFeedback.user_sub == owner, AssistantFeedback.answer_id == req.answer_id))).scalar_one_or_none()
+    if row is None:
+        row = AssistantFeedback(user_sub=owner, answer_id=req.answer_id)
+        session.add(row)
+    row.username = _user.username
+    row.conversation_id = req.conversation_id
+    row.rating = 1 if req.rating == "up" else -1
+    if req.comment is not None:
+        row.comment = req.comment.strip() or None
+    if req.question is not None:
+        row.question = req.question[:_FEEDBACK_QUESTION_MAX]
+    if req.answer is not None:
+        row.answer = req.answer[:_FEEDBACK_ANSWER_MAX]
+    await session.commit()
+    logger.info("어시스턴트 답변 평가: user=%s conv=%s answer=%s rating=%s",
+                owner, req.conversation_id, req.answer_id, req.rating)
+    return AssistantFeedbackResponse(answer_id=req.answer_id, rating=req.rating)
 
 
 # ---------------------------------------------------------------------------
@@ -366,6 +416,24 @@ async def api_generate_all(_guard: CurrentUser,
             apply=body.apply, force=body.force, language=body.language,
         )
         return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/datasets/{dataset_id}/ai-ready-drafts", response_model=AiReadyDraftResponse)
+async def api_ai_ready_drafts(_guard: CurrentUser,
+    dataset_id: int,
+    body: AiReadyDraftRequest = AiReadyDraftRequest(),
+    _perm=Depends(require_feature("ai.generate")), session: AsyncSession = Depends(get_session),
+):
+    """AI-Ready 서술형 항목(편향 · 한계 · 관련법령) 초안 — 적용 대기 제안으로 남는다(TODO-096 6단계).
+
+    관련법령은 설정 › AI-Ready 의 법령 목록 안에서만 고른다. 데이터셋 소유자 또는 관리자만.
+    """
+    await _require_dataset_editor(_guard, session, dataset_id)
+    try:
+        return await ai_ready_drafts.generate_drafts(
+            session, dataset_id, fields=body.fields, force=body.force, language=body.language)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

@@ -45,6 +45,8 @@ export const tagSchema = z.object({
   description: z.string().nullable().optional(),
   color: z.string(),
   created_at: z.string(),
+  /** 태그 목록에서만 — 붙은 데이터셋 수(removed 제외) */
+  dataset_count: z.number().nullable().optional(),
 })
 export type Tag = z.infer<typeof tagSchema>
 
@@ -55,6 +57,8 @@ export const glossaryTermSchema = z.object({
   parent_id: z.number().nullable().optional(),
   term_type: z.string().optional().default("TERM"),
   created_at: z.string(),
+  /** 용어 목록에서만 — 연결된 데이터셋 수(removed 제외) */
+  dataset_count: z.number().nullable().optional(),
   updated_at: z.string(),
 })
 export type GlossaryTerm = z.infer<typeof glossaryTermSchema>
@@ -98,6 +102,8 @@ export const datasetSummarySchema = z.object({
   created_by: z.string().nullable().optional(),
   created_at: z.coerce.date(),
   updated_at: z.coerce.date(),
+  // 카드 보기용(목록 조회에 card=true 일 때만) — 앞쪽 컬럼 이름
+  column_preview: z.array(z.string()).nullable().optional(),
 })
 export type DatasetSummary = z.infer<typeof datasetSummarySchema>
 
@@ -145,8 +151,8 @@ export const datasetDetailSchema = z.object({
   file_count: z.number().nullable().optional(),
   sensitivity: z.string().nullable().optional(),
   contains_pii: z.boolean().nullable().optional(),
-  pii_fields: z.string().nullable().optional(),
-  compliance_tags: z.string().nullable().optional(),
+  pii_fields: z.array(z.string()).nullable().optional(),   // TODO-143 — 목록(값 안의 쉼표 보존)
+  compliance_tags: z.array(z.string()).nullable().optional(),
   tier: z.string().nullable().optional(),
   certification: z.string().nullable().optional(),
   steward: z.string().nullable().optional(),
@@ -157,6 +163,29 @@ export const datasetDetailSchema = z.object({
   quality_status: z.string().nullable().optional(),
   show_quality_score: z.boolean().nullable().optional(),
   note: z.string().nullable().optional(),
+  // --- AI-Ready (TODO-096) — 비어 있으면 기관 기본값(GET /catalog/ai-ready/defaults)을 보여 준다 ---
+  legal_basis: z.string().nullable().optional(),
+  publisher: z.string().nullable().optional(),
+  landing_page: z.string().nullable().optional(),
+  contact_email: z.string().nullable().optional(),
+  data_language: z.string().nullable().optional(),
+  persistent_id: z.string().nullable().optional(),
+  temporal_start: z.string().nullable().optional(), // YYYY-MM-DD
+  temporal_end: z.string().nullable().optional(),
+  spatial_coverage: z.string().nullable().optional(),
+  data_version: z.string().nullable().optional(),
+  version_notes: z.string().nullable().optional(),
+  license: z.string().nullable().optional(),
+  license_url: z.string().nullable().optional(),
+  rights: z.string().nullable().optional(),
+  allowed_uses: z.array(z.string()).nullable().optional(), // null = 정하지 않음, [] = 모두 허용하지 않음
+  contains_synthetic: z.boolean().nullable().optional(),
+  contains_machine_annotation: z.boolean().nullable().optional(),
+  data_biases: z.string().nullable().optional(),
+  known_limitations: z.string().nullable().optional(),
+  missing_data_info: z.string().nullable().optional(),
+  missing_value_notation: z.string().nullable().optional(),
+  privacy_measures: z.string().nullable().optional(),
   datasource_properties: z.record(z.string(), z.unknown()).nullable().optional(),
   schema_fields: z.array(schemaFieldSchema),
   tags: z.array(tagSchema),

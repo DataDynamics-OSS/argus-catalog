@@ -11,6 +11,8 @@ import { Switch } from "@workspace/ui/components/switch"
 
 import { fetchMailConfig, updateMailConfig, testMail, type MailConfig } from "./api"
 import { errorMessage, notifyError, notifySuccess } from "@/lib/notify"
+import { TagInput } from "@/components/tag-input"
+import { joinCsv, splitCsv } from "@/lib/text-list"
 
 const EMPTY: MailConfig = {
   enabled: false,
@@ -106,7 +108,7 @@ export function EmailSettings() {
           <div className="flex items-center justify-between">
             <div>
               <Label>이메일 발송 활성화</Label>
-              <p className="text-xs text-muted-foreground mt-0.5">비활성화 시 발송 요청은 조용히 무시됩니다.</p>
+              <p className="text-xs mt-0.5">비활성화 시 발송 요청은 조용히 무시됩니다.</p>
             </div>
             <Switch checked={cfg.enabled} onCheckedChange={(v) => set("enabled", v)} />
           </div>
@@ -128,14 +130,14 @@ export function EmailSettings() {
             <div className="flex items-center justify-between rounded-md border px-3 py-2">
               <div>
                 <Label className="text-sm">STARTTLS</Label>
-                <p className="text-xs text-muted-foreground mt-0.5">587 포트</p>
+                <p className="text-xs mt-0.5">587 포트</p>
               </div>
               <Switch checked={cfg.use_tls} onCheckedChange={(v) => set("use_tls", v)} />
             </div>
             <div className="flex items-center justify-between rounded-md border px-3 py-2">
               <div>
                 <Label className="text-sm">SSL</Label>
-                <p className="text-xs text-muted-foreground mt-0.5">465 포트</p>
+                <p className="text-xs mt-0.5">465 포트</p>
               </div>
               <Switch checked={cfg.use_ssl} onCheckedChange={(v) => set("use_ssl", v)} />
             </div>
@@ -173,7 +175,7 @@ export function EmailSettings() {
             </div>
             <div className="space-y-1.5">
               <Label>기본 수신자 (선택)</Label>
-              <Input value={cfg.default_recipients} onChange={(e) => set("default_recipients", e.target.value)} placeholder="a@x.com, b@y.com" />
+              <TagInput commaSeparates aria-label="기본 수신자" value={splitCsv(cfg.default_recipients)} onChange={(v) => set("default_recipients", joinCsv(v))} placeholder="예: a@example.com 입력 후 Enter" />
             </div>
           </div>
 
@@ -193,7 +195,7 @@ export function EmailSettings() {
                 테스트 메일 발송
               </Button>
             </div>
-            <p className="text-xs text-muted-foreground">테스트는 현재 입력값을 저장한 뒤 발송합니다.</p>
+            <p className="text-xs">테스트는 현재 입력값을 저장한 뒤 발송합니다.</p>
           </div>
         </CardContent>
       </Card>

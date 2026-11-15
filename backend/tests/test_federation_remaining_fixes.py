@@ -26,6 +26,7 @@ import app.catalog.models as cm
 import app.federation.models as fm
 from app.core.config import settings
 from app.federation import schemas as s
+from app.permissions.models import Permission
 from app.settings.models import CatalogConfiguration
 
 
@@ -33,7 +34,7 @@ async def _make_session():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     models = (
         cm.Datasource, cm.Dataset, cm.DatasetSchema, cm.DatasetLineage,
-        CatalogConfiguration, fm.FederatedInstance, fm.FederationSyncRun,
+        CatalogConfiguration, fm.FederatedInstance, fm.FederationSyncRun, Permission,
     )
     async with engine.begin() as conn:
         for m in models:

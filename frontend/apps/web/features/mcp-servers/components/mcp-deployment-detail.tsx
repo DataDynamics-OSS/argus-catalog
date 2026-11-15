@@ -1,27 +1,22 @@
 "use client"
 
+import { InfoTip, Tip } from "@/components/tip"
+import { CodeEditor } from "@/components/code-editor"
 import { Fragment, useCallback, useEffect, useState } from "react"
-import {
-  Activity,
-  AlertTriangle,
-  ArrowLeft,
-  FileCode,
-  FileJson,
-  KeyRound,
-  Loader2,
-  Pencil,
-  Plug,
-  Plus,
-  RefreshCw,
-  ShieldCheck,
-  Trash2,
-} from "lucide-react"
+import { Activity, AlertTriangle, ArrowLeft, FileCode, FileJson, KeyRound, Loader2, MoreHorizontal, Pencil, Play, Plug, Plus, ShieldCheck, Trash2 } from "lucide-react"
 import { errorMessage, notifyError, toast } from "@/lib/notify"
 import { useConfirm } from "@/components/confirm-provider"
 
 import { Badge } from "@workspace/ui/components/badge"
+import { StatusBadge as ToneBadge } from "@workspace/ui/components/status-badge"
 import { Button } from "@workspace/ui/components/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@workspace/ui/components/card"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@workspace/ui/components/dropdown-menu"
 import {
   Dialog,
   DialogContent,
@@ -51,6 +46,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@workspace/ui/componen
 import { Textarea } from "@workspace/ui/components/textarea"
 import { cn } from "@workspace/ui/lib/utils"
 
+import { DetailSection, LINE_TABS_LIST, LINE_TABS_TRIGGER } from "@/components/detail-section"
 import { useAuth } from "@/features/auth"
 import { usePermissions } from "@/features/permissions/use-permissions"
 import {
@@ -76,11 +72,14 @@ import {
 } from "../api"
 import {
   AUTH_METHODS,
+  AUTH_METHOD_LABEL,
+  authMethodLabel,
   ENVIRONMENTS,
   FRAMEWORK_LABEL,
   STATUS_LABEL,
   STATUS_OPTIONS,
   TRANSPORTS,
+  DEPLOYMENT_FIELD_HELP,
   type McpCollectResult,
   type McpCredential,
   type McpDeploymentAgent,
@@ -94,6 +93,7 @@ import {
 import {
   EffectBadge,
   FieldRow,
+  FieldTable,
   HealthDot,
   OriginBadge,
   OriginLegend,
@@ -109,6 +109,9 @@ import { FindingsPanel } from "./tabs/findings-panel"
 import { ManifestImportDialog } from "./tabs/manifest-dialog"
 import { AgentScopeDialog } from "./tabs/agent-scope-dialog"
 import { PolicyPanel } from "./tabs/policy-panel"
+import { OriginText } from "@/features/datasets/components/origin-text"
+import { MutatingBadge } from "@/components/mutating-badge"
+import { TagInput } from "@/components/tag-input"
 
 const BASIS_LABEL: Record<string, string> = {
   inferred: "수집 결과로 추정",
@@ -120,7 +123,7 @@ export function McpDeploymentDetail({ name }: { name: string }) {
   const { setSelectedDeployment, setSelectedServer, reload, reloadKey } = useMcpServers()
   const askConfirm = useConfirm()
   const { user } = useAuth()
-  const { isFeatureAllowed, canUseFeature } = usePermissions()
+  const { canUseFeature } = usePermissions()
   const [dep, setDep] = useState<Detail | null>(null)
   const [eff, setEff] = useState<McpEffectiveState | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -154,7 +157,7 @@ export function McpDeploymentDetail({ name }: { name: string }) {
     return (
       <div className="space-y-3">
         <Button variant="ghost" size="sm" onClick={() => setSelectedDeployment(null)}>
-          <ArrowLeft className="mr-1 h-4 w-4" /> 목록
+          <ArrowLeft className="mr-1 h-4 w-4" /> 목록으로
         </Button>
         <p className="text-sm text-destructive">{error}</p>
       </div>
@@ -171,15 +174,22 @@ export function McpDeploymentDetail({ name }: { name: string }) {
   const isForge = dep.server_framework === "argus-forge"
   const warnings = dep.security_warnings ?? []
   // 헬스 체크·수집·편집·폐기·정책·범위·자격증명·토큰은 배포 등록자·관리자만 — 서버(_guard_deployment)와 같은 기준
-  const canEdit = !!user && (user.is_admin || (!!dep.created_by && dep.created_by === user.username))
+  // 역할의 기능 권한(수정 mcp.edit · 폐기 mcp.delete · 수집 mcp.collect · 감사 조회 mcp.audit-view ·
+  // 감사 적재 mcp.audit-ingest)도 함께 본다(TODO-122).
+  const isOwner = !!user && (user.is_admin || (!!dep.created_by && dep.created_by === user.username))
+  const canEdit = isOwner && canUseFeature("mcp.edit")
+  const canDelete = isOwner && canUseFeature("mcp.delete")
+  const canCollect = isOwner && canUseFeature("mcp.collect")
+  const canViewAudit = isOwner && canUseFeature("mcp.audit-view")
+  const canIngestAudit = isOwner && canUseFeature("mcp.audit-ingest")
   // 승인 정책·에이전트별 범위는 여기에 기능 권한 mcp.policy 까지 필요(관리자는 항상) — 서버 _guard_policy 와 같은 기준
-  const canEditPolicy = canEdit && (!!user?.is_admin || isFeatureAllowed("mcp.policy"))
+  const canEditPolicy = canEdit && canUseFeature("mcp.policy")
 
   const runHealth = async () => {
     setBusy("health")
     try {
       const r = await healthCheckMcpDeployment(dep.name)
-      toast.success(`헬스 체크: ${r.health_status}`)
+      toast.success("헬스 체크를 마쳤습니다.", { description: `상태: ${r.health_status}` })
       await load()
     } catch (e) {
       notifyError(e, "헬스 체크를 실행하지 못했습니다.")
@@ -193,20 +203,20 @@ export function McpDeploymentDetail({ name }: { name: string }) {
       {/* 헤더 */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-start gap-2">
-          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setSelectedDeployment(null)} aria-label="목록">
+          <Tip label="목록"><Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setSelectedDeployment(null)} aria-label="목록">
             <ArrowLeft className="h-4 w-4" />
-          </Button>
+          </Button></Tip>
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <Plug className="h-5 w-5 text-muted-foreground" />
               <h2 className="text-lg font-semibold">{dep.display_name || dep.name}</h2>
-              <Badge variant="outline">{dep.environment}</Badge>
+              <Badge variant="outline"><OriginText origin={dep.environment} /></Badge>
               <StatusBadge status={dep.status} />
               <HealthDot status={dep.health_status} />
               {dep.policy_mode === "enforce" ? (
-                <Badge className="bg-violet-600 text-white hover:bg-violet-600">정책 적용(enforce)</Badge>
+                <Tip label="강제(enforce) — 서버가 승인 정책 번들을 받아 정책에 어긋나는 호출을 거부합니다(서비스 토큰 필요)."><ToneBadge tone="info">정책 적용(enforce)</ToneBadge></Tip>
               ) : (
-                <Badge variant="outline">관측 모드(observe)</Badge>
+                <Tip label="관측(observe) — 카탈로그가 승인 정책과 서버 관측값의 차이만 찾고, 서버의 호출은 막지 않습니다."><Badge variant="outline">관측 모드(observe)</Badge></Tip>
               )}
               {!dep.policy_version && (
                 <button type="button" onClick={() => setTab("policy")}>
@@ -221,7 +231,7 @@ export function McpDeploymentDetail({ name }: { name: string }) {
                 </button>
               )}
             </div>
-            <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs">
               <span className="font-mono">{dep.urn}</span>
               {dep.server_name && (
                 <>
@@ -236,50 +246,68 @@ export function McpDeploymentDetail({ name }: { name: string }) {
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
-          {canEdit && (
+          {canCollect && (
           <>
           <Button size="sm" variant="outline" disabled={busy !== null} onClick={runHealth}>
             {busy === "health" ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Activity className="mr-1 h-4 w-4" />}
             헬스 체크
           </Button>
           <Button size="sm" variant="outline" onClick={() => setCollectOpen(true)}>
-            <RefreshCw className="mr-1 h-4 w-4" /> 수집
+            <Play className="mr-1 h-4 w-4" /> 수집
           </Button>
-          {isForge && (
-            <Button size="sm" variant="outline" onClick={() => setConfigOpen(true)}>
-              <FileCode className="mr-1 h-4 w-4" /> 설정 가져오기
-            </Button>
+          </>
           )}
-          <Button size="sm" variant="outline" onClick={() => setManifestOpen(true)}>
-            <FileJson className="mr-1 h-4 w-4" /> manifest
-          </Button>
+          {canEdit && (
           <Button size="sm" variant="outline" onClick={() => setEditOpen(true)}>
             <Pencil className="mr-1 h-4 w-4" /> 편집
           </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            className="text-destructive"
-            disabled={dep.status === "retired"}
-            onClick={async () => {
-              if (!(await askConfirm({
-                title: "배포 폐기",
-                description: `'${dep.name}' 배포를 폐기할까요? (사용 중인 에이전트가 있으면 거부됩니다)`,
-                confirmText: "폐기",
-                destructive: true,
-              }))) return
-              try {
-                await retireMcpDeployment(dep.name)
-                toast.success("배포를 폐기했습니다.")
-                reload()
-              } catch (e) {
-                notifyError(e, "배포를 폐기하지 못했습니다.")
-              }
-            }}
-          >
-            <Trash2 className="mr-1 h-4 w-4" /> 폐기
-          </Button>
-          </>
+          )}
+          {/* 덜 쓰는 작업(설정 가져오기 · 매니페스트 · 폐기)은 ⋯ 메뉴로 — 데이터셋 상세와 같은 배치.
+              가져오기는 mcp.collect, 폐기는 mcp.delete 권한(TODO-122) */}
+          {(canCollect || canDelete) && (
+          <DropdownMenu>
+            <Tip label="더 보기"><DropdownMenuTrigger asChild>
+              <Button size="sm" variant="outline" className="w-8 px-0" aria-label="더 보기">
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger></Tip>
+            <DropdownMenuContent align="end" className="min-w-44">
+              {canCollect && isForge && (
+                <DropdownMenuItem onClick={() => setConfigOpen(true)}>
+                  <FileCode /> 설정 가져오기
+                </DropdownMenuItem>
+              )}
+              {canCollect && (
+                <DropdownMenuItem onClick={() => setManifestOpen(true)}>
+                  <FileJson /> 매니페스트 가져오기
+                </DropdownMenuItem>
+              )}
+              {canCollect && canDelete && <DropdownMenuSeparator />}
+              {canDelete && (
+              <DropdownMenuItem
+                variant="destructive"
+                disabled={dep.status === "retired"}
+                onClick={async () => {
+                  if (!(await askConfirm({
+                    title: "배포 폐기",
+                    description: `'${dep.name}' 배포를 폐기할까요? (사용 중인 에이전트가 있으면 거부됩니다)`,
+                    confirmText: "폐기",
+                    destructive: true,
+                  }))) return
+                  try {
+                    await retireMcpDeployment(dep.name)
+                    toast.success("배포를 폐기했습니다.")
+                    reload()
+                  } catch (e) {
+                    notifyError(e, "배포를 폐기하지 못했습니다.")
+                  }
+                }}
+              >
+                <Trash2 /> 폐기
+              </DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
           )}
         </div>
       </div>
@@ -297,104 +325,97 @@ export function McpDeploymentDetail({ name }: { name: string }) {
       )}
 
       <Tabs value={tab} onValueChange={setTab}>
-        <TabsList className="flex-wrap">
-          <TabsTrigger value="effective">실효 상태</TabsTrigger>
-          <TabsTrigger value="overview">개요</TabsTrigger>
-          <TabsTrigger value="policy">승인 정책</TabsTrigger>
-          <TabsTrigger value="findings">finding ({dep.open_finding_count})</TabsTrigger>
-          <TabsTrigger value="audit">감사 이벤트</TabsTrigger>
-          <TabsTrigger value="scopes">리소스 범위 ({eff.scopes.filter((s) => s.layer !== "approved").length})</TabsTrigger>
-          <TabsTrigger value="credential">자격증명</TabsTrigger>
-          <TabsTrigger value="agents">사용 에이전트 ({dep.agent_count})</TabsTrigger>
-          <TabsTrigger value="sync">수집 이력</TabsTrigger>
-          <TabsTrigger value="history">상태 이력</TabsTrigger>
+        <TabsList variant="line" className={LINE_TABS_LIST}>
+          <TabsTrigger value="effective" className={LINE_TABS_TRIGGER}>실효 상태</TabsTrigger>
+          <TabsTrigger value="overview" className={LINE_TABS_TRIGGER}>개요</TabsTrigger>
+          <TabsTrigger value="policy" className={LINE_TABS_TRIGGER}>승인 정책</TabsTrigger>
+          <TabsTrigger value="findings" className={LINE_TABS_TRIGGER}>finding ({dep.open_finding_count})</TabsTrigger>
+          {/* 감사 이벤트에는 호출 인자가 들어 있어 배포 소유자 · 관리자에게만 보인다(서버도 403, DEF-124) —
+              역할의 감사 조회 권한(mcp.audit-view)도 필요하다(TODO-122) */}
+          {canViewAudit && <TabsTrigger value="audit" className={LINE_TABS_TRIGGER}>감사 이벤트</TabsTrigger>}
+          <TabsTrigger value="scopes" className={LINE_TABS_TRIGGER}>리소스 범위 ({eff.scopes.filter((s) => s.layer !== "approved").length})</TabsTrigger>
+          <TabsTrigger value="credential" className={LINE_TABS_TRIGGER}>자격증명</TabsTrigger>
+          <TabsTrigger value="agents" className={LINE_TABS_TRIGGER}>사용 에이전트 ({dep.agent_count})</TabsTrigger>
+          <TabsTrigger value="sync" className={LINE_TABS_TRIGGER}>수집 이력</TabsTrigger>
+          <TabsTrigger value="history" className={LINE_TABS_TRIGGER}>상태 이력</TabsTrigger>
         </TabsList>
 
         <TabsContent value="effective" className="mt-4">
           <EffectivePanel eff={eff} />
         </TabsContent>
 
-        <TabsContent value="overview" className="mt-4 grid gap-4 lg:grid-cols-2">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-sm">배포 관리 정보 <OriginBadge origin="argus" /></CardTitle>
-            </CardHeader>
-            <CardContent className="divide-y">
-              <FieldRow label="이름" origin="argus"><span className="font-mono">{dep.name}</span></FieldRow>
-              <FieldRow label="표시명" origin="argus">{dep.display_name}</FieldRow>
-              <FieldRow label="설명" origin="argus">{dep.description}</FieldRow>
-              <FieldRow label="환경" origin="argus">{dep.environment}</FieldRow>
-              <FieldRow label="상태" origin="argus"><StatusBadge status={dep.status} /></FieldRow>
-              <FieldRow label="전송" origin="argus">{dep.transport}</FieldRow>
-              <FieldRow label="MCP 엔드포인트" origin="argus">
-                {dep.endpoint ? <span className="break-all font-mono text-xs">{dep.endpoint}</span> : null}
+        <TabsContent value="overview" className="mt-4 grid items-start gap-6 lg:grid-cols-2">
+          <DetailSection title={<>배포 관리 정보 <OriginBadge origin="argus" /></>}>
+            <FieldTable>
+              <FieldRow label="이름" help={DEPLOYMENT_FIELD_HELP["이름"]} origin="argus"><span className="font-mono">{dep.name}</span></FieldRow>
+              <FieldRow label="표시명" help={DEPLOYMENT_FIELD_HELP["표시명"]} origin="argus">{dep.display_name}</FieldRow>
+              <FieldRow label="설명" help={DEPLOYMENT_FIELD_HELP["설명"]} origin="argus">{dep.description}</FieldRow>
+              <FieldRow label="환경" help={DEPLOYMENT_FIELD_HELP["환경"]} origin="argus">{dep.environment}</FieldRow>
+              <FieldRow label="상태" help={DEPLOYMENT_FIELD_HELP["상태"]} origin="argus"><StatusBadge status={dep.status} /></FieldRow>
+              <FieldRow label="전송" help={DEPLOYMENT_FIELD_HELP["전송"]} origin="argus">{dep.transport}</FieldRow>
+              <FieldRow label="MCP 엔드포인트" help={DEPLOYMENT_FIELD_HELP["MCP 엔드포인트"]} origin="argus">
+                {dep.endpoint ? <span className="break-all font-mono">{dep.endpoint}</span> : null}
               </FieldRow>
               {isForge && (
-                <FieldRow label="도구 REST API" origin="argus">
-                  {dep.rest_api_base ? <span className="break-all font-mono text-xs">{dep.rest_api_base}</span> : null}
+                <FieldRow label="도구 REST API" help={DEPLOYMENT_FIELD_HELP["도구 REST API"]} origin="argus">
+                  {dep.rest_api_base ? <span className="break-all font-mono">{dep.rest_api_base}</span> : null}
                 </FieldRow>
               )}
-              <FieldRow label="인증 방식" origin="argus">{dep.auth_method}</FieldRow>
-              <FieldRow label="배포 범위" origin="argus">{dep.deployment_scope}</FieldRow>
-              <FieldRow label="호스트" origin="argus">{dep.host}</FieldRow>
-              <FieldRow label="연결 데이터 소스" origin="argus">{dep.datasource_name}</FieldRow>
-              <FieldRow label="정책 모드" origin="argus">{dep.policy_mode}</FieldRow>
-              <FieldRow label="정책 버전" origin="argus">
+              <FieldRow label="인증 방식" help={DEPLOYMENT_FIELD_HELP["인증 방식"]} origin="argus">{dep.auth_method}</FieldRow>
+              <FieldRow label="배포 범위" help={DEPLOYMENT_FIELD_HELP["배포 범위"]} origin="argus">{dep.deployment_scope}</FieldRow>
+              <FieldRow label="호스트" help={DEPLOYMENT_FIELD_HELP["호스트"]} origin="argus">{dep.host}</FieldRow>
+              <FieldRow label="연결 데이터 소스" help={DEPLOYMENT_FIELD_HELP["연결 데이터 소스"]} origin="argus">{dep.datasource_name}</FieldRow>
+              <FieldRow label="정책 모드" help={DEPLOYMENT_FIELD_HELP["정책 모드"]} origin="argus">{dep.policy_mode}</FieldRow>
+              <FieldRow label="정책 버전" help={DEPLOYMENT_FIELD_HELP["정책 버전"]} origin="argus">
                 {dep.policy_version ? (
-                  <span className="font-mono text-xs">{dep.policy_version} · {dep.policy_updated_by ?? "-"}</span>
+                  <span className="font-mono">{dep.policy_version} · {dep.policy_updated_by ?? "-"}</span>
                 ) : null}
               </FieldRow>
-              <FieldRow label="승인 버전" origin="argus">{dep.approved_version}</FieldRow>
-              <FieldRow label="감사 이벤트 보존" origin="argus">{dep.audit_retention_days}일</FieldRow>
-              <FieldRow label="자동 수집 주기" origin="argus">
+              <FieldRow label="승인 버전" help={DEPLOYMENT_FIELD_HELP["승인 버전"]} origin="argus">{dep.approved_version}</FieldRow>
+              <FieldRow label="감사 이벤트 보존" help={DEPLOYMENT_FIELD_HELP["감사 이벤트 보존"]} origin="argus">{dep.audit_retention_days}일</FieldRow>
+              <FieldRow label="자동 수집 주기" help={DEPLOYMENT_FIELD_HELP["자동 수집 주기"]} origin="argus">
                 {dep.collect_interval_minutes ? `${dep.collect_interval_minutes}분` : "수동"}
               </FieldRow>
-              <FieldRow label="헬스" origin="argus">
+              <FieldRow label="헬스" help={DEPLOYMENT_FIELD_HELP["헬스"]} origin="argus">
                 <span className="inline-flex items-center gap-2">
                   <HealthDot status={dep.health_status} />
-                  {dep.latency_ms != null && <span className="text-xs text-muted-foreground">{dep.latency_ms}ms</span>}
-                  {dep.health_fail_count > 0 && <span className="text-xs text-red-600">연속 실패 {dep.health_fail_count}회</span>}
-                  <span className="text-xs text-muted-foreground">{fmtDate(dep.last_health_check_at)}</span>
+                  {dep.latency_ms != null && <span>{dep.latency_ms}ms</span>}
+                  {dep.health_fail_count > 0 && <span className="text-red-600">연속 실패 {dep.health_fail_count}회</span>}
+                  <span>{fmtDate(dep.last_health_check_at)}</span>
                 </span>
               </FieldRow>
-              <FieldRow label="최근 관측" origin="argus">
+              <FieldRow label="최근 관측" help={DEPLOYMENT_FIELD_HELP["최근 관측"]} origin="argus">
                 {fmtDate(dep.last_observed_at)}{dep.observed_source ? ` (${dep.observed_source})` : ""}
               </FieldRow>
-              <FieldRow label="소유자 / 부서" origin="argus">{[dep.owner_email, dep.department].filter(Boolean).join(" / ") || null}</FieldRow>
-            </CardContent>
-          </Card>
-          <div className="flex flex-col gap-4">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-sm">서버 설정 수집값 <OriginBadge origin="server_config" /></CardTitle>
-                <p className="text-xs text-muted-foreground">
-                  MCP 표준에는 없는 정보입니다. Argus Forge 서버는 config.yaml 가져오기 또는 /readyz 로 수집합니다.
-                </p>
-              </CardHeader>
-              <CardContent className="divide-y">
-                <FieldRow label="대상 시스템" origin="server_config">
-                  {dep.target_endpoint ? <span className="break-all font-mono text-xs">{dep.target_endpoint}</span> : null}
+              <FieldRow label="소유자 / 부서" help={DEPLOYMENT_FIELD_HELP["소유자 / 부서"]} origin="argus">{[dep.owner_email, dep.department].filter(Boolean).join(" / ") || null}</FieldRow>
+            </FieldTable>
+          </DetailSection>
+          <div className="flex flex-col gap-6">
+            <DetailSection
+              title={<>서버 설정 수집값 <OriginBadge origin="server_config" /></>}
+              description="MCP 표준에는 없는 정보입니다. Argus Forge 서버는 config.yaml 가져오기 또는 /readyz 로 수집합니다."
+            >
+              <FieldTable>
+                <FieldRow label="대상 시스템" help={DEPLOYMENT_FIELD_HELP["대상 시스템"]} origin="server_config">
+                  {dep.target_endpoint ? <span className="break-all font-mono">{dep.target_endpoint}</span> : null}
                 </FieldRow>
-                <FieldRow label="실행 계정" origin="server_config">{dep.service_principal}</FieldRow>
-                <FieldRow label="대상 인증" origin="server_config">{dep.principal_auth}</FieldRow>
-                <FieldRow label="인스턴스 ID" origin="server_config">
-                  {dep.instance_id ? <span className="font-mono text-xs">{dep.instance_id}</span> : null}
+                <FieldRow label="실행 계정" help={DEPLOYMENT_FIELD_HELP["실행 계정"]} origin="server_config">{dep.service_principal}</FieldRow>
+                <FieldRow label="대상 인증" help={DEPLOYMENT_FIELD_HELP["대상 인증"]} origin="server_config">{dep.principal_auth}</FieldRow>
+                <FieldRow label="인스턴스 ID" help={DEPLOYMENT_FIELD_HELP["인스턴스 ID"]} origin="server_config">
+                  {dep.instance_id ? <span className="break-all font-mono">{dep.instance_id}</span> : null}
                 </FieldRow>
-                <FieldRow label="제한(limits)" origin="server_config">
+                <FieldRow label="제한(limits)" help={DEPLOYMENT_FIELD_HELP["제한(limits)"]} origin="server_config">
                   {dep.limits && Object.keys(dep.limits).length ? <JsonBlock value={dep.limits} /> : null}
                 </FieldRow>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-sm">MCP 서버 보고값 <OriginBadge origin="mcp" /></CardTitle>
-              </CardHeader>
-              <CardContent className="divide-y">
-                <FieldRow label="배포 버전" origin="mcp">{dep.deployed_version}</FieldRow>
-                <FieldRow label="프로토콜 버전" origin="mcp">{dep.protocol_version}</FieldRow>
-                <FieldRow label="serverInfo" origin="mcp">{dep.server_info ? <JsonBlock value={dep.server_info} /> : null}</FieldRow>
-              </CardContent>
-            </Card>
+              </FieldTable>
+            </DetailSection>
+            <DetailSection title={<>MCP 서버 보고값 <OriginBadge origin="mcp" /></>}>
+              <FieldTable>
+                <FieldRow label="배포 버전" help={DEPLOYMENT_FIELD_HELP["배포 버전"]} origin="mcp">{dep.deployed_version}</FieldRow>
+                <FieldRow label="프로토콜 버전" help={DEPLOYMENT_FIELD_HELP["프로토콜 버전"]} origin="mcp">{dep.protocol_version}</FieldRow>
+                <FieldRow label="serverInfo" help={DEPLOYMENT_FIELD_HELP["serverInfo"]} origin="mcp">{dep.server_info ? <JsonBlock value={dep.server_info} /> : null}</FieldRow>
+              </FieldTable>
+            </DetailSection>
           </div>
         </TabsContent>
 
@@ -406,9 +427,11 @@ export function McpDeploymentDetail({ name }: { name: string }) {
           <FindingsPanel name={dep.name} onChanged={load} canEdit={canEdit} key={`${dep.open_finding_count}-${dep.policy_version}`} />
         </TabsContent>
 
-        <TabsContent value="audit" className="mt-4">
-          <AuditPanel dep={dep} onChanged={load} canEdit={canEdit} />
-        </TabsContent>
+        {canViewAudit && (
+          <TabsContent value="audit" className="mt-4">
+            <AuditPanel dep={dep} onChanged={load} canEdit={canIngestAudit} />
+          </TabsContent>
+        )}
 
         <TabsContent value="scopes" className="mt-4">
           <ScopesPanel name={dep.name} eff={eff} onChanged={load} canEdit={canEdit} />
@@ -456,16 +479,15 @@ function EffectivePanel({ eff }: { eff: McpEffectiveState }) {
   const [onlyExposed, setOnlyExposed] = useState(true)
   const tools = eff.tools.filter((t) => !onlyExposed || t.exposed)
   return (
-    <div className="flex flex-col gap-4">
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm">도구 그룹 on/off</CardTitle>
-          <p className="text-xs text-muted-foreground">
-            관측값 <OriginBadge origin="server_config" className="align-middle" /> 은 서버 설정 또는 수집 결과로 확인한 실제 상태,
-            승인값 <OriginBadge origin="argus" className="align-middle" /> 은 Argus 에서 승인한 목표 상태(Phase 2 정책 연동)입니다.
-          </p>
-        </CardHeader>
-        <CardContent>
+    <div className="flex flex-col gap-6">
+      <DetailSection
+        title="도구 그룹 on/off"
+        description={<>
+          관측값 <OriginBadge origin="server_config" className="align-middle" /> 은 서버 설정 또는 수집 결과로 확인한 실제 상태,
+          승인값 <OriginBadge origin="argus" className="align-middle" /> 은 Argus 에서 승인한 목표 상태(Phase 2 정책 연동)입니다.
+        </>}
+      >
+        <div className="rounded-md border">
           <Table>
             <TableHeader>
               <TableRow>
@@ -475,7 +497,7 @@ function EffectivePanel({ eff }: { eff: McpEffectiveState }) {
                 <TableHead>관측</TableHead>
                 <TableHead>근거</TableHead>
                 <TableHead>승인</TableHead>
-                <TableHead className="text-right">노출 / 전체</TableHead>
+                <TableHead className="text-right"><InfoTip tip="이 그룹에서 지금 노출되는 도구 수 / 그룹의 전체 도구 수입니다. 꺼진 그룹의 도구는 노출되지 않습니다.">노출 / 전체</InfoTip></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -486,35 +508,32 @@ function EffectivePanel({ eff }: { eff: McpEffectiveState }) {
                   <TableCell>
                     <div className="flex items-center gap-1.5">
                       <span className="font-medium">{g.label || g.key}</span>
-                      {g.mutating && <Badge variant="outline" className="h-4 border-orange-300 px-1 text-[10px] text-orange-700 dark:text-orange-300">변경</Badge>}
+                      {g.mutating && <MutatingBadge />}
                     </div>
                   </TableCell>
                   <TableCell className="font-mono text-xs">{g.config_key || "-"}</TableCell>
                   <TableCell><RiskBadge risk={g.risk} /></TableCell>
                   <TableCell><OnOff value={g.observed_enabled} /></TableCell>
-                  <TableCell className="text-xs text-muted-foreground">{g.observed_basis ? BASIS_LABEL[g.observed_basis] ?? g.observed_basis : "-"}</TableCell>
+                  <TableCell className="text-xs">{g.observed_basis ? BASIS_LABEL[g.observed_basis] ?? g.observed_basis : "-"}</TableCell>
                   <TableCell><OnOff value={g.approved_enabled} /></TableCell>
                   <TableCell className="text-right text-sm">{g.exposed_count} / {g.tool_count}</TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
-        </CardContent>
-      </Card>
+        </div>
+      </DetailSection>
 
-      <Card>
-        <CardHeader>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <CardTitle className="text-sm">
-              도구 노출 상태 ({eff.tools.filter((t) => t.exposed).length} 노출 / {eff.tools.length} 전체)
-            </CardTitle>
-            <label className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Switch checked={onlyExposed} onCheckedChange={setOnlyExposed} />
-              노출된 도구만
-            </label>
-          </div>
-        </CardHeader>
-        <CardContent>
+      <DetailSection
+        title={`도구 노출 상태 (${eff.tools.filter((t) => t.exposed).length} 노출 / ${eff.tools.length} 전체)`}
+        actions={
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Switch checked={onlyExposed} onCheckedChange={setOnlyExposed} />
+            노출된 도구만
+          </label>
+        }
+      >
+        <div className="rounded-md border">
           <Table>
             <TableHeader>
               <TableRow>
@@ -539,21 +558,21 @@ function EffectivePanel({ eff }: { eff: McpEffectiveState }) {
                   <TableCell>
                     <div className="flex items-center gap-1.5">
                       <span className="font-mono text-sm">{t.name}</span>
-                      {t.mutating && <Badge variant="outline" className="h-4 border-orange-300 px-1 text-[10px] text-orange-700 dark:text-orange-300">변경</Badge>}
+                      {t.mutating && <MutatingBadge />}
                     </div>
                   </TableCell>
                   <TableCell className="text-xs">{t.group_key || "-"}</TableCell>
                   <TableCell><RiskBadge risk={t.risk} /></TableCell>
                   <TableCell><OnOff value={t.exposed} /></TableCell>
-                  <TableCell>{t.blocked ? <Badge variant="destructive" className="text-[10px]">차단</Badge> : "-"}</TableCell>
+                  <TableCell>{t.blocked ? <ToneBadge tone="danger" size="sm" label="차단" /> : "-"}</TableCell>
                   <TableCell>{t.requires_approval ? <ShieldCheck className="h-4 w-4 text-violet-600" /> : "-"}</TableCell>
                   <TableCell><RowSourceBadge source={t.source} /></TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
-        </CardContent>
-      </Card>
+        </div>
+      </DetailSection>
     </div>
   )
 }
@@ -568,7 +587,7 @@ function ScopesPanel({ name, eff, onChanged, canEdit }: {
   const [rt, setRt] = useState("")
   const [action, setAction] = useState("any")
   const [effect, setEffect] = useState("deny")
-  const [patterns, setPatterns] = useState("")
+  const [patterns, setPatterns] = useState<string[]>([])
   const [desc, setDesc] = useState("")
 
   const [simType, setSimType] = useState("")
@@ -587,24 +606,23 @@ function ScopesPanel({ name, eff, onChanged, canEdit }: {
   const resourceTypes = Array.from(new Set(eff.scopes.map((s) => s.resource_type)))
 
   return (
-    <div className="flex flex-col gap-4">
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm">리소스 범위 규칙</CardTitle>
-          <p className="text-xs text-muted-foreground">
+    <div className="flex flex-col gap-6">
+      <DetailSection
+        title="리소스 범위 규칙"
+        description={<>
             도구가 접근할 수 있는 리소스(DB·토픽·버킷·경로 등)를 리소스 유형 × 동작 × 효과 × 패턴(fnmatch)으로 정규화한 규칙입니다.
             평가 순서는 protect &gt; deny &gt; allow 목록이며, delete 는 write 규칙도 함께 적용됩니다.
             설정 가져오기로 수집된 규칙 <OriginBadge origin="server_config" className="align-middle" /> 은 재가져오기 시 갱신되고,
             수동 규칙 <OriginBadge origin="argus" className="align-middle" /> 은 Argus 에서만 관리됩니다.
-          </p>
-        </CardHeader>
-        <CardContent className="space-y-3">
+        </>}
+      >
+        <div className="rounded-md border">
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>리소스 유형</TableHead>
                 <TableHead>동작</TableHead>
-                <TableHead>효과</TableHead>
+                <TableHead><InfoTip tip="allow — 이 패턴만 허용(맞지 않으면 거부) · deny — 거부 · protect — 보호 대상, 다른 규칙보다 먼저 거부. 우선순위는 protect > deny > allow.">효과</InfoTip></TableHead>
                 <TableHead>패턴</TableHead>
                 <TableHead>설정 키</TableHead>
                 <TableHead>출처</TableHead>
@@ -627,13 +645,13 @@ function ScopesPanel({ name, eff, onChanged, canEdit }: {
                     <div className="flex flex-wrap gap-1">
                       {s.patterns.map((p) => <code key={p} className="rounded bg-muted px-1 text-[11px]">{p}</code>)}
                     </div>
-                    {s.description && <div className="mt-0.5 text-[11px] text-muted-foreground">{s.description}</div>}
+                    {s.description && <div className="mt-0.5 text-[11px]">{s.description}</div>}
                   </TableCell>
-                  <TableCell className="font-mono text-[11px] text-muted-foreground">{s.config_key || "-"}</TableCell>
+                  <TableCell className="font-mono text-[11px]">{s.config_key || "-"}</TableCell>
                   <TableCell><RowSourceBadge source={s.source} /></TableCell>
                   <TableCell>
                     {canEdit && (
-                    <Button
+                    <Tip label="삭제"><Button
                       variant="ghost"
                       size="icon"
                       className="h-7 w-7"
@@ -648,13 +666,14 @@ function ScopesPanel({ name, eff, onChanged, canEdit }: {
                       }}
                     >
                       <Trash2 className="h-4 w-4" />
-                    </Button>
+                    </Button></Tip>
                     )}
                   </TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
+        </div>
           {canEdit && (
           <div className="grid gap-2 rounded-md border p-3 sm:grid-cols-[1fr_110px_110px_2fr_1fr_auto] sm:items-end">
             <div className="grid gap-1">
@@ -683,8 +702,8 @@ function ScopesPanel({ name, eff, onChanged, canEdit }: {
               </Select>
             </div>
             <div className="grid gap-1">
-              <Label className="text-xs">패턴 (쉼표 구분, fnmatch)</Label>
-              <Input value={patterns} onChange={(e) => setPatterns(e.target.value)} placeholder="예: prod_*, finance" className="h-8" />
+              <Label className="text-xs">패턴 (fnmatch, 입력 후 Enter)</Label>
+              <TagInput size="sm" mono value={patterns} onChange={setPatterns} placeholder="예: prod_* 입력 후 Enter" />
             </div>
             <div className="grid gap-1">
               <Label className="text-xs">설명</Label>
@@ -692,17 +711,17 @@ function ScopesPanel({ name, eff, onChanged, canEdit }: {
             </div>
             <Button
               size="sm"
-              disabled={!rt.trim() || !patterns.trim()}
+              disabled={!rt.trim() || patterns.length === 0}
               onClick={async () => {
                 try {
                   await addMcpScope(name, {
                     resource_type: rt.trim(),
                     action,
                     effect,
-                    patterns: patterns.split(",").map((p) => p.trim()).filter(Boolean),
+                    patterns,
                     description: desc.trim() || undefined,
                   })
-                  setPatterns("")
+                  setPatterns([])
                   setDesc("")
                   await onChanged()
                 } catch (e) {
@@ -714,19 +733,16 @@ function ScopesPanel({ name, eff, onChanged, canEdit }: {
             </Button>
           </div>
           )}
-        </CardContent>
-      </Card>
+      </DetailSection>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm">접근 시뮬레이터</CardTitle>
-          <p className="text-xs text-muted-foreground">
+      <DetailSection
+        title="접근 시뮬레이터"
+        description={<>
             이 배포의 도구가 특정 리소스에 접근할 수 있는지 평가합니다. 실제 서버 호출은 하지 않습니다.
             “서버 설정” 은 위 규칙, “승인 정책” 은 승인 범위, “둘 다” 는 두 계층을 모두 통과해야 허용입니다.
             에이전트를 고르면 “둘 다” 에 그 에이전트의 리소스 범위까지 적용합니다.
-          </p>
-        </CardHeader>
-        <CardContent className="space-y-3">
+        </>}
+      >
           <div className="grid gap-2 sm:grid-cols-[1fr_2fr_110px_130px_150px_auto] sm:items-end">
             <div className="grid gap-1">
               <Label className="text-xs">리소스 유형</Label>
@@ -798,7 +814,7 @@ function ScopesPanel({ name, eff, onChanged, canEdit }: {
               <div className="font-medium">
                 결과: {sim.decision === "allow" ? "허용" : sim.decision === "deny" ? "거부" : "알 수 없음"}
               </div>
-              <div className="text-xs text-muted-foreground">{sim.reason}</div>
+              <div className="text-xs">{sim.reason}</div>
               {sim.by_layer && (
                 <div className="mt-1 grid gap-0.5 text-xs">
                   <div>서버 설정: <b>{sim.by_layer.observed.decision}</b> — {sim.by_layer.observed.reason}</div>
@@ -820,8 +836,7 @@ function ScopesPanel({ name, eff, onChanged, canEdit }: {
               )}
             </div>
           )}
-        </CardContent>
-      </Card>
+      </DetailSection>
     </div>
   )
 }
@@ -847,28 +862,26 @@ function CredentialPanel({ name, onChanged, canEdit }: { name: string; onChanged
   useEffect(load, [load])
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-sm">
-          <KeyRound className="h-4 w-4" /> 수집용 자격증명 <OriginBadge origin="argus" />
-        </CardTitle>
-        <p className="text-xs text-muted-foreground">
+    <DetailSection
+      icon={<KeyRound />}
+      title={<>수집용 자격증명 <OriginBadge origin="argus" /></>}
+      description={<>
           Argus 가 이 배포에서 도구 목록을 수집하거나 헬스 체크할 때 사용하는 자격증명입니다. 암호화 저장되며 값은 다시 표시되지 않습니다.
           mcp.json 가져오기 시 환경변수·헤더의 값은 저장하지 않고 키 이름만 기록합니다.
-        </p>
-      </CardHeader>
-      <CardContent className="space-y-4">
+      </>}
+      className="space-y-4"
+    >
         {err ? (
-          <p className="text-sm text-muted-foreground">{err}</p>
+          <p className="text-sm">{err}</p>
         ) : cred === undefined ? (
           <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
         ) : cred ? (
           <div className="flex flex-wrap items-center gap-3 rounded-md border p-3 text-sm">
-            <Badge variant="outline">{cred.kind}</Badge>
+            <Badge variant="outline">{authMethodLabel(cred.kind)}</Badge>
             {cred.header_name && <span className="font-mono text-xs">{cred.header_name}</span>}
             {cred.username && <span className="text-xs">{cred.username}</span>}
             <span className="font-mono text-xs">{cred.masked}</span>
-            <span className="text-xs text-muted-foreground">{cred.updated_by || "-"} · {fmtDate(cred.updated_at)}</span>
+            <span className="text-xs">{cred.updated_by || "-"} · {fmtDate(cred.updated_at)}</span>
             {canEdit && (
             <Button
               size="sm"
@@ -905,9 +918,9 @@ function CredentialPanel({ name, onChanged, canEdit }: { name: string; onChanged
             <Select value={kind} onValueChange={setKind}>
               <SelectTrigger size="sm" className="h-8"><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="bearer">bearer</SelectItem>
-                <SelectItem value="api_key">api_key</SelectItem>
-                <SelectItem value="basic">basic</SelectItem>
+                <SelectItem value="bearer">{AUTH_METHOD_LABEL.bearer}</SelectItem>
+                <SelectItem value="api_key">{AUTH_METHOD_LABEL.api_key}</SelectItem>
+                <SelectItem value="basic">{AUTH_METHOD_LABEL.basic}</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -947,8 +960,7 @@ function CredentialPanel({ name, onChanged, canEdit }: { name: string; onChanged
           </Button>
         </div>
         )}
-      </CardContent>
-    </Card>
+    </DetailSection>
   )
 }
 
@@ -973,16 +985,15 @@ function AgentsPanel({ name, onChanged, canEdit, isAdmin }: {
   const keyOf = (u: McpUnregistered) => `${u.name}|${u.url ?? ""}`
 
   return (
-    <div className="flex flex-col gap-4">
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm">이 배포를 사용하는 AI Agent</CardTitle>
-          <p className="text-xs text-muted-foreground">
+    <div className="flex flex-col gap-6">
+      <DetailSection
+        title="이 배포를 사용하는 AI Agent"
+        description={<>
             에이전트별로 허용 그룹·도구(AI Agent 상세 → MCP 서버)와 리소스 범위(아래 “범위 편집”)를 좁힐 수 있습니다.
             정책 번들에 에이전트별로 실려 강제(enforce) 모드에서 서버가 인스턴스 정책 위에 추가로 집행합니다.
-          </p>
-        </CardHeader>
-        <CardContent>
+        </>}
+      >
+        <div className="rounded-md border">
           <Table>
             <TableHeader>
               <TableRow>
@@ -990,13 +1001,13 @@ function AgentsPanel({ name, onChanged, canEdit, isAdmin }: {
                 <TableHead>상태</TableHead>
                 <TableHead>허용 그룹</TableHead>
                 <TableHead>허용 도구</TableHead>
-                <TableHead className="text-right">실효 도구</TableHead>
+                <TableHead className="text-right"><InfoTip tip="이 에이전트가 실제로 쓸 수 있는 도구 수입니다 — 에이전트에 허용한 그룹 · 도구와 배포에서 노출되는 도구가 겹치는 것만 셉니다.">실효 도구</InfoTip></TableHead>
                 <TableHead>리소스 범위</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {agents === null ? (
-                <TableRow><TableCell colSpan={6} className="h-14 text-center text-muted-foreground">불러오는 중...</TableCell></TableRow>
+                <TableRow><TableCell colSpan={6} className="h-14 text-center text-muted-foreground">불러오는 중…</TableCell></TableRow>
               ) : agents.length === 0 ? (
                 <TableRow><TableCell colSpan={6} className="h-14 text-center text-muted-foreground">연결된 에이전트가 없습니다.</TableCell></TableRow>
               ) : agents.map((a) => (
@@ -1005,11 +1016,11 @@ function AgentsPanel({ name, onChanged, canEdit, isAdmin }: {
                     <a href={`/dashboard/ai-agents?agent=${encodeURIComponent(a.agent_name)}`} className="font-medium text-primary hover:underline">
                       {a.agent_display_name || a.agent_name}
                     </a>
-                    <div className="text-xs text-muted-foreground">{a.agent_name}</div>
+                    <div className="text-xs">{a.agent_name}</div>
                   </TableCell>
                   <TableCell>{a.agent_status ? <StatusBadge status={a.agent_status} /> : "-"}</TableCell>
                   <TableCell className="text-xs">{a.allowed_groups?.length ? a.allowed_groups.join(", ") : <span className="text-muted-foreground">전체</span>}</TableCell>
-                  <TableCell className="text-xs">{a.allowed_tools?.length ? a.allowed_tools.join(", ") : <span className="text-muted-foreground">전체</span>}</TableCell>
+                  <TableCell className="text-xs">{a.allowed_groups?.length ? a.allowed_groups.join(", ") : <span >전체</span>}</TableCell>
                   <TableCell className="text-right">{a.effective_tool_count}</TableCell>
                   <TableCell>
                     <div className="flex items-center gap-2">
@@ -1022,11 +1033,11 @@ function AgentsPanel({ name, onChanged, canEdit, isAdmin }: {
                             </span>
                           ))}
                           {a.resource_scopes.length > 3 && (
-                            <span className="text-xs text-muted-foreground">+{a.resource_scopes.length - 3}</span>
+                            <span className="text-xs">+{a.resource_scopes.length - 3}</span>
                           )}
                         </span>
                       ) : (
-                        <span className="text-xs text-muted-foreground">인스턴스 범위만</span>
+                        <span className="text-xs">인스턴스 범위만</span>
                       )}
                       {canEdit && (
                         <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => setScopeAgent(a)}>
@@ -1039,8 +1050,8 @@ function AgentsPanel({ name, onChanged, canEdit, isAdmin }: {
               ))}
             </TableBody>
           </Table>
-        </CardContent>
-      </Card>
+        </div>
+      </DetailSection>
 
       <AgentScopeDialog
         name={name}
@@ -1050,14 +1061,11 @@ function AgentsPanel({ name, onChanged, canEdit, isAdmin }: {
       />
 
       {isAdmin && unregistered.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm">미등록 MCP 연결을 이 배포로 연결 (관리자)</CardTitle>
-            <p className="text-xs text-muted-foreground">
-              AI Agent 에 이름·URL 로 직접 입력된 연결을 이 배포와 연결하면 카탈로그 등록 상태가 되어 실효 도구·정책 번들에 반영됩니다.
-            </p>
-          </CardHeader>
-          <CardContent className="space-y-2">
+        <DetailSection
+          title="미등록 MCP 연결을 이 배포로 연결 (관리자)"
+          description="AI Agent 에 이름·URL 로 직접 입력된 연결을 이 배포와 연결하면 카탈로그 등록 상태가 되어 실효 도구·정책 번들에 반영됩니다."
+        >
+          <div className="rounded-md border">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -1085,13 +1093,14 @@ function AgentsPanel({ name, onChanged, canEdit, isAdmin }: {
                         />
                       </TableCell>
                       <TableCell className="font-medium">{u.name}</TableCell>
-                      <TableCell className="break-all font-mono text-xs text-muted-foreground">{u.url || "-"}</TableCell>
+                      <TableCell className="break-all font-mono text-xs">{u.url || "-"}</TableCell>
                       <TableCell className="text-xs">{u.agents.join(", ")}</TableCell>
                     </TableRow>
                   )
                 })}
               </TableBody>
             </Table>
+          </div>
             <Button
               size="sm"
               disabled={selected.size === 0}
@@ -1110,8 +1119,7 @@ function AgentsPanel({ name, onChanged, canEdit, isAdmin }: {
             >
               선택 항목 연결
             </Button>
-          </CardContent>
-        </Card>
+        </DetailSection>
       )}
     </div>
   )
@@ -1143,7 +1151,7 @@ function SyncLogPanel({ name }: { name: string }) {
         </TableHeader>
         <TableBody>
           {rows === null ? (
-            <TableRow><TableCell colSpan={7} className="h-14 text-center text-muted-foreground">불러오는 중...</TableCell></TableRow>
+            <TableRow><TableCell colSpan={7} className="h-14 text-center text-muted-foreground">불러오는 중…</TableCell></TableRow>
           ) : rows.length === 0 ? (
             <TableRow><TableCell colSpan={7} className="h-14 text-center text-muted-foreground">수집 이력이 없습니다.</TableCell></TableRow>
           ) : rows.map((r) => (
@@ -1152,10 +1160,10 @@ function SyncLogPanel({ name }: { name: string }) {
                 <TableCell className="text-xs">{fmtDate(r.created_at)}</TableCell>
                 <TableCell className="text-xs">{r.kind}</TableCell>
                 <TableCell className="text-xs">{r.source || "-"}</TableCell>
-                <TableCell>{r.ok ? <Badge variant="outline" className="text-emerald-700">성공</Badge> : <Badge variant="destructive">실패</Badge>}</TableCell>
-                <TableCell className="max-w-md truncate text-xs text-muted-foreground" title={r.message ?? ""}>{r.message || (r.diff ? "변경 내역 보기" : "-")}</TableCell>
+                <TableCell>{r.ok ? <ToneBadge tone="success">성공</ToneBadge> : <ToneBadge tone="danger">실패</ToneBadge>}</TableCell>
+                <TableCell className="max-w-md truncate text-xs" title={r.message ?? ""}>{r.message || (r.diff ? "변경 내역 보기" : "-")}</TableCell>
                 <TableCell className="text-right text-xs">{r.duration_ms != null ? `${r.duration_ms}ms` : "-"}</TableCell>
-                <TableCell className="text-xs text-muted-foreground">{r.triggered_by || "-"}</TableCell>
+                <TableCell className="text-xs">{r.triggered_by || "-"}</TableCell>
               </TableRow>
               {open === r.id && r.diff && (
                 <TableRow className="hover:bg-transparent">
@@ -1202,7 +1210,7 @@ export function DiffView({ diff }: { diff: Record<string, unknown> }) {
     diff.scopes === undefined
   return (
     <div className="space-y-2">
-      {nothing && <p className="text-xs text-muted-foreground">변경 사항이 없습니다.</p>}
+      {nothing && <p className="text-xs">변경 사항이 없습니다.</p>}
       <NameList label="새 도구" names={tools.added} tone="text-emerald-700 dark:text-emerald-400" />
       <NameList label="변경된 도구" names={tools.changed} tone="text-amber-700 dark:text-amber-400" />
       <NameList label="정의에서 제거된 도구" names={tools.removed} tone="text-red-700 dark:text-red-400" />
@@ -1267,7 +1275,7 @@ function CollectDialog({
     try {
       const r = await collectMcpDeployment(dep.name, { source, dry_run: dryRun })
       if (!r.ok) {
-        toast.error(r.message || "도구를 수집하지 못했습니다.")
+        notifyError(r.message, "도구를 수집하지 못했습니다.")
         setPreview(r)
         return
       }
@@ -1292,7 +1300,7 @@ function CollectDialog({
           <DialogTitle>도구·리소스 수집</DialogTitle>
         </DialogHeader>
         <div className="space-y-3 text-sm">
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs">
             표준 MCP(Streamable HTTP: initialize → tools/list · resources/list · prompts/list)로 수집합니다.
             Argus Forge 서버는 manifest(<code>/manifest</code>)를 먼저 시도하고, 없으면 도구 REST(<code>/tools</code>)로 수집합니다.
             stdio 서버는 실행하지 않습니다.
@@ -1317,10 +1325,10 @@ function CollectDialog({
             <div className="rounded-md border p-3">
               {preview.ok ? (
                 <>
-                  <div className="mb-2 text-xs text-muted-foreground">
+                  <div className="mb-2 text-xs">
                     경로: {preview.source} · 도구 {preview.tool_count}개 · 노출 {preview.exposed_count}개
                   </div>
-                  {preview.message && <div className="mb-2 text-xs text-muted-foreground">{preview.message}</div>}
+                  {preview.message && <div className="mb-2 text-xs">{preview.message}</div>}
                   {preview.diff && <DiffView diff={preview.diff} />}
                 </>
               ) : (
@@ -1383,15 +1391,16 @@ function ConfigImportDialog({
           <DialogTitle>Argus Forge 설정(config.yaml) 가져오기</DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs">
             서버의 config.yaml 을 붙여넣으면 도구 그룹 on/off(<code>allow.*</code>), 리소스 범위(허용·차단·보호 목록), limits,
             대상 시스템·실행 계정을 추출합니다. 비밀번호·토큰 등 비밀값은 저장하지 않습니다.
           </p>
-          <Textarea
+          <CodeEditor
+            language="yaml"
+            aria-label="config.yaml 내용"
             value={content}
-            onChange={(e) => { setContent(e.target.value); setPreview(null) }}
-            rows={14}
-            className="font-mono text-xs"
+            onChange={(v) => { setContent(v); setPreview(null) }}
+            minHeight={280}
             placeholder={"mcp:\n  host: 0.0.0.0\n  port: 8080\nhive:\n  ...\nallow:\n  write: false"}
           />
           <label className="flex items-center gap-2 text-xs">
@@ -1553,14 +1562,14 @@ function DeploymentEditDialog({
           <div className="grid gap-1.5"><A>호스트</A><Input value={f.host} onChange={set("host")} /></div>
           <div className="grid gap-1.5"><A>자동 수집 주기(분, 비우면 수동)</A><Input type="number" min={0} value={f.collect_interval_minutes} onChange={set("collect_interval_minutes")} /></div>
           <div className="grid gap-1.5"><A>감사 이벤트 보존(일)</A><Input type="number" min={1} max={3650} value={f.audit_retention_days} onChange={set("audit_retention_days")} /></div>
-          <p className="text-xs text-muted-foreground sm:col-span-2">정책 모드(observe/enforce)는 “승인 정책” 탭에서 변경합니다 (이력이 남음).</p>
+          <p className="text-xs sm:col-span-2">정책 모드(observe/enforce)는 “승인 정책” 탭에서 변경합니다 (이력이 남음).</p>
           <div className="grid gap-1.5"><A>소유자 이메일</A><Input value={f.owner_email} onChange={set("owner_email")} /></div>
           <div className="grid gap-1.5"><A>부서</A><Input value={f.department} onChange={set("department")} /></div>
           <div className="grid gap-1.5 sm:col-span-2"><A>설명</A><Textarea value={f.description} onChange={set("description")} rows={2} /></div>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>취소</Button>
-          <Button onClick={save} disabled={saving}>{saving ? "저장 중..." : "저장"}</Button>
+          <Button onClick={save} disabled={saving}>{saving ? "저장 중…" : "저장"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

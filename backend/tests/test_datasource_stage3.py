@@ -18,6 +18,7 @@ import asyncio
 import ssl
 
 from pydantic import ValidationError
+from sqlalchemy import select
 
 import app.catalog.models as cm
 from app.catalog import service, topology_service
@@ -147,6 +148,25 @@ async def _test_sync_scope() -> None:
             assert calls[-1]["ssl"] is None
             assert (await db.get(cm.Dataset, ids["t2"])).status == "removed"
             assert (await db.get(cm.Dataset, ids["dotted"])).status == "active"   # 오매칭 없음
+
+        # 2b) 수집 범위 테이블 필터(3단계) — 걸러진 테이블은 갱신하지 않고, 원본에 없어도 제거로 표시하지 않음
+        result_tables.append(catalog_sync.TableInfo(database="app", name="tmp_load", table_type="BASE TABLE",
+                                                    table_comment="", columns=[]))
+        async with make_db() as db:
+            for i in ids.values():
+                (await db.get(cm.Dataset, i)).status = "active"
+            await db.commit()
+        async with make_db() as db:
+            res = await catalog_sync.sync_datasource_metadata(
+                db, dsid, None, lambda container, table: container == "app" and table == "t1")
+            assert (res.tables_total, res.tables_created, res.tables_removed) == (1, 0, 0)
+            assert (await db.get(cm.Dataset, ids["t2"])).status == "active"     # 범위 밖 — 판정하지 않음
+            names = (await db.execute(select(cm.Dataset.name))).scalars().all()
+            assert "app.tmp_load" not in names
+            res = await catalog_sync.sync_datasource_metadata(
+                db, dsid, None, lambda container, table: not table.startswith("tmp_"))
+            assert res.tables_removed == 1 and (await db.get(cm.Dataset, ids["t2"])).status == "removed"
+        del result_tables[1:]
 
         # 3) 원본 테이블 0개 → 제거 반영 생략
         result_tables.clear()

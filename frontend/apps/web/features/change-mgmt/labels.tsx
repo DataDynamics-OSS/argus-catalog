@@ -3,23 +3,24 @@
 import { useEffect, useState } from "react"
 import { ChevronDown } from "lucide-react"
 
-import { Badge } from "@workspace/ui/components/badge"
+import { StatusBadge as ToneBadge, type StatusTone } from "@workspace/ui/components/status-badge"
 import { RichTextViewer } from "@/components/comments/rich-text-viewer"
 import { fetchUsers } from "@/features/users/api"
 import type { User } from "@/features/users/data/schema"
 import type { ChangeType, CRStatus, Priority } from "./api"
 
-export const STATUS_STYLE: Record<CRStatus, string> = {
-  DRAFT: "bg-gray-200 text-gray-700",
-  SUBMITTED: "bg-blue-200 text-blue-800",
-  APPROVING: "bg-amber-200 text-amber-800",
-  APPROVED: "bg-emerald-200 text-emerald-800",
-  REJECTED: "bg-rose-200 text-rose-800",
-  SCHEDULED: "bg-violet-200 text-violet-800",
-  APPLIED: "bg-green-300 text-green-900",
-  ROLLED_BACK: "bg-orange-200 text-orange-800",
-  CANCELLED: "bg-gray-300 text-gray-800",
-  CLOSED: "bg-gray-400 text-gray-900",
+/** 상태 톤(TODO-107) — 진행(상신 · 결재 · 적용 예정) 파랑, 승인 · 적용 초록, 반려 빨강, 롤백 주황, 취소 · 종료 무채색 */
+export const STATUS_TONE: Record<CRStatus, StatusTone> = {
+  DRAFT: "neutral",
+  SUBMITTED: "info",
+  APPROVING: "info",
+  APPROVED: "success",
+  REJECTED: "danger",
+  SCHEDULED: "info",
+  APPLIED: "success",
+  ROLLED_BACK: "warning",
+  CANCELLED: "muted",
+  CLOSED: "muted",
 }
 
 export const STATUS_LABEL: Record<CRStatus, string> = {
@@ -39,7 +40,8 @@ export const CHANGE_TYPE_LABEL: Record<ChangeType, string> = {
   BREAKING: "호환성 깨짐 (Breaking)",
   NON_BREAKING: "호환 유지 (Non-breaking)",
   ADDITIVE: "추가 (Additive)",
-  COSMETIC: "표기·메타데이터 (Cosmetic)",
+  // 기록용 — 승인·적용해도 데이터셋을 바꾸지 않는다(DEF-065)
+  COSMETIC: "표기·메타데이터 — 기록용 (Cosmetic)",
 }
 
 export const PRIORITY_LABEL: Record<Priority, string> = {
@@ -49,8 +51,21 @@ export const PRIORITY_LABEL: Record<Priority, string> = {
   LOW: "낮음 (Low)",
 }
 
+/** 우선순위 톤(DEF-116) — 긴급 빨강 · 높음 주황 · 보통 · 낮음 무채색 */
+export const PRIORITY_TONE: Record<Priority, StatusTone> = {
+  EMERGENCY: "danger",
+  HIGH: "warning",
+  NORMAL: "neutral",
+  LOW: "neutral",
+}
+
+/** 우선순위 배지 — 영어 병기 없이 "긴급" · "높음" … (선택 목록은 `PRIORITY_LABEL` 그대로) */
+export function PriorityBadge({ priority }: { priority: Priority }) {
+  return <ToneBadge tone={PRIORITY_TONE[priority] ?? "neutral"} label={(PRIORITY_LABEL[priority] ?? priority).split(" (")[0]} />
+}
+
 export function StatusBadge({ status }: { status: CRStatus }) {
-  return <Badge className={STATUS_STYLE[status]}>{STATUS_LABEL[status]}</Badge>
+  return <ToneBadge tone={STATUS_TONE[status] ?? "neutral"} label={STATUS_LABEL[status] ?? status} />
 }
 
 const userDisplayName = (u: User) => `${u.lastName ?? ""}${u.firstName ?? ""}`.trim() || u.username
@@ -113,7 +128,7 @@ export function DescriptionPreview({ html }: { html: string }) {
   if (!text) return null
   const long = text.length > 100
   return (
-    <div className="mt-2 text-sm text-muted-foreground">
+    <div className="mt-2 text-sm">
       {open ? (
         <RichTextViewer html={html} />
       ) : (

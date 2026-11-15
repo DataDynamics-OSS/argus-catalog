@@ -36,7 +36,7 @@ from app.permissions.models import Permission
 from app.settings.models import CatalogConfiguration
 from app.usermgr import ownership
 from app.usermgr import service as usvc
-from app.usermgr.models import ArgusRole, ArgusUser
+from app.usermgr.models import ArgusRole, ArgusUser, ArgusUserPreference
 
 ADMIN_ROLE = settings.auth_keycloak_admin_role
 
@@ -58,7 +58,7 @@ async def factory():
     engine = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all, tables=[
-            ArgusRole.__table__, ArgusUser.__table__, Permission.__table__, CatalogConfiguration.__table__,
+            ArgusRole.__table__, ArgusUser.__table__, ArgusUserPreference.__table__, Permission.__table__, CatalogConfiguration.__table__,
             # 사용자 삭제 시 소유 자산 확인(2단계)이 읽는 테이블
             *(a.model.__table__ for a in ownership._registry()),
         ])
@@ -287,6 +287,19 @@ async def test_me_always_denies_admin_menus(factory):
         me = await perm.get_my_permissions(tu("u"), s)
         assert {"users", "settings", "permissions", "mlflow-files", "oci-files"} <= set(me["denied_menus"])
         assert (await perm.get_my_permissions(tu("a", ADMIN_ROLE), s))["denied_menus"] == []
+
+
+async def test_me_opens_sync_runs_menu_to_sync_granted_role(factory):
+    """메타데이터 수집(관리 메뉴)은 수집 권한(datasources.sync)을 명시 허용받은 역할에도 열린다(TODO-074)."""
+    async with factory() as s:
+        assert "sync-runs" in (await perm.get_my_permissions(tu("u"), s))["denied_menus"]
+        await perm._put_matrix(s, "FEATURE", {"datasources.sync": ["argus-user"]})
+        me = await perm.get_my_permissions(tu("u"), s)
+        assert "sync-runs" not in me["denied_menus"]
+        assert {"users", "settings", "permissions"} <= set(me["denied_menus"])
+        # 허용받지 않은 역할(superuser)은 그대로 막힌다
+        sup = await perm.get_my_permissions(tu("su", "argus-superuser"), s)
+        assert "sync-runs" in sup["denied_menus"]
 
 
 async def test_require_menu_server_enforced(factory):

@@ -1,6 +1,7 @@
 "use client"
 
 import { Lock } from "lucide-react"
+import { StatusBadge, type StatusMeta, type StatusTone } from "@workspace/ui/components/status-badge"
 import { cn } from "@workspace/ui/lib/utils"
 
 
@@ -13,35 +14,31 @@ export const STAGE_LABEL: Record<ModelStage, string> = {
   ARCHIVED: "보관",
 }
 
-const STAGE_CLASS: Record<ModelStage, string> = {
-  NONE: "border-zinc-200 bg-zinc-50 text-zinc-500",
-  STAGING: "border-amber-200 bg-amber-50 text-amber-700",
-  PRODUCTION: "border-emerald-200 bg-emerald-50 text-emerald-700",
-  ARCHIVED: "border-zinc-200 bg-zinc-100 text-zinc-500",
+// 단계 톤(TODO-107) — 스테이징은 환경 색(주황)과 맞춤
+const STAGE_TONE: Record<ModelStage, StatusTone> = {
+  NONE: "neutral",
+  STAGING: "warning",
+  PRODUCTION: "success",
+  ARCHIVED: "muted",
 }
 
 export function StageBadge({ stage, version, className }: { stage: ModelStage; version?: number; className?: string }) {
   return (
-    <span className={cn("inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium", STAGE_CLASS[stage], className)}>
+    <StatusBadge tone={STAGE_TONE[stage]} className={className}>
       {STAGE_LABEL[stage]}{version !== undefined ? ` v${version}` : ""}
-    </span>
+    </StatusBadge>
   )
 }
 
-const STATUS_LABEL: Record<string, { label: string; cls: string }> = {
-  READY: { label: "준비됨", cls: "bg-blue-500" },
-  PENDING_REGISTRATION: { label: "등록 중", cls: "bg-zinc-400" },
-  FAILED_REGISTRATION: { label: "등록 실패", cls: "bg-red-500" },
+const VERSION_STATUS: Record<string, StatusMeta> = {
+  READY: { label: "준비됨", tone: "success" },
+  PENDING_REGISTRATION: { label: "등록 중", tone: "info" },
+  FAILED_REGISTRATION: { label: "등록 실패", tone: "danger" },
 }
 
 /** 버전 등록 상태 배지 — 준비됨(READY) 은 굳이 보여 주지 않는 곳이 많아 호출 측에서 고른다. */
 export function VersionStatusBadge({ status }: { status: string | null }) {
-  const s = STATUS_LABEL[status ?? ""] ?? { label: status ?? "알 수 없음", cls: "bg-orange-500" }
-  return (
-    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold text-white ${s.cls}`}>
-      {s.label}
-    </span>
-  )
+  return <StatusBadge {...(VERSION_STATUS[status ?? ""] ?? { label: status ?? "알 수 없음", tone: "warning" })} />
 }
 
 /** MLflow 모델 파일 브라우저에서 해당 경로를 여는 주소. */
@@ -58,7 +55,7 @@ export function frameworkLabel(c: ModelDetail["catalog"]): string | null {
 /** 쓰기 권한이 없을 때 보여 주는 안내. */
 export function ReadOnlyNote({ what }: { what: string }) {
   return (
-    <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+    <p className="flex items-center gap-1.5 text-xs">
       <Lock className="h-3.5 w-3.5" />
       {what}은(는) 모델 소유자 또는 관리자만 변경할 수 있습니다.
     </p>
@@ -101,7 +98,7 @@ export function metricsWithDelta(all: VersionMetrics[], version: number) {
 export function MetricChip({ name, value, delta, improved }: { name: string; value: number; delta?: number; improved?: boolean }) {
   return (
     <span className="inline-flex items-baseline gap-1 rounded-md border bg-muted/30 px-2 py-0.5 text-xs">
-      <span className="text-muted-foreground">{name}</span>
+      <span >{name}</span>
       <span className="font-mono font-medium">{formatMetric(value)}</span>
       {delta !== undefined && delta !== 0 && (
         <span className={cn("font-mono text-[11px]", improved ? "text-emerald-600" : "text-red-600")}>

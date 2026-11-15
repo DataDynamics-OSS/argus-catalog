@@ -1,5 +1,7 @@
 "use client"
 
+import { Tip } from "@/components/tip"
+import { CodeEditor } from "@/components/code-editor"
 import { useId, useState } from "react"
 import { Eye, EyeOff } from "lucide-react"
 
@@ -14,6 +16,8 @@ import {
 } from "@workspace/ui/components/select"
 import { Switch } from "@workspace/ui/components/switch"
 import type { DatasourceFieldDef } from "@/features/datasources/datasource-configs"
+import { TagInput } from "@/components/tag-input"
+import { decodeList } from "@/lib/text-list"
 
 // 데이터 소스 유형별 동적 연결 설정 폼
 export function ConfigForm({
@@ -92,6 +96,47 @@ export function ConfigForm({
           )
         }
 
+        if (field.type === "list") {
+          // 값 목록 — 배지 입력, 문자열 배열로 저장(예전 쉼표 문자열도 읽음, TODO-144)
+          const raw = values[field.key]
+          return (
+            <div key={field.key} className="grid gap-1.5">
+              <Label htmlFor={id} className="text-sm">
+                {field.label}
+                {field.required && <span className="text-destructive ml-0.5">*</span>}
+              </Label>
+              <TagInput
+                id={id}
+                mono
+                commaSeparates
+                placeholder={field.placeholder}
+                value={Array.isArray(raw) ? decodeList(raw.map(String)) : decodeList(typeof raw === "string" ? raw : null)}
+                onChange={(v) => onChange(field.key, v)}
+              />
+            </div>
+          )
+        }
+
+        if (field.type === "textarea") {
+          // 여러 줄 값(k=v 목록 등) — 한 줄 입력란은 줄바꿈을 지워 값이 붙어 버린다
+          return (
+            <div key={field.key} className="grid gap-1.5">
+              <Label htmlFor={id} className="text-sm">
+                {field.label}
+                {field.required && <span className="text-destructive ml-0.5">*</span>}
+              </Label>
+              <CodeEditor
+                id={id}
+                placeholder={field.placeholder}
+                value={String(values[field.key] ?? "")}
+                onChange={(v) => onChange(field.key, v)}
+                minHeight={72}
+                maxHeight={240}
+              />
+            </div>
+          )
+        }
+
         const isStoredSecret = storedSecrets.includes(field.key)
         const isPassword = field.type === "password" || isStoredSecret
         const showPw = showPasswords[field.key] ?? false
@@ -119,14 +164,14 @@ export function ConfigForm({
                 className={`h-9 text-sm ${isPassword ? "pr-9" : ""}`}
               />
               {isPassword && (
-                <button
+                <Tip label={showPw ? "값 숨기기" : "값 보기"}><button
                   type="button"
                   className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                   onClick={() => setShowPasswords((p) => ({ ...p, [field.key]: !showPw }))}
                   aria-label={showPw ? "값 숨기기" : "값 보기"}
                 >
                   {showPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </button>
+                </button></Tip>
               )}
             </div>
           </div>

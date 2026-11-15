@@ -1,5 +1,6 @@
 "use client"
 
+import { Tip } from "@/components/tip"
 import { useCallback, useState } from "react"
 import dynamic from "next/dynamic"
 import { Check, Copy, Loader2 } from "lucide-react"
@@ -9,6 +10,7 @@ import type { EditorProps } from "@monaco-editor/react"
 import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
 import { MONACO_FONT_SIZE } from "@/lib/monaco"
+import { copyText } from "@/lib/clipboard"
 
 type MonacoOptions = NonNullable<EditorProps["options"]>
 
@@ -65,7 +67,7 @@ const BASE_READONLY_OPTIONS: MonacoOptions = {
  *
  * - 모든 readonly 코드 영역에서 동일한 폰트·옵션·UX 를 보장하기 위한 공용 래퍼.
  * - 복사 버튼은 hover/focus 시에만 나타나 코드 가독성을 방해하지 않는다.
- * - 차트 래퍼(`Highchart`)와 동일하게 props 의 옵션이 항상 기본값을 덮어쓴다.
+ * - props 의 옵션이 항상 기본값을 덮어쓴다.
  */
 export function CodeViewer({
   code,
@@ -82,7 +84,7 @@ export function CodeViewer({
 
   const handleCopy = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(code)
+      await copyText(code)
       setCopied(true)
       toast.success(`${copyLabel} 내용을 클립보드에 복사했습니다.`)
       setTimeout(() => setCopied(false), 2000)
@@ -95,6 +97,8 @@ export function CodeViewer({
     ...BASE_READONLY_OPTIONS,
     wordWrap,
     ...options,
+    // 줄 번호는 모든 Monaco 에서 켠다(TODO-126) — options 로도 끄지 않는다
+    lineNumbers: "on",
   }
 
   return (
@@ -120,12 +124,12 @@ export function CodeViewer({
         - z-10 으로 에디터 스크롤바보다 위.
         - copied 상태에서는 항상 표시 (사용자 피드백 유지).
       */}
-      <Button
+      <Tip label={copied ? "복사됨" : "복사"}><Button
         type="button"
         variant="secondary"
         size="icon"
         onClick={handleCopy}
-        title={copied ? "복사됨" : "복사"}
+       
         aria-label={copied ? "복사됨" : "복사"}
         className={cn(
           "absolute top-1.5 right-5 z-10 h-7 w-7 shadow-sm",
@@ -136,7 +140,7 @@ export function CodeViewer({
         {copied
           ? <Check className="h-3.5 w-3.5" />
           : <Copy className="h-3.5 w-3.5" />}
-      </Button>
+      </Button></Tip>
     </div>
   )
 }

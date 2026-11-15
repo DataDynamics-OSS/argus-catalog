@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """데이터셋 분류체계(Taxonomy) API. catalog_router 와 동일 prefix(/api/v1/catalog).
 
-조회는 인증 없이 공개, 생성·수정·삭제·매핑 변경은 ``taxonomies.edit`` 기능 권한이 필요하다.
+조회는 인증 없이 공개. 분류체계 · 분류의 생성 · 수정 · 삭제는 ``taxonomies.edit``, 데이터셋 ↔ 분류 매핑은
+``taxonomies.map`` 기능 권한이 필요하다(TODO-138 — 예전엔 둘 다 taxonomies.edit).
 """
 
 from __future__ import annotations
@@ -31,10 +32,14 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/catalog", tags=["catalog-taxonomy"])
 
-# 분류체계·분류·데이터셋 매핑 편집 — 명시 허용형 기능 권한(미설정이면 admin 전용,
-# 권한 관리 › 기능 권한에서 역할에 허용 가능). 조회는 공개.
+# 분류체계·분류 편집 — 명시 허용형 기능 권한(미설정이면 admin 전용, 권한 관리 › 기능 권한에서 역할에 허용 가능).
+# 분류 체계 메뉴를 막은 역할은 이 편집도 못 한다(공용 메뉴 편집 차단, SHARED_MENU_FEATURES). 조회는 공개.
 TAXONOMIES_EDIT_FEATURE = "taxonomies.edit"
 TaxonomyEditor = Annotated[TokenUser, Depends(require_feature_granted(TAXONOMIES_EDIT_FEATURE))]
+# 데이터셋 ↔ 분류 매핑 — 명시 허용형. 데이터셋 상세에서도 붙이고 떼므로 분류 체계 메뉴 차단과 묶지 않는다.
+# taxonomies.edit 를 받았던 역할은 기동 때 이 키도 받는다(permissions.router.seed_default_permissions).
+TAXONOMIES_MAP_FEATURE = "taxonomies.map"
+TaxonomyMapper = Annotated[TokenUser, Depends(require_feature_granted(TAXONOMIES_MAP_FEATURE))]
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +167,7 @@ async def list_direct_dataset_ids(category_id: int, session: AsyncSession = Depe
 
 
 @router.post("/datasets/{dataset_id}/categories/{category_id}")
-async def add_dataset_category(_editor: TaxonomyEditor, dataset_id: int, category_id: int, session: AsyncSession = Depends(get_session)):
+async def add_dataset_category(_editor: TaxonomyMapper, dataset_id: int, category_id: int, session: AsyncSession = Depends(get_session)):
     """데이터셋을 분류에 매핑한다(이미 있으면 그대로 성공). 데이터셋·분류가 없으면 404."""
     if not await svc.add_dataset_category(session, dataset_id, category_id):
         logger.warning("분류 매핑 실패 — 데이터셋 또는 분류 없음: dataset_id=%d category_id=%d", dataset_id, category_id)
@@ -171,7 +176,7 @@ async def add_dataset_category(_editor: TaxonomyEditor, dataset_id: int, categor
 
 
 @router.delete("/datasets/{dataset_id}/categories/{category_id}")
-async def remove_dataset_category(_editor: TaxonomyEditor, dataset_id: int, category_id: int, session: AsyncSession = Depends(get_session)):
+async def remove_dataset_category(_editor: TaxonomyMapper, dataset_id: int, category_id: int, session: AsyncSession = Depends(get_session)):
     """직접 매핑 하나를 해제한다. 매핑이 없으면 404."""
     if not await svc.remove_dataset_category(session, dataset_id, category_id):
         logger.warning("해제 대상 분류 매핑 없음: dataset_id=%d category_id=%d", dataset_id, category_id)

@@ -1,14 +1,16 @@
 "use client"
 
+import { DetailSection } from "@/components/detail-section"
+import { Tip } from "@/components/tip"
 import { useEffect, useState } from "react"
 import Link from "next/link"
-import { ArrowLeft, Check, Loader2, Trash2 } from "lucide-react"
+import { ArrowLeft, Loader2, Plus, Trash2 } from "lucide-react"
 import { notifyError, toast } from "@/lib/notify"
 import { useConfirm } from "@/components/confirm-provider"
+import { FieldError } from "@/components/field-error"
 
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
-import { Card, CardContent } from "@workspace/ui/components/card"
 import { Input } from "@workspace/ui/components/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@workspace/ui/components/select"
 import { cn } from "@workspace/ui/lib/utils"
@@ -58,7 +60,7 @@ function TargetName({ type, refValue, label, id }: { type: string; refValue: str
   return (
     <>
       {href ? <Link href={href} className="font-medium text-primary hover:underline">{text}</Link> : <span className="font-medium">{text}</span>}
-      {label && <span className="ml-2 font-mono text-xs text-muted-foreground">{refValue}</span>}
+      {label && <span className="ml-2 font-mono text-xs">{refValue}</span>}
     </>
   )
 }
@@ -66,9 +68,10 @@ function TargetName({ type, refValue, label, id }: { type: string; refValue: str
 type SearchResult = { key: string; items: LineageTargetOption[] }
 
 /** 대상 식별자 입력 — API·데이터셋·모델·에이전트는 카탈로그 검색 자동완성(자유 입력도 가능) */
-function TargetRefInput({ type, value, onChange, onPick }: {
+function TargetRefInput({ type, value, onChange, onPick, invalid }: {
   type: string
   value: string
+  invalid?: boolean
   onChange: (v: string) => void
   onPick: (o: LineageTargetOption) => void
 }) {
@@ -103,6 +106,7 @@ function TargetRefInput({ type, value, onChange, onPick }: {
         onKeyDown={(e) => { if (e.key === "Escape") setOpen(false) }}
         placeholder={REF_PLACEHOLDER[type] ?? "이름 또는 URN"}
         aria-autocomplete={searchable ? "list" : undefined}
+        aria-invalid={invalid || undefined}
       />
       {show && (
         <ul role="listbox" className="absolute left-0 top-9 z-20 max-h-60 w-[320px] overflow-y-auto rounded-md border bg-popover py-1 text-sm shadow-md">
@@ -117,7 +121,7 @@ function TargetRefInput({ type, value, onChange, onPick }: {
                 onClick={() => { onPick(o); setOpen(false) }}
               >
                 <span className="font-medium">{o.label}</span>
-                {o.label !== o.ref && <span className="max-w-full truncate font-mono text-[11px] text-muted-foreground">{o.ref}</span>}
+                {o.label !== o.ref && <span className="max-w-full truncate font-mono text-[11px]">{o.ref}</span>}
               </button>
             </li>
           ))}
@@ -143,15 +147,15 @@ function IncomingLineage({ apiName }: { apiName: string }) {
   }, [apiName, key])
   const cur = result?.key === key ? result : null
   return (
-    <Card><CardContent className="pt-4">
-      <div className="mb-2">
-        <p className="flex items-center gap-1 text-sm font-medium"><ArrowLeft className="h-3.5 w-3.5" />들어오는 관계</p>
-        <p className="text-xs text-muted-foreground">다른 API 가 이 API 를 대상으로 등록한 관계입니다(해당 API 의 리니지 탭에서 관리).</p>
-      </div>
+    <DetailSection
+      title="들어오는 관계"
+      icon={<ArrowLeft />}
+      description="다른 API 가 이 API 를 대상으로 등록한 관계입니다(해당 API 의 리니지 탭에서 관리)."
+    >
       {!cur ? (
-        <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />불러오는 중...</p>
+        <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />불러오는 중…</p>
       ) : cur.error ? (
-        <p className="text-sm text-muted-foreground">
+        <p className="text-sm">
           들어오는 관계를 불러오지 못했습니다.{" "}
           <button type="button" className="text-primary hover:underline" onClick={() => setSeq((n) => n + 1)}>다시 시도</button>
         </p>
@@ -171,15 +175,15 @@ function IncomingLineage({ apiName }: { apiName: string }) {
                   <td className="px-3 py-2 align-top">
                     <TargetName type="api" refValue={e.source_api_name} label={e.source_display_name} />
                   </td>
-                  <td className="px-3 py-2 align-top"><Badge variant="outline" className="text-xs">{RELATION_LABEL[e.relation] ?? e.relation}</Badge></td>
-                  <td className="px-3 py-2 align-top text-muted-foreground">{e.note || "-"}</td>
+                  <td className="px-3 py-2 align-top"><Badge variant="outline">{RELATION_LABEL[e.relation] ?? e.relation}</Badge></td>
+                  <td className="px-3 py-2 align-top">{e.note || "-"}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       )}
-    </CardContent></Card>
+    </DetailSection>
   )
 }
 
@@ -193,6 +197,7 @@ export function LineageTab({ apiName, lineage, canAdmin, onChanged }: {
   const [relation, setRelation] = useState("consumes")
   const [targetType, setTargetType] = useState("dataset")
   const [targetRef, setTargetRef] = useState("")
+  const [targetRefError, setTargetRefError] = useState<string | null>(null)
   const [targetLabel, setTargetLabel] = useState("")
   const [note, setNote] = useState("")
   const [busy, setBusy] = useState(false)
@@ -200,7 +205,8 @@ export function LineageTab({ apiName, lineage, canAdmin, onChanged }: {
   const askConfirm = useConfirm()
 
   const handleAdd = async () => {
-    if (!targetRef.trim()) { toast.error("대상 식별자를 입력하세요."); return }
+    if (!targetRef.trim()) { setTargetRefError("대상 식별자를 입력하세요."); return }
+    setTargetRefError(null)
     setBusy(true)
     try {
       await addApiLineage(apiName, {
@@ -226,9 +232,9 @@ export function LineageTab({ apiName, lineage, canAdmin, onChanged }: {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <div className="flex items-start justify-between gap-2">
-        <p className="text-sm text-muted-foreground">
+        <p className="text-sm">
           이 API 가 제공(provides)·소비(consumes)·의존(depends_on)하는 시스템·데이터셋·모델·AI 에이전트·다른 API 와의 관계를 기록·관리하는 화면입니다. 관계를 등록하면 영향 범위 파악과 카탈로그 내 연결 추적에 활용됩니다.
         </p>
         <div className="flex shrink-0 overflow-hidden rounded-md border">
@@ -242,11 +248,7 @@ export function LineageTab({ apiName, lineage, canAdmin, onChanged }: {
       {viewMode === "table" && LINEAGE_RELATIONS.map((rel) => {
         const edges = lineage.filter((e) => e.relation === rel.value)
         return (
-          <Card key={rel.value}><CardContent className="pt-4">
-            <div className="mb-2">
-              <p className="text-sm font-medium">{rel.label}</p>
-              <p className="text-xs text-muted-foreground">{rel.caption}</p>
-            </div>
+          <DetailSection key={rel.value} title={`${rel.label} (${edges.length})`} description={rel.caption}>
             {edges.length === 0 ? (
               <p className="text-sm text-muted-foreground">등록된 관계가 없습니다.</p>
             ) : (
@@ -261,14 +263,14 @@ export function LineageTab({ apiName, lineage, canAdmin, onChanged }: {
                   <tbody>
                     {edges.map((e) => (
                       <tr key={e.id} className="border-t">
-                        <td className="px-3 py-2 align-top"><Badge variant="outline" className="text-xs">{TARGET_TYPE_LABEL[e.target_type] ?? e.target_type}</Badge></td>
+                        <td className="px-3 py-2 align-top"><Badge variant="outline">{TARGET_TYPE_LABEL[e.target_type] ?? e.target_type}</Badge></td>
                         <td className="px-3 py-2 align-top">
                           <TargetName type={e.target_type} refValue={e.target_ref} label={e.target_label} id={e.target_id} />
                         </td>
-                        <td className="px-3 py-2 align-top text-muted-foreground">{e.note || "-"}</td>
+                        <td className="px-3 py-2 align-top">{e.note || "-"}</td>
                         {canAdmin && (
                           <td className="px-3 py-2 align-top text-right">
-                            <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => handleDelete(e.id)} title="삭제" aria-label="삭제"><Trash2 className="h-4 w-4" /></Button>
+                            <Tip label="삭제"><Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => handleDelete(e.id)} aria-label="삭제"><Trash2 className="h-4 w-4" /></Button></Tip>
                           </td>
                         )}
                       </tr>
@@ -277,21 +279,19 @@ export function LineageTab({ apiName, lineage, canAdmin, onChanged }: {
                 </table>
               </div>
             )}
-          </CardContent></Card>
+          </DetailSection>
         )
       })}
 
       {viewMode === "table" && <IncomingLineage apiName={apiName} />}
 
       {!canAdmin ? (
-        <p className="text-xs text-muted-foreground">리니지 관계 추가·삭제는 관리자만 할 수 있습니다.</p>
+        <p className="text-xs">리니지 관계 추가·삭제는 관리자 또는 리니지 편집 권한이 있는 역할만 할 수 있습니다.</p>
       ) : (
-      <Card><CardContent className="pt-4">
-        <p className="mb-2 text-sm font-medium">관계 추가</p>
-
-        <details className="mb-3 rounded-md border bg-muted/20 p-3">
+      <DetailSection title="관계 추가">
+        <details className="rounded-md border bg-muted/20 p-3">
           <summary className="cursor-pointer text-xs font-medium text-muted-foreground">사용 방법 (펼치기)</summary>
-          <div className="mt-2 space-y-2 text-xs text-muted-foreground">
+          <div className="mt-2 space-y-2 text-xs">
             <p>이 API 기준으로 다른 대상과의 관계 한 건을 등록합니다. 아래 4가지를 채우고 “추가”를 누르세요.</p>
             <ul className="ml-4 list-disc space-y-1">
               <li><b>관계</b> — <b>제공(provides)</b>: 이 API가 데이터·기능을 제공하는 소비처 · <b>소비(consumes)</b>: 이 API가 사용·소비하는 대상 · <b>의존(depends_on)</b>: 런타임에 의존하는 대상</li>
@@ -306,39 +306,42 @@ export function LineageTab({ apiName, lineage, canAdmin, onChanged }: {
 
         <div className="flex flex-wrap items-end gap-2">
           <div className="space-y-1">
-            <p className="text-xs text-muted-foreground">관계</p>
+            <p className="text-xs">관계</p>
             <Select value={relation} onValueChange={setRelation}>
               <SelectTrigger className="h-8 w-[150px] text-sm"><SelectValue /></SelectTrigger>
               <SelectContent>{LINEAGE_RELATIONS.map((r) => <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>)}</SelectContent>
             </Select>
           </div>
           <div className="space-y-1">
-            <p className="text-xs text-muted-foreground">대상 유형</p>
-            <Select value={targetType} onValueChange={(v) => { setTargetType(v); setTargetRef(""); setTargetLabel("") }}>
+            <p className="text-xs">대상 유형</p>
+            <Select value={targetType} onValueChange={(v) => { setTargetType(v); setTargetRef(""); setTargetLabel(""); setTargetRefError(null) }}>
               <SelectTrigger className="h-8 w-[130px] text-sm"><SelectValue /></SelectTrigger>
               <SelectContent>{LINEAGE_TARGET_TYPES.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent>
             </Select>
           </div>
           <div className="space-y-1">
-            <p className="text-xs text-muted-foreground">대상 식별자{SEARCHABLE_TYPES.has(targetType) ? " (검색)" : ""}</p>
+            <p className="text-xs">대상 식별자{SEARCHABLE_TYPES.has(targetType) ? " (검색)" : ""}</p>
             <TargetRefInput
               type={targetType}
               value={targetRef}
-              onChange={setTargetRef}
-              onPick={(o) => { setTargetRef(o.ref); if (!targetLabel.trim() && o.label !== o.ref) setTargetLabel(o.label) }}
+              invalid={!!targetRefError}
+              onChange={(v) => { setTargetRef(v); setTargetRefError(null) }}
+              onPick={(o) => { setTargetRef(o.ref); setTargetRefError(null); if (!targetLabel.trim() && o.label !== o.ref) setTargetLabel(o.label) }}
             />
           </div>
           <div className="space-y-1">
-            <p className="text-xs text-muted-foreground">표시명(선택)</p>
+            <p className="text-xs">표시명(선택)</p>
             <Input className="h-8 w-[160px] text-sm" value={targetLabel} onChange={(e) => setTargetLabel(e.target.value)} placeholder="주문 데이터셋" />
           </div>
           <div className="flex-1 space-y-1">
-            <p className="text-xs text-muted-foreground">비고(선택)</p>
+            <p className="text-xs">비고(선택)</p>
             <Input className="h-8 w-full text-sm" value={note} onChange={(e) => setNote(e.target.value)} />
           </div>
-          <Button size="sm" disabled={busy} onClick={handleAdd}>{busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Check className="mr-1 h-4 w-4" />}추가</Button>
+          <Button size="sm" disabled={busy} onClick={handleAdd}>{busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Plus className="mr-1 h-4 w-4" />}추가</Button>
         </div>
-      </CardContent></Card>
+        {/* 입력란들이 한 줄로 바닥 정렬돼 있어 오류 문구는 줄 아래에 둔다 */}
+        <FieldError className="-mt-2">{targetRefError}</FieldError>
+      </DetailSection>
       )}
     </div>
   )

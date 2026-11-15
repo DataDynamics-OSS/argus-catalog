@@ -178,7 +178,7 @@ export function AIAgentsAddDialog() {
               </SelectContent>
             </Select>
           </div>
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs">
             소유자·부서·분류는 필수입니다(책임자 관리 기준). 프레임워크·기저 모델 등 나머지 항목은 등록 후 상세 화면에서 편집할 수 있습니다.
           </p>
           {error && <p className="text-sm text-destructive">{error}</p>}
@@ -187,7 +187,7 @@ export function AIAgentsAddDialog() {
               취소
             </Button>
             <Button onClick={handleSubmit} disabled={saving || !canSubmit}>
-              {saving ? "생성 중..." : "생성"}
+              {saving ? "등록 중…" : "등록"}
             </Button>
           </div>
         </div>

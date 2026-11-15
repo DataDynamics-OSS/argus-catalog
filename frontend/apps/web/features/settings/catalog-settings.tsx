@@ -75,7 +75,7 @@ export function CatalogSettings() {
           <div className="flex items-center justify-between gap-4">
             <div>
               <Label htmlFor="dataset-create-by-users">일반 사용자의 데이터셋 직접 등록 허용</Label>
-              <p className="text-xs text-muted-foreground mt-0.5">
+              <p className="text-xs mt-0.5">
                 끄면(기본) 관리자만 등록합니다. 켜면 일반 사용자도 등록할 수 있으며, 권한 관리의
                 기능 권한 「데이터셋 등록」(datasets.create)은 계속 적용됩니다.
               </p>

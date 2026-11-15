@@ -11,6 +11,7 @@
 """
 
 import logging
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -47,12 +48,20 @@ from app.apis.schemas import (
     SpecPreviewResponse,
     SpecUpload,
 )
-from app.core.auth import AdminUser, CurrentUser, OptionalUser, assert_owner_or_admin
+from app.core.auth import AdminUser, CurrentUser, OptionalUser, TokenUser, assert_owner_or_admin
 from app.core.database import get_session
 from app.core.outbound import OutboundBlockedError
-from app.permissions.router import check_feature, require_feature
+from app.permissions.router import (
+    check_feature,
+    check_feature_granted,
+    require_feature,
+    require_feature_granted,
+)
 
 logger = logging.getLogger(__name__)
+
+# API 리니지 추가 · 삭제 — 데이터셋 리니지와 같은 명시 허용형 기능 권한(TODO-122)
+LineageEditor = Annotated[TokenUser, Depends(require_feature_granted("lineage.edit"))]
 
 router = APIRouter(prefix="/apis", tags=["apis"])
 
@@ -137,7 +146,7 @@ async def list_apis(
     )
 
 
-@router.post("/invoke", response_model=InvokeResponse)
+@router.post("/invoke", response_model=InvokeResponse, dependencies=[Depends(require_feature("apis.try-it"))])
 async def invoke(_guard: CurrentUser, req: InvokeRequest, user: OptionalUser, session: AsyncSession = Depends(get_session)):
     """Try-it 프록시 호출(브라우저 CORS 우회 + 저장 자격증명 주입). 알려진 API 는 사용량 로깅.
 
@@ -164,17 +173,21 @@ async def get_api(name: str, user: OptionalUser, session: AsyncSession = Depends
     if not detail:
         logger.warning("API 없음: %s", name)
         raise HTTPException(status_code=404, detail=_NOT_FOUND.format(name=name))
-    # 화면 버튼 노출용 권한 — 판단 규칙은 assert_owner_or_admin / AdminUser 가드와 동일
+    # 화면 버튼 노출용 권한 — 판단 규칙은 각 엔드포인트 가드(소유자 · 기능 권한)와 동일
     if user:
         created_by = await service.get_api_created_by(session, name)
+        owner = user.is_admin or bool(created_by and created_by == user.username)
         detail.permissions = ApiPermissions(
-            can_edit=user.is_admin or bool(created_by and created_by == user.username),
+            can_edit=owner and await check_feature(session, user, "apis.edit"),
+            can_delete=owner and await check_feature(session, user, "apis.delete"),
+            can_view_usage=owner,
+            can_edit_lineage=await check_feature_granted(session, user, "lineage.edit"),
             can_admin=user.is_admin,
         )
     return detail
 
 
-@router.patch("/{name}", response_model=ApiSummary)
+@router.patch("/{name}", response_model=ApiSummary, dependencies=[Depends(require_feature("apis.edit"))])
 async def update_api(name: str, req: ApiUpdate, current: CurrentUser, user: OptionalUser, session: AsyncSession = Depends(get_session)):
     """API 메타데이터 부분 갱신 — API 생성자 본인 또는 관리자."""
     logger.info("PATCH /apis/%s by=%s", name, current.username)
@@ -190,7 +203,7 @@ async def update_api(name: str, req: ApiUpdate, current: CurrentUser, user: Opti
     return res
 
 
-@router.delete("/{name}")
+@router.delete("/{name}", dependencies=[Depends(require_feature("apis.delete"))])
 async def delete_api(name: str, current: CurrentUser, session: AsyncSession = Depends(get_session)):
     """API 삭제 — API 생성자 본인 또는 관리자."""
     logger.info("DELETE /apis/%s by=%s", name, current.username)
@@ -200,7 +213,7 @@ async def delete_api(name: str, current: CurrentUser, session: AsyncSession = De
     return {"status": "ok"}
 
 
-@router.post("/{name}/specs", response_model=ApiSummary)
+@router.post("/{name}/specs", response_model=ApiSummary, dependencies=[Depends(require_feature("apis.edit"))])
 async def upload_spec(name: str, req: SpecUpload, current: CurrentUser, session: AsyncSession = Depends(get_session)):
     """스펙 새 버전 등록 — 개요 편집과 같은 기준(생성자 본인 또는 관리자)."""
     assert_owner_or_admin(current, await service.get_api_created_by(session, name), "API")
@@ -217,7 +230,7 @@ async def upload_spec(name: str, req: SpecUpload, current: CurrentUser, session:
     return res
 
 
-@router.post("/{name}/endpoints", response_model=ApiEndpointResponse)
+@router.post("/{name}/endpoints", response_model=ApiEndpointResponse, dependencies=[Depends(require_feature("apis.edit"))])
 async def add_endpoint(name: str, req: EndpointCreate, current: CurrentUser, session: AsyncSession = Depends(get_session)):
     """수동(manual) API 에 엔드포인트 추가."""
     assert_owner_or_admin(current, await service.get_api_created_by(session, name), "API")
@@ -231,7 +244,7 @@ async def add_endpoint(name: str, req: EndpointCreate, current: CurrentUser, ses
     return res
 
 
-@router.patch("/{name}/endpoints/{ep_id}", response_model=ApiEndpointResponse)
+@router.patch("/{name}/endpoints/{ep_id}", response_model=ApiEndpointResponse, dependencies=[Depends(require_feature("apis.edit"))])
 async def update_endpoint(name: str, ep_id: int, req: EndpointCreate, current: CurrentUser, session: AsyncSession = Depends(get_session)):
     """수동(manual) API 의 엔드포인트 수정."""
     assert_owner_or_admin(current, await service.get_api_created_by(session, name), "API")
@@ -245,7 +258,7 @@ async def update_endpoint(name: str, ep_id: int, req: EndpointCreate, current: C
     return res
 
 
-@router.delete("/{name}/endpoints/{ep_id}")
+@router.delete("/{name}/endpoints/{ep_id}", dependencies=[Depends(require_feature("apis.edit"))])
 async def delete_endpoint(name: str, ep_id: int, current: CurrentUser, session: AsyncSession = Depends(get_session)):
     # 추가·수정과 동일하게 API 생성자 본인 또는 관리자
     assert_owner_or_admin(current, await service.get_api_created_by(session, name), "API")
@@ -282,7 +295,7 @@ async def list_alerts(name: str, status: str | None = Query(None), session: Asyn
     return res
 
 
-@router.post("/{name}/alerts/{alert_id}/ack")
+@router.post("/{name}/alerts/{alert_id}/ack", dependencies=[Depends(require_feature("apis.edit"))])
 async def acknowledge_alert(current: CurrentUser, name: str, alert_id: int, session: AsyncSession = Depends(get_session)):
     """Breaking 알림 확인 처리(OPEN → ACKNOWLEDGED) — API 생성자 본인 또는 관리자."""
     assert_owner_or_admin(current, await service.get_api_created_by(session, name), "API")
@@ -390,7 +403,7 @@ async def list_incoming_lineage(name: str, session: AsyncSession = Depends(get_s
 
 
 @router.post("/{name}/lineage", response_model=LineageResponse)
-async def add_lineage(_guard: AdminUser, name: str, req: LineageCreate, user: OptionalUser, session: AsyncSession = Depends(get_session)):
+async def add_lineage(_guard: LineageEditor, name: str, req: LineageCreate, user: OptionalUser, session: AsyncSession = Depends(get_session)):
     """리니지 엣지 추가(관리자). 유형 오류·중복은 400."""
     try:
         res = await service.add_api_lineage(session, name, req, created_by=(user.username or user.email) if user else None)
@@ -403,7 +416,7 @@ async def add_lineage(_guard: AdminUser, name: str, req: LineageCreate, user: Op
 
 
 @router.delete("/{name}/lineage/{edge_id}")
-async def delete_lineage(_guard: AdminUser, name: str, edge_id: int, session: AsyncSession = Depends(get_session)):
+async def delete_lineage(_guard: LineageEditor, name: str, edge_id: int, session: AsyncSession = Depends(get_session)):
     if not await service.delete_api_lineage(session, name, edge_id):
         raise HTTPException(status_code=404, detail="리니지 관계를 찾을 수 없습니다.")
     return {"status": "ok"}

@@ -57,6 +57,29 @@ async def _unique_code(session: AsyncSession, model, name: str) -> str:
 # 조직 (Organization)
 # ---------------------------------------------------------------------------
 
+class DuplicateNameError(ValueError):
+    """같은 상위(조직 · 시스템의 소속 조직) 아래 같은 이름 — 라우터가 409 로 바꾼다(DEF-111)."""
+
+
+async def _assert_unique_name(
+    session: AsyncSession, model, parent_col, parent_id: int | None, name: str, exclude_id: int | None = None,
+) -> None:
+    """``parent_id`` 아래 ``name`` 이 이미 있으면 ``DuplicateNameError``.
+
+    DB 의 유일 제약(``parent_id, name`` · ``org_id, name``)은 NULL 을 서로 다른 값으로 보므로 최상위 조직 ·
+    미분류 시스템의 중복을 막지 못한다 — 서비스에서 함께 검사한다(DEF-111).
+    """
+    cond = parent_col.is_(None) if parent_id is None else parent_col == parent_id
+    stmt = select(model.id).where(cond, model.name == name)
+    if exclude_id is not None:
+        stmt = stmt.where(model.id != exclude_id)
+    if await session.scalar(stmt.limit(1)) is not None:
+        where = "최상위" if model is Organization and parent_id is None else (
+            "미분류" if parent_id is None else "같은 조직")
+        kind = "조직" if model is Organization else "시스템"
+        raise DuplicateNameError(f"{where}에 같은 이름의 {kind}이(가) 이미 있습니다: {name}")
+
+
 async def list_organizations(session: AsyncSession) -> list[OrganizationResponse]:
     """조직 전체(sort_order, 이름 순) — 트리가 아닌 평면 목록."""
     rows = (
@@ -77,6 +100,7 @@ async def create_organization(
     """조직을 만들고 커밋한다. 상위 조직이 없으면 ``ValueError``."""
     if req.parent_id is not None and await session.get(Organization, req.parent_id) is None:
         raise ValueError(f"상위 조직을 찾을 수 없습니다: {req.parent_id}")
+    await _assert_unique_name(session, Organization, Organization.parent_id, req.parent_id, req.name)
     org = Organization(
         code=await _unique_code(session, Organization, req.name),
         name=req.name,
@@ -130,6 +154,12 @@ async def update_organization(
             if new_parent in await _descendant_org_ids(session, org_id):
                 raise ValueError("조직을 자신의 하위 조직 아래로 옮길 수 없습니다.")
 
+    if "name" in data or "parent_id" in data:
+        await _assert_unique_name(
+            session, Organization, Organization.parent_id,
+            data["parent_id"] if "parent_id" in data else org.parent_id,
+            data.get("name") or org.name, exclude_id=org_id,
+        )
     for key, value in data.items():
         setattr(org, key, value)
     await session.commit()
@@ -183,6 +213,7 @@ async def create_system(session: AsyncSession, req: SystemCreate) -> SystemRespo
     """시스템을 만들고 커밋한다. 지정한 조직이 없으면 ``ValueError``."""
     if req.org_id is not None and await session.get(Organization, req.org_id) is None:
         raise ValueError(f"조직을 찾을 수 없습니다: {req.org_id}")
+    await _assert_unique_name(session, System, System.org_id, req.org_id, req.name)
     system = System(
         code=await _unique_code(session, System, req.name),
         name=req.name,
@@ -210,6 +241,12 @@ async def update_system(
     data = req.model_dump(exclude_unset=True)
     if data.get("org_id") is not None and await session.get(Organization, data["org_id"]) is None:
         raise ValueError(f"조직을 찾을 수 없습니다: {data['org_id']}")
+    if "name" in data or "org_id" in data:
+        await _assert_unique_name(
+            session, System, System.org_id,
+            data["org_id"] if "org_id" in data else system.org_id,
+            data.get("name") or system.name, exclude_id=system_id,
+        )
     for key, value in data.items():
         setattr(system, key, value)
     await session.commit()
@@ -329,7 +366,7 @@ async def get_topology(session: AsyncSession) -> TopologyResponse:
 
     def build(org: Organization) -> TopologyOrganization:
         return TopologyOrganization(
-            id=org.id, name=org.name, parent_id=org.parent_id,
+            id=org.id, name=org.name, parent_id=org.parent_id, description=org.description,
             children=[build(c) for c in children_by_parent.get(org.id, [])],
             systems=systems_by_org.get(org.id, []),
         )

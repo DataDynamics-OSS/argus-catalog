@@ -1,8 +1,9 @@
 "use client"
 
+import { Tip } from "@/components/tip"
 import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
-import { Link2, Plus, Search, Trash2 } from "lucide-react"
+import { Link2, Plus, Trash2 } from "lucide-react"
 import { notifyError, toast } from "@/lib/notify"
 
 import { Badge } from "@workspace/ui/components/badge"
@@ -24,6 +25,7 @@ import {
   type LineageRelation, type ModelLineage,
 } from "../../api"
 import { ReadOnlyNote } from "./shared"
+import { SearchInput } from "@/components/search-input"
 
 export const RELATION_LABEL: Record<LineageRelation, string> = {
   TRAINING_DATA: "학습 데이터",
@@ -114,23 +116,20 @@ function AddLineageDialog({
               <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
                 <span>
                   <span className="font-medium">{picked.name}</span>
-                  {picked.datasource_name && <span className="ml-2 text-muted-foreground">{picked.datasource_name}</span>}
+                  {picked.datasource_name && <span className="ml-2">{picked.datasource_name}</span>}
                 </span>
                 <Button variant="ghost" size="sm" className="h-7" onClick={() => setPicked(null)}>변경</Button>
               </div>
             ) : (
               <>
-                <div className="relative">
-                  <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    autoFocus value={query} onChange={(e) => setQuery(e.target.value)}
-                    placeholder="데이터셋 이름으로 검색" className="h-9 pl-8"
-                  />
-                </div>
+                <SearchInput
+                  autoFocus value={query} onValueChange={setQuery}
+                  placeholder="데이터셋 이름 검색…"
+                />
                 {query.trim() && (
                   <div className="max-h-52 overflow-auto rounded-md border">
                     {searching ? (
-                      <p className="px-3 py-2 text-sm text-muted-foreground">검색 중...</p>
+                      <p className="px-3 py-2 text-sm text-muted-foreground">검색 중…</p>
                     ) : hits.length === 0 ? (
                       <p className="px-3 py-2 text-sm text-muted-foreground">일치하는 데이터셋이 없습니다.</p>
                     ) : hits.map((h) => (
@@ -139,7 +138,7 @@ function AddLineageDialog({
                         className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-muted"
                       >
                         <span className="font-medium">{h.name}</span>
-                        <span className="text-xs text-muted-foreground">{h.datasource_name ?? h.datasource_type}</span>
+                        <span className="text-xs">{h.datasource_name ?? h.datasource_type}</span>
                       </button>
                     ))}
                   </div>
@@ -177,7 +176,7 @@ function AddLineageDialog({
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>취소</Button>
-          <Button onClick={submit} disabled={!picked || saving}>{saving ? "연결 중..." : "연결"}</Button>
+          <Button onClick={submit} disabled={!picked || saving}>{saving ? "연결 중…" : "연결"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -277,15 +276,15 @@ export function LineageTab({
                   </td>
                   <td className="px-3 py-2">{RELATION_LABEL[l.relation_type] ?? l.relation_type}</td>
                   <td className="px-3 py-2">{l.model_version ? `v${l.model_version}` : "전체"}</td>
-                  <td className="px-3 py-2 text-muted-foreground">{l.description || "—"}</td>
+                  <td className="px-3 py-2">{l.description || "—"}</td>
                   {canEdit && (
                     <td className="px-3 py-2 text-right">
-                      <Button
+                      <Tip label="연결 삭제"><Button
                         variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-destructive"
                         onClick={() => setRemoving(l)} aria-label="연결 삭제"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
+                      </Button></Tip>
                     </td>
                   )}
                 </tr>
@@ -295,7 +294,7 @@ export function LineageTab({
         </div>
       )}
       {linked.length > 0 && (
-        <p className="text-xs text-muted-foreground">
+        <p className="text-xs">
           배포 아티팩트는 OCI 모델 허브에서 이 모델을 원본으로 연결한 모델입니다. 연결은 OCI 모델의 리니지 탭에서 관리합니다.
         </p>
       )}

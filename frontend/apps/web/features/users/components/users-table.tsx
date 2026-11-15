@@ -49,6 +49,7 @@ import {
 } from "@/components/data-table"
 import { fetchOrganizations } from "../api"
 import { roles } from "../data/data"
+import { useRoleOptions } from "../use-role-options"
 import { type User } from "../data/schema"
 import { usersColumns as columns } from "./users-columns"
 import { UsersPrimaryButtons } from "./users-primary-buttons"
@@ -87,6 +88,15 @@ export function UsersTable({ data, isLoading }: UsersTableProps) {
 
   /** Compute total page count from the backend's total record count. */
   const pageCount = useMemo(() => Math.ceil(total / pageSize), [total, pageSize])
+  // 역할 필터 — 기본 역할(아이콘) + 사용자 정의 역할(TODO-124)
+  const roleOptions = useRoleOptions()
+  const roleFilterOptions = useMemo(
+    () => [
+      ...roles.map((role) => ({ ...role })),
+      ...roleOptions.filter((r) => r.custom).map((r) => ({ label: r.label, value: r.value })),
+    ],
+    [roleOptions],
+  )
 
   /**
    * TanStack Table instance configuration.
@@ -197,7 +207,7 @@ export function UsersTable({ data, isLoading }: UsersTableProps) {
       {/* Toolbar: search input, faceted filters (Status, Role), view options */}
       <DataTableToolbar
         table={table}
-        searchPlaceholder="이름·이메일·소속 검색..."
+        searchPlaceholder="이름·이메일·소속 검색…"
         searchKey="username"
         filters={[
           {
@@ -211,7 +221,7 @@ export function UsersTable({ data, isLoading }: UsersTableProps) {
           {
             columnId: "role",
             title: "역할",
-            options: roles.map((role) => ({ ...role })),
+            options: roleFilterOptions,
           },
           {
             columnId: "organization",

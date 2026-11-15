@@ -19,7 +19,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@workspace/ui/components/select"
-import { Card, CardContent } from "@workspace/ui/components/card"
 import {
   convertSampleToParquet,
   deleteSampleData,
@@ -434,7 +433,7 @@ export function SampleDataTab({ datasetId, isSynced = false, canEdit = false }: 
   const renderParquetTable = () => (
     <div className="flex flex-col gap-3 p-4 text-sm">
       <div className="flex items-center justify-between">
-        <span className="text-xs text-muted-foreground font-[family-name:var(--font-d2coding)]">
+        <span className="text-xs font-[family-name:var(--font-d2coding)]">
           Parquet · {parquetRows.length} rows · {parquetColumns.length} columns
         </span>
       </div>
@@ -512,7 +511,7 @@ export function SampleDataTab({ datasetId, isSynced = false, canEdit = false }: 
                   이스케이프
                 </SelectItem>
                 <SelectItem value={DELIM_CUSTOM} className="text-sm">
-                  직접 입력...
+                  직접 입력…
                 </SelectItem>
               </SelectContent>
             </Select>
@@ -572,7 +571,7 @@ export function SampleDataTab({ datasetId, isSynced = false, canEdit = false }: 
                 <SelectItem value={NO_QUOTE} className="text-sm">없음</SelectItem>
                 <SelectItem value={'"'} className="text-sm">큰따옴표 (&quot;)</SelectItem>
                 <SelectItem value="'" className="text-sm">작은따옴표 (&apos;)</SelectItem>
-                <SelectItem value="__custom__" className="text-sm">직접 입력...</SelectItem>
+                <SelectItem value="__custom__" className="text-sm">직접 입력…</SelectItem>
               </SelectContent>
             </Select>
 
@@ -597,7 +596,7 @@ export function SampleDataTab({ datasetId, isSynced = false, canEdit = false }: 
           className="h-8"
         >
           <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
-          새로 고침
+          새로고침
         </Button>
 
         {canEdit && (
@@ -619,7 +618,7 @@ export function SampleDataTab({ datasetId, isSynced = false, canEdit = false }: 
         )}
 
         {!isLoading && rows.length > 0 && (
-          <span className="text-sm text-muted-foreground ml-auto font-[family-name:var(--font-d2coding)]">
+          <span className="text-sm ml-auto font-[family-name:var(--font-d2coding)]">
             {csvDisplay.data.length}행 · {csvDisplay.columnCount}컬럼
           </span>
         )}
@@ -634,7 +633,7 @@ export function SampleDataTab({ datasetId, isSynced = false, canEdit = false }: 
 
       {error && (
         <div className="flex items-center justify-center h-[200px]">
-          <p className="text-sm text-muted-foreground">{error}</p>
+          <p className="text-sm">{error}</p>
         </div>
       )}
 
@@ -657,10 +656,10 @@ export function SampleDataTab({ datasetId, isSynced = false, canEdit = false }: 
   // Render
   // ---------------------------------------------------------------------------
   return (
-    <Card>
+    <div className="space-y-3">
       {/* Hide Delete button for synced datasets and users who cannot edit (owner/admin only) */}
       {hasSample && !isSynced && canEdit && (
-        <div className="flex justify-end px-4 pt-3">
+        <div className="flex justify-end">
           <Button size="sm" variant="outline" onClick={handleDelete} className="text-destructive">
             <Trash2 className="mr-1 h-3.5 w-3.5" />
             삭제
@@ -674,7 +673,8 @@ export function SampleDataTab({ datasetId, isSynced = false, canEdit = false }: 
         className="hidden"
         onChange={handleFileSelect}
       />
-      <CardContent className="p-0">
+      {/* 박스는 샘플 표 하나 — 바깥 카드 없음 */}
+      <div className="overflow-hidden rounded-md border">
         {/* Parquet view: no toolbar */}
         {hasSample && sampleFormat === "parquet" && renderParquetTable()}
 
@@ -693,9 +693,9 @@ export function SampleDataTab({ datasetId, isSynced = false, canEdit = false }: 
             >
               <Upload className="h-8 w-8 text-muted-foreground" />
               <p className="text-sm font-medium">
-                {uploading ? "업로드 중..." : "CSV 파일을 업로드하려면 클릭하세요"}
+                {uploading ? "업로드 중…" : "CSV 파일을 업로드하려면 클릭하세요"}
               </p>
-              <p className="text-xs text-muted-foreground">
+              <p className="text-xs">
                 지원 형식: .csv, .tsv (최대 100 KB)
               </p>
             </div>
@@ -713,7 +713,7 @@ export function SampleDataTab({ datasetId, isSynced = false, canEdit = false }: 
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
           </div>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   )
 }

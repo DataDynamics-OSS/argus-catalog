@@ -9,10 +9,14 @@
 설계 원칙:
 - **베스트에포트**: 모든 실패는 logger.warning 후 무시한다 — 텔레메트리가
   채팅 응답을 절대 막지 않는다 (레지스트리가 없는 환경에서도 안전).
-- **권한 위임**: assistant(구 serve) 모드는 사용자 토큰으로 동작하므로 등록/적재도 그
+- **권한 위임**: assistant 는 사용자 토큰으로 동작하므로 등록/적재도 그
   토큰을 그대로 쓴다 (별도 관리자 계정 없음).
 - **등록은 프로세스당 1회**: 이름 기준 idempotent — 이미 있으면(409) 정상으로
   보고 건너뛴다. 첫 채팅에서 사용자 토큰을 확보한 뒤 지연 등록한다.
+  레지스트리는 소유자 이메일·부서·분류를 필수로 요구하므로, 소유자·부서 설정이
+  없으면 등록은 건너뛰고(화면에서 미리 등록한 경우를 위해) 적재만 시도한다.
+- **미등록이면 끈다**: 적재가 404(레지스트리에 없는 이름)면 그 프로세스에서는
+  텔레메트리를 끄고 한 번만 경고한다 — 채팅마다 실패 로그가 쌓이지 않게 (DEF-035).
 
 표준 라이브러리만 사용한다 (외부 의존성 0).
 """
@@ -49,12 +53,14 @@ class Telemetry:
     """
 
     def __init__(self, api_url: str, agent_name: str, model: str, llm_url: str,
-                 enabled: bool = True) -> None:
+                 enabled: bool = True, owner_email: str = "", department: str = "") -> None:
         self.base = api_url.rstrip("/") + "/api/v1"
         self.name = agent_name
         self.model = model
         self.provider = _model_provider(llm_url)
         self.enabled = enabled
+        self.owner_email = (owner_email or "").strip()
+        self.department = (department or "").strip()
         # 등록은 프로세스당 1회 — 동시 채팅 경쟁을 막기 위해 락으로 보호
         self._registered = False
         self._reg_lock = threading.Lock()
@@ -86,6 +92,9 @@ class Telemetry:
             "display_name": "Argus Catalog 어시스턴트",
             "description": "카탈로그 도구를 호출해 근거 기반으로 답하는 tool-use 채팅 어시스턴트.",
             "status": "active",
+            # 레지스트리 필수 항목(소유자 이메일·부서·분류)
+            "owner_email": self.owner_email,
+            "department": self.department,
             "category": "data-catalog",
             "framework": "argus-catalog-ai-service",
             "base_model": self.model,
@@ -108,6 +117,12 @@ class Telemetry:
             return
         with self._reg_lock:
             if self._registered:  # 락 대기 중 다른 스레드가 끝냈을 수 있다
+                return
+            if not (self.owner_email and self.department):
+                # 필수 항목 없이 보내면 422 — 등록은 건너뛰고, 이미 등록된 경우를 위해 적재만 시도
+                logger.info("셀프-등록 생략 — 소유자·부서 설정 없음(ARGUS_AI_AGENT_OWNER_EMAIL·"
+                            "ARGUS_AI_AGENT_DEPARTMENT). 레지스트리에 '%s' 가 있으면 적재만 합니다.", self.name)
+                self._registered = True
                 return
             try:
                 self._post(token, "/ai-agents", self._registration_payload(tool_names))
@@ -149,7 +164,13 @@ class Telemetry:
             logger.info("텔레메트리 적재 — status=%s, latency=%dms, tokens=%d/%d",
                         status, latency_ms, tokens_in, tokens_out)
         except urllib.error.HTTPError as e:
-            # 404(등록 실패 후) 등은 베스트에포트라 경고만
+            if e.code == 404:
+                # 레지스트리에 없는 이름 — 매 채팅 실패를 반복하지 않도록 이 프로세스에서는 끈다
+                logger.warning("텔레메트리 끔 — 레지스트리에 '%s' 가 없습니다. 화면에서 등록하거나 "
+                               "소유자·부서를 설정하고 재시작하세요.", self.name)
+                self.enabled = False
+                return
+            # 그 밖의 실패는 베스트에포트라 경고만
             logger.warning("텔레메트리 적재 실패 %s — 무시", e.code)
         except (urllib.error.URLError, OSError) as e:
             logger.warning("텔레메트리 적재 연결 실패: %s — 무시", e)

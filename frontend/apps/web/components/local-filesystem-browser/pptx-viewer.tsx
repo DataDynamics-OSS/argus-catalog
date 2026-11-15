@@ -36,7 +36,7 @@ export function PptxViewer({ data }: PptxViewerProps) {
             ))}
           </div>
           {slide.notes && (
-            <blockquote className="mt-3 pl-3 border-l-2 text-xs text-muted-foreground italic">
+            <blockquote className="mt-3 pl-3 border-l-2 text-xs italic">
               {slide.notes}
             </blockquote>
           )}

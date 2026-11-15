@@ -255,7 +255,22 @@ async def add_connection(
     await session.commit()
     logger.info("카탈로그 연결: catalog=%s datasource=%s role=%s remote=%s",
                 catalog.catalog_key, datasource.datasource_id, req.role, req.remote_name)
-    return (await _responses(session, [catalog]))[0]
+    response = (await _responses(session, [catalog]))[0]
+    await _reresolve_engine_lineage(session, datasource.datasource_id)
+    return response
+
+
+async def _reresolve_engine_lineage(session: AsyncSession, engine_key: str) -> None:
+    """연결이 바뀐 엔진이 실행한 쿼리 리니지를 비우고 다시 해석한다(실패는 경고만).
+
+    호출자는 응답을 먼저 만든다 — 실패 시 롤백이 ORM 객체를 만료시켜 응답 생성이 깨지지 않도록.
+    """
+    try:
+        from app.catalog.lineage_resolve import resolve_query_lineage_for_engine
+        await resolve_query_lineage_for_engine(session, engine_key, reset=True)
+    except Exception as e:
+        await session.rollback()
+        logger.warning("연결 변경 후 리니지 재해석 실패 (datasource=%s): %s", engine_key, e)
 
 
 async def remove_connection(session: AsyncSession, catalog_id: int, datasource_id: int) -> CatalogResponse:
@@ -267,10 +282,14 @@ async def remove_connection(session: AsyncSession, catalog_id: int, datasource_i
         raise CatalogNotFoundError("연결을 찾을 수 없습니다.")
     if conn.role == ROLE_SYNC and catalog.auto_created:
         raise CatalogConflictError("데이터 소스와 함께 만들어진 카탈로그의 수집(SYNC) 연결은 끊을 수 없습니다.")
+    engine_key = await session.scalar(select(Datasource.datasource_id).where(Datasource.id == datasource_id))
     await session.delete(conn)
     await session.commit()
     logger.info("카탈로그 연결 해제: catalog=%s datasource id=%d", catalog.catalog_key, datasource_id)
-    return (await _responses(session, [catalog]))[0]
+    response = (await _responses(session, [catalog]))[0]
+    if engine_key:
+        await _reresolve_engine_lineage(session, engine_key)
+    return response
 
 
 async def list_datasource_catalogs(session: AsyncSession, datasource_id: int) -> list[CatalogResponse]:
@@ -293,7 +312,7 @@ async def list_datasource_catalogs(session: AsyncSession, datasource_id: int) ->
 # Trino 커넥터 이름 → 연결 후보로 볼 Argus 카탈로그 kind
 _CONNECTOR_KINDS: dict[str, tuple[str, ...]] = {
     "hive": ("hive",),
-    "iceberg": ("iceberg-rest", "hive"),
+    "iceberg": ("iceberg-rest", "iceberg-hadoop", "hive"),
     "delta_lake": ("hive",),
     "hudi": ("hive",),
     "kudu": ("kudu",),
@@ -354,33 +373,12 @@ async def discover_engine_catalogs(session: AsyncSession, datasource_id: int) ->
 
 async def _trino_catalogs(config: dict) -> list[tuple[str, str | None]]:
     """Trino REST(/v1/statement)로 ``system.metadata.catalogs`` 를 읽는다. 형식 오류는 ValueError."""
-    import httpx
+    from app.quality import trino_client
 
-    from app.catalog.service import validate_connection_target
-
-    host, port = validate_connection_target(config, 8443)
-    use_ssl = str(config.get("use_ssl", True)).strip().lower() in ("true", "1", "yes", "on")
-    user = str(config.get("username") or "argus")
-    password = config.get("password") or None
-    base = f"{'https' if use_ssl else 'http'}://{host}:{port}"
-    auth = (user, password) if password else None
-    headers = {"X-Trino-User": user}
+    endpoint = trino_client.TrinoEndpoint.from_config(config)
     sql = "SELECT catalog_name, connector_name FROM system.metadata.catalogs ORDER BY catalog_name"
-    rows: list[tuple[str, str | None]] = []
-    # 내부망 Trino 는 사설 인증서가 흔하다 — 접속 테스트(connection_ssl)와 같은 수준(암호화, 미검증)
-    async with httpx.AsyncClient(timeout=10.0, verify=False, auth=auth) as client:
-        resp = await client.post(f"{base}/v1/statement", content=sql, headers=headers)
-        for _ in range(100):
-            resp.raise_for_status()
-            body = resp.json()
-            if body.get("error"):
-                raise RuntimeError(body["error"].get("message") or "Trino query failed")
-            rows.extend((r[0], r[1] if len(r) > 1 else None) for r in body.get("data") or [])
-            next_uri = body.get("nextUri")
-            if not next_uri:
-                return rows
-            resp = await client.get(next_uri, headers=headers)
-    raise RuntimeError("Trino 응답이 끝나지 않았습니다.")
+    result = await trino_client.execute(endpoint, sql, request_timeout=10.0)
+    return [(r[0], r[1] if len(r) > 1 else None) for r in result.rows]
 
 
 # ---------------------------------------------------------------------------

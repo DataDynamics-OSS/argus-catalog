@@ -1,6 +1,7 @@
 "use client"
 
-import { Badge } from "@workspace/ui/components/badge"
+import { InfoTip } from "@/components/tip"
+import { StatusBadge } from "@workspace/ui/components/status-badge"
 import {
   Dialog,
   DialogContent,
@@ -17,6 +18,7 @@ import {
 } from "@workspace/ui/components/table"
 
 import type { FederationSyncRun } from "./api"
+import { syncStatus } from "./status"
 
 /** peer 의 최근 HARVEST 실행 이력(상태·전체/증분·건수·오류·시작 시각). */
 export function SyncRunsDialog({
@@ -44,7 +46,7 @@ export function SyncRunsDialog({
           <TableHeader>
             <TableRow>
               <TableHead>상태</TableHead>
-              <TableHead>관측/갱신/임베딩/정리</TableHead>
+              <TableHead><InfoTip tip="관측 — peer 에서 받은 데이터셋 수 · 갱신 — 미러에 새로 넣거나 바꾼 수 · 임베딩 — 허브 모델로 다시 임베딩한 수 · 정리 — peer 에 더 없어 미러에서 지운 수">관측/갱신/임베딩/정리</InfoTip></TableHead>
               <TableHead>시작</TableHead>
             </TableRow>
           </TableHeader>
@@ -60,7 +62,7 @@ export function SyncRunsDialog({
                   }
                 >
                   {loading
-                    ? "불러오는 중..."
+                    ? "불러오는 중…"
                     : error
                       ? `이력을 불러오지 못했습니다: ${error}`
                       : "이력이 없습니다."}
@@ -70,18 +72,8 @@ export function SyncRunsDialog({
               runs.map((r) => (
                 <TableRow key={r.id}>
                   <TableCell>
-                    <Badge
-                      variant={
-                        r.status === "SUCCESS"
-                          ? "default"
-                          : r.status === "FAILED"
-                            ? "secondary"
-                            : "outline"
-                      }
-                    >
-                      {r.status}
-                    </Badge>
-                    <span className="ml-1.5 text-xs text-muted-foreground">
+                    <StatusBadge {...syncStatus(r.status)} />
+                    <span className="ml-1.5 text-xs">
                       {r.is_full ? "전체" : "증분"}
                     </span>
                   </TableCell>
@@ -94,7 +86,7 @@ export function SyncRunsDialog({
                       </div>
                     )}
                   </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">
+                  <TableCell className="text-xs">
                     {new Date(r.started_at).toLocaleString()}
                   </TableCell>
                 </TableRow>

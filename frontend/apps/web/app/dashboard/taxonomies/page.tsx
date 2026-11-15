@@ -1,7 +1,9 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
-import { ChevronDown, ChevronRight, FolderOpen, FolderTree, Minus, Pencil, Plus } from "lucide-react"
+import { Tip } from "@/components/tip"
+import { Suspense, useCallback, useEffect, useState } from "react"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
+import { ChevronDown, ChevronRight, FolderOpen, FolderPlus, FolderTree, MoreHorizontal, Pencil, Plus, Trash2, type LucideIcon } from "lucide-react"
 import { notifyError, toast } from "@/lib/notify"
 
 import {
@@ -28,6 +30,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@workspace/ui/components/dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@workspace/ui/components/dropdown-menu"
 import { Input } from "@workspace/ui/components/input"
 import { Label } from "@workspace/ui/components/label"
 import {
@@ -38,7 +47,7 @@ import {
   SelectValue,
 } from "@workspace/ui/components/select"
 import { DashboardHeader } from "@/components/dashboard-header"
-import { useAuth } from "@/features/auth"
+import { MenuItemContent } from "@/components/menu-item-content"
 import { usePermissions } from "@/features/permissions/use-permissions"
 import {
   addDatasetCategory,
@@ -60,29 +69,117 @@ import { countCategories } from "@/features/taxonomy/tree"
 import { fetchDatasets, type PaginatedDatasets } from "@/features/datasets/api"
 import { DatasetsGrid } from "@/features/datasets/components/datasets-grid"
 import { GridPagination } from "@/components/grid-pagination"
+import { useResizableWidth } from "@/hooks/use-resizable-width"
+import { SearchInput } from "@/components/search-input"
 
 type Sel = { kind: "category"; id: number } | { kind: "uncategorized" } | null
 
+const PAGE_SIZES = [10, 20, 30, 40, 50]
+const DEFAULT_PAGE_SIZE = 50
+
+/** 주소 → 화면 상태. ?taxonomy=&category= 또는 &uncategorized=1, &page=, &size= (TODO-073) */
+function readTaxonomyParams(params: { get(name: string): string | null }) {
+  const num = (k: string) => {
+    const v = Number(params.get(k))
+    return Number.isInteger(v) && v > 0 ? v : null
+  }
+  const category = num("category")
+  const sel: Sel = category ? { kind: "category", id: category } : params.get("uncategorized") === "1" ? { kind: "uncategorized" } : null
+  const size = num("size")
+  return {
+    taxId: num("taxonomy"),
+    sel,
+    page: num("page") ?? 1,
+    size: size && PAGE_SIZES.includes(size) ? size : DEFAULT_PAGE_SIZE,
+  }
+}
+
+function taxonomyQuery(taxId: number | null, sel: Sel, page: number, size: number): string {
+  const q = new URLSearchParams()
+  if (taxId != null) q.set("taxonomy", String(taxId))
+  if (sel?.kind === "category") q.set("category", String(sel.id))
+  if (sel?.kind === "uncategorized") q.set("uncategorized", "1")
+  if (page > 1) q.set("page", String(page))
+  if (size !== DEFAULT_PAGE_SIZE) q.set("size", String(size))
+  return q.toString()
+}
+
+// 선택한 분류 체계·분류·페이지를 주소에 남긴다 — useSearchParams 를 쓰므로 Suspense 로 감싼다.
+type RowAction = { label: string; icon: LucideIcon; onSelect: () => void; destructive?: boolean; separatorBefore?: boolean }
+
+function renderContextActions(actions: RowAction[]) {
+  return actions.flatMap((a) => [
+    ...(a.separatorBefore ? [<ContextMenuSeparator key={`${a.label}-sep`} />] : []),
+    <ContextMenuItem key={a.label} variant={a.destructive ? "destructive" : undefined} onClick={a.onSelect}>
+      <MenuItemContent icon={a.icon} label={a.label} />
+    </ContextMenuItem>,
+  ])
+}
+
+/** 행 끝 ⋯ 버튼 — 마우스를 올리거나 Tab 으로 닿으면 보인다. 우클릭 메뉴와 같은 항목. */
+function RowMenu({ label, actions }: { label: string; actions: RowAction[] }) {
+  return (
+    <span onClick={(e) => e.stopPropagation()} onContextMenu={(e) => e.stopPropagation()}>
+      <DropdownMenu>
+        <Tip label={label}><DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            aria-label={label}
+            className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 outline-none hover:bg-background hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100 data-[state=open]:opacity-100"
+          >
+            <MoreHorizontal className="h-3.5 w-3.5" />
+          </button>
+        </DropdownMenuTrigger></Tip>
+        <DropdownMenuContent align="end" className="w-44" aria-label={label}>
+          {actions.flatMap((a) => [
+            ...(a.separatorBefore ? [<DropdownMenuSeparator key={`${a.label}-sep`} />] : []),
+            <DropdownMenuItem key={a.label} variant={a.destructive ? "destructive" : undefined} onSelect={a.onSelect}>
+              <MenuItemContent icon={a.icon} label={a.label} />
+            </DropdownMenuItem>,
+          ])}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </span>
+  )
+}
+
 export default function TaxonomiesPage() {
-  // 편집(분류체계·분류·데이터셋 매핑) — admin 이거나 권한 관리에서 taxonomies.edit 를 명시 허용받은 역할
-  // (미설정이면 admin 전용, 서버도 같은 키로 403). 조회는 누구나.
-  const { user } = useAuth()
-  const { isFeatureGranted } = usePermissions()
-  const canEdit = !!user?.is_admin || isFeatureGranted("taxonomies.edit")
+  return (
+    <Suspense>
+      <TaxonomiesPageContent />
+    </Suspense>
+  )
+}
+
+function TaxonomiesPageContent() {
+  // 편집(분류체계·분류) — admin 이거나 권한 관리에서 taxonomies.edit 를 명시 허용받은 역할
+  // (미설정이면 admin 전용, 서버도 같은 키로 403). 데이터셋 매핑은 taxonomies.map(TODO-138). 조회는 누구나.
+  const { canUseFeature } = usePermissions()
+  const canEdit = canUseFeature("taxonomies.edit")
+  const canMap = canUseFeature("taxonomies.map")
+  // 처음 상태는 주소에서 읽고, 바뀌면 주소에 쓴다 — 데이터셋 상세에 갔다 돌아와도 같은 분류·페이지(TODO-073)
+  const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+  const [initial] = useState(() => readTaxonomyParams(searchParams))
   const [taxonomies, setTaxonomies] = useState<Taxonomy[]>([])
-  const [taxId, setTaxId] = useState<number | null>(null)
+  const [taxId, setTaxId] = useState<number | null>(initial.taxId)
   const [tree, setTree] = useState<TaxonomyTree | null>(null)
-  const [selected, setSelected] = useState<Sel>(null)
+  const [selected, setSelected] = useState<Sel>(initial.sel)
   const [datasets, setDatasets] = useState<PaginatedDatasets>({ items: [], total: 0, page: 1, page_size: 50 })
   // 선택한 분류에 *직접* 매핑된 데이터셋 id — 목록은 하위 분류까지 포함하지만 해제는 직접 매핑만 가능.
   const [directIds, setDirectIds] = useState<Set<number>>(new Set())
   // 우측 그리드 페이지네이션 — page 는 1-base(서버), pageSize 는 페이지당 행 수.
-  const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(50)
+  const [page, setPage] = useState(initial.page)
+  const [pageSize, setPageSize] = useState(initial.size)
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set())
   const [rootOpen, setRootOpen] = useState(true)
-  const [asideWidth, setAsideWidth] = useState(288) // 트리 폭(px), w-72 = 18rem 기준
-  const dragRef = useRef<{ startX: number; startW: number } | null>(null)
+  // 카테고리/데이터셋 사이 separator 드래그로 트리 폭 조절 — 마지막 폭을 브라우저에 기억한다.
+  const { width: asideWidth, startResize } = useResizableWidth("argus.taxonomies.asideWidth", {
+    defaultWidth: 288, // w-72 = 18rem
+    min: 200,
+    max: 560,
+  })
   // 분류 트리 드래그 정렬 상태
   const [dragInfo, setDragInfo] = useState<{ id: number; parentId: number | null } | null>(null)
   const [dropTarget, setDropTarget] = useState<{ id: number; pos: "before" | "after" } | null>(null)
@@ -91,28 +188,6 @@ export default function TaxonomiesPage() {
   // 삭제 확인 대상 — 분류(우클릭 삭제)·분류체계(삭제 버튼)
   const [catDeleteTarget, setCatDeleteTarget] = useState<TreeCategory | null>(null)
   const [taxDeleteOpen, setTaxDeleteOpen] = useState(false)
-
-  // 카테고리/데이터셋 사이 separator 드래그로 트리 폭 조절
-  const startResize = (e: React.MouseEvent) => {
-    e.preventDefault()
-    dragRef.current = { startX: e.clientX, startW: asideWidth }
-    const onMove = (ev: MouseEvent) => {
-      if (!dragRef.current) return
-      const next = dragRef.current.startW + (ev.clientX - dragRef.current.startX)
-      setAsideWidth(Math.min(560, Math.max(200, next)))
-    }
-    const onUp = () => {
-      dragRef.current = null
-      window.removeEventListener("mousemove", onMove)
-      window.removeEventListener("mouseup", onUp)
-      document.body.style.userSelect = ""
-      document.body.style.cursor = ""
-    }
-    document.body.style.userSelect = "none"
-    document.body.style.cursor = "col-resize"
-    window.addEventListener("mousemove", onMove)
-    window.addEventListener("mouseup", onUp)
-  }
 
   // dialogs
   // 분류체계 생성/수정(이름·설명) 공용 대화상자
@@ -130,7 +205,8 @@ export default function TaxonomiesPage() {
   const loadTaxonomies = useCallback(async () => {
     const list = await fetchTaxonomies().catch(() => [])
     setTaxonomies(list)
-    setTaxId((prev) => prev ?? (list[0]?.id ?? null))
+    // 주소의 분류 체계가 없어졌으면 첫 번째로
+    setTaxId((prev) => (prev != null && list.some((t) => t.id === prev) ? prev : (list[0]?.id ?? null)))
   }, [])
 
   const loadTree = useCallback(async (id: number) => {
@@ -163,6 +239,15 @@ export default function TaxonomiesPage() {
   }, [taxId])
 
   useEffect(() => { loadDatasets(selected, page, pageSize) }, [selected, page, pageSize, loadDatasets, tree])
+
+  // 화면 상태 → 주소(기록을 쌓지 않도록 replace)
+  const queryKey = searchParams.toString()
+  useEffect(() => {
+    const q = taxonomyQuery(taxId, selected, page, pageSize)
+    if (q !== queryKey) router.replace(q ? `${pathname}?${q}` : pathname, { scroll: false })
+    // queryKey 는 비교용 — 주소가 바뀌었다고 다시 쓰지 않는다
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taxId, selected, page, pageSize, pathname, router])
 
   // 선택 변경 시 1페이지로 복귀(트리/미분류/분류체계 전환 공통).
   const selectNode = useCallback((sel: Sel) => { setSelected(sel); setPage(1) }, [])
@@ -288,6 +373,14 @@ export default function TaxonomiesPage() {
     } catch (e) { notifyError(e, "분류 순서를 바꾸지 못했습니다.") }
   }
 
+  // 분류 행 메뉴 — 우클릭 메뉴와 행 끝 ⋯ 버튼(키보드로도 열림)이 같은 목록을 쓴다
+  const catActions = (c: TreeCategory): RowAction[] => [
+    { label: "하위 분류 추가", icon: FolderPlus, onSelect: () => openCreateCat(c.id) },
+    { label: "이름 변경", icon: Pencil, onSelect: () => openEditCat(c) },
+    { label: "삭제", icon: Trash2, destructive: true, separatorBefore: true, onSelect: () => setCatDeleteTarget(c) },
+  ]
+  const rootActions: RowAction[] = [{ label: "분류 추가", icon: FolderPlus, onSelect: () => openCreateCat(null) }]
+
   const renderCat = (c: TreeCategory, depth: number) => {
     const open = !collapsed.has(c.id)
     const active = selected?.kind === "category" && selected.id === c.id
@@ -318,20 +411,16 @@ export default function TaxonomiesPage() {
                 setDragInfo(null); setDropTarget(null)
               }}
             >
-              <button type="button" className="shrink-0 text-muted-foreground" onClick={(e) => { e.stopPropagation(); toggle(c.id) }}>
+              <Tip label={open ? "접기" : "펼치기"}><button aria-label={open ? "접기" : "펼치기"} type="button" className="shrink-0 text-muted-foreground" onClick={(e) => { e.stopPropagation(); toggle(c.id) }}>
                 {c.children.length > 0 ? (open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />) : <span className="inline-block h-3.5 w-3.5" />}
-              </button>
+              </button></Tip>
               <FolderTree className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
               <span className="truncate">{c.name}</span>
-              <span className="ml-auto shrink-0 rounded bg-muted px-1.5 text-xs text-muted-foreground tabular-nums">{c.dataset_count}</span>
+              <span className="ml-auto shrink-0 rounded bg-muted px-1.5 text-xs tabular-nums">{c.dataset_count}</span>
+              {canEdit && <RowMenu label={`${c.name} 메뉴`} actions={catActions(c)} />}
             </div>
           </ContextMenuTrigger>
-          <ContextMenuContent className="w-44">
-            <ContextMenuItem onClick={() => openCreateCat(c.id)}>하위 분류 추가</ContextMenuItem>
-            <ContextMenuItem onClick={() => openEditCat(c)}>이름 변경</ContextMenuItem>
-            <ContextMenuSeparator />
-            <ContextMenuItem variant="destructive" onClick={() => setCatDeleteTarget(c)}>삭제</ContextMenuItem>
-          </ContextMenuContent>
+          <ContextMenuContent className="w-44">{renderContextActions(catActions(c))}</ContextMenuContent>
         </ContextMenu>
         {open && c.children.map((ch) => renderCat(ch, depth + 1))}
       </div>
@@ -350,32 +439,31 @@ export default function TaxonomiesPage() {
             </SelectContent>
           </Select>
           {canEdit && <Button size="sm" variant="outline" onClick={openCreateTax}><Plus className="mr-1 h-4 w-4" /> 분류체계 추가</Button>}
-          {canEdit && currentTax && <Button size="sm" variant="outline" onClick={openEditTax}><Pencil className="mr-1 h-4 w-4" /> 분류체계 수정</Button>}
-          {canEdit && taxId != null && <Button size="sm" variant="outline" className="text-destructive" onClick={() => setTaxDeleteOpen(true)}><Minus className="mr-1 h-4 w-4" /> 분류체계 삭제</Button>}
-          {currentTax?.description && <span className="truncate text-sm text-muted-foreground" title={currentTax.description}>{currentTax.description}</span>}
+          {canEdit && currentTax && <Button size="sm" variant="outline" onClick={openEditTax}><Pencil className="mr-1 h-4 w-4" /> 분류체계 편집</Button>}
+          {canEdit && taxId != null && <Button size="sm" variant="outline" className="text-destructive" onClick={() => setTaxDeleteOpen(true)}><Trash2 className="mr-1 h-4 w-4" /> 분류체계 삭제</Button>}
+          {currentTax?.description && <span className="truncate text-sm" title={currentTax.description}>{currentTax.description}</span>}
         </div>
 
         <div className="flex flex-1 gap-1 min-h-0">
           {/* 좌: 분류 트리 */}
           <aside className="shrink-0 overflow-auto rounded-md border p-2" style={{ width: asideWidth }}>
             {!tree ? (
-              <p className="py-8 text-center text-sm text-muted-foreground">분류체계를 선택/생성하세요.</p>
+              <p className="py-8 text-center text-sm">분류체계를 선택/생성하세요.</p>
             ) : (
               <div className="flex flex-col gap-0.5">
                 {/* 루트 "카테고리" — 우클릭으로 최상위 분류 추가 */}
                 <ContextMenu>
                   <ContextMenuTrigger asChild disabled={!canEdit}>
                     <div className={rowCls(false)} style={{ paddingLeft: 6 }} onClick={() => setRootOpen((o) => !o)}>
-                      <button type="button" className="shrink-0 text-muted-foreground" onClick={(e) => { e.stopPropagation(); setRootOpen((o) => !o) }}>
+                      <Tip label={rootOpen ? "접기" : "펼치기"}><button aria-label={rootOpen ? "접기" : "펼치기"} type="button" className="shrink-0 text-muted-foreground" onClick={(e) => { e.stopPropagation(); setRootOpen((o) => !o) }}>
                         {rootOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-                      </button>
+                      </button></Tip>
                       <FolderTree className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                       <span className="truncate font-semibold">카테고리</span>
+                      {canEdit && <span className="ml-auto"><RowMenu label="카테고리 메뉴" actions={rootActions} /></span>}
                     </div>
                   </ContextMenuTrigger>
-                  <ContextMenuContent className="w-44">
-                    <ContextMenuItem onClick={() => openCreateCat(null)}>분류 추가</ContextMenuItem>
-                  </ContextMenuContent>
+                  <ContextMenuContent className="w-44">{renderContextActions(rootActions)}</ContextMenuContent>
                 </ContextMenu>
                 {rootOpen && (
                   <>
@@ -389,7 +477,7 @@ export default function TaxonomiesPage() {
                       <span className="w-4 shrink-0" />
                       <FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                       <span className="truncate">미분류</span>
-                      <span className="ml-auto shrink-0 rounded bg-muted px-1.5 text-xs text-muted-foreground tabular-nums">{tree.uncategorized_count}</span>
+                      <span className="ml-auto shrink-0 rounded bg-muted px-1.5 text-xs tabular-nums">{tree.uncategorized_count}</span>
                     </div>
                   </>
                 )}
@@ -419,14 +507,14 @@ export default function TaxonomiesPage() {
                       : "데이터셋"}{" "}
                   ({datasets.total})
                 </h2>
-                {canEdit && selected?.kind === "category" && (
+                {canMap && selected?.kind === "category" && (
                   <Button size="sm" onClick={openMap}><Plus className="mr-1 h-4 w-4" /> 데이터셋 매핑</Button>
                 )}
               </div>
               {/* 데이터셋 메뉴와 동일한 그리드를 그대로 재사용. 분류 선택 시 행 끝에 "제거"(매핑 해제, 확인 후). */}
               <DatasetsGrid
                 data={datasets.items}
-                onRemove={canEdit && selected?.kind === "category" ? (id) => setRemoveTarget(id) : undefined}
+                onRemove={canMap && selected?.kind === "category" ? (id) => setRemoveTarget(id) : undefined}
                 canRemove={(row) => directIds.has(row.id)}
               />
               {/* 페더레이션 탐색과 동일한 페이지네이션(서버 페이지). 데이터가 있으면 표시. */}
@@ -451,7 +539,7 @@ export default function TaxonomiesPage() {
       {/* 분류체계 생성/수정 */}
       <Dialog open={taxDialog.open} onOpenChange={(o) => setTaxDialog((d) => ({ ...d, open: o }))}>
         <DialogContent className="max-w-sm">
-          <DialogHeader><DialogTitle>{taxDialog.mode === "create" ? "분류체계 추가" : "분류체계 수정"}</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{taxDialog.mode === "create" ? "분류체계 추가" : "분류체계 편집"}</DialogTitle></DialogHeader>
           <div className="grid gap-4 py-2">
             <div className="grid gap-1.5">
               <Label className="text-sm">이름 <span className="text-destructive">*</span></Label>
@@ -463,7 +551,7 @@ export default function TaxonomiesPage() {
             </div>
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setTaxDialog((d) => ({ ...d, open: false }))}>취소</Button>
-              <Button onClick={handleTaxSave} disabled={!taxDialog.name.trim()}>{taxDialog.mode === "create" ? "생성" : "저장"}</Button>
+              <Button onClick={handleTaxSave} disabled={!taxDialog.name.trim()}>{taxDialog.mode === "create" ? "추가" : "저장"}</Button>
             </div>
           </div>
         </DialogContent>
@@ -480,7 +568,7 @@ export default function TaxonomiesPage() {
             </div>
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setCatDialog((d) => ({ ...d, open: false }))}>취소</Button>
-              <Button onClick={handleCatSave} disabled={!catDialog.name.trim()}>저장</Button>
+              <Button onClick={handleCatSave} disabled={!catDialog.name.trim()}>{catDialog.mode === "create" ? "추가" : "저장"}</Button>
             </div>
           </div>
         </DialogContent>
@@ -491,7 +579,7 @@ export default function TaxonomiesPage() {
         <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto">
           <DialogHeader><DialogTitle>데이터셋 매핑</DialogTitle></DialogHeader>
           <div className="grid gap-3 py-2">
-            <Input value={mapSearch} onChange={(e) => runMapSearch(e.target.value)} placeholder="데이터셋 검색..." className="h-9 text-sm" />
+            <SearchInput value={mapSearch} onValueChange={runMapSearch} placeholder="데이터셋 검색…" />
             <div className="max-h-[55vh] overflow-y-auto">
               <DatasetsGrid
                 data={mapResults}
@@ -502,7 +590,7 @@ export default function TaxonomiesPage() {
               />
             </div>
             <div className="flex items-center justify-end gap-2 pt-1">
-              <span className="mr-auto text-sm text-muted-foreground">{mapSelected.size}개 선택됨</span>
+              <span className="mr-auto text-sm">{mapSelected.size}개 선택됨</span>
               <Button variant="outline" onClick={() => setMapOpen(false)}>취소</Button>
               <Button onClick={mapSelectedDatasets} disabled={mapSelected.size === 0}>
                 <Plus className="mr-1 h-4 w-4" /> 선택 추가

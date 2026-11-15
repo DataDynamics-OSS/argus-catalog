@@ -160,7 +160,12 @@ export async function recomputeRelationships(reset = true): Promise<{
 }
 
 // 쿼리 lineage 의 dataset_id 백필 — 테이블명→데이터셋 해석(리니지 그래프 노출용).
-export async function resolveLineage(): Promise<{ resolved: number; remaining_unresolved: number }> {
+// unresolved_catalog: 쿼리한 엔진은 알지만 카탈로그 연결(엔진 쪽 이름)이 없어 해석하지 못한 칸 수.
+export async function resolveLineage(): Promise<{
+  resolved: number
+  unresolved_catalog?: number
+  remaining_unresolved: number
+}> {
   const res = await authFetch("/api/v1/catalog/lineage/resolve", { method: "POST" })
   if (!res.ok) await throwOnError(res, "lineage를 해석하지 못했습니다.")
   return res.json()
@@ -398,6 +403,45 @@ export async function testAssistant(
 }
 
 // ---------------------------------------------------------------------------
+// 수집 서비스 (metadata-sync)
+// ---------------------------------------------------------------------------
+
+export type MetadataSyncConfig = { base_url: string; api_token_set: boolean; run_retention_days: number }
+
+export async function fetchMetadataSyncConfig(): Promise<MetadataSyncConfig> {
+  const res = await authFetch(`${BASE}/metadata-sync`)
+  if (!res.ok) await throwOnError(res, "수집 서비스 설정을 불러오지 못했습니다.")
+  return res.json()
+}
+
+/** api_token: undefined 면 기존 토큰 유지, "" 면 지움 */
+export async function updateMetadataSyncConfig(config: {
+  base_url: string
+  api_token?: string
+  run_retention_days: number
+}): Promise<void> {
+  const res = await authFetch(`${BASE}/metadata-sync`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(config),
+  })
+  if (!res.ok) await throwOnError(res, "수집 서비스 설정을 저장하지 못했습니다.")
+}
+
+export async function testMetadataSync(config: {
+  base_url: string
+  api_token?: string
+}): Promise<{ success: boolean; message: string }> {
+  const res = await authFetch(`${BASE}/metadata-sync/test`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(config),
+  })
+  if (!res.ok) await throwOnError(res, "수집 서비스 연결을 테스트하지 못했습니다.")
+  return res.json()
+}
+
+// ---------------------------------------------------------------------------
 // Email (SMTP)
 // ---------------------------------------------------------------------------
 
@@ -532,4 +576,181 @@ export async function updateCatalogPolicyConfig(config: CatalogPolicyConfig): Pr
     body: JSON.stringify(config),
   })
   if (!res.ok) await throwOnError(res, "데이터셋 등록 설정을 저장하지 못했습니다.")
+}
+
+// ---------------------------------------------------------------------------
+// 사이드바 브랜드 — 제품명 · 회사명 문구와 눌렀을 때 갈 주소(비우면 데이터셋 카드 보기)
+// ---------------------------------------------------------------------------
+
+export type BrandingConfig = {
+  title: string
+  subtitle: string
+  link_url: string
+}
+
+export const DEFAULT_BRANDING: BrandingConfig = { title: "Argus Catalog", subtitle: "Data Dynamics Inc", link_url: "" }
+
+/** 저장하면 사이드바가 새로 그리도록 알리는 창 이벤트(detail: BrandingConfig) */
+export const BRANDING_CHANGED_EVENT = "argus:branding-changed"
+
+export async function fetchBrandingConfig(): Promise<BrandingConfig> {
+  const res = await authFetch(`${BASE}/branding`)
+  if (!res.ok) throw new Error(`사이드바 표시 설정을 불러오지 못했습니다. (HTTP ${res.status})`)
+  return res.json()
+}
+
+/** 로그인 전(로그인 화면) — 토큰 없이 읽는 공개 조회(TODO-146) */
+export async function fetchPublicBranding(): Promise<BrandingConfig> {
+  const res = await fetch(`${BASE}/branding/public`)
+  if (!res.ok) throw new Error(`사이드바 표시 설정을 불러오지 못했습니다. (HTTP ${res.status})`)
+  return res.json()
+}
+
+export async function updateBrandingConfig(config: BrandingConfig): Promise<BrandingConfig> {
+  const res = await authFetch(`${BASE}/branding`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(config),
+  })
+  if (!res.ok) await throwOnError(res, "사이드바 표시 설정을 저장하지 못했습니다.")
+  return res.json()
+}
+
+// ---------------------------------------------------------------------------
+// API 키 (프로그램용 자격 — 수집·AI·품질·SDK·NiFi 등)
+// ---------------------------------------------------------------------------
+
+export type ApiKeyStatus = "active" | "disabled" | "revoked"
+
+export type ApiKeyInfo = {
+  id: number
+  name: string
+  description: string | null
+  key_prefix: string
+  role_id: string
+  scopes: string[]
+  status: ApiKeyStatus
+  expires_at: string | null
+  last_used_at: string | null
+  last_used_ip: string | null
+  created_by: string | null
+  created_at: string | null
+  rotated_at: string | null
+  revoked_at: string | null
+  revoked_by: string | null
+}
+
+export type ApiKeyCreated = ApiKeyInfo & { api_key: string }
+export type ApiKeyScope = { code: string; label: string; description: string }
+
+const KEYS = "/api/v1/api-keys"
+
+export async function fetchApiKeys(includeRevoked: boolean): Promise<ApiKeyInfo[]> {
+  const res = await authFetch(`${KEYS}?include_revoked=${includeRevoked}`)
+  if (!res.ok) await throwOnError(res, "API 키 목록을 불러오지 못했습니다.")
+  return res.json()
+}
+
+export async function fetchApiKeyScopes(): Promise<ApiKeyScope[]> {
+  const res = await authFetch(`${KEYS}/scopes`)
+  if (!res.ok) await throwOnError(res, "API 키 범위를 불러오지 못했습니다.")
+  return res.json()
+}
+
+export async function createApiKey(body: {
+  name: string
+  description?: string
+  role: string
+  scopes: string[]
+  expires_in_days?: number | null
+}): Promise<ApiKeyCreated> {
+  const res = await authFetch(KEYS, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) await throwOnError(res, "API 키를 발급하지 못했습니다.")
+  return res.json()
+}
+
+export async function updateApiKey(
+  id: number,
+  body: { name?: string; description?: string; role?: string; scopes?: string[]; enabled?: boolean },
+): Promise<ApiKeyInfo> {
+  const res = await authFetch(`${KEYS}/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) await throwOnError(res, "API 키를 수정하지 못했습니다.")
+  return res.json()
+}
+
+export async function rotateApiKey(id: number): Promise<ApiKeyCreated> {
+  const res = await authFetch(`${KEYS}/${id}/rotate`, { method: "POST" })
+  if (!res.ok) await throwOnError(res, "API 키를 재발급하지 못했습니다.")
+  return res.json()
+}
+
+export async function revokeApiKey(id: number): Promise<ApiKeyInfo> {
+  const res = await authFetch(`${KEYS}/${id}`, { method: "DELETE" })
+  if (!res.ok) await throwOnError(res, "API 키를 폐기하지 못했습니다.")
+  return res.json()
+}
+
+
+// ---------------------------------------------------------------------------
+// AI-Ready 기관 기본값 — 데이터셋에 값이 없을 때 쓰는 제공기관·언어·라이선스·연락처 (TODO-096)
+// ---------------------------------------------------------------------------
+
+export type AiReadyConfig = {
+  publisher: string
+  language: string
+  license: string
+  license_url: string
+  contact_email: string
+  /** AI-Ready 점검의 최소 요건 — 전체 결측률 상한(%, 미만이어야 충족) */
+  max_missing_pct: number
+  /** AI-Ready 점검의 최소 요건 — 갱신 주기를 몇 번까지 놓쳐도 되는지 */
+  max_missed_cycles: number
+  /** 오류 신고·개선 요청 처리 기한(일) — 접수 때 기한으로 저장 */
+  report_due_days: number
+  /** 관련법령 목록 — 한 줄에 하나(`법령명 | 해당하는 경우`). AI 초안은 이 안에서만 관련법령을 고른다 */
+  laws: string
+  /** 외부 공개 주소 방식 — DCAT · Croissant · 데이터 카드에 넣는 이 서버 주소 */
+  public_mode: PublicUrlMode
+  /** FQDN · 바인딩 IP 방식의 스킴 */
+  public_scheme: "http" | "https"
+  /** FQDN · 바인딩 IP 방식의 포트 — 비우면(null) 백엔드 포트 */
+  public_port: number | null
+  /** 직접 입력 방식의 URL */
+  public_url: string
+}
+
+export type PublicUrlMode = "REQUEST" | "FQDN" | "IP" | "CUSTOM"
+
+/** 방식별로 실제 어떤 주소가 되는지(`current` 는 저장된 설정의 주소) */
+export type PublicUrlPreview = Record<Exclude<PublicUrlMode, "CUSTOM">, string> & { current: string }
+
+export async function fetchPublicUrlPreview(scheme: string, port: number | null): Promise<PublicUrlPreview> {
+  const q = new URLSearchParams({ scheme })
+  if (port) q.set("port", String(port))
+  const res = await authFetch(`${BASE}/ai-ready/public-url?${q}`)
+  if (!res.ok) await throwOnError(res, "공개 주소를 확인하지 못했습니다.")
+  return res.json()
+}
+
+export async function fetchAiReadyConfig(): Promise<AiReadyConfig> {
+  const res = await authFetch(`${BASE}/ai-ready`)
+  if (!res.ok) throw new Error(`AI-Ready 설정을 불러오지 못했습니다. (HTTP ${res.status})`)
+  return res.json()
+}
+
+export async function updateAiReadyConfig(config: AiReadyConfig): Promise<void> {
+  const res = await authFetch(`${BASE}/ai-ready`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(config),
+  })
+  if (!res.ok) await throwOnError(res, "AI-Ready 설정을 저장하지 못했습니다.")
 }

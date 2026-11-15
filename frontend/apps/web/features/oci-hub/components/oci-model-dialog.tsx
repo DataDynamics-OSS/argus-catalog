@@ -193,7 +193,7 @@ export function OciModelDialog({
               </SelectContent>
             </Select>
             {!isAdmin && (
-              <p className="text-xs text-muted-foreground">승인·운영 상태는 관리자만 지정할 수 있습니다.</p>
+              <p className="text-xs">승인·운영 상태는 관리자만 지정할 수 있습니다.</p>
             )}
           </div>
           {error && <p className="text-sm text-destructive">{error}</p>}

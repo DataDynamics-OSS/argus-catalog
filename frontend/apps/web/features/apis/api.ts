@@ -73,9 +73,15 @@ export type ApiTagDef = { name: string; description: string }
 
 /** 현재 사용자가 이 API 에 할 수 있는 작업(버튼 노출 판단용). 실제 통제는 백엔드 가드. */
 export type ApiPermissions = {
-  /** 개요 편집·상태 변경·삭제·엔드포인트 추가/수정/삭제 — 생성자 본인 또는 관리자 */
+  /** 개요 편집·상태 변경·스펙 새 버전·엔드포인트 추가/수정/삭제 — 생성자 본인 또는 관리자 + 기능 권한 apis.edit */
   can_edit: boolean
-  /** 자격증명·리니지 추가/삭제 — 관리자 */
+  /** 삭제 — 생성자 본인 또는 관리자 + 기능 권한 apis.delete */
+  can_delete: boolean
+  /** 다른 사람 호출 이력 · 사용량 전체 보기 — 생성자 본인 또는 관리자 */
+  can_view_usage: boolean
+  /** 리니지 추가/삭제 — 기능 권한 lineage.edit(명시 허용형, 미설정이면 관리자만) */
+  can_edit_lineage: boolean
+  /** 자격증명 추가/삭제 — 관리자 */
   can_admin: boolean
 }
 

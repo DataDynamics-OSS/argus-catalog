@@ -3,9 +3,9 @@
 // Dataset 상세 페이지의 "표준 용어" 탭 — 선택한 사전과 컬럼 매핑 상태(준수도)를 관리하고
 // 자동/수동 매핑 및 초기화 기능을 제공한다.
 
+import { Tip } from "@/components/tip"
 import { useCallback, useEffect, useState } from "react"
-import { Card, CardContent } from "@workspace/ui/components/card"
-import { Badge } from "@workspace/ui/components/badge"
+import { StatusBadge } from "@workspace/ui/components/status-badge"
 import { Button } from "@workspace/ui/components/button"
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -25,7 +25,7 @@ import {
 import {
   AlertTriangle, ArrowRight, Check, ChevronsUpDown, RotateCcw, Shield, X, Zap,
 } from "lucide-react"
-import { errorMessage, toast } from "@/lib/notify"
+import { toast, notifyError } from "@/lib/notify"
 import { authFetch, throwOnError } from "@/features/auth/auth-fetch"
 
 const BASE = "/api/v1/standards"
@@ -84,9 +84,6 @@ type Props = {
   canEdit?: boolean
 }
 
-function errMsg(e: unknown, fallback: string): string {
-  return errorMessage(e) ?? fallback
-}
 
 // ---------------------------------------------------------------------------
 // Component
@@ -125,7 +122,7 @@ export function TermsTab({ datasetId, canEdit = false }: Props) {
       })
       .catch((err) => {
         setDictionaries([])
-        toast.error(errMsg(err, "사전 목록을 불러오지 못했습니다."))
+        notifyError(err, "사전 목록을 불러오지 못했습니다.")
       })
   }, [datasetId])
 
@@ -140,7 +137,7 @@ export function TermsTab({ datasetId, canEdit = false }: Props) {
       if (!resp.ok) await throwOnError(resp, "용어 매핑을 불러오지 못했습니다.")
       setMapping(await resp.json())
     } catch (err) {
-      toast.error(errMsg(err, "용어 매핑을 불러오지 못했습니다."))
+      notifyError(err, "용어 매핑을 불러오지 못했습니다.")
     } finally {
       setLoading(false)
     }
@@ -163,7 +160,7 @@ export function TermsTab({ datasetId, canEdit = false }: Props) {
       setResetOpen(false)
       await loadMapping()
     } catch (err) {
-      toast.error(errMsg(err, "용어 매핑을 초기화하지 못했습니다."))
+      notifyError(err, "용어 매핑을 초기화하지 못했습니다.")
     } finally {
       setResetting(false)
     }
@@ -183,7 +180,7 @@ export function TermsTab({ datasetId, canEdit = false }: Props) {
       setAutoMapResult(await resp.json())
       await loadMapping()
     } catch (err) {
-      toast.error(errMsg(err, "용어를 자동 매핑하지 못했습니다."))
+      notifyError(err, "용어를 자동 매핑하지 못했습니다.")
     } finally {
       setAutoMapping(false)
     }
@@ -204,7 +201,7 @@ export function TermsTab({ datasetId, canEdit = false }: Props) {
       })
       if (!resp.ok) await throwOnError(resp, "용어를 매핑하지 못했습니다.")
     } catch (err) {
-      toast.error(errMsg(err, "용어를 매핑하지 못했습니다."))
+      notifyError(err, "용어를 매핑하지 못했습니다.")
     }
     await loadMapping()
   }
@@ -214,7 +211,7 @@ export function TermsTab({ datasetId, canEdit = false }: Props) {
       const resp = await authFetch(`${BASE}/mappings/${mappingId}`, { method: "DELETE" })
       if (!resp.ok) await throwOnError(resp, "용어 매핑을 제거하지 못했습니다.")
     } catch (err) {
-      toast.error(errMsg(err, "용어 매핑을 제거하지 못했습니다."))
+      notifyError(err, "용어 매핑을 제거하지 못했습니다.")
     }
     await loadMapping()
   }
@@ -240,11 +237,11 @@ export function TermsTab({ datasetId, canEdit = false }: Props) {
               body: JSON.stringify({ dictionary_id: id }),
             }).then(async (r) => {
               if (!r.ok) await throwOnError(r, "기본 사전을 저장하지 못했습니다.")
-            }).catch((err) => toast.error(errMsg(err, "기본 사전 선택을 저장하지 못했습니다.")))
+            }).catch((err) => notifyError(err, "기본 사전 선택을 저장하지 못했습니다."))
           }}
         >
           <SelectTrigger className="w-64 h-9">
-            <SelectValue placeholder="사전 선택..." />
+            <SelectValue placeholder="사전 선택…" />
           </SelectTrigger>
           <SelectContent>
             {(dictionaries ?? []).map(d => (
@@ -275,12 +272,12 @@ export function TermsTab({ datasetId, canEdit = false }: Props) {
           className="gap-1.5"
         >
           <Zap className="h-3.5 w-3.5" />
-          {autoMapping ? "매핑 중..." : "자동 매핑"}
+          {autoMapping ? "매핑 중…" : "자동 매핑"}
         </Button>
         </>)}
 
         {autoMapResult && (
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <div className="flex items-center gap-2 text-xs">
             <Check className="h-3.5 w-3.5 text-green-500" />
             신규 {autoMapResult.created}건, 갱신 {autoMapResult.updated}건
             {autoMapResult.removed > 0 && `, 제거 ${autoMapResult.removed}건`}
@@ -291,8 +288,7 @@ export function TermsTab({ datasetId, canEdit = false }: Props) {
 
       {/* Compliance bar */}
       {stats && stats.total_columns > 0 && (
-        <Card>
-          <CardContent className="py-3 px-4">
+        <div className="py-1">
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-2">
                 <Shield className="h-4 w-4 text-muted-foreground" />
@@ -333,33 +329,25 @@ export function TermsTab({ datasetId, canEdit = false }: Props) {
                 </span>
               </div>
             </div>
-          </CardContent>
-        </Card>
+        </div>
       )}
 
       {/* Column mapping table */}
       {loading ? (
-        <Card>
-          <CardContent className="flex items-center justify-center py-12">
-            <p className="text-sm text-muted-foreground">불러오는 중...</p>
-          </CardContent>
-        </Card>
+        <p className="py-12 text-center text-sm text-muted-foreground">불러오는 중…</p>
       ) : !mapping || mapping.columns.length === 0 ? (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-12 gap-3">
+        <div className="flex flex-col items-center justify-center py-12 gap-3">
             <Shield className="h-10 w-10 text-muted-foreground/40" />
-            <p className="text-sm text-muted-foreground">
+            <p className="text-sm">
               {selectedDictId
                 ? "스키마 컬럼이 없습니다. 스키마를 추가한 뒤 자동 매핑을 실행하세요."
                 : dictionaries && dictionaries.length === 0
                   ? "등록된 표준 사전이 없습니다. '데이터 표준' 메뉴에서 사전을 먼저 만드세요."
                   : "용어 매핑을 보려면 사전을 선택하세요."}
             </p>
-          </CardContent>
-        </Card>
+        </div>
       ) : (
-        <Card>
-          <CardContent className="p-0">
+        <div className="overflow-hidden rounded-md border">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -387,7 +375,7 @@ export function TermsTab({ datasetId, canEdit = false }: Props) {
 
                     {/* Actual type */}
                     <TableCell>
-                      <span className="text-sm text-muted-foreground font-mono" style={{ fontFamily: "var(--font-d2coding), 'D2Coding', Consolas, monospace" }}>
+                      <span className="text-sm font-mono" style={{ fontFamily: "var(--font-d2coding), 'D2Coding', Consolas, monospace" }}>
                         {col.native_type || col.column_type}
                       </span>
                     </TableCell>
@@ -404,7 +392,7 @@ export function TermsTab({ datasetId, canEdit = false }: Props) {
                       {col.term_name ? (
                         <div>
                           <span className="text-sm font-medium">{col.term_name}</span>
-                          <span className="text-sm text-muted-foreground ml-1.5">
+                          <span className="text-sm ml-1.5">
                             ({col.term_physical_name})
                           </span>
                         </div>
@@ -435,16 +423,16 @@ export function TermsTab({ datasetId, canEdit = false }: Props) {
                       <div className="flex items-center gap-1.5">
                         <MappingBadge type={col.mapping_type} />
                         {canEdit && col.mapping_id && (
-                          <Button
+                          <Tip label="매핑 제거"><Button
                             variant="ghost"
                             size="icon"
                             className="h-5 w-5 text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40"
                             onClick={() => handleDeleteMapping(col.mapping_id!)}
-                            title="이 컬럼의 매핑 제거"
+                           
                             aria-label="매핑 제거"
                           >
                             <X className="h-3.5 w-3.5" />
-                          </Button>
+                          </Button></Tip>
                         )}
                       </div>
                     </TableCell>
@@ -452,14 +440,12 @@ export function TermsTab({ datasetId, canEdit = false }: Props) {
                 ))}
               </TableBody>
             </Table>
-          </CardContent>
-        </Card>
+        </div>
       )}
 
       {/* Violations summary */}
       {mapping && mapping.columns.some(c => c.mapping_type === "VIOLATION") && (
-        <Card className="border-red-200 dark:border-red-900">
-          <CardContent className="py-3 px-4">
+        <div className="rounded-md border border-red-200 px-4 py-3 dark:border-red-900">
             <div className="flex items-center gap-2 mb-2">
               <AlertTriangle className="h-4 w-4 text-red-500" />
               <span className="text-sm font-medium text-red-600 dark:text-red-400">
@@ -470,7 +456,7 @@ export function TermsTab({ datasetId, canEdit = false }: Props) {
               {mapping.columns
                 .filter(c => c.mapping_type === "VIOLATION")
                 .map(c => (
-                  <p key={c.schema_id} className="text-xs text-muted-foreground">
+                  <p key={c.schema_id} className="text-xs">
                     <code className="font-mono text-red-600 dark:text-red-400">{c.column_name}</code>
                     : 실제 {c.native_type || c.column_type} → 표준{" "}
                     <code className="font-mono">
@@ -480,8 +466,7 @@ export function TermsTab({ datasetId, canEdit = false }: Props) {
                   </p>
                 ))}
             </div>
-          </CardContent>
-        </Card>
+        </div>
       )}
 
       {/* 매핑 초기화 확인 다이얼로그 */}
@@ -501,7 +486,7 @@ export function TermsTab({ datasetId, canEdit = false }: Props) {
               취소
             </Button>
             <Button variant="destructive" onClick={handleResetMappings} disabled={resetting}>
-              {resetting ? "초기화 중..." : "초기화"}
+              {resetting ? "초기화 중…" : "초기화"}
             </Button>
           </div>
         </DialogContent>
@@ -542,7 +527,7 @@ function ManualMapPicker({
           return r.json()
         })
         .then((d) => { if (alive) setTerms(d) })
-        .catch((err) => toast.error(errMsg(err, "용어를 검색하지 못했습니다.")))
+        .catch((err) => notifyError(err, "용어를 검색하지 못했습니다."))
     }, search ? 300 : 0)
     return () => { alive = false; clearTimeout(t) }
   }, [open, search, dictionaryId])
@@ -558,7 +543,7 @@ function ManualMapPicker({
       <PopoverContent className="w-[400px] p-0" align="start">
         <Command shouldFilter={false}>
           <CommandInput
-            placeholder="용어 검색..."
+            placeholder="용어 검색…"
             value={search}
             onValueChange={setSearch}
           />
@@ -576,9 +561,9 @@ function ManualMapPicker({
                 >
                   <div className="flex items-center gap-2 w-full">
                     <span className="font-medium">{t.term_name}</span>
-                    <code className="text-[10px] text-muted-foreground">{t.physical_name}</code>
+                    <code className="text-[11px]">{t.physical_name}</code>
                     {t.domain_name && (
-                      <span className="ml-auto text-[10px] text-muted-foreground">
+                      <span className="ml-auto text-[11px]">
                         {t.domain_name} ({t.domain_data_type})
                       </span>
                     )}
@@ -605,8 +590,8 @@ function StatusIcon({ type }: { type: string | null }) {
 }
 
 function MappingBadge({ type }: { type: string | null }) {
-  if (type === "MATCHED") return <Badge className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200 text-xs px-2 py-0.5 border-0">일치</Badge>
-  if (type === "SIMILAR") return <Badge className="bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200 text-xs px-2 py-0.5 border-0">유사</Badge>
-  if (type === "VIOLATION") return <Badge className="bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200 text-xs px-2 py-0.5 border-0">위반</Badge>
-  return <Badge variant="outline" className="text-xs px-2 py-0.5 text-muted-foreground">미연결</Badge>
+  if (type === "MATCHED") return <StatusBadge tone="success">일치</StatusBadge>
+  if (type === "SIMILAR") return <StatusBadge tone="warning">유사</StatusBadge>
+  if (type === "VIOLATION") return <StatusBadge tone="danger">위반</StatusBadge>
+  return <StatusBadge tone="muted">미연결</StatusBadge>
 }

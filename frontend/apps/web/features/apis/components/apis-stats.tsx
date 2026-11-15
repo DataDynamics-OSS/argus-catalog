@@ -23,9 +23,9 @@ function StatCard({ icon: Icon, label, value, hint, tone, onClick, active }: {
     <CardContent className="flex items-center gap-3 px-4">
       <Icon className={tone === "warn" ? "h-5 w-5 text-amber-500" : "h-5 w-5 text-muted-foreground"} />
       <div className="min-w-0 text-left">
-        <div className="text-xs text-muted-foreground">{label}</div>
+        <div className="text-xs">{label}</div>
         <div className="text-lg font-semibold leading-tight">{value}</div>
-        {hint && <div className="truncate text-[11px] text-muted-foreground">{hint}</div>}
+        {hint && <div className="truncate text-[11px]">{hint}</div>}
       </div>
     </CardContent>
   )

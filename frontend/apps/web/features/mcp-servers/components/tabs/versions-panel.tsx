@@ -49,7 +49,7 @@ export function VersionsPanel({ name, refreshKey }: { name: string; refreshKey?:
 
   return (
     <div className="space-y-2">
-      <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+      <p className="flex items-center gap-1.5 text-xs">
         <OriginBadge origin="argus" /> 수집·manifest 가져오기로 도구 구성이 바뀔 때 기록합니다. 행을 누르면 변경 내역과 스냅숏을 봅니다.
       </p>
       <div className="rounded-md border">
@@ -89,7 +89,7 @@ export function VersionsPanel({ name, refreshKey }: { name: string; refreshKey?:
                     )}
                   </TableCell>
                   <TableCell className="text-xs">{v.source ?? "-"}{v.deployment_name ? ` · ${v.deployment_name}` : ""}</TableCell>
-                  <TableCell className="font-mono text-[11px] text-muted-foreground">{v.capability_hash.slice(0, 12)}</TableCell>
+                  <TableCell className="font-mono text-[11px]">{v.capability_hash.slice(0, 12)}</TableCell>
                 </TableRow>
                 {openId === v.id && (
                   <TableRow>

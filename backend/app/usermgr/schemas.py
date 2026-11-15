@@ -13,6 +13,7 @@
 
 from datetime import datetime
 from enum import Enum
+from typing import Annotated
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -38,6 +39,11 @@ class RoleName(str, Enum):
     ADMIN = "argus-admin"
     SUPERUSER = "argus-superuser"
     USER = "argus-user"
+
+
+# 요청에서 받는 역할 식별자 — 기본 역할(RoleName) 또는 사용자 정의 역할(TODO-124, 권한 관리에서 만든 역할).
+# 형식만 여기서 보고, 있는 역할인지는 서비스가 확인한다(없으면 400).
+RoleId = Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{1,48}[a-z0-9]$", max_length=50)]
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +93,7 @@ class UserAddRequest(BaseModel):
     department: str | None = Field(None, max_length=100)     # 소속 부서
     phone_number: str | None = Field(None, max_length=30)
     password: str = Field(..., min_length=4, max_length=128)
-    role: RoleName = Field(RoleName.USER, description="역할 이름 (Admin/Superuser/User)")
+    role: RoleId = Field(RoleName.USER.value, description="역할 식별자 (argus-admin/argus-superuser/argus-user 또는 사용자 정의 역할)")
     # True 면 최초 로그인 시 비밀번호 변경을 강제한다(LDAP 동기화 계정은 초기 비번이
     # 생년월일이므로 동기화 도구가 True 로 보낸다). 일반 생성은 기본 False.
     must_change_password: bool = Field(False, description="최초 로그인 시 비밀번호 강제 변경 여부")
@@ -117,11 +123,11 @@ class UserModifyRequest(BaseModel):
 class UserChangeRoleRequest(BaseModel):
     """역할 변경 요청.
 
-    ``role`` 값은 반드시 ``RoleName`` enum 의 한 값이어야 한다. 서비스 계층이
-    이 이름을 DB ``role_id`` 로 변환해 사용자 행을 갱신한다.
+    ``role`` 은 기본 역할(``RoleName``) 또는 사용자 정의 역할의 식별자. 서비스 계층이
+    이 이름을 DB ``role_id`` 로 변환해 사용자 행을 갱신한다(없는 역할이면 400).
     """
 
-    role: RoleName
+    role: RoleId
 
 
 class UserSetPasswordRequest(BaseModel):

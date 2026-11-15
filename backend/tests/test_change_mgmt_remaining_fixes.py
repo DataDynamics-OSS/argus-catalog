@@ -62,10 +62,20 @@ async def _make_db():
         cur.execute("PRAGMA foreign_keys=ON")   # 데이터셋 삭제 → CR 연쇄 삭제(ON DELETE CASCADE)
         cur.close()
 
+    from sqlalchemy import text
+
+    from app.alert.models import AlertRule
+    from app.comments.models import Comment
+
+    # 데이터셋 삭제는 FK 없는 참조(알림 규칙·댓글·쿼리 리니지)도 정리한다(DEF-059)
     tables = _with_fk_targets([chm.ApprovalStep.__table__, chm.NotificationLog.__table__,
-                               chm.ChangeReferrer.__table__, cm.DatasetSchema.__table__])
+                               chm.ChangeReferrer.__table__, cm.DatasetSchema.__table__,
+                               AlertRule.__table__, Comment.__table__])
     async with engine.begin() as conn:
         await conn.run_sync(lambda sc: cm.Base.metadata.create_all(sc, tables=tables))
+        await conn.execute(text(
+            "CREATE TABLE argus_query_lineage (id INTEGER PRIMARY KEY,"
+            " source_dataset_id INT, target_dataset_id INT)"))
     return engine, async_sessionmaker(engine, expire_on_commit=False)
 
 

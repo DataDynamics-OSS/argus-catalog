@@ -1,5 +1,6 @@
 "use client"
 
+import { DetailSection } from "@/components/detail-section"
 import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
 import { FileText, Loader2, Pencil } from "lucide-react"
@@ -118,14 +119,14 @@ function ModelCardSection({
     )
   }
   return (
-    <article className="space-y-5">
-      <div className="flex items-center justify-between">
-        <h2 className="text-base font-semibold">모델 카드</h2>
-        <div className="flex items-center gap-3">
-          {card?.updated_at && <span className="text-xs text-muted-foreground">{timeAgo(card.updated_at)} 수정</span>}
-          {canEdit && <Button size="sm" variant="outline" onClick={startEdit}><Pencil className="mr-1.5 h-3.5 w-3.5" />편집</Button>}
-        </div>
-      </div>
+    <DetailSection
+      title="모델 카드"
+      actions={<>
+        {card?.updated_at && <span className="text-xs">{timeAgo(card.updated_at)} 수정</span>}
+        {canEdit && <Button size="sm" variant="outline" onClick={startEdit}><Pencil className="mr-1.5 h-3.5 w-3.5" />편집</Button>}
+      </>}
+      className="space-y-5"
+    >
       {DOC_FIELDS.map((f) => (
         <section key={f.key}>
           <h3 className="mb-1 text-sm font-semibold">{f.label}</h3>
@@ -134,7 +135,7 @@ function ModelCardSection({
             : <p className="text-sm italic text-muted-foreground/70">작성되지 않음</p>}
         </section>
       ))}
-    </article>
+    </DetailSection>
   )
 }
 
@@ -148,20 +149,20 @@ function Dependencies({ requirements, conda }: { requirements: string | null; co
         type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open}
         className="flex w-full items-center justify-between px-4 py-2.5 text-sm font-medium"
       >
-        <span>의존성 {count > 0 && <span className="ml-1 text-xs font-normal text-muted-foreground">패키지 {count}개</span>}</span>
-        <span className="text-xs text-muted-foreground">{open ? "접기" : "펼치기"}</span>
+        <span>의존성 {count > 0 && <span className="ml-1 text-xs font-normal">패키지 {count}개</span>}</span>
+        <span className="text-xs">{open ? "접기" : "펼치기"}</span>
       </button>
       {open && (
         <div className="space-y-3 border-t p-4">
           {requirements && (
             <div>
-              <p className="mb-1 text-xs text-muted-foreground">requirements.txt</p>
+              <p className="mb-1 text-xs">requirements.txt</p>
               <CodeSnippet code={requirements.trim()} language="text" />
             </div>
           )}
           {conda && (
             <div>
-              <p className="mb-1 text-xs text-muted-foreground">conda.yaml</p>
+              <p className="mb-1 text-xs">conda.yaml</p>
               <CodeSnippet code={conda.trim()} language="yaml" />
             </div>
           )}
@@ -228,8 +229,8 @@ export function OverviewTab({
                   <StageBadge stage={primary.stage} />
                   {primary.status !== "READY" && <VersionStatusBadge status={primary.status} />}
                 </div>
-                {primary.description && <p className="text-muted-foreground line-clamp-2">{primary.description}</p>}
-                <p className="text-xs text-muted-foreground">
+                {primary.description && <p className="line-clamp-2">{primary.description}</p>}
+                <p className="text-xs">
                   {formatBytes(primary.artifact_size)} · {formatDate(primary.finished_at ?? primary.created_at)} 등록
                 </p>
                 {primaryMetrics.length > 0 && (
@@ -276,7 +277,7 @@ export function OverviewTab({
                     <Link href={`/dashboard/oci-hub/${encodeURIComponent(o.name)}`} className="font-medium text-primary hover:underline">
                       {o.display_name || o.name}
                     </Link>
-                    <p className="text-xs text-muted-foreground">
+                    <p className="text-xs">
                       {[o.framework, o.version_count > 0 ? `v${o.version_count}` : null, OCI_STATUS_LABELS[o.status] ?? o.status].filter(Boolean).join(" · ")}
                     </p>
                   </li>
@@ -300,7 +301,7 @@ export function OverviewTab({
                     </Link>
                   </li>
                 ))}
-                {lineage.length > 3 && <li className="text-xs text-muted-foreground">외 {lineage.length - 3}개</li>}
+                {lineage.length > 3 && <li className="text-xs">외 {lineage.length - 3}개</li>}
               </ul>
             )}
           </SideCard>

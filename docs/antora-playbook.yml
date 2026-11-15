@@ -9,6 +9,12 @@ content:
       start_path: docs
       edit_url: false
 
+antora:
+  extensions:
+    # 매뉴얼 안 검색(상단 검색창). 한글은 형태소 분석 없이 어절 단위로 찾는다.
+    - require: '@antora/lunr-extension'
+      languages: [en, ko]
+
 asciidoc:
   attributes:
     source-highlighter: highlight.js
@@ -22,8 +28,9 @@ asciidoc:
 
 ui:
   bundle:
-    url: https://gitlab.com/antora/antora-ui-default/-/jobs/artifacts/HEAD/raw/build/ui-bundle.zip?job=bundle-stable
-    snapshot: true
+    # 저장소에 고정한 기본 UI 번들 — 에어갭에서도 빌드되고 빌드마다 모양이 바뀌지 않는다.
+    # 원본: https://gitlab.com/antora/antora-ui-default (job bundle-stable). 갱신 방법은 ui-bundle/README.md.
+    url: ./ui-bundle/ui-bundle.zip
   supplemental_files: ./ui-supplemental
 
 output:

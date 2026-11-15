@@ -1,5 +1,6 @@
 "use client"
 
+import { Tip } from "@/components/tip"
 import { useMemo, useState } from "react"
 import Link from "next/link"
 import { Loader2, Plus, Trash2 } from "lucide-react"
@@ -213,17 +214,17 @@ export function OciLineageTab({
                       ) : (
                         <span className="font-medium">{l.source_name || l.source_id}</span>
                       )}
-                      {l.source_name && <span className="ml-2 font-mono text-xs text-muted-foreground">{l.source_id}</span>}
+                      {l.source_name && <span className="ml-2 font-mono text-xs">{l.source_id}</span>}
                     </td>
-                    <td className="px-3 py-2 text-muted-foreground">{l.description || "-"}</td>
+                    <td className="px-3 py-2">{l.description || "-"}</td>
                     {canEdit && (
                       <td className="px-3 py-2 text-right">
-                        <Button
+                        <Tip label="리니지 삭제"><Button
                           variant="ghost" size="icon-sm" aria-label="리니지 삭제"
                           disabled={deleting === l.id} onClick={() => remove(l)}
                         >
                           {deleting === l.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-                        </Button>
+                        </Button></Tip>
                       </td>
                     )}
                   </tr>

@@ -16,6 +16,7 @@ import {
 } from "lucide-react"
 
 import { Badge } from "@workspace/ui/components/badge"
+import { StatusBadge } from "@workspace/ui/components/status-badge"
 import { Button } from "@workspace/ui/components/button"
 import { Checkbox } from "@workspace/ui/components/checkbox"
 import {
@@ -44,11 +45,7 @@ import {
   TableRow,
 } from "@workspace/ui/components/table"
 import { Textarea } from "@workspace/ui/components/textarea"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@workspace/ui/components/tooltip"
+import { DisabledReason, Tip } from "@/components/tip"
 import { ConfirmDialog } from "@/components/confirm-dialog"
 
 import {
@@ -67,6 +64,7 @@ import {
   type FederationSyncRun,
   type InstanceHealth,
 } from "./api"
+import { INSTANCE_STATUS, MODE_LABEL, instanceStatus, modeLabel } from "./status"
 import { CapabilityChecklist } from "./capability-checklist"
 import { HarvestProgress, runSummary, type HarvestProg } from "./harvest-progress"
 import { SyncRunsDialog } from "./sync-runs-dialog"
@@ -526,7 +524,7 @@ export function FederationInstancesPanel() {
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
       <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">
+        <p className="text-sm">
           연합할 다른 팀의 Argus Catalog 인스턴스를 peer 로 등록합니다.
         </p>
         <Button onClick={openCreate}>
@@ -560,7 +558,7 @@ export function FederationInstancesPanel() {
                   className="py-8 text-center text-muted-foreground"
                 >
                   <Loader2 className="inline h-4 w-4 animate-spin" /> 불러오는
-                  중...
+                  중…
                 </TableCell>
               </TableRow>
             ) : instances.length === 0 ? (
@@ -581,23 +579,17 @@ export function FederationInstancesPanel() {
                   <TableRow>
                     <TableCell>
                       <div className="font-medium">{inst.name}</div>
-                      <div className="font-mono text-xs text-muted-foreground">
+                      <div className="font-mono text-xs">
                         {inst.instance_key} · {inst.base_url}
                       </div>
                     </TableCell>
                     <TableCell>
-                      <Badge variant="outline">{inst.mode}</Badge>
+                      <Badge variant="outline" title={inst.mode}>{modeLabel(inst.mode)}</Badge>
                     </TableCell>
                     <TableCell>
-                      <Badge
-                        variant={
-                          inst.status === "ACTIVE" ? "default" : "secondary"
-                        }
-                      >
-                        {inst.status}
-                      </Badge>
+                      <StatusBadge {...instanceStatus(inst.status)} />
                     </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
+                    <TableCell className="text-sm">
                       {inst.sync_interval_sec}s
                     </TableCell>
                     <TableCell>
@@ -623,7 +615,7 @@ export function FederationInstancesPanel() {
                           >
                             <XCircle className="h-4 w-4 shrink-0" />
                             <span className="shrink-0">불가</span>
-                            <span className="truncate font-normal text-muted-foreground">
+                            <span className="truncate font-normal">
                               · {healthReason(h)}
                             </span>
                           </button>
@@ -634,7 +626,7 @@ export function FederationInstancesPanel() {
                           size="sm"
                           onClick={() => doHealth(inst)}
                         >
-                          <Activity className="mr-1 h-3.5 w-3.5" /> 점검
+                          <Activity className="mr-1 h-3.5 w-3.5" /> 헬스 체크
                         </Button>
                       )}
                     </TableCell>
@@ -723,7 +715,7 @@ export function FederationInstancesPanel() {
                 </p>
               ) : (
                 editId === null && (
-                  <p className="text-xs text-muted-foreground">
+                  <p className="text-xs">
                     영문 대소문자, 숫자, _, - 만 사용할 수 있습니다.
                   </p>
                 )
@@ -768,17 +760,15 @@ export function FederationInstancesPanel() {
                       <SelectItem key={m} value={m} className="items-start">
                         <div className="flex flex-col gap-0.5">
                           <span className="flex items-center gap-1.5 font-medium">
-                            {m}
+                            {MODE_LABEL[m]}
+                            <span className="font-mono text-xs font-normal">{m}</span>
                             {MODE_INFO[m].recommended && (
-                              <Badge
-                                variant="secondary"
-                                className="px-1 py-0 text-[10px]"
-                              >
+                              <Badge size="sm" variant="secondary">
                                 권장
                               </Badge>
                             )}
                           </span>
-                          <span className="text-xs text-muted-foreground">
+                          <span className="text-xs">
                             {MODE_INFO[m].brief}
                           </span>
                         </div>
@@ -786,7 +776,7 @@ export function FederationInstancesPanel() {
                     ))}
                   </SelectContent>
                 </Select>
-                <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
+                <p className="flex items-start gap-1.5 text-xs">
                   <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                   <span>{MODE_INFO[form.mode].detail}</span>
                 </p>
@@ -812,7 +802,7 @@ export function FederationInstancesPanel() {
                     })
                   }}
                 />
-                <p className="text-xs text-muted-foreground">최소 30초</p>
+                <p className="text-xs">최소 30초</p>
               </div>
             </div>
             <div className="grid gap-1.5">
@@ -857,8 +847,8 @@ export function FederationInstancesPanel() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="ACTIVE">ACTIVE</SelectItem>
-                    <SelectItem value="PAUSED">PAUSED</SelectItem>
+                    <SelectItem value="ACTIVE">{INSTANCE_STATUS.ACTIVE.label}</SelectItem>
+                    <SelectItem value="PAUSED">{INSTANCE_STATUS.PAUSED.label}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -910,7 +900,7 @@ export function FederationInstancesPanel() {
                     onChange={setDisplayFields}
                     available={caps.exposed}
                   />
-                  <span className="text-xs text-muted-foreground">
+                  <span className="text-xs">
                     {(displayFields ?? caps.exposed).length}개 표시 /{" "}
                     {caps.exposed.length}개 제공
                   </span>
@@ -1016,8 +1006,9 @@ function IconAction({
   children: React.ReactNode
 }) {
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
+    // 비활성이면 Button 이 마우스를 받지 않아 툴팁이 안 뜬다 — DisabledReason 이 감싼 span 으로 띄운다(DEF-118)
+    <DisabledReason reason={disabled && label}>
+      <Tip label={disabled ? null : label}>
         <Button
           variant="ghost"
           size="sm"
@@ -1028,9 +1019,8 @@ function IconAction({
         >
           {children}
         </Button>
-      </TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
-    </Tooltip>
+      </Tip>
+    </DisabledReason>
   )
 }
 

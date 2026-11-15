@@ -4,6 +4,7 @@ import { useState } from "react"
 import { AlertTriangle, Loader2, Pencil, Save, Upload } from "lucide-react"
 import { errorMessage, notifyError, toast } from "@/lib/notify"
 import { useConfirm } from "@/components/confirm-provider"
+import { FieldError } from "@/components/field-error"
 
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
@@ -98,18 +99,18 @@ function SpecUploadDialog({ api, open, onOpenChange, onUploaded }: {
           <SpecPreviewSummary preview={preview}>
             {(p) => (
               <>
-                <div className="text-muted-foreground">
+                <div >
                   버전: v{api.version} → <span className="font-medium text-foreground">v{p.version}</span>
                   {dupVersion && <span className="text-destructive"> — 이미 등록된 버전입니다. 스펙의 info.version 을 올려야 등록할 수 있습니다.</span>}
                 </div>
-                <div className="text-muted-foreground">
+                <div >
                   엔드포인트: {api.endpoint_count}개 → <span className="font-medium text-foreground">{p.endpoint_count}개</span>
                   {p.endpoint_count < api.endpoint_count && <span className="text-amber-600"> (줄어듦 — Breaking 변경일 수 있습니다)</span>}
                 </div>
                 {baseOverridden ? (
-                  <div className="text-muted-foreground">Base URL: 직접 지정한 <span className="font-mono">{api.base_url}</span> 이 그대로 유지됩니다.</div>
+                  <div >Base URL: 직접 지정한 <span className="font-mono">{api.base_url}</span> 이 그대로 유지됩니다.</div>
                 ) : needsBaseUrl(p) ? (
-                  <div className="text-muted-foreground">등록 후 개요 탭의 편집에서 Base URL 을 입력할 수 있습니다.</div>
+                  <div >등록 후 개요 탭의 편집에서 Base URL 을 입력할 수 있습니다.</div>
                 ) : null}
               </>
             )}
@@ -124,7 +125,7 @@ function SpecUploadDialog({ api, open, onOpenChange, onUploaded }: {
           <DialogFooter className="mt-0">
             <Button variant="outline" onClick={() => { void requestClose() }} disabled={saving}>취소</Button>
             <Button onClick={() => void submit()} disabled={saving || !hasInput || !!urlErr || !!dupVersion}>
-              {saving ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Upload className="mr-1 h-4 w-4" />}등록
+              {saving ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : null}등록
             </Button>
           </DialogFooter>
         </div>
@@ -134,7 +135,7 @@ function SpecUploadDialog({ api, open, onOpenChange, onUploaded }: {
 }
 
 function ContractKindBadge({ label }: { label: string }) {
-  return <Badge variant="outline" className="h-5 px-1.5 text-[11px] font-normal">{label}</Badge>
+  return <Badge variant="outline">{label}</Badge>
 }
 
 // ---------------------------------------------------------------------------
@@ -146,6 +147,8 @@ function ContractSection({ api, canEdit, onChanged }: { api: ApiDetail; canEdit:
   const [url, setUrl] = useState("")
   const [text, setText] = useState("")
   const [saving, setSaving] = useState(false)
+  // 파일 불러오기 오류(크기 초과·읽기 실패) — 불러오기 버튼 아래에 보인다
+  const [fileError, setFileError] = useState<string | null>(null)
   const urlErr = urlError(url)
   const baseUrl = api.contract_url ?? ""
   const baseText = api.contract_text ?? ""
@@ -153,7 +156,7 @@ function ContractSection({ api, canEdit, onChanged }: { api: ApiDetail; canEdit:
   // 문법 하이라이트 언어 — 편집 중엔 입력 내용, 보기에선 저장된 원문 기준(본문 우선, 안 되면 프로토콜)
   const kind = detectContractKind(editing ? text : baseText, api.protocol)
 
-  const start = () => { setUrl(baseUrl); setText(baseText); setEditing(true) }
+  const start = () => { setUrl(baseUrl); setText(baseText); setFileError(null); setEditing(true) }
   const cancel = async () => {
     if (dirty && !(await askConfirm({
       title: "변경 내용 버리기",
@@ -164,7 +167,8 @@ function ContractSection({ api, canEdit, onChanged }: { api: ApiDetail; canEdit:
     setEditing(false)
   }
   const save = async () => {
-    if (urlErr) { toast.error(`계약 문서 URL: ${urlErr}`); return }
+    // URL 형식 오류는 입력란 아래에 이미 보인다(저장 버튼도 비활성)
+    if (urlErr) return
     const payload: { contract_url?: string | null; contract_text?: string | null } = {}
     if (url.trim() !== baseUrl.trim()) payload.contract_url = url.trim() || null
     if (text !== baseText) payload.contract_text = text.trim() ? text : null
@@ -182,7 +186,7 @@ function ContractSection({ api, canEdit, onChanged }: { api: ApiDetail; canEdit:
   return (
     <>
       <div className="flex items-start justify-between gap-2">
-        <p className="text-sm text-muted-foreground">
+        <p className="text-sm">
           수동 등록 API 의 계약/스키마 문서(SDL/WSDL/.proto/AsyncAPI 등)입니다.
         </p>
         {canEdit && (
@@ -205,7 +209,7 @@ function ContractSection({ api, canEdit, onChanged }: { api: ApiDetail; canEdit:
           <div className="space-y-1.5">
             <Label htmlFor="api-contract-url">계약 문서 URL (선택)</Label>
             <Input id="api-contract-url" aria-invalid={urlErr ? true : undefined} placeholder="SDL/WSDL/.proto/AsyncAPI 문서 URL" value={url} onChange={(e) => setUrl(e.target.value)} />
-            {urlErr && <p className="text-[11px] text-destructive">{urlErr}</p>}
+            <FieldError>{urlErr}</FieldError>
           </div>
           <div className="space-y-1.5">
             <div className="flex items-center justify-between gap-2">
@@ -213,12 +217,13 @@ function ContractSection({ api, canEdit, onChanged }: { api: ApiDetail; canEdit:
                 <Label>계약 문서 원문 (선택)</Label>
                 {text.trim() && <ContractKindBadge label={kind.label} />}
               </div>
-              <FileLoadButton accept={CONTRACT_FILE_ACCEPT} onLoad={(t) => setText(t)} onError={(m) => toast.error(m)} />
+              <FileLoadButton accept={CONTRACT_FILE_ACCEPT} onLoad={(t) => { setText(t); setFileError(null) }} onError={setFileError} />
             </div>
+            <FieldError className="text-right">{fileError}</FieldError>
             <CodeEditor
               language={kind.language}
               value={text}
-              onChange={setText}
+              onChange={(v) => { setText(v); setFileError(null) }}
               ariaLabel="계약 문서 원문"
               placeholder="SDL / WSDL / .proto / AsyncAPI 원문을 붙여넣기"
               height={320}
@@ -239,11 +244,11 @@ function ContractSection({ api, canEdit, onChanged }: { api: ApiDetail; canEdit:
           )}
           {api.contract_text && (
             <div className="flex items-center gap-2">
-              <p className="text-xs text-muted-foreground">계약 문서</p>
+              <p className="text-xs">계약 문서</p>
               <ContractKindBadge label={kind.label} />
             </div>
           )}
-          <CodeViewer text={api.contract_text || null} language={kind.language} emptyLabel={canEdit ? "계약 문서가 없습니다. 편집 버튼으로 입력하세요." : "계약 문서가 없습니다."} lineNumbers scroll />
+          <CodeViewer text={api.contract_text || null} language={kind.language} emptyLabel={canEdit ? "계약 문서가 없습니다. 편집 버튼으로 입력하세요." : "계약 문서가 없습니다."} scroll />
         </>
       )}
     </>
@@ -267,11 +272,11 @@ export function SpecTab({ api, canEdit, onChanged }: {
     <>
       <div className="flex items-start justify-between gap-2">
         <div className="space-y-1">
-          <p className="text-sm text-muted-foreground">
+          <p className="text-sm">
             현재 OpenAPI/Swagger 스펙의 원본(JSON)입니다. 줄 번호·접기를 지원하며 depth 4 이상은 자동으로 접혀 있습니다(거터 화살표로 펼치거나 접을 수 있습니다). 우상단 버튼으로 전체를 클립보드에 복사할 수 있습니다.
           </p>
           {cur && (
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs">
               현재 버전 v{cur.version} · {fmtDateTime(cur.created_at)} 등록{cur.created_by ? ` (${cur.created_by})` : ""}
               {cur.source_url && <> · 출처 <a href={cur.source_url} target="_blank" rel="noreferrer" className="break-all text-primary hover:underline">{cur.source_url}</a></>}
               {api.specs.length > 1 && ` · 전체 ${api.specs.length}개 버전(이력 탭에서 비교)`}
@@ -287,7 +292,6 @@ export function SpecTab({ api, canEdit, onChanged }: {
       <CodeViewer
         text={api.raw_spec ? (() => { try { return JSON.stringify(JSON.parse(api.raw_spec!), null, 2) } catch { return api.raw_spec } })() : null}
         emptyLabel="원본 스펙이 없습니다."
-        lineNumbers
         scroll
       />
       {canEdit && <SpecUploadDialog api={api} open={uploadOpen} onOpenChange={setUploadOpen} onUploaded={onChanged} />}

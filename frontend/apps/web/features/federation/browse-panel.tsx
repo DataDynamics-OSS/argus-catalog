@@ -1,5 +1,6 @@
 "use client"
 
+import { Tip } from "@/components/tip"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   AlertTriangle,
@@ -10,13 +11,10 @@ import {
   Info,
   Loader2,
   RefreshCw,
-  Search,
 } from "lucide-react"
 import Link from "next/link"
 
-import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
-import { Input } from "@workspace/ui/components/input"
 import {
   Table,
   TableBody,
@@ -36,16 +34,11 @@ import {
 } from "./api"
 import { federatedDetailHref } from "./search-panel"
 import { errorMessage } from "@/lib/notify"
+import { OriginText } from "@/features/datasets/components/origin-text"
+import { SearchInput } from "@/components/search-input"
 
 /** 우측 데이터셋 그리드 기본 페이지 크기(선택 가능). */
 const PAGE_SIZE = 50
-
-/** 출처(환경) 배지 색 — 로컬 데이터셋 카드와 동일 규칙. */
-function originBg(origin: string): string {
-  if (origin === "PROD") return "bg-emerald-600"
-  if (origin === "STAGING") return "bg-orange-500"
-  return "bg-sky-500"
-}
 
 /** ISO 문자열을 YYYY-MM-DD 로. 빈 값/파싱 실패 시 빈 문자열. */
 function formatYmd(value: string | null): string {
@@ -106,7 +99,7 @@ function FederatedDatasetTable({
                   </Link>
                   {d.summary && (
                     <p
-                      className="max-w-[400px] truncate text-xs text-muted-foreground"
+                      className="max-w-[400px] truncate text-xs"
                       title={d.summary}
                     >
                       {d.summary}
@@ -115,11 +108,7 @@ function FederatedDatasetTable({
                 </div>
               </TableCell>
               <TableCell className="text-center">
-                {d.origin && (
-                  <Badge className={`text-xs text-white ${originBg(d.origin)}`}>
-                    {d.origin}
-                  </Badge>
-                )}
+                {d.origin && <OriginText origin={d.origin} />}
               </TableCell>
               <TableCell className="text-center text-sm">
                 {d.field_count}
@@ -286,22 +275,19 @@ export function FederationBrowsePanel() {
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
       <div className="flex items-center gap-2">
-        <div className="relative max-w-xl flex-1">
-          <Search className="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            className="pl-9"
-            placeholder="데이터셋 이름/설명으로 트리 좁히기..."
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && applyFilter()}
-          />
-        </div>
+        <SearchInput
+          className="max-w-xl flex-1"
+          placeholder="데이터셋 이름/설명으로 트리 좁히기…"
+          value={query}
+          onValueChange={setQuery}
+          onSearch={applyFilter}
+        />
         <Button variant="outline" onClick={applyFilter}>
           필터
         </Button>
-        <Button variant="ghost" size="icon" onClick={refresh} title="새로고침">
+        <Tip label="새로고침"><Button variant="ghost" size="icon" onClick={refresh} aria-label="새로고침">
           <RefreshCw className="h-4 w-4" />
-        </Button>
+        </Button></Tip>
       </div>
 
       {statsError && (
@@ -312,14 +298,14 @@ export function FederationBrowsePanel() {
 
       {statsLoading && !instances && (
         <div className="flex items-center gap-2 py-8 text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" /> 인스턴스 불러오는 중...
+          <Loader2 className="h-4 w-4 animate-spin" /> 인스턴스 불러오는 중…
         </div>
       )}
 
       {instances && mirrorInstances.length === 0 && (
         <p className="py-8 text-center text-sm text-muted-foreground">
-          미러(HARVEST) 데이터셋을 가진 인스턴스가 없습니다. 인스턴스 관리에서
-          HARVEST/HYBRID 모드로 등록하고 가져오기를 실행하세요.
+          미러 데이터셋을 가진 인스턴스가 없습니다. 인스턴스 관리에서
+          가져오기 · 혼합 모드로 등록하고 가져오기를 실행하세요.
         </p>
       )}
 
@@ -346,7 +332,7 @@ export function FederationBrowsePanel() {
                     )}
                     <Globe className="h-4 w-4 shrink-0 text-blue-600" />
                     <span className="truncate font-medium">{inst.name}</span>
-                    <span className="ml-auto text-xs text-muted-foreground">
+                    <span className="ml-auto text-xs">
                       {inst.mirror_datasets.toLocaleString()}
                     </span>
                   </button>
@@ -356,7 +342,7 @@ export function FederationBrowsePanel() {
                       {st?.loading && (
                         <div className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground">
                           <Loader2 className="h-3.5 w-3.5 animate-spin" />{" "}
-                          불러오는 중...
+                          불러오는 중…
                         </div>
                       )}
                       {st?.error && (
@@ -414,7 +400,7 @@ export function FederationBrowsePanel() {
                             <span className="truncate text-sm">
                               {ds.datasource_name}
                             </span>
-                            <span className="ml-auto text-xs text-muted-foreground">
+                            <span className="ml-auto text-xs">
                               {ds.dataset_count}
                             </span>
                           </div>
@@ -440,10 +426,10 @@ export function FederationBrowsePanel() {
                 return (
                   <div className="flex min-h-0 flex-col">
                     <div className="flex items-center gap-2 border-b px-3 py-2">
-                      <span className="truncate text-sm text-muted-foreground">
+                      <span className="truncate text-sm">
                         {selection.breadcrumb.join("  ›  ")}
                       </span>
-                      <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                      <span className="ml-auto shrink-0 text-xs">
                         {total.toLocaleString()}개
                       </span>
                     </div>
@@ -473,7 +459,7 @@ export function FederationBrowsePanel() {
                 )
               })()
             ) : (
-              <div className="flex h-full items-center justify-center p-8 text-center text-sm text-muted-foreground">
+              <div className="flex h-full items-center justify-center p-8 text-center text-sm">
                 왼쪽 트리에서 데이터소스를 선택하면 데이터셋이 표시됩니다.
               </div>
             )}

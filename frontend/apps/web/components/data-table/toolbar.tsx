@@ -4,8 +4,8 @@ import { type Table } from "@tanstack/react-table"
 import { Search, X } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
-import { Input } from "@workspace/ui/components/input"
 import { DataTableFacetedFilter } from "./faceted-filter"
+import { SearchInput } from "@/components/search-input"
 
 type DataTableToolbarProps<TData> = {
   table: Table<TData>
@@ -28,7 +28,7 @@ type DataTableToolbarProps<TData> = {
 
 export function DataTableToolbar<TData>({
   table,
-  searchPlaceholder = "검색...",
+  searchPlaceholder = "검색…",
   searchKey,
   filters = [],
   onSearch,
@@ -39,27 +39,21 @@ export function DataTableToolbar<TData>({
     <div className="flex items-center justify-between">
       <div className="flex flex-1 flex-col-reverse items-start gap-y-2 sm:flex-row sm:items-center sm:space-x-2">
         {searchKey ? (
-          <Input
+          <SearchInput
+            size="sm"
+            className="w-[180px] lg:w-[260px]"
             placeholder={searchPlaceholder}
-            value={
-              (table.getColumn(searchKey)?.getFilterValue() as string) ?? ""
-            }
-            onChange={(event) =>
-              table.getColumn(searchKey)?.setFilterValue(event.target.value)
-            }
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && onSearch) {
-                onSearch()
-              }
-            }}
-            className="h-8 w-[150px] lg:w-[250px]"
+            value={(table.getColumn(searchKey)?.getFilterValue() as string) ?? ""}
+            onValueChange={(v) => table.getColumn(searchKey)?.setFilterValue(v)}
+            onSearch={onSearch}
           />
         ) : (
-          <Input
+          <SearchInput
+            size="sm"
+            className="w-[180px] lg:w-[260px]"
             placeholder={searchPlaceholder}
             value={table.getState().globalFilter ?? ""}
-            onChange={(event) => table.setGlobalFilter(event.target.value)}
-            className="h-8 w-[150px] lg:w-[250px]"
+            onValueChange={(v) => table.setGlobalFilter(v)}
           />
         )}
         <div className="flex gap-x-2">

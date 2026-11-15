@@ -1,5 +1,6 @@
 "use client"
 
+import { CodeEditor } from "@/components/code-editor"
 import { useCallback, useEffect, useState } from "react"
 import { AlertTriangle, CheckCircle2, Info, Loader2 } from "lucide-react"
 
@@ -18,7 +19,7 @@ import { useAuth } from "@/features/auth/auth-context"
 import { checkApiName, createApi } from "../api"
 import { OwnerPicker, ownerDisplayName, type OwnerPick } from "./api-owner"
 import { MANUAL_PROTOCOLS } from "./apis-constants"
-import { ComboInput, OPT_API_CATEGORY, TagsInput } from "./apis-detail-shared"
+import { ComboInput, OPT_API_CATEGORY } from "./apis-detail-shared"
 import { CONTRACT_FILE_ACCEPT, FileLoadButton, urlError } from "./apis-form-utils"
 import { useApis } from "./apis-provider"
 import {
@@ -26,6 +27,7 @@ import {
   specSourceHasInput, specSourceMissingMessage, specSourcePayload, specSourceUrlError, useSpecPreview,
 } from "./spec-source-input"
 import { errorMessage } from "@/lib/notify"
+import { TagInput } from "@/components/tag-input"
 
 // API 식별자 규칙 — 백엔드 검증(API_NAME_RE)·자동 생성(slugify)과 동일하게 영문·숫자·점·하이픈·언더스코어.
 // URN(`<name>.api`)·URL 경로에 사용.
@@ -65,7 +67,7 @@ export function ApisAddDialog() {
   // 소유자 — undefined 면 "아직 고르지 않음"으로 로그인 사용자를 기본값으로 쓴다(null = 사용자가 미지정을 선택).
   const [ownerPick, setOwnerPick] = useState<OwnerPick | null | undefined>(undefined)
   const [category, setCategory] = useState("")
-  const [tags, setTags] = useState("")
+  const [tags, setTags] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // 식별자 중복 사전 확인 결과 — 확인한 이름과 함께 보관해, 입력이 바뀌면 자동으로 "확인 중"으로 본다.
@@ -110,7 +112,7 @@ export function ApisAddDialog() {
     setRegMode("spec"); setSpec(EMPTY_SPEC_SOURCE); setSpecBaseUrl("")
     setName(""); setDisplayName(""); setDescription(""); setBaseUrl(""); setVersion(""); setProtocol("REST")
     setContractUrl(""); setContractText("")
-    setOwnerPick(undefined); setCategory(""); setTags(""); setError(null)
+    setOwnerPick(undefined); setCategory(""); setTags([]); setError(null)
     setNameCheck(null)
     previewReset()
   }, [previewReset])
@@ -119,7 +121,7 @@ export function ApisAddDialog() {
 
   // 입력한 내용이 있는지 — 실수로 닫을 때(ESC·바깥 클릭·취소) 확인용
   const dirty = !!(spec.text.trim() || spec.url.trim() || specBaseUrl.trim() || name.trim() || displayName.trim() || description.trim()
-    || baseUrl.trim() || version.trim() || contractUrl.trim() || contractText.trim() || category.trim() || tags.trim()
+    || baseUrl.trim() || version.trim() || contractUrl.trim() || contractText.trim() || category.trim() || tags.length > 0
     || ownerPick !== undefined)
 
   // 사용자가 닫으려 할 때 — 저장 중에는 닫지 않고(결과를 볼 수 있게), 입력이 있으면 확인 후 닫는다.
@@ -147,7 +149,6 @@ export function ApisAddDialog() {
     if (hasUrlErr) { setError("주소 형식이 올바르지 않은 항목이 있습니다."); return }
     setSaving(true)
     try {
-      const tagList = tags.split(",").map((t) => t.trim()).filter(Boolean)
       // 공통 메타데이터 — 스펙 등록에서 표시명·설명을 비우면 스펙의 title/description 을 사용(백엔드).
       const common = {
         display_name: displayName.trim() || undefined,
@@ -156,7 +157,7 @@ export function ApisAddDialog() {
         owner_email: owner?.email || undefined,
         department: owner?.department || undefined,
         category: category.trim() || undefined,
-        tags: tagList.length > 0 ? tagList : undefined,
+        tags: tags.length > 0 ? tags : undefined,
       }
       // 계약 문서는 REST 가 아닐 때만 화면에 보이므로 그때만 보낸다(프로토콜을 바꾸면 숨겨진 값이 저장되지 않게).
       const withContract = protocol !== "REST"
@@ -206,11 +207,11 @@ export function ApisAddDialog() {
           />
           <p id="api-add-name-hint" className="text-[11px]">
             {nameErr ? <span className="text-destructive">{nameErr}</span>
-              : nameStatus === "checking" ? <span className="inline-flex items-center gap-1 text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" /> 중복 확인 중...</span>
+              : nameStatus === "checking" ? <span className="inline-flex items-center gap-1 text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" /> 중복 확인 중…</span>
               : nameStatus === "taken" ? <span className="text-destructive">이미 존재하는 식별자입니다.</span>
               : nameStatus === "available" ? <span className="inline-flex items-center gap-1 text-emerald-600"><CheckCircle2 className="h-3 w-3" /> 사용할 수 있는 식별자입니다.</span>
-              : nameStatus === "error" ? <span className="text-muted-foreground">중복 여부를 확인하지 못했습니다(등록 시 다시 확인).</span>
-              : <span className="text-muted-foreground">영문·숫자·점(.)·하이픈(-)·언더스코어(_)만 사용</span>}
+              : nameStatus === "error" ? <span >중복 여부를 확인하지 못했습니다(등록 시 다시 확인).</span>
+              : <span >영문·숫자·점(.)·하이픈(-)·언더스코어(_)만 사용</span>}
           </p>
         </div>
         <div className="space-y-1.5">
@@ -246,7 +247,7 @@ export function ApisAddDialog() {
       </div>
       <div className="space-y-1.5">
         <Label htmlFor="api-add-tags">태그 (선택, 입력 후 Enter)</Label>
-        <TagsInput id="api-add-tags" value={tags} onChange={setTags} />
+        <TagInput id="api-add-tags" value={tags} onChange={setTags} />
       </div>
     </>
   )
@@ -266,7 +267,7 @@ export function ApisAddDialog() {
 
           {isSpec ? (
             <>
-              <p className="text-sm text-muted-foreground">
+              <p className="text-sm">
                 OpenAPI 2.0(Swagger) / 3.x 스펙을 붙여넣거나 URL로 등록합니다. 이름·버전·엔드포인트는 스펙에서 자동 추출됩니다. AsyncAPI 문서는 "수동 등록"에서 계약 문서로 등록하세요.
               </p>
               <SpecSourceInput value={spec} onChange={setSpec} onError={setError} preview={preview} />
@@ -283,7 +284,7 @@ export function ApisAddDialog() {
                 <div className="space-y-1.5">
                   <Label htmlFor="api-add-spec-base-url">Base URL (선택 — 스펙의 서버 주소 대신 사용)</Label>
                   <Input id="api-add-spec-base-url" aria-invalid={baseUrlErr ? true : undefined} placeholder="https://api.example.com" value={specBaseUrl} onChange={(e) => setSpecBaseUrl(e.target.value)} />
-                  {fieldError(baseUrlErr) || <p className="text-[11px] text-muted-foreground">{BASE_URL_CRED_HINT}</p>}
+                  {fieldError(baseUrlErr) || <p className="text-[11px]">{BASE_URL_CRED_HINT}</p>}
                 </div>
               )}
               {identityFields}
@@ -291,7 +292,7 @@ export function ApisAddDialog() {
             </>
           ) : (
             <>
-              <p className="text-sm text-muted-foreground">
+              <p className="text-sm">
                 스펙 없이 API를 직접 등록합니다(REST·GraphQL·gRPC·SOAP·Webhook 등). 기본 메타데이터만 입력해 생성한 뒤, 상세 화면의 엔드포인트 탭에서 엔드포인트(오퍼레이션)를 추가하세요.
               </p>
               {identityFields}
@@ -312,7 +313,7 @@ export function ApisAddDialog() {
                 <Label htmlFor="api-add-base-url">Base URL (선택)</Label>
                 <Input id="api-add-base-url" aria-invalid={baseUrlErr ? true : undefined} placeholder="https://api.example.com" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
                 {fieldError(baseUrlErr) || (
-                  <p className="flex items-start gap-1 text-[11px] text-muted-foreground"><Info className="mt-px h-3 w-3 shrink-0" />{BASE_URL_CRED_HINT}</p>
+                  <p className="flex items-start gap-1 text-[11px]"><Info className="mt-px h-3 w-3 shrink-0" />{BASE_URL_CRED_HINT}</p>
                 )}
               </div>
               {classificationFields}
@@ -332,7 +333,7 @@ export function ApisAddDialog() {
                         onError={setError}
                       />
                     </div>
-                    <Textarea id="api-add-contract-text" placeholder="SDL / WSDL / .proto / AsyncAPI 원문을 붙여넣기" value={contractText} onChange={(e) => setContractText(e.target.value)} className="max-h-80 min-h-24 font-mono text-xs" />
+                    <CodeEditor id="api-add-contract-text" placeholder="SDL / WSDL / .proto / AsyncAPI 원문을 붙여넣기" value={contractText} onChange={setContractText} minHeight={96} maxHeight={320} />
                   </div>
                 </>
               )}

@@ -50,6 +50,7 @@ from app.change_mgmt import schemas, service, temporal_client
 from app.change_mgmt.activities import (
     analyze_impact,
     apply_change,
+    escalate_unacked_consumers,
     record_decision,
     send_notifications,
     update_cr_status,
@@ -278,7 +279,7 @@ async def main() -> int:
         workflows=[ChangeApprovalWorkflow],
         activities=[
             analyze_impact, record_decision, update_cr_status,
-            send_notifications, wait_acks_summary, apply_change,
+            send_notifications, wait_acks_summary, escalate_unacked_consumers, apply_change,
         ],
     )
 

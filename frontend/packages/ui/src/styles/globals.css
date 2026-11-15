@@ -20,10 +20,17 @@
     --secondary: oklch(0.967 0.001 286.375);
     --secondary-foreground: oklch(0.21 0.006 285.885);
     --muted: oklch(0.97 0 0);
-    --muted-foreground: oklch(0.556 0 0);
+    /* 보조 글자(라벨 · 아이콘 · 빈 상태). 정보 본문은 --foreground 를 쓴다(TODO-125) */
+    --muted-foreground: oklch(0.45 0 0);
+    /* 입력 칸 안내 글자 — 예전 회색 그대로(TODO-125) */
+    --placeholder: oklch(0.556 0 0);
     --accent: oklch(0.97 0 0);
     --accent-foreground: oklch(0.205 0 0);
     --destructive: oklch(0.577 0.245 27.325);
+    /* 상태 의미 색(TODO-107) — 배지 글자로 읽히는 진하기. 배경은 /10 · /20 으로 옅게 쓴다. */
+    --success: oklch(0.527 0.154 150.069);
+    --warning: oklch(0.555 0.163 48.998);
+    --info: oklch(0.546 0.245 262.881);
     --border: oklch(0.922 0 0);
     --input: oklch(0.922 0 0);
     --ring: oklch(0.708 0 0);
@@ -55,10 +62,14 @@
     --secondary: oklch(0.274 0.006 286.033);
     --secondary-foreground: oklch(0.985 0 0);
     --muted: oklch(0.269 0 0);
-    --muted-foreground: oklch(0.708 0 0);
+    --muted-foreground: oklch(0.8 0 0);
+    --placeholder: oklch(0.708 0 0);
     --accent: oklch(0.269 0 0);
     --accent-foreground: oklch(0.985 0 0);
     --destructive: oklch(0.704 0.191 22.216);
+    --success: oklch(0.792 0.209 151.711);
+    --warning: oklch(0.828 0.189 84.429);
+    --info: oklch(0.707 0.165 254.624);
     --border: oklch(1 0 0 / 10%);
     --input: oklch(1 0 0 / 15%);
     --ring: oklch(0.556 0 0);
@@ -90,9 +101,16 @@
     --color-secondary-foreground: var(--secondary-foreground);
     --color-muted: var(--muted);
     --color-muted-foreground: var(--muted-foreground);
+    --color-placeholder: var(--placeholder);
+    /* 가장 작은 본문 글자 12px → 13px(TODO-125). text-xs 를 쓰는 곳이 모두 따라온다 */
+    --text-xs: 0.8125rem;
+    --text-xs--line-height: calc(1.125 / 0.8125);
     --color-accent: var(--accent);
     --color-accent-foreground: var(--accent-foreground);
     --color-destructive: var(--destructive);
+    --color-success: var(--success);
+    --color-warning: var(--warning);
+    --color-info: var(--info);
     --color-border: var(--border);
     --color-input: var(--input);
     --color-ring: var(--ring);
@@ -347,7 +365,7 @@ pre,
   margin: 0.75em 0;
 }
 .tiptap.ProseMirror p.is-editor-empty:first-child::before {
-  color: var(--muted-foreground);
+  color: var(--placeholder);
   content: attr(data-placeholder);
   float: left;
   height: 0;

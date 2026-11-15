@@ -1,7 +1,8 @@
 "use client"
 
+import { Tip } from "@/components/tip"
 import { useCallback, useEffect, useState } from "react"
-import { Check, CheckCircle2, Eye, EyeOff, Loader2, Play, Rocket, Save, SkipForward, X, XCircle } from "lucide-react"
+import { Check, CheckCircle2, Eye, EyeOff, Loader2, Play, Save, SkipForward, Wand2, X, XCircle } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@workspace/ui/components/card"
@@ -19,27 +20,15 @@ import {
   updateObjectStorageConfig,
   type InitStep,
 } from "./api"
-import { errorMessage, notifyError, notifySuccess, toast } from "@/lib/notify"
+import { errorMessage, notifyError, notifySuccess } from "@/lib/notify"
+import { FieldError } from "@/components/field-error"
+import { InitStepBadge } from "@/features/settings/init-step-badge"
 
 function StepIcon({ status }: { status: string }) {
   if (status === "ok") return <CheckCircle2 className="h-4 w-4 text-blue-500" />
   if (status === "created") return <CheckCircle2 className="h-4 w-4 text-emerald-500" />
   if (status === "skip") return <SkipForward className="h-4 w-4 text-muted-foreground" />
   return <XCircle className="h-4 w-4 text-red-500" />
-}
-
-function StepBadge({ status }: { status: string }) {
-  const colors: Record<string, string> = {
-    ok: "bg-blue-50 text-blue-700 border-blue-200",
-    created: "bg-emerald-50 text-emerald-700 border-emerald-200",
-    skip: "bg-muted text-muted-foreground border-muted",
-    error: "bg-red-50 text-red-700 border-red-200",
-  }
-  return (
-    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold ${colors[status] || colors.error}`}>
-      {status.toUpperCase()}
-    </span>
-  )
 }
 
 export function OciModelRegistrySettings() {
@@ -53,6 +42,9 @@ export function OciModelRegistrySettings() {
   const [useSsl, setUseSsl] = useState(false)
   const [bucket, setBucket] = useState("model-artifacts")
   const [presignedUrlExpiry, setPresignedUrlExpiry] = useState("3600")
+  // 초기화 전 필수 항목 검증 오류(입력란 id → 문구). 값을 바꾸면 그 입력란 오류는 지운다.
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
+  const clearFieldError = (id: string) => setFieldErrors((e) => { if (!(id in e)) return e; const n = { ...e }; delete n[id]; return n })
 
   const [showSecretKey, setShowSecretKey] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -101,6 +93,7 @@ export function OciModelRegistrySettings() {
         bucket,
         presigned_url_expiry: parseInt(presignedUrlExpiry) || 3600,
       })
+      setFieldErrors({})
       notifySuccess("오브젝트 스토리지 설정을 저장했습니다.")
       await loadConfig()
     } catch (err) {
@@ -128,12 +121,13 @@ export function OciModelRegistrySettings() {
 
   function handleOpenInit() {
     const missing: string[] = []
-    if (!endpoint.trim()) missing.push("엔드포인트")
-    if (!accessKey.trim()) missing.push("Access Key")
-    if (!secretKey.trim()) missing.push("Secret Key")
-    if (!bucket.trim()) missing.push("버킷")
+    if (!endpoint.trim()) missing.push("os-endpoint")
+    if (!accessKey.trim()) missing.push("os-access-key")
+    if (!secretKey.trim()) missing.push("os-secret-key")
+    if (!bucket.trim()) missing.push("os-bucket")
+    setFieldErrors(Object.fromEntries(missing.map((id) => [id, "필수 항목입니다."])))
     if (missing.length > 0) {
-      toast.error("필수 항목이 비어 있습니다.", { description: missing.join(", ") })
+      document.getElementById(missing[0]!)?.focus()
       return
     }
     setInitSteps([])
@@ -159,7 +153,7 @@ export function OciModelRegistrySettings() {
     return (
       <div className="flex items-center justify-center py-12">
         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-        <span className="ml-2 text-sm text-muted-foreground">설정을 불러오는 중...</span>
+        <span className="ml-2 text-sm text-muted-foreground">설정을 불러오는 중…</span>
       </div>
     )
   }
@@ -200,8 +194,8 @@ export function OciModelRegistrySettings() {
                 테스트
               </Button>
               <Button size="sm" variant="outline" onClick={handleOpenInit}>
-                <Rocket className="h-4 w-4 mr-1.5" />
-                초기화
+                <Wand2 className="h-4 w-4 mr-1.5" />
+                초기 설정
               </Button>
             </div>
           </div>
@@ -227,10 +221,12 @@ export function OciModelRegistrySettings() {
               <Input
                 id="os-endpoint"
                 value={endpoint}
-                onChange={(e) => setEndpoint(e.target.value)}
+                aria-invalid={!!fieldErrors["os-endpoint"] || undefined}
+                onChange={(e) => { setEndpoint(e.target.value); clearFieldError("os-endpoint") }}
                 placeholder="예: http://your-host:51000"
               />
-              <p className="text-xs text-muted-foreground">
+              <FieldError>{fieldErrors["os-endpoint"]}</FieldError>
+              <p className="text-xs">
                 S3 호환 오브젝트 스토리지 엔드포인트 URL (MinIO, AWS S3 등)
               </p>
             </div>
@@ -239,9 +235,11 @@ export function OciModelRegistrySettings() {
               <Input
                 id="os-access-key"
                 value={accessKey}
-                onChange={(e) => setAccessKey(e.target.value)}
+                aria-invalid={!!fieldErrors["os-access-key"] || undefined}
+                onChange={(e) => { setAccessKey(e.target.value); clearFieldError("os-access-key") }}
                 placeholder="Access Key"
               />
+              <FieldError>{fieldErrors["os-access-key"]}</FieldError>
             </div>
             <div className="space-y-2">
               <Label htmlFor="os-secret-key">Secret Key</Label>
@@ -250,19 +248,21 @@ export function OciModelRegistrySettings() {
                   id="os-secret-key"
                   type={showSecretKey ? "text" : "password"}
                   value={secretKey}
-                  onChange={(e) => setSecretKey(e.target.value)}
+                  aria-invalid={!!fieldErrors["os-secret-key"] || undefined}
+                  onChange={(e) => { setSecretKey(e.target.value); clearFieldError("os-secret-key") }}
                   placeholder="Secret Key"
                   className="pr-10"
                 />
-                <button
+                <Tip label={showSecretKey ? "값 숨기기" : "값 보기"}><button aria-label={showSecretKey ? "값 숨기기" : "값 보기"}
                   type="button"
                   onClick={() => setShowSecretKey((prev) => !prev)}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
                   tabIndex={-1}
                 >
                   {showSecretKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </button>
+                </button></Tip>
               </div>
+              <FieldError>{fieldErrors["os-secret-key"]}</FieldError>
             </div>
             <div className="space-y-2">
               <Label htmlFor="os-region">리전</Label>
@@ -288,10 +288,12 @@ export function OciModelRegistrySettings() {
               <Input
                 id="os-bucket"
                 value={bucket}
-                onChange={(e) => setBucket(e.target.value)}
+                aria-invalid={!!fieldErrors["os-bucket"] || undefined}
+                onChange={(e) => { setBucket(e.target.value); clearFieldError("os-bucket") }}
                 placeholder="model-artifacts"
               />
-              <p className="text-xs text-muted-foreground">
+              <FieldError>{fieldErrors["os-bucket"]}</FieldError>
+              <p className="text-xs">
                 모델 아티팩트 저장용 S3 버킷
               </p>
             </div>
@@ -303,7 +305,7 @@ export function OciModelRegistrySettings() {
                 onChange={(e) => setPresignedUrlExpiry(e.target.value)}
                 placeholder="3600"
               />
-              <p className="text-xs text-muted-foreground">
+              <p className="text-xs">
                 Presigned URL 유효 시간(초). 기본값 3600
               </p>
             </div>
@@ -316,8 +318,8 @@ export function OciModelRegistrySettings() {
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Rocket className="h-5 w-5" />
-              오브젝트 스토리지 초기화
+              <Wand2 className="h-5 w-5" />
+              오브젝트 스토리지 초기 설정
             </DialogTitle>
             <DialogDescription>
               버킷이 존재하는지 확인하고 없으면 생성합니다.
@@ -325,7 +327,7 @@ export function OciModelRegistrySettings() {
           </DialogHeader>
 
           {initSteps.length === 0 && !initRunning && (
-            <div className="py-2 text-sm text-muted-foreground">
+            <div className="py-2 text-sm">
               <p><strong>{endpoint}</strong> 에 접속해 버킷 <strong>{bucket}</strong> 의 존재를 확인합니다.</p>
             </div>
           )}
@@ -338,9 +340,9 @@ export function OciModelRegistrySettings() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="font-medium">{s.step}</span>
-                      <StepBadge status={s.status} />
+                      <InitStepBadge status={s.status} />
                     </div>
-                    <p className="text-xs text-muted-foreground">{s.message}</p>
+                    <p className="text-xs">{s.message}</p>
                   </div>
                 </div>
               ))}
@@ -352,9 +354,9 @@ export function OciModelRegistrySettings() {
                     : "bg-emerald-50 text-emerald-700 border border-emerald-200"
                 }`}>
                   {hasErrors
-                    ? "초기화 중 오류가 발생했습니다."
+                    ? "초기 설정 중 오류가 발생했습니다."
                     : createdCount > 0
-                      ? `초기화 완료. 버킷 '${bucket}' 사용 준비됨.`
+                      ? `초기 설정을 마쳤습니다. 버킷 '${bucket}' 을(를) 쓸 수 있습니다.`
                       : `버킷 '${bucket}' 가 이미 존재합니다.`
                   }
                 </div>
@@ -365,7 +367,7 @@ export function OciModelRegistrySettings() {
           {initRunning && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
               <Loader2 className="h-4 w-4 animate-spin" />
-              초기화 중...
+              초기화 중…
             </div>
           )}
 
@@ -374,7 +376,6 @@ export function OciModelRegistrySettings() {
               <>
                 <Button variant="outline" onClick={() => setInitOpen(false)}>취소</Button>
                 <Button onClick={handleInitialize}>
-                  <Rocket className="h-4 w-4 mr-1" />
                   시작
                 </Button>
               </>

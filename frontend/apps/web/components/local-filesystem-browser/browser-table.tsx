@@ -5,23 +5,23 @@ import {
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
-  ClipboardCopy,
+  Copy,
+  Download,
+  Eye,
   File,
   FileArchive,
   FileAudio,
   FileCode,
   FileImage,
+  FileSpreadsheet,
+  FileTerminal,
   FileText,
+  FileType,
   FileVideo,
   Folder,
-  FileSpreadsheet,
-  FileType,
-  Eye,
-  FileTerminal,
+  Info,
   Pencil,
   Trash2,
-  Info,
-  Download,
 } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
@@ -38,6 +38,7 @@ import {
 import type { FilesystemEntry, SortConfig, SortDirection } from "./types"
 import { entryId, formatBytes, formatDate, getFileCategory } from "./utils"
 import { isCsvTsvFile, isViewableFile } from "./file-viewer-dialog"
+import { copyText } from "@/lib/clipboard"
 
 export type EntryContextAction = "rename" | "delete" | "properties" | "view" | "view-cat" | "download"
 
@@ -53,6 +54,8 @@ type BrowserTableProps = {
   onContextAction?: (action: EntryContextAction, entry: FilesystemEntry) => void
   /** admin 만 rename/delete 컨텍스트 메뉴 표시 */
   canManage?: boolean
+  /** 내려받기 컨텍스트 메뉴를 보일지(기본 true) */
+  canDownload?: boolean
   sort: SortConfig
   onSortChange: (sort: SortConfig) => void
   isLoading: boolean
@@ -124,21 +127,6 @@ function SortButton({
   )
 }
 
-function copyToClipboard(text: string): Promise<void> {
-  if (navigator.clipboard?.writeText) {
-    return navigator.clipboard.writeText(text)
-  }
-  const textarea = document.createElement("textarea")
-  textarea.value = text
-  textarea.style.position = "fixed"
-  textarea.style.opacity = "0"
-  document.body.appendChild(textarea)
-  textarea.select()
-  document.execCommand("copy")
-  document.body.removeChild(textarea)
-  return Promise.resolve()
-}
-
 export function BrowserTable({
   currentPath,
   entries,
@@ -149,6 +137,7 @@ export function BrowserTable({
   onEntryDoubleClick,
   onContextAction,
   canManage = false,
+  canDownload = true,
   sort,
   onSortChange,
   isLoading,
@@ -171,7 +160,7 @@ export function BrowserTable({
 
   async function handleCopyPath(entry: FilesystemEntry) {
     try {
-      await copyToClipboard(entry.key)
+      await copyText(entry.key)
       toast.success("경로를 클립보드에 복사했습니다.")
     } catch {
       toast.error("경로를 복사하지 못했습니다.", { description: "HTTPS 가 아닌 환경에서는 클립보드 복사가 막힐 수 있습니다." })
@@ -207,9 +196,9 @@ export function BrowserTable({
   if (isLoading) {
     return (
       <div className="flex-1 flex items-center justify-center py-20">
-        <div className="flex flex-col items-center gap-3 text-muted-foreground">
+        <div className="flex flex-col items-center gap-3">
           <div className="h-6 w-6 animate-spin rounded-full border-2 border-current border-t-transparent" />
-          <span className="text-sm">불러오는 중...</span>
+          <span className="text-sm">불러오는 중…</span>
         </div>
       </div>
     )
@@ -326,41 +315,25 @@ export function BrowserTable({
                         </div>
                       )}
                     </td>
-                    <td className="px-3 py-1.5 text-right text-muted-foreground tabular-nums">
+                    <td className="px-3 py-1.5 text-right tabular-nums">
                       {isFolder ? "-" : formatBytes(entry.size)}
                     </td>
-                    <td className="px-3 py-1.5 text-muted-foreground">
+                    <td className="px-3 py-1.5">
                       {isFolder ? "-" : formatDate(entry.lastModified)}
                     </td>
-                    <td className="px-3 py-1.5 text-muted-foreground font-mono text-xs">
+                    <td className="px-3 py-1.5 font-mono text-xs">
                       {entry.permissions ?? "-"}
                     </td>
-                    <td className="px-3 py-1.5 text-muted-foreground">
+                    <td className="px-3 py-1.5">
                       {entry.owner ?? "-"}
                     </td>
-                    <td className="px-3 py-1.5 text-muted-foreground">
+                    <td className="px-3 py-1.5">
                       {entry.group ?? "-"}
                     </td>
                   </tr>
                 </ContextMenuTrigger>
                 <ContextMenuContent>
-                  {canManage && (
-                    <>
-                      <ContextMenuItem onClick={() => onContextAction?.("rename", entry)}>
-                        <Pencil className="h-4 w-4" />
-                        이름 변경
-                      </ContextMenuItem>
-                      <ContextMenuItem onClick={() => onContextAction?.("delete", entry)}>
-                        <Trash2 className="h-4 w-4" />
-                        삭제
-                      </ContextMenuItem>
-                      <ContextMenuSeparator />
-                    </>
-                  )}
-                  <ContextMenuItem onClick={() => onContextAction?.("properties", entry)}>
-                    <Info className="h-4 w-4" />
-                    속성
-                  </ContextMenuItem>
+                  {/* 순서: 보기 → 이름 변경 → 내려받기 · 경로 복사 → 속성 → 삭제(맨 아래, 빨강) */}
                   {entry.kind === "file" && (
                     <ContextMenuItem
                       onClick={() => onContextAction?.("view", entry)}
@@ -371,27 +344,41 @@ export function BrowserTable({
                     </ContextMenuItem>
                   )}
                   {entry.kind === "file" && isCsvTsvFile(entry.name) && (
-                    <ContextMenuItem
-                      onClick={() => onContextAction?.("view-cat", entry)}
-                    >
+                    <ContextMenuItem onClick={() => onContextAction?.("view-cat", entry)}>
                       <FileTerminal className="h-4 w-4" />
                       텍스트 보기
                     </ContextMenuItem>
                   )}
-                  {entry.kind === "file" && (
+                  {canManage && (
+                    <ContextMenuItem onClick={() => onContextAction?.("rename", entry)}>
+                      <Pencil className="h-4 w-4" />
+                      이름 변경
+                    </ContextMenuItem>
+                  )}
+                  {(entry.kind === "file" || canManage) && <ContextMenuSeparator />}
+                  {entry.kind === "file" && canDownload && (
+                    <ContextMenuItem onClick={() => onContextAction?.("download", entry)}>
+                      <Download className="h-4 w-4" />
+                      내려받기
+                    </ContextMenuItem>
+                  )}
+                  <ContextMenuItem onClick={() => handleCopyPath(entry)}>
+                    <Copy className="h-4 w-4" />
+                    경로 복사
+                  </ContextMenuItem>
+                  <ContextMenuItem onClick={() => onContextAction?.("properties", entry)}>
+                    <Info className="h-4 w-4" />
+                    속성
+                  </ContextMenuItem>
+                  {canManage && (
                     <>
                       <ContextMenuSeparator />
-                      <ContextMenuItem onClick={() => onContextAction?.("download", entry)}>
-                        <Download className="h-4 w-4" />
-                        다운로드
+                      <ContextMenuItem variant="destructive" onClick={() => onContextAction?.("delete", entry)}>
+                        <Trash2 className="h-4 w-4" />
+                        삭제
                       </ContextMenuItem>
                     </>
                   )}
-                  <ContextMenuSeparator />
-                  <ContextMenuItem onClick={() => handleCopyPath(entry)}>
-                    <ClipboardCopy className="h-4 w-4" />
-                    경로 복사
-                  </ContextMenuItem>
                 </ContextMenuContent>
               </ContextMenu>
             )

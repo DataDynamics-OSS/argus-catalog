@@ -10,6 +10,10 @@
 - GET    /changes/{id}                     CR 상세 (결재 단계 포함)
 - POST   /changes/{id}/decisions           결재 처리 (Signal)
 - POST   /changes/{id}/cancel              CR 취소 (Signal)
+- PUT    /changes/{id}                     초안(DRAFT) 수정 — 결재선·참조자 포함 전체 교체
+- DELETE /changes/{id}                     상신한 적 없는 CR 삭제(작성 중·상신 전 취소)
+- POST   /changes/{id}/close               적용 완료 CR 종료 (APPLIED → CLOSED)
+- POST   /changes/{id}/rollback            적용한 스키마 변경 되돌리기 (APPLIED → ROLLED_BACK)
 - POST   /changes/consumers                소비자 등록
 - GET    /changes/consumers/{dataset_id}   소비자 목록
 - GET    /changes/{id}/notifications       통지 로그
@@ -25,7 +29,9 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio.service import RPCError, RPCStatusCode
 
+from app.catalog import service as catalog_service
 from app.change_mgmt import schemas, service, temporal_client
+from app.change_mgmt.activities import CONSUMER_CHANNELS
 from app.core.auth import CurrentUser, TokenUser, assert_owner_or_admin
 from app.core.database import get_session
 from app.permissions.router import require_feature
@@ -47,6 +53,27 @@ CANCELLABLE_STATUSES = frozenset({
 
 
 TEMPORAL_CALL_FAILED = "Temporal 워크플로우 엔진 호출에 실패했습니다."
+
+
+NEED_INDEPENDENT_APPROVER = (
+    "이 데이터셋을 직접 편집할 권한(생성자·관리자)이 없으면 결재선에 요청자가 아닌 결재자를 1명 이상 지정해야 합니다."
+)
+
+
+async def _require_independent_approver(session: AsyncSession, user: TokenUser, dataset_id: int,
+                                        approvers: list[str]) -> None:
+    """결재선이 비거나 요청자 본인뿐이면 결재 없이(자동 승인) 적용된다 — 데이터셋 편집 권한이 있는 사람만 허용(DEF-050).
+
+    편집 권한이 없는 요청자가 이렇게 만들면 직접 편집 가드(``_require_dataset_editor``)를 우회해 남의 데이터셋 스키마를
+    바꿀 수 있으므로 422 로 막는다.
+    """
+    if user.is_admin or any(a and a != user.username for a in approvers):
+        return
+    created_by = await catalog_service.get_dataset_created_by(session, dataset_id)
+    if created_by and created_by == user.username:
+        return
+    logger.warning("CR 거부(독립 결재자 없음): by=%s dataset_id=%s approvers=%s", user.username, dataset_id, approvers)
+    raise HTTPException(status_code=422, detail=NEED_INDEPENDENT_APPROVER)
 
 
 async def _require_temporal() -> None:
@@ -80,6 +107,7 @@ async def create_change_request(
     if missing:
         logger.warning("CR 생성 거부(알 수 없는 결재자): by=%s missing=%s", user.username, missing)
         raise HTTPException(status_code=422, detail=f"등록되지 않았거나 비활성인 결재자입니다: {', '.join(missing)}")
+    await _require_independent_approver(session, user, data.dataset_id, [s.approver for s in data.approval_chain])
     # 요청자는 인증 사용자에서 도출한다 (클라이언트가 위조할 수 없도록)
     cr = await service.create_cr(session, data, user.username)
     await session.commit()
@@ -89,12 +117,7 @@ async def create_change_request(
         await service.notify_referrers(session, cr)
     except Exception as e:  # noqa: BLE001
         logger.warning("참조자(CC) 통지 실패 (CR 생성은 유지): cr=%s: %s", cr.cr_code, e)
-    steps = await service.list_approval_steps(session, cr.id)
-    refs = await service.list_referrers(session, cr.id)
-    response = schemas.ChangeRequestResponse.model_validate(cr)
-    response.approval_steps = [schemas.ApprovalStepResponse.model_validate(s) for s in steps]
-    response.referrers = [schemas.ReferrerResponse.model_validate(r) for r in refs]
-    return response
+    return await _detail_response(session, cr)
 
 
 @router.get("", response_model=list[schemas.ChangeRequestResponse])
@@ -108,9 +131,11 @@ async def list_change_requests(
     crs = await service.list_crs(session, status=status, dataset_id=dataset_id)
     # 목록 "결재" 열(승인 단계/전체·반려)용 결재 단계 — 예전에는 빈 배열이라 항상 "—" 였다(IT CHG-T04)
     steps_by_cr = await service.steps_by_cr(session, [cr.id for cr in crs])
+    names = await service.dataset_names(session, [cr.dataset_id for cr in crs])
     out: list[schemas.ChangeRequestResponse] = []
     for cr in crs:
         response = schemas.ChangeRequestResponse.model_validate(cr)
+        response.dataset_name = names.get(cr.dataset_id)
         response.approval_steps = [
             schemas.ApprovalStepResponse.model_validate(s) for s in steps_by_cr.get(cr.id, [])
         ]
@@ -128,8 +153,12 @@ async def list_my_inbox(
 ):
     """현재 사용자가 지금 결재해야 하는 변경 요청 목록 (현재 단계 결재자=나)."""
     out: list[schemas.ChangeRequestResponse] = []
-    for cr, steps in await service.list_inbox(session, user.username):
+    inbox = await service.list_inbox(session, user.username)
+    # 결재자가 카드만 보고도 어느 데이터셋인지 알 수 있게(TODO-077)
+    names = await service.dataset_names(session, [cr.dataset_id for cr, _ in inbox])
+    for cr, steps in inbox:
         response = schemas.ChangeRequestResponse.model_validate(cr)
+        response.dataset_name = names.get(cr.dataset_id)
         response.approval_steps = [
             schemas.ApprovalStepResponse.model_validate(s) for s in steps
         ]
@@ -145,6 +174,17 @@ async def my_inbox_count(
     return {"count": await service.count_inbox(session, user.username)}
 
 
+async def _detail_response(session: AsyncSession, cr) -> schemas.ChangeRequestResponse:
+    """CR 상세 응답 — 결재 단계·참조자·데이터셋 이름 포함."""
+    steps = await service.list_approval_steps(session, cr.id)
+    refs = await service.list_referrers(session, cr.id)
+    response = schemas.ChangeRequestResponse.model_validate(cr)
+    response.approval_steps = [schemas.ApprovalStepResponse.model_validate(s) for s in steps]
+    response.referrers = [schemas.ReferrerResponse.model_validate(r) for r in refs]
+    response.dataset_name = (await service.dataset_names(session, [cr.dataset_id])).get(cr.dataset_id)
+    return response
+
+
 @router.get("/{cr_id}", response_model=schemas.ChangeRequestResponse)
 async def get_change_request(
     cr_id: int, session: AsyncSession = Depends(get_session)
@@ -154,25 +194,122 @@ async def get_change_request(
     cr = await service.get_cr(session, cr_id)
     if cr is None:
         raise HTTPException(status_code=404, detail="변경 요청을(를) 찾을 수 없습니다.")
-    steps = await service.list_approval_steps(session, cr_id)
-    refs = await service.list_referrers(session, cr_id)
-    response = schemas.ChangeRequestResponse.model_validate(cr)
-    response.approval_steps = [schemas.ApprovalStepResponse.model_validate(s) for s in steps]
-    response.referrers = [schemas.ReferrerResponse.model_validate(r) for r in refs]
-    return response
+    return await _detail_response(session, cr)
+
+
+async def _own_cr(session: AsyncSession, user: TokenUser, cr_id: int):
+    """요청자 본인 또는 관리자만 다루는 CR 을 읽는다 — 없으면 404, 남의 것이면 403."""
+    cr = await service.get_cr(session, cr_id)
+    if cr is None:
+        raise HTTPException(status_code=404, detail="변경 요청을(를) 찾을 수 없습니다.")
+    assert_owner_or_admin(user, cr.requested_by, "변경 요청")
+    return cr
+
+
+@router.put("/{cr_id}", response_model=schemas.ChangeRequestResponse)
+async def update_change_request(
+    cr_id: int,
+    data: schemas.ChangeRequestCreate,
+    user: ChangeCreator,
+    session: AsyncSession = Depends(get_session),
+):
+    """상신 전 초안(DRAFT) 수정 — 요청자 본인 또는 관리자. 본문은 생성과 같고 결재선·참조자까지 통째로 바꾼다.
+
+    상신했거나 끝난 CR 은 409. 결재자·독립 결재자 검사는 생성과 같다.
+    """
+    cr = await _own_cr(session, user, cr_id)
+    if cr.status != schemas.CRStatus.DRAFT.value or cr.workflow_id is not None:
+        raise HTTPException(status_code=409, detail=f"작성 중(DRAFT)인 변경 요청만 수정할 수 있습니다 (현재={cr.status}).")
+    missing = await service.unknown_approvers(session, [s.approver for s in data.approval_chain])
+    if missing:
+        raise HTTPException(status_code=422, detail=f"등록되지 않았거나 비활성인 결재자입니다: {', '.join(missing)}")
+    await _require_independent_approver(session, user, data.dataset_id, [s.approver for s in data.approval_chain])
+    await service.replace_draft_cr(session, cr, data)
+    await session.commit()
+    await session.refresh(cr)
+    logger.info("CR 수정: cr=%s by=%s", cr.cr_code, user.username)
+    return await _detail_response(session, cr)
+
+
+@router.delete("/{cr_id}", status_code=204)
+async def delete_change_request(user: CurrentUser, cr_id: int, session: AsyncSession = Depends(get_session)):
+    """상신한 적 없는 CR(작성 중, 또는 상신 전에 취소) 삭제 — 요청자 본인 또는 관리자.
+
+    상신한 CR 은 결재·통지 이력이 있어 지우지 않는다(409) — 취소하거나 종료한다.
+    """
+    cr = await _own_cr(session, user, cr_id)
+    if cr.workflow_id is not None or cr.status not in (schemas.CRStatus.DRAFT.value, schemas.CRStatus.CANCELLED.value):
+        raise HTTPException(status_code=409, detail="상신한 변경 요청은 이력이 남아 삭제할 수 없습니다 — 취소하거나 종료하세요.")
+    code = cr.cr_code
+    await service.delete_unsubmitted_cr(session, cr)
+    await session.commit()
+    logger.info("CR 삭제: cr=%s by=%s", code, user.username)
+
+
+@router.post("/{cr_id}/close", response_model=schemas.ChangeRequestResponse)
+async def close_change_request(user: CurrentUser, cr_id: int, session: AsyncSession = Depends(get_session)):
+    """적용 완료(APPLIED) CR 종료 — 적용 결과를 확인한 뒤 요청자 본인 또는 관리자가 닫는다. 종료하면 롤백할 수 없다."""
+    cr = await _own_cr(session, user, cr_id)
+    if cr.status != schemas.CRStatus.APPLIED.value:
+        raise HTTPException(status_code=409, detail=f"적용 완료(APPLIED)된 변경 요청만 종료할 수 있습니다 (현재={cr.status}).")
+    if not await service.close_cr(session, cr.id):
+        raise HTTPException(status_code=409, detail="변경 요청 상태가 바뀌었습니다. 새로고침 후 다시 시도하세요.")
+    await session.commit()
+    await session.refresh(cr)
+    logger.info("CR 종료: cr=%s by=%s", cr.cr_code, user.username)
+    return await _detail_response(session, cr)
+
+
+@router.post("/{cr_id}/rollback", response_model=schemas.ChangeRequestResponse,
+             dependencies=[Depends(require_feature("changes.rollback"))])
+async def rollback_change_request(user: CurrentUser, cr_id: int, session: AsyncSession = Depends(get_session)):
+    """적용한 스키마 변경 되돌리기 — 요청자 본인 또는 관리자, 적용 완료(APPLIED) CR 만.
+
+    CR 이 건드린 컬럼만 적용 직전 상태로 되돌린다(추가한 컬럼은 삭제, 바꾼·삭제한 컬럼은 원래대로).
+    되돌릴 적용 전 정보가 없으면 409. 스키마 변경 이력에 남고 알림 규칙도 평가된다.
+    """
+    cr = await _own_cr(session, user, cr_id)
+    if cr.status != schemas.CRStatus.APPLIED.value:
+        raise HTTPException(status_code=409, detail=f"적용 완료(APPLIED)된 변경 요청만 되돌릴 수 있습니다 (현재={cr.status}).")
+    try:
+        ups, drops = await service.rollback_cr(session, cr)
+    except ValueError as e:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    await session.commit()
+    await session.refresh(cr)
+    logger.info("CR 롤백: cr=%s dataset=%s (+%d upsert, -%d drop) by=%s", cr.cr_code, cr.dataset_id, ups, drops, user.username)
+    return await _detail_response(session, cr)
 
 
 # ---------------------------------------------------------------------------
 # 워크플로우 트리거
 # ---------------------------------------------------------------------------
 
+def _normalize_channels(channels: list[str]) -> list[str]:
+    """통지 채널을 대문자·중복 제거로 정리. 모르는 값이나 빈 목록은 400 (DEF-005)."""
+    out = list(dict.fromkeys(str(c).strip().upper() for c in channels if str(c).strip()))
+    unknown = [c for c in out if c not in CONSUMER_CHANNELS]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"지원하지 않는 통지 채널입니다: {', '.join(unknown)} "
+                                                    f"(가능: {', '.join(CONSUMER_CHANNELS)}).")
+    if not out:
+        raise HTTPException(status_code=400, detail="통지 채널을 하나 이상 고르세요.")
+    return out
+
+
 @router.post("/{cr_id}/submit", response_model=schemas.ChangeRequestSubmitResponse)
 async def submit_change_request(user: CurrentUser,
     cr_id: int,
-    notify_channels: list[str] = Body(default=["EMAIL", "IN_APP"]),
+    notify_channels: list[str] = Body(default=["WEBHOOK", "EMAIL"]),
     session: AsyncSession = Depends(get_session),
 ):
-    """결재 상신 — 요청자 본인 또는 관리자만. DRAFT 가 아니면 400, Temporal 장애 시 503."""
+    """결재 상신 — 요청자 본인 또는 관리자만. DRAFT 가 아니면 400, Temporal 장애 시 503.
+
+    본문은 소비자 통지 채널 목록(WEBHOOK·EMAIL·SLACK, 기본 WEBHOOK·EMAIL). 모르는 채널이나 빈 목록은 400.
+    SMS·IN_APP 은 예전 호출 호환으로 받지만 보내지 않고 이력에 ``SKIPPED`` 로 남는다(DEF-005).
+    """
+    notify_channels = _normalize_channels(notify_channels)
     await _require_temporal()
     cr = await service.get_cr(session, cr_id)
     if cr is None:
@@ -181,6 +318,9 @@ async def submit_change_request(user: CurrentUser,
     if cr.status != schemas.CRStatus.DRAFT.value:
         logger.warning("CR 상신 거부(DRAFT 아님): cr_id=%d status=%s", cr_id, cr.status)
         raise HTTPException(status_code=400, detail=f"변경 요청은(는) DRAFT 상태여야 합니다 (현재={cr.status}).")
+    # 이 검사 전에 만든 초안도 상신 때 막는다(요청자 본인이 상신하므로 user 가 요청자이거나 관리자)
+    steps = await service.list_approval_steps(session, cr.id)
+    await _require_independent_approver(session, user, cr.dataset_id, [s.approver for s in steps])
 
     try:
         workflow_id = await service.submit_cr(session, cr, notify_channels)
@@ -309,7 +449,15 @@ async def cancel_change_request(user: CurrentUser,
 async def create_consumer(_guard: CurrentUser,
     data: schemas.ConsumerCreate, _perm=Depends(require_feature("changes.consumers")), session: AsyncSession = Depends(get_session)
 ):
-    """데이터셋 소비자를 등록한다(``changes.consumers`` 기능 권한)."""
+    """데이터셋 소비자를 등록한다(``changes.consumers`` 기능 권한 + 그 데이터셋의 소유자 또는 관리자).
+
+    소비자에는 연락 이메일 · 웹훅 주소가 들어가 변경 내용이 그쪽으로 나간다 — 남의 데이터셋에 임의의 수신처를
+    붙이지 못하게 데이터셋 소유자(생성자)로 묶는다(DEF-121). 없는 데이터셋은 404."""
+    if not _guard.is_admin:
+        exists, owner = await service.dataset_creator(session, data.dataset_id)
+        if not exists:
+            raise HTTPException(status_code=404, detail="데이터셋을 찾을 수 없습니다.")
+        assert_owner_or_admin(_guard, owner, "데이터셋")
     consumer = await service.create_consumer(session, data)
     await session.commit()
     logger.info("소비자 등록: id=%s dataset_id=%s name=%s by=%s",
@@ -346,10 +494,20 @@ async def ack_notification(_guard: CurrentUser,
     comment: str | None = Body(None, embed=True),
     session: AsyncSession = Depends(get_session),
 ):
-    """통지 수신 확인(ACK) — 상태를 ACKED 로 바꾸고 시각·코멘트를 기록한다. 없으면 404."""
+    """통지 수신 확인(ACK) — 상태를 ACKED 로 바꾸고 시각·코멘트를 기록한다. 없으면 404.
+
+    수신자 본인 · 변경 요청자 · 데이터셋 소유자 · 관리자만 할 수 있다(그 밖은 403, DEF-122)."""
+    from app.change_mgmt import models as cm_models
+
+    existing = await session.get(cm_models.NotificationLog, log_id)
+    if existing is None:
+        logger.warning("통지 ACK 실패(없음): log_id=%d", log_id)
+        raise HTTPException(status_code=404, detail="통지 이력을(를) 찾을 수 없습니다.")
+    if not await service.can_ack_notification(session, existing, _guard):
+        logger.warning("통지 ACK 거부(403): log_id=%d user=%s", log_id, _guard.username)
+        raise HTTPException(status_code=403, detail="통지의 수신자, 변경 요청자, 데이터셋 소유자 또는 관리자만 수신 확인할 수 있습니다.")
     log = await service.ack_notification(session, log_id, comment)
     if log is None:
-        logger.warning("통지 ACK 실패(없음): log_id=%d", log_id)
         raise HTTPException(status_code=404, detail="통지 이력을(를) 찾을 수 없습니다.")
     await session.commit()
     logger.info("통지 ACK: log_id=%d cr_id=%s by=%s", log_id, log.cr_id, _guard.username)

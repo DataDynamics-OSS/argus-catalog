@@ -8,11 +8,11 @@ import {
   HardDrive,
   Info,
   Loader2,
-  Search,
 } from "lucide-react"
 import { useRouter } from "next/navigation"
 
 import { Badge } from "@workspace/ui/components/badge"
+import { MatchTypeBadge } from "@/components/match-type-badge"
 import { Button } from "@workspace/ui/components/button"
 import { Card, CardContent } from "@workspace/ui/components/card"
 import {
@@ -22,7 +22,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@workspace/ui/components/dialog"
-import { Input } from "@workspace/ui/components/input"
 
 import {
   datasetLineage,
@@ -32,6 +31,7 @@ import {
 } from "./api"
 import { errorMessage } from "@/lib/notify"
 import { markdownToPlain } from "@/features/search/excerpt"
+import { SearchInput } from "@/components/search-input"
 
 /** 페더레이션 데이터셋 상세 전체화면 경로. */
 export function federatedDetailHref(federatedUrn: string): string {
@@ -48,17 +48,15 @@ export function SourceBadge({
 }) {
   if (!instanceKey) {
     return (
-      <Badge variant="secondary" className="gap-1">
-        <HardDrive className="h-3 w-3" /> 로컬
+      <Badge variant="outline" >
+        <HardDrive /> 로컬
       </Badge>
     )
   }
   return (
-    <Badge
-      variant="outline"
-      className="gap-1 border-blue-300 text-blue-700 dark:text-blue-300"
-    >
-      <Globe className="h-3 w-3" /> {instanceName || instanceKey}
+    // 출처는 분류라 무채색 테두리(TODO-107) — 로컬 · 다른 인스턴스는 아이콘과 글자 진하기로 구분
+    <Badge variant="outline">
+      <Globe /> {instanceName || instanceKey}
     </Badge>
   )
 }
@@ -175,23 +173,20 @@ export function FederationSearchPanel({
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
       <div className="flex items-center gap-2">
-        <div className="relative max-w-xl flex-1">
-          <Search className="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            className="pl-9"
-            placeholder="모든 팀 카탈로그를 한 번에 검색..."
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && runSearch()}
-          />
-        </div>
+        <SearchInput
+          className="max-w-xl flex-1"
+          placeholder="모든 팀 카탈로그를 한 번에 검색…"
+          value={query}
+          onValueChange={setQuery}
+          onSearch={runSearch}
+        />
         <Button onClick={runSearch} disabled={loading}>
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "검색"}
         </Button>
       </div>
 
       {meta && (
-        <div className="flex items-center gap-3 text-sm text-muted-foreground">
+        <div className="flex items-center gap-3 text-sm">
           <span className="flex items-center gap-1">
             <Info className="h-3.5 w-3.5" /> {results.length}건 · {meta.queried}
             개 인스턴스 조회
@@ -225,25 +220,23 @@ export function FederationSearchPanel({
                     instanceName={hit.source_instance_name}
                   />
                   <span className="truncate font-medium">{hit.name}</span>
-                  <Badge variant="secondary" className="text-xs">
-                    {hit.match_type}
-                  </Badge>
-                  <span className="text-xs text-muted-foreground">
+                  <MatchTypeBadge type={hit.match_type} />
+                  <span className="text-xs">
                     {(hit.score * 100).toFixed(0)}%
                   </span>
                 </div>
-                <div className="mt-1 truncate text-xs text-muted-foreground">
+                <div className="mt-1 truncate text-xs">
                   {hit.datasource_name && <span>{hit.datasource_name}</span>}
                   {hit.datasource_type && <span> · {hit.datasource_type}</span>}
                   {hit.origin && <span> · {hit.origin}</span>}
                 </div>
                 {/* 설명은 마크다운(## 개요, **굵게**) — 기호가 보이지 않게 평문으로 */}
                 {hit.description && (
-                  <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
+                  <p className="mt-1 line-clamp-2 text-sm">
                     {markdownToPlain(hit.description)}
                   </p>
                 )}
-                <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
+                <div className="mt-1 truncate font-mono text-[11px]">
                   {hit.urn}
                 </div>
               </div>
@@ -292,7 +285,7 @@ export function FederationSearchPanel({
           </DialogHeader>
           {lineageLoading ? (
             <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" /> 리니지를 불러오는 중...
+              <Loader2 className="h-4 w-4 animate-spin" /> 리니지를 불러오는 중…
             </div>
           ) : lineageError ? (
             <div className="flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -341,7 +334,7 @@ export function LineageBody({ graph }: { graph: FederatedLineageGraph }) {
             >
               {label(e.source_urn)}
             </span>
-            <span className="text-xs text-muted-foreground">
+            <span className="text-xs">
               —{e.relation_type}→
             </span>
             <SourceBadge
@@ -356,7 +349,7 @@ export function LineageBody({ graph }: { graph: FederatedLineageGraph }) {
               {label(e.target_urn)}
             </span>
             {e.reported_by && (
-              <Badge variant="outline" className="ml-auto text-[10px]">
+              <Badge size="sm" variant="outline" className="ml-auto">
                 보고: {e.reported_by}
               </Badge>
             )}

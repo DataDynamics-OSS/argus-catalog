@@ -19,6 +19,20 @@ entry point 를 선언하면 자동으로 발견·등록된다::
 
 플러그인을 켜지 않으면 아무 것도 등록되지 않으므로 **OSS 기본 동작과 완전히 동일**
 하다. 코어 라우터에는 어떤 영향도 주지 않는다.
+
+권한(TODO-123) — 플러그인 객체에 선택 속성을 두면 권한 관리에 들어간다::
+
+    plugin = SimpleNamespace(
+        router=router,
+        # 기능 권한 키 — 권한 관리 › 기능 권한에 저장할 수 있게 된다. default_deny 면 미설정 시 관리자만.
+        features=[{"key": "acme.billing-export", "default_deny": True}],
+        # 관리자 전용 메뉴 — 매트릭스로 열 수 없고 granted_by 기능을 받은 역할에만 열린다.
+        menus=[{"key": "plugin.acme-billing", "admin_only": True, "granted_by": ["acme.billing-admin"]}],
+        # 라우터 전체에 메뉴 가드 — 그 메뉴가 막힌 사용자는 API 도 403(코어의 서버 API 차단 메뉴와 같다).
+        menu_key="plugin.acme-billing",
+    )
+
+화면 쪽은 ``frontend/apps/web/plugins/types.ts`` 의 ``features`` · 메뉴 항목 ``adminOnly`` · ``grantedBy`` 로 같은 키를 선언한다.
 """
 
 from __future__ import annotations
@@ -40,6 +54,21 @@ DEFAULT_PREFIX = "/api/v1"
 
 #: ``plugins.enabled`` 에 이 값이 있으면 발견된 플러그인을 모두 로드한다(개발용).
 ENABLE_ALL = "*"
+
+
+def _register_permissions(name: str, plugin) -> list:
+    """플러그인이 선언한 기능 키 · 메뉴를 권한 표에 더하고, ``menu_key`` 가 있으면 라우터에 걸 메뉴 가드를 돌려준다."""
+    from fastapi import Depends
+
+    from app.permissions.router import register_plugin_permissions, require_menu
+
+    register_plugin_permissions(name, features=getattr(plugin, "features", None) or (),
+                                menus=getattr(plugin, "menus", None) or ())
+    menu_key = getattr(plugin, "menu_key", None)
+    if not menu_key:
+        return []
+    logger.info("플러그인 '%s' API 에 메뉴 가드: %s", name, menu_key)
+    return [Depends(require_menu(str(menu_key)))]
 
 
 def load_plugin_routers(app: "FastAPI", enabled: list[str] | None = None) -> list[str]:
@@ -78,7 +107,8 @@ def load_plugin_routers(app: "FastAPI", enabled: list[str] | None = None) -> lis
         # prefix 를 지정하지 않았거나 None/빈 문자열이면 기본 prefix 를 쓴다.
         prefix = getattr(plugin, "prefix", None) or DEFAULT_PREFIX
         try:
-            app.include_router(router, prefix=prefix)
+            dependencies = _register_permissions(ep.name, plugin)
+            app.include_router(router, prefix=prefix, dependencies=dependencies)
         except Exception:  # noqa: BLE001
             logger.exception("플러그인 '%s' 라우터 등록 실패 — 건너뜀", ep.name)
             continue

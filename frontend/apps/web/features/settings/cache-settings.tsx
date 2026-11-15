@@ -139,7 +139,7 @@ export function CacheSettings() {
       <Card>
         <CardContent className="pt-6">
           <div className="flex items-center gap-2 text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" /> 캐시 설정을 불러오는 중...
+            <Loader2 className="h-4 w-4 animate-spin" /> 캐시 설정을 불러오는 중…
           </div>
         </CardContent>
       </Card>
@@ -169,7 +169,7 @@ export function CacheSettings() {
           <div className="flex items-center justify-between">
             <div>
               <Label className="text-sm font-medium">캐시 활성화</Label>
-              <p className="text-xs text-muted-foreground">비활성화하면 모든 요청이 DB에서 직접 조회됩니다</p>
+              <p className="text-xs">비활성화하면 모든 요청이 DB에서 직접 조회됩니다</p>
             </div>
             <Switch checked={enabled} onCheckedChange={setEnabled} />
           </div>
@@ -187,7 +187,7 @@ export function CacheSettings() {
                 onChange={(e) => setMaxSize(Number(e.target.value))}
                 className="h-9"
               />
-              <p className="text-xs text-muted-foreground">
+              <p className="text-xs">
                 최대 캐시 항목 수. 초과 시 가장 오래된 항목이 LRU 방식으로 제거됩니다.
               </p>
             </div>
@@ -204,7 +204,7 @@ export function CacheSettings() {
                 onChange={(e) => setTtl(Number(e.target.value))}
                 className="h-9"
               />
-              <p className="text-xs text-muted-foreground">
+              <p className="text-xs">
                 캐시 항목 만료 시간. {ttl >= 60 ? `${Math.floor(ttl / 60)}분` : `${ttl}초`} 후 자동 갱신됩니다.
               </p>
             </div>
@@ -237,7 +237,7 @@ export function CacheSettings() {
               <StatItem label="적중" value={stats.hits.toLocaleString()} />
               <StatItem label="미적중" value={stats.misses.toLocaleString()} />
             </div>
-            <div className="mt-3 text-xs text-muted-foreground">
+            <div className="mt-3 text-xs">
               총 요청: {stats.total_requests.toLocaleString()}건 · TTL: {stats.ttl_seconds}초
             </div>
           </CardContent>
@@ -250,7 +250,7 @@ export function CacheSettings() {
 function StatItem({ label, value, highlight }: { label: string; value: string | number; highlight?: boolean }) {
   return (
     <div className="text-center">
-      <div className="text-xs text-muted-foreground mb-1">{label}</div>
+      <div className="text-xs mb-1">{label}</div>
       <div className={`text-lg font-semibold ${highlight ? "text-green-600" : ""}`}>{value}</div>
     </div>
   )

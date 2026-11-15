@@ -29,3 +29,6 @@ deploy/.env
 
 # 운영 배포 데이터 보관 경로(bind mount 기본값 DATA_DIR=./data)
 deploy/data/
+
+# 웹 도움말용 매뉴얼 사이트 — docs/tools/build-web-manual.sh 가 빌드 때 만든다
+frontend/apps/web/public/manual/

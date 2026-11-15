@@ -77,7 +77,7 @@ export function HarvestProgress({ prog }: { prog: HarvestProg }) {
         </span>
         {/* 표 셀은 nowrap 이라 truncate 로는 폭이 줄지 않는다 — 긴 오류는 두 줄까지 줄바꿈 */}
         <span
-          className="line-clamp-2 min-w-0 break-all text-muted-foreground"
+          className="line-clamp-2 min-w-0 break-all"
           title={text}
         >
           {text}
@@ -108,9 +108,9 @@ export function HarvestProgress({ prog }: { prog: HarvestProg }) {
             </span>
           )}
         </div>
-        <span className="block text-[11px] text-muted-foreground">
+        <span className="block text-[11px]">
           {indeterminate
-            ? "가져오는 중..."
+            ? "가져오는 중…"
             : `${label} ${prog.done.toLocaleString()} / ${prog.total.toLocaleString()}` +
               (prog.phase !== "FETCH"
                 ? ` · 관측 ${prog.seen.toLocaleString()}`

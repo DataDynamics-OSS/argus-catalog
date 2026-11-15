@@ -76,26 +76,74 @@ async def test_a2a_card_to_preview_then_apply(api):
     body = r.json()
     assert body["source_url"] == f"{HOST}/a2a/refund/.well-known/agent-card.json"
     assert body["name"] == "refund-helper" and body["exists"] is False
-    assert body["missing"] == ["owner", "category"]  # 부서는 provider.organization 에서
+    # 외부 카드의 provider.organization 은 제공 조직이라 부서로 옮기지 않는다(DEF-018)
+    assert body["missing"] == ["owner", "department", "category"]
     doc = body["document"]
     assert doc["metadata"] == {"name": "refund-helper", "displayName": "Refund Helper", "owner": None,
-                               "department": "고객지원팀", "category": None, "tags": ["환불", "결제"]}
+                               "department": None, "category": None, "tags": ["환불", "결제"]}
     assert doc["spec"]["version"] == "2.1.0"
+    # 전송 방식(JSONRPC)은 호출 방식(sync/async/streaming)이 아니라 옮기지 않는다(DEF-018)
     assert doc["spec"]["interface"] == {"endpoint": "https://203.0.113.10/a2a/refund", "protocol": "a2a",
-                                        "invocationMethod": "jsonrpc", "streaming": True, "authMethod": "bearer"}
-    assert doc["spec"]["capabilities"] == ["환불 가능 여부 판단", "상담원 연결"]
+                                        "streaming": True, "authMethod": "bearer", "inputModes": ["text/plain"]}
+    assert any("고객지원팀" in n and "부서로 옮기지 않았습니다" in n for n in body["notes"])
+    assert any("JSONRPC" in n for n in body["notes"])
+    # 카드 skills 는 기능 목록이 아니라 스킬로 옮긴다(TODO-024)
+    assert "capabilities" not in doc["spec"]
+    assert doc["spec"]["skills"] == [{"id": "refund-check", "name": "환불 가능 여부 판단", "tags": ["환불", "결제"]},
+                                     {"id": "handoff", "name": "상담원 연결", "tags": ["환불"]}]
     assert doc["spec"]["release"]["source"] == body["source_url"]
     assert "status" not in doc["spec"]  # 새로 만들면 초안, 있으면 현재 상태 유지
-    assert any("refund-helper" in n for n in body["notes"]) and any("기술 2개" in n for n in body["notes"])
+    assert any("refund-helper" in n for n in body["notes"]) and any("스킬 2개" in n for n in body["notes"])
     assert yaml.safe_load(body["yaml"]) == doc
     assert (await api.get("/refund-helper")).status_code == 404  # 미리 보기만, 저장하지 않음
 
     # 사용자가 비어 있는 항목을 채워 반영
-    doc["metadata"].update(owner="alice@corp.example", category="customer-service")
+    doc["metadata"].update(owner="alice@corp.example", department="고객지원팀", category="customer-service")
     r = await api.apply(doc)
     assert r.json()["summary"]["created"] == 1, r.text
     d = (await api.get("/refund-helper")).json()
     assert d["status"] == "draft" and d["endpoint"] == "https://203.0.113.10/a2a/refund" and d["streaming"] is True
+    assert [k["skill_key"] for k in d["skills"]] == ["refund-check", "handoff"]
+    assert d["default_input_modes"] == ["text/plain"]
+
+
+A2A_V1_CARD = {
+    "name": "Refund Helper",
+    "description": "환불 문의를 처리한다.",
+    "version": "3.0.0",
+    "supportedInterfaces": [
+        {"url": "grpc://203.0.113.10:50051", "protocolBinding": "GRPC", "protocolVersion": "1.0"},
+        {"url": "https://203.0.113.10/a2a/v1", "protocolBinding": "JSONRPC", "protocolVersion": "1.0"},
+    ],
+    "provider": {"organization": "Acme Corp", "url": "https://acme.example"},
+    "capabilities": {"streaming": False},
+    "securitySchemes": {"oidc": {"openIdConnectSecurityScheme": {"openIdConnectUrl": "https://acme.example/.well-known/openid-configuration"}}},
+    "defaultInputModes": ["text/plain"],
+    "defaultOutputModes": ["text/plain"],
+    "skills": [{"id": "refund-check", "name": "환불 가능 여부 판단", "description": "환불 규정 확인", "tags": ["환불"]}],
+}
+
+
+async def test_a2a_v1_card_reads_supported_interfaces(api):
+    # A2A 1.0 은 호출 주소가 supportedInterfaces 안에 있다 — JSONRPC 를 우선 고른다(DEF-015)
+    api.routes[f"{HOST}/v1.json"] = (200, A2A_V1_CARD, {})
+    body = (await card(api, f"{HOST}/v1.json")).json()
+    itf = body["document"]["spec"]["interface"]
+    assert itf == {"endpoint": "https://203.0.113.10/a2a/v1", "protocol": "a2a", "authMethod": "openidconnect",
+                   "inputModes": ["text/plain"], "outputModes": ["text/plain"]}
+    assert body["document"]["metadata"]["department"] is None
+    assert any("Acme Corp" in n for n in body["notes"])
+
+
+@pytest.mark.parametrize("scheme, expected", [
+    ({"httpAuthSecurityScheme": {"scheme": "Bearer"}}, "bearer"),
+    ({"apiKeySecurityScheme": {"location": "header", "name": "X-API-Key"}}, "apikey"),
+    ({"oauth2SecurityScheme": {"flows": {}}}, "oauth2"),
+    ({"mtlsSecurityScheme": {}}, "mutualtls"),
+    ({"type": "http", "scheme": "Basic"}, "basic"),  # 0.3 형식
+])
+def test_auth_method_from_v1_and_v03_schemes(scheme, expected):
+    assert card_import._auth_method({"securitySchemes": {"s": scheme}}) == expected
 
 
 async def test_falls_back_to_agent_json_and_site_root(api):
@@ -120,10 +168,15 @@ async def test_catalog_card_format_and_overrides(api):
     body = r.json()
     assert body["name"] == "cs.refund" and body["exists"] is True
     assert "이미 등록되어 있습니다" in body["notes"][0]
-    assert body["missing"] == ["category"]  # 소유자는 provider.contact(이메일), 부서는 organization
+    # 카탈로그 확장(params)으로 식별 이름·소유자·부서·분류가 그대로 돌아온다
+    assert body["missing"] == []
     m = body["document"]["metadata"]
-    assert (m["owner"], m["department"]) == ("alice@corp.example", "고객지원팀")
-    assert body["document"]["spec"]["interface"]["endpoint"] == "https://agents.corp.example/refund"
+    assert (m["name"], m["displayName"], m["owner"], m["department"], m["category"]) == (
+        "cs.refund", "환불 도우미", "alice@corp.example", "고객지원팀", "customer-service")
+    spec = body["document"]["spec"]
+    assert spec["interface"]["endpoint"] == "https://agents.corp.example/refund"
+    assert spec["capabilities"] == ["환불 접수", "상담원 연결"]  # skill 은 기능에서, 도구는 내보내지 않음
+    assert not any("부서로 옮기지 않았습니다" in n for n in body["notes"])
 
     r = await card(api, f"{HOST}/cards/refund.json", name="imported.refund", owner="bob@corp.example",
                    department="운영팀", category="ops")

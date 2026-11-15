@@ -131,7 +131,7 @@ export default function ChangePasswordRequiredPage() {
             </div>
             {error && <p className="text-sm text-destructive">{error}</p>}
             <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? "변경 중..." : "비밀번호 변경"}
+              {loading ? "변경 중…" : "비밀번호 변경"}
             </Button>
             <Button
               type="button"

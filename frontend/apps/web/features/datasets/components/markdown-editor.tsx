@@ -1,5 +1,6 @@
 "use client"
 
+import { Tip } from "@/components/tip"
 import { useEffect } from "react"
 import { useEditor, EditorContent } from "@tiptap/react"
 import StarterKit from "@tiptap/starter-kit"
@@ -54,17 +55,19 @@ function ToolbarButton({
   title?: string
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      title={title}
-      className={`p-1.5 rounded hover:bg-muted transition-colors ${
-        active ? "bg-muted text-foreground" : "text-muted-foreground"
-      } ${disabled ? "opacity-50 cursor-not-allowed" : ""}`}
-    >
-      {children}
-    </button>
+    <Tip label={title}>
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={disabled}
+        aria-label={title}
+        className={`p-1.5 rounded hover:bg-muted transition-colors ${
+          active ? "bg-muted text-foreground" : "text-muted-foreground"
+        } ${disabled ? "opacity-50 cursor-not-allowed" : ""}`}
+      >
+        {children}
+      </button>
+    </Tip>
   )
 }
 
@@ -332,7 +335,7 @@ export function MarkdownViewer({ value, onClick, className = "" }: MarkdownViewe
       {editor ? (
         <EditorContent editor={editor} />
       ) : (
-        <p className="text-sm text-muted-foreground italic">No description</p>
+        <p className="text-sm italic">No description</p>
       )}
     </div>
   )

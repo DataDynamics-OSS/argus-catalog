@@ -1,5 +1,6 @@
 "use client"
 
+import { Tip } from "@/components/tip"
 import * as React from "react"
 import { Eye, EyeOff } from "lucide-react"
 
@@ -28,12 +29,12 @@ export function PasswordInput({
     <div className={cn("relative rounded-md", className)}>
       <input
         type={showPassword ? "text" : "password"}
-        className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-hidden disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40"
+        className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-placeholder focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-hidden disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40"
         ref={ref}
         disabled={disabled}
         {...props}
       />
-      <Button
+      <Tip label={showPassword ? "비밀번호 숨기기" : "비밀번호 보기"}><Button
         type="button"
         size="icon"
         variant="ghost"
@@ -43,7 +44,7 @@ export function PasswordInput({
         aria-label={showPassword ? "비밀번호 숨기기" : "비밀번호 보기"}
       >
         {showPassword ? <Eye size={18} /> : <EyeOff size={18} />}
-      </Button>
+      </Button></Tip>
     </div>
   )
 }

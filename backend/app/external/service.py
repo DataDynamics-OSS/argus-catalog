@@ -108,13 +108,17 @@ async def _resolve_dataset_id(
             select(Dataset.id, Dataset.urn).where(Dataset.id == identifier)
         )
         row = result.first()
-        return (row[0], row[1]) if row else None
+        if row is None:
+            return None
+        _remember_urn(row[0], row[1])
+        return (row[0], row[1])
 
     # URN 조회 — 먼저 매핑 캐시 확인
     mapping_key = f"urn_map:{identifier}"
     cached_id = await cache.get(mapping_key)
     if cached_id is not None and cached_id.get("urn"):
         logger.debug("URN 매핑 캐시 적중: urn=%s dataset_id=%s", identifier, cached_id["dataset_id"])
+        _remember_urn(cached_id["dataset_id"], cached_id["urn"], identifier)
         return (cached_id["dataset_id"], cached_id["urn"])
 
     # URN 으로 DB 조회 (unique 인덱스 컬럼 — 빠름)
@@ -152,7 +156,33 @@ async def _resolve_dataset_id(
     # URN→ID 매핑을 캐시 (가볍고 수명이 김)
     # 정규 URN 도 함께 저장 — 캐시 적중 시에도 입력(옛/별칭) URN 이 아닌 정규 URN 을 돌려준다
     await cache.put(mapping_key, {"dataset_id": row[0], "urn": row[1]})
+    _remember_urn(row[0], row[1], identifier)
     return (row[0], row[1])
+
+
+# 캐시에 올린 데이터셋의 id → (정규 URN, 조회에 쓰인 URN들). 스키마가 바뀐 데이터셋을 id 로만 알 때
+# (SQLAlchemy 커밋 이벤트) URN 기준 캐시 키를 DB 조회 없이 지우려고 둔다. 데이터셋 수만큼만 자란다.
+_urns_by_id: dict[int, set[str]] = {}
+
+
+def _remember_urn(dataset_id: int, urn: str, alias: str | None = None) -> None:
+    keys = _urns_by_id.setdefault(int(dataset_id), set())
+    keys.add(urn)
+    if alias and alias != urn:
+        keys.add(alias)
+
+
+def forget_dataset_nowait(dataset_id: int) -> int:
+    """데이터셋 하나의 외부 API 캐시(메타데이터·Avro·URN 매핑)를 즉시 지운다. 지운 항목 수.
+
+    스키마·설명·Avro 편집본이 바뀐 커밋 직후 ``app.schema_registry.changes`` 가 부른다(동기 — 이벤트 루프 스레드 전용).
+    """
+    cache = get_cache()
+    removed = 0
+    for urn in _urns_by_id.pop(int(dataset_id), set()):
+        for prefix in ("metadata:", "avro:", "urn_map:"):
+            removed += int(cache.discard(f"{prefix}{urn}"))
+    return removed
 
 
 # ---------------------------------------------------------------------------
@@ -256,12 +286,6 @@ async def get_dataset_avro_schema(
 # ---------------------------------------------------------------------------
 
 
-async def invalidate_dataset_avro(urn: str) -> None:
-    """Avro 캐시 한 건 무효화 — 속성(Avro 편집본) 변경 직후 외부 API 가 옛 값을 주지 않도록."""
-    removed = await get_cache().invalidate(f"avro:{urn}")
-    logger.debug("Avro 캐시 무효화 요청: urn=%s removed=%s", urn, removed)
-
-
 _MD_RULES: list[tuple[re.Pattern, str]] = [
     # 화면 features/search/excerpt.ts ``markdownToPlain`` 과 같은 순서·규칙(JS \w 는 ASCII 라 re.ASCII)
     (re.compile(r"```[\s\S]*?```"), " "),                          # 코드 블록
@@ -348,7 +372,7 @@ async def _build_avro_schema(session: AsyncSession, dataset_id: int) -> dict | N
     avro_fields = []
     for s in schema_rows:
         avro_type = _resolve_avro_type(s.field_type, s.native_type, s.nullable == "true")
-        field: dict = {"name": s.field_path, "type": avro_type}
+        field: dict = {"name": avro_name(s.field_path), "type": avro_type}
         if isinstance(avro_type, list) and avro_type and avro_type[0] == "null":
             field["default"] = None     # null 이 먼저인 union 의 기본값 (화면 Avro 탭과 동일)
         if s.description:
@@ -357,14 +381,15 @@ async def _build_avro_schema(session: AsyncSession, dataset_id: int) -> dict | N
 
     # qualified_name 은 ``{datasource_id}.{path}`` 형식. datasource_id 를 prefix 로 떼어
     # 내고 나머지를 path 로 본다. UI 의 AvroSchemaCard 와 동일한 통일된 표기:
-    #   - namespace = datasource_id (그대로)
-    #   - name      = path (Avro spec 상 dot 불가하므로 ``.`` → ``_`` 로 sanitize)
+    #   - namespace = datasource_id 를 Avro 이름 규칙으로 (``mysql-19d0…`` → ``mysql_19d0…``)
+    #   - name      = path 를 Avro 이름 규칙으로 (``.`` 등 → ``_``)
+    # 데이터소스 ID 에는 항상 ``-`` 가 있어, 그대로 쓰면 Java Avro·fastavro 가 스키마를 거부했다(DEF-040).
     qn = row.qualified_name or row.name or ""
     datasource_id_str = row.datasource_id_str or ""
     prefix = f"{datasource_id_str}."
     path = qn[len(prefix):] if datasource_id_str and qn.startswith(prefix) else qn
-    record_name = (path or row.name or "").replace(".", "_")
-    namespace = datasource_id_str or "default"
+    record_name = avro_name(path or row.name or "")
+    namespace = avro_namespace(datasource_id_str)
 
     return {
         "type": "record",
@@ -373,6 +398,23 @@ async def _build_avro_schema(session: AsyncSession, dataset_id: int) -> dict | N
         "doc": _description_doc(row.description) or f"Avro schema for {path or row.name}",
         "fields": avro_fields,
     }
+
+
+_AVRO_INVALID_CHARS = re.compile(r"[^A-Za-z0-9_]")
+
+
+def avro_name(text: str) -> str:
+    """Avro 이름 규칙(``[A-Za-z_][A-Za-z0-9_]*``)에 맞춘 이름 — 그 밖의 문자는 ``_``, 숫자로 시작하면 앞에 ``_``.
+
+    화면 Avro 탭(``frontend/apps/web/features/datasets/avro.ts`` ``avroName``)과 같은 규칙.
+    """
+    name = _AVRO_INVALID_CHARS.sub("_", text or "") or "_"
+    return f"_{name}" if name[0].isdigit() else name
+
+
+def avro_namespace(text: str) -> str:
+    """점으로 나눈 각 부분을 ``avro_name`` 으로 맞춘 네임스페이스 — 예: ``s3-1a2b`` → ``s3_1a2b``."""
+    return ".".join(avro_name(p) for p in (text or "").split(".") if p) or "default"
 
 
 def _native_to_avro(type_text: str | None):
@@ -479,6 +521,28 @@ async def _build_metadata(session: AsyncSession, dataset_id: int) -> dict | None
             )
             properties = {}
 
+    # AI-Ready 점검 요약(TODO-096 3단계, 검토 문서 §6.2) — 이용자가 AI 학습에 써도 되는 상태인지 판단하는 근거.
+    # 점검이 실패해도 메타데이터 응답은 막지 않는다.
+    ai_ready_summary = None
+    try:
+        from app.catalog import ai_ready_check
+
+        check = await ai_ready_check.evaluate_dataset(session, dataset_id)
+        if check is not None:
+            ai_ready_summary = {
+                "ready": check["min_requirements"]["met"]
+                and not [i for i in check["items"] if i["level"] == "REQUIRED" and i["status"] not in ("PASS", "NA")],
+                "required_rate": check["required"]["rate"],
+                "recommended_rate": check["recommended"]["rate"],
+                "min_requirements_met": check["min_requirements"]["met"],
+                "unmet_required": [
+                    {"key": i["key"], "status": i["status"], "reason": i["evidence"]}
+                    for i in check["items"] if i["level"] == "REQUIRED" and i["status"] not in ("PASS", "NA")
+                ],
+            }
+    except Exception:  # noqa: BLE001 — 점검 모듈 오류가 외부 메타데이터 API 를 깨지 않게
+        logger.exception("외부 메타데이터의 AI-Ready 요약 계산 실패: dataset_id=%d", dataset_id)
+
     return {
         "dataset_id": row.id,
         "urn": row.urn,
@@ -516,4 +580,5 @@ async def _build_metadata(session: AsyncSession, dataset_id: int) -> dict | None
         "tags": tags,
         "owners": owners,
         "properties": properties,
+        "ai_ready": ai_ready_summary,
     }

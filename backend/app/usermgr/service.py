@@ -20,12 +20,13 @@ SQLAlchemy 비동기 세션을 통해 이뤄진다.
 import logging
 from datetime import datetime, timezone
 
+from sqlalchemy import delete as sql_delete
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.passwords import hash_password_async, password_problem
 from app.core.sql import LIKE_ESCAPE, like_contains
-from app.usermgr.models import ArgusRole, ArgusUser
+from app.usermgr.models import ArgusRole, ArgusUser, ArgusUserPreference
 from app.usermgr.schemas import (
     PaginatedUserResponse,
     RoleName,
@@ -127,6 +128,18 @@ async def _get_role_by_role_id(session: AsyncSession, role_id: str) -> ArgusRole
     return result.scalars().first()
 
 
+async def _assignable_role(session: AsyncSession, role_id: str) -> ArgusRole | None:
+    """사용자에게 줄 수 있는 역할 행 — 기본 역할이거나 기반 역할이 있는 사용자 정의 역할(TODO-124). 아니면 None."""
+    from app.permissions import roles as custom_roles
+    role = await _get_role_by_role_id(session, role_id)
+    if role is None:
+        return None
+    if role_id in custom_roles.builtin_role_ids() or role_id in await custom_roles.load_custom_roles(session):
+        return role
+    logger.warning("기반 역할이 없는 역할은 줄 수 없음: %s", role_id)
+    return None
+
+
 async def _build_user_response(session: AsyncSession, user: ArgusUser) -> UserResponse:
     """``ArgusUser`` ORM 객체에서 역할명을 resolve 해 ``UserResponse`` 로 변환."""
     result = await session.execute(select(ArgusRole).where(ArgusRole.id == user.role_id))
@@ -171,10 +184,10 @@ async def add_user(session: AsyncSession, req: UserAddRequest) -> UserResponse:
     Raises:
         ValueError: 지정된 역할이 DB 에 없으면 발생. 라우터가 400 으로 변환.
     """
-    role = await _get_role_by_role_id(session, req.role.value)
+    role = await _assignable_role(session, req.role)
     if not role:
-        logger.warning("add_user: 알 수 없는 역할 '%s'", req.role.value)
-        raise ValueError(f"Role '{req.role.value}' not found")
+        logger.warning("add_user: 알 수 없는 역할 '%s'", req.role)
+        raise ValueError(f"Role '{req.role}' not found")
     # 최초 로그인 때 바꾸게 하는 임시 비밀번호(LDAP 동기화의 생년월일 등)가 아니면 정책을 강제한다
     if not req.must_change_password and (problem := password_problem(req.password)):
         logger.warning("add_user: 비밀번호 정책 위반 username=%s", req.username)
@@ -247,6 +260,9 @@ async def delete_user(session: AsyncSession, user_id: int, transfer_to: str | No
         logger.info("소유 자산 이관: %s → %s %s", user.username, transfer_to,
                     {a["key"]: a["count"] for a in owned})
 
+    # 로컬 사용자의 UI 설정(키 sub=str(id)) 도 함께 지운다(DEF-009). Keycloak 사용자는 sub 가 UUID 라
+    # 이 행이 없고, 같은 사람이 다시 로그인하면 그대로 쓰는 것이 맞으므로 두지 않는다.
+    await session.execute(sql_delete(ArgusUserPreference).where(ArgusUserPreference.sub == str(user.id)))
     await session.delete(user)
     await session.commit()
     logger.info("사용자 삭제: %s (id=%d)", user.username, user.id)
@@ -302,20 +318,20 @@ async def change_role(
     # 마지막 관리자 보호: admin → 다른 역할로 바꾸려는 경우 차단
     from app.usermgr.schemas import RoleName
     admin_role = await _get_role_by_role_id(session, RoleName.ADMIN.value)
-    if admin_role and user.role_id == admin_role.id and req.role.value != RoleName.ADMIN.value:
+    if admin_role and user.role_id == admin_role.id and req.role != RoleName.ADMIN.value:
         if await _is_last_admin(session, user_id):
-            logger.warning("change_role 차단(마지막 관리자 강등): user_id=%d target=%s", user_id, req.role.value)
+            logger.warning("change_role 차단(마지막 관리자 강등): user_id=%d target=%s", user_id, req.role)
             raise ValueError("마지막 활성 관리자의 역할은 바꿀 수 없습니다. 활성 관리자가 한 명 이상 있어야 합니다.")
 
-    role = await _get_role_by_role_id(session, req.role.value)
+    role = await _assignable_role(session, req.role)
     if not role:
-        logger.warning("change_role: 알 수 없는 역할 '%s' user_id=%d", req.role.value, user_id)
-        raise ValueError(f"Role '{req.role.value}' not found")
+        logger.warning("change_role: 알 수 없는 역할 '%s' user_id=%d", req.role, user_id)
+        raise ValueError(f"Role '{req.role}' not found")
 
     user.role_id = role.id
     await session.commit()
     await session.refresh(user)
-    logger.info("사용자 역할 변경: %s -> %s (id=%d)", user.username, req.role.value, user.id)
+    logger.info("사용자 역할 변경: %s -> %s (id=%d)", user.username, req.role, user.id)
     return await _build_user_response(session, user)
 
 

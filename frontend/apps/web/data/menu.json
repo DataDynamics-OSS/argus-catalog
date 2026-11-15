@@ -137,6 +137,18 @@
           "title": "알림",
           "url": "/dashboard/alerts",
           "icon": "Bell"
+        },
+        {
+          "id": "ai-ready",
+          "title": "AI-Ready 점검",
+          "url": "/dashboard/ai-ready",
+          "icon": "ListChecks"
+        },
+        {
+          "id": "data-reports",
+          "title": "오류 신고 처리",
+          "url": "/dashboard/data-reports",
+          "icon": "MessageSquareWarning"
         }
       ]
     },
@@ -149,6 +161,18 @@
           "title": "사용자 관리",
           "url": "/dashboard/users",
           "icon": "Users"
+        },
+        {
+          "id": "sync-runs",
+          "title": "메타데이터 수집",
+          "url": "/dashboard/sync-runs",
+          "icon": "Activity"
+        },
+        {
+          "id": "quality-runs",
+          "title": "데이터 품질",
+          "url": "/dashboard/quality-runs",
+          "icon": "ClipboardCheck"
         },
         {
           "id": "settings",

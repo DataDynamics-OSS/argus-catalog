@@ -62,6 +62,23 @@ external:
     ttl_seconds: 300
     enabled: true
 
+# Confluent 호환 스키마 레지스트리 (/api/v1/schema-registry) — 읽기 전용. subject = 데이터셋 URN
+schema_registry:
+  enabled: true
+  basic_auth: true                  # 사용자 이름·비밀번호 Basic 인증 허용(Bearer 토큰은 항상 허용)
+  basic_auth_cache_seconds: 300     # 검증한 Basic 자격을 기억하는 시간(초)
+  immutable_cache_size: 10000       # id·버전 번호 조회 응답 캐시 크기(내용이 바뀌지 않는 응답)
+  immutable_cache_seconds: 86400
+  register_on_change: true          # 스키마가 바뀐 커밋 뒤 새 버전을 미리 등록
+
+# API 키 — 백엔드를 부르는 프로그램(수집·AI·품질·SDK·NiFi 등)의 자격. 설정 > API 키에서 발급
+api_keys:
+  enabled: true
+  cache_seconds: 30                 # 검증 결과 기억 시간(초) — 다른 서버의 중지·폐기는 최대 이만큼 늦게 반영
+  last_used_interval_seconds: 300   # 마지막 사용 시각을 DB 에 쓰는 최소 간격(초)
+  default_expire_days: 365          # 발급 때 만료를 정하지 않으면 쓰는 기본 일수(0 = 무기한, max_expire_days 보다 길면 그 값으로)
+  max_expire_days: 0                # 허용하는 최대 일수(0 = 제한 없음, 무기한 허용)
+
 # Object Storage (MinIO / S3) — 최초 seed 기본값. 이후 DB 설정값으로 덮어쓴다.
 object_storage:
   endpoint: ${os.endpoint:http://localhost:9000}
@@ -76,10 +93,9 @@ object_storage:
 # 변경 관리(change-mgmt) 결재/통지 워크플로우용 Temporal 설정
 # 개발 스택 기동: docker compose -f backend/deploy/temporal/docker-compose.yml up -d
 # AI 어시스턴트 (argus-catalog-ai-service 의 assistant 서버, 예: http://<호스트>:8930) — 설정 시 채팅을 프록시.
-# 비워 두면 서버 내장 단순 대화로 폴백한다. agent.url 은 이전 이름(한 버전 동안 유지).
+# 비워 두면 서버 내장 단순 대화로 폴백한다. (이전 이름 agent.url 은 0.7.0 에서 제거)
 assistant:
   service.url: ${assistant.service.url:}
-  agent.url: ${assistant.agent.url:}
 
 temporal:
   enabled: ${temporal.enabled:true}
@@ -108,3 +124,10 @@ federation:
   export_datasource_allowlist: ${federation.export_datasource_allowlist:}
   breaker_threshold: ${federation.breaker_threshold:3}
   breaker_cooldown_seconds: ${federation.breaker_cooldown_seconds:60}
+
+# 품질 진단 — 쿼리는 별도 서비스인 품질 워커(extensions/argus-catalog-quality-worker)가 Trino 에 낸다.
+# 아래 값은 카탈로그가 실행 계획에 실어 워커에 보낸다(폴링 간격 등 워커 자신의 설정은 워커의 config 에 있다).
+# trino_source: Trino 리소스 그룹 선택자가 볼 식별값(X-Trino-Source·클라이언트 태그).
+quality:
+  trino_query_timeout_minutes: ${quality.trino_query_timeout_minutes:30}
+  trino_source: ${quality.trino_source:argus-dq}

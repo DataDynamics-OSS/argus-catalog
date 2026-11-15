@@ -15,6 +15,7 @@
 
 import datetime as _dt
 import logging
+import re
 
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select
@@ -23,20 +24,29 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agents import discovery
 from app.agents.models import (
     AIAgent,
+    AIAgentDataAccess,
     AIAgentEval,
     AIAgentHookEvent,
     AIAgentInvocationLog,
     AIAgentLineage,
     AIAgentMcpServer,
+    AIAgentSkill,
     AIAgentStatusHistory,
     AIAgentTool,
     AIAgentVersion,
 )
 from app.agents.schemas import (
-    AgentCardProvider,
+    CATALOG_CARD_EXTENSION_URI,
+    AgentCardCapabilities,
+    AgentCardExtension,
+    AgentCardInterface,
     AgentCardSkill,
+    AgentOwnerInfo,
+    AgentResourceUsage,
     AIAgentCard,
     AIAgentCreate,
+    AIAgentDataAccessCreate,
+    AIAgentDataAccessResponse,
     AIAgentDetailResponse,
     AIAgentEvalCreate,
     AIAgentEvalResponse,
@@ -48,6 +58,9 @@ from app.agents.schemas import (
     AIAgentMcpServerUpdate,
     AIAgentMeteringResponse,
     AIAgentPolicyBundle,
+    AIAgentSkillCreate,
+    AIAgentSkillResponse,
+    AIAgentSkillUpdate,
     AIAgentStats,
     AIAgentStatusHistoryResponse,
     AIAgentSummary,
@@ -61,6 +74,8 @@ from app.agents.schemas import (
     HookEventResponse,
     NameCount,
     PaginatedAIAgents,
+    PolicyDataAccess,
+    PolicyIdentity,
     PolicyMcpServer,
     PolicyTool,
 )
@@ -132,6 +147,8 @@ async def list_agents(
     owner_state: str | None = None,
     incomplete: bool = False,
     sort: str | None = None,
+    risk_tier: str | None = None,
+    autonomy_level: str | None = None,
 ) -> PaginatedAIAgents:
     """에이전트 목록(검색·필터·정렬·페이지네이션).
 
@@ -154,7 +171,8 @@ async def list_agents(
         base = base.where(AIAgent.framework == framework)
     if category:
         base = base.where(AIAgent.category == category)
-    base = governance.sql_filters(base, department=department, owner=owner, managed_by=managed_by)
+    base = governance.sql_filters(base, department=department, owner=owner, managed_by=managed_by,
+                                  risk_tier=risk_tier, autonomy_level=autonomy_level)
 
     # 계산 조건·정렬을 위해 SQL 조건에 맞는 전체를 읽은 뒤 메모리에서 거르고 페이지를 자른다
     agents = list((await session.execute(base)).scalars().all())
@@ -163,14 +181,30 @@ async def list_agents(
                                       incomplete=incomplete, sort=sort)
     logger.debug("AIAgent 목록: SQL 조건 일치 %d건 → 계산 조건 적용 후 %d건 (page=%d)", len(agents), len(rows), page)
     offset = (page - 1) * page_size
+    page_rows = rows[offset:offset + page_size]
+    owners = await _owner_infos(session, [a.owner_email for a in page_rows])
     items = []
-    for a in rows[offset:offset + page_size]:
+    for a in page_rows:
         item = AIAgentSummary.model_validate(a)
         f = facts[a.id]
         item.owner_state, item.completeness, item.missing_fields, item.max_risk = (
             f.owner_state, f.completeness, f.missing, f.max_risk)
+        item.owner = owners.get(a.owner_email.strip().lower()) if a.owner_email else None
         items.append(item)
     return PaginatedAIAgents(items=items, total=len(rows), page=page, page_size=page_size)
+
+
+async def _owner_infos(session: AsyncSession, emails: list[str | None]) -> dict[str, AgentOwnerInfo]:
+    """소유자 이메일들 → 등록 사용자 정보(소문자 이메일 키). 한 번의 IN 쿼리로 조회."""
+    from app.usermgr.models import ArgusUser
+
+    keys = {e.strip().lower() for e in emails if e and e.strip()}
+    if not keys:
+        return {}
+    users = (await session.execute(
+        select(ArgusUser).where(func.lower(ArgusUser.email).in_(keys))
+    )).scalars().all()
+    return {u.email.lower(): AgentOwnerInfo.model_validate(u) for u in users}
 
 
 async def get_agent_detail(session: AsyncSession, name: str) -> AIAgentDetailResponse | None:
@@ -227,14 +261,55 @@ async def get_agent_detail(session: AsyncSession, name: str) -> AIAgentDetailRes
     from app.mcp_servers.service import enrich_agent_links
 
     detail.mcp_servers = [AIAgentMcpServerResponse(**m) for m in await enrich_agent_links(session, list(mcps))]
-    detail.lineage = [AIAgentLineageResponse.model_validate(line) for line in lineage]
+    detail.lineage = await _resolve_lineage(session, lineage)
     detail.versions = [AIAgentVersionResponse.model_validate(v) for v in versions]
+    detail.skills = await _list_skills(session, agent.id)
+    detail.data_access = await _list_data_access(session, agent.id)
+    if agent.base_model_ref:
+        from app.models.models import RegisteredModel
+
+        model = await session.get(RegisteredModel, agent.base_model_ref)
+        detail.base_model_name = model.name if model else None
     from app.agents import governance
+
+    detail.identity_state = await governance.identity_state(session, agent)
 
     f = (await governance.facts_for(session, [agent]))[agent.id]
     detail.owner_state, detail.completeness, detail.missing_fields, detail.max_risk = (
         f.owner_state, f.completeness, f.missing, f.max_risk)
+    if agent.owner_email:
+        owners = await _owner_infos(session, [agent.owner_email])
+        detail.owner = owners.get(agent.owner_email.strip().lower())
     return detail
+
+
+async def _resolve_lineage(session: AsyncSession, rows) -> list[AIAgentLineageResponse]:
+    """리니지 대상(자유 문자열)을 카탈로그 엔티티로 해석해 ``target_id`` 를 채운다(화면 링크·검증 표시용).
+
+    agent 는 이름, model 은 등록 모델 이름·URN, dataset 은 데이터셋 URN·이름·정규화 이름으로 찾는다.
+    찾지 못하면 None(외부 대상이거나 오타).
+    """
+    from app.catalog.models import Dataset
+    from app.models.models import RegisteredModel
+
+    out = []
+    for line in rows:
+        item = AIAgentLineageResponse.model_validate(line)
+        ref = line.target_ref
+        if line.target_type == "agent":
+            q = select(AIAgent.id).where(AIAgent.name == ref)
+        elif line.target_type == "model":
+            q = select(RegisteredModel.id).where(
+                (RegisteredModel.name == ref) | (RegisteredModel.urn == ref), RegisteredModel.status != "deleted")
+        elif line.target_type == "dataset":
+            q = select(Dataset.id).where((Dataset.urn == ref) | (Dataset.name == ref) | (Dataset.qualified_name == ref))
+        else:
+            q = None
+        if q is not None:
+            ids = (await session.execute(q.limit(2))).scalars().all()
+            item.target_id = ids[0] if len(ids) == 1 else None  # 이름이 여러 개에 맞으면 연결하지 않는다
+        out.append(item)
+    return out
 
 
 async def update_agent(
@@ -523,6 +598,13 @@ async def get_stats(session: AsyncSession) -> AIAgentStats:
         by_status=await _group_count(session, AIAgent.status),
         by_framework=await _group_count(session, AIAgent.framework),
         by_category=await _group_count(session, AIAgent.category),
+        by_risk_tier=await _group_count(session, AIAgent.risk_tier),
+        unassessed_risk_count=await session.scalar(
+            select(func.count(AIAgent.id)).where(AIAgent.risk_tier.is_(None), AIAgent.status != "retired")) or 0,
+        high_risk_unassessed_count=await session.scalar(
+            select(func.count(AIAgent.id)).where(
+                AIAgent.risk_tier.in_(("high", "prohibited")), AIAgent.impact_assessed_at.is_(None),
+                AIAgent.status != "retired")) or 0,
         multi_agent_count=multi,
         hitl_required_count=hitl,
         total_invocations=int(invocations),
@@ -583,6 +665,240 @@ async def delete_mcp_server(session: AsyncSession, name: str, mcp_id: int) -> bo
 
 async def delete_lineage(session: AsyncSession, name: str, lineage_id: int) -> bool:
     return await _delete_child(session, AIAgentLineage, name, lineage_id)
+
+
+# ---------------------------------------------------------------------------
+# 서브리소스: 스킬 (A2A AgentSkill, TODO-024)
+# ---------------------------------------------------------------------------
+
+
+async def _list_skills(session: AsyncSession, agent_id: int) -> list[AIAgentSkillResponse]:
+    rows = (await session.execute(
+        select(AIAgentSkill).where(AIAgentSkill.agent_id == agent_id)
+        .order_by(AIAgentSkill.sort_order, AIAgentSkill.id)
+    )).scalars().all()
+    return [AIAgentSkillResponse.model_validate(r) for r in rows]
+
+
+def _clean_list(values: list[str] | None) -> list[str] | None:
+    """공백 제거·빈 값 제외·중복 제거(순서 유지). 결과가 비면 None."""
+    if values is None:
+        return None
+    out = list(dict.fromkeys(str(v).strip() for v in values if str(v).strip()))
+    return out or None
+
+
+async def add_skill(session: AsyncSession, name: str, req: AIAgentSkillCreate) -> AIAgentSkillResponse | None:
+    """스킬 추가. ``skill_key`` 를 비우면 이름에서 만든다. 키가 겹치면 ``ValueError``. 에이전트가 없으면 None."""
+    agent = await _get_agent_by_name(session, name)
+    if not agent:
+        return None
+    used = set((await session.execute(
+        select(AIAgentSkill.skill_key).where(AIAgentSkill.agent_id == agent.id))).scalars().all())
+    if req.skill_key:
+        if req.skill_key in used:
+            raise ValueError(f"스킬 ID '{req.skill_key}' 가 이미 있습니다")
+        key = req.skill_key
+    else:
+        key = _card_skill_id(req.name, used)
+    data = req.model_dump(exclude={"skill_key"})
+    for f in ("tags", "examples", "input_modes", "output_modes"):
+        data[f] = _clean_list(data[f])
+    skill = AIAgentSkill(agent_id=agent.id, skill_key=key, **data)
+    session.add(skill)
+    await session.commit()
+    await session.refresh(skill)
+    logger.info("AIAgent 스킬 추가됨: agent=%s skill=%s", name, key)
+    return AIAgentSkillResponse.model_validate(skill)
+
+
+async def update_skill(
+    session: AsyncSession, name: str, skill_id: int, req: AIAgentSkillUpdate
+) -> AIAgentSkillResponse | None:
+    """스킬 부분 수정(``skill_key`` 는 바꾸지 않는다 — 카드를 받아 간 쪽의 참조가 깨지지 않게). 없으면 None."""
+    agent = await _get_agent_by_name(session, name)
+    if not agent:
+        return None
+    skill = (await session.execute(
+        select(AIAgentSkill).where(AIAgentSkill.id == skill_id, AIAgentSkill.agent_id == agent.id)
+    )).scalars().first()
+    if not skill:
+        logger.warning("AIAgent 스킬 없음(수정): agent=%s id=%d", name, skill_id)
+        return None
+    data = req.model_dump(exclude_unset=True)
+    for f in ("tags", "examples", "input_modes", "output_modes"):
+        if f in data:
+            data[f] = _clean_list(data[f])
+    for k, v in data.items():
+        setattr(skill, k, v)
+    await session.commit()
+    await session.refresh(skill)
+    logger.info("AIAgent 스킬 수정됨: agent=%s skill=%s", name, skill.skill_key)
+    return AIAgentSkillResponse.model_validate(skill)
+
+
+async def delete_skill(session: AsyncSession, name: str, skill_id: int) -> bool:
+    return await _delete_child(session, AIAgentSkill, name, skill_id)
+
+
+# ---------------------------------------------------------------------------
+# 서브리소스: 데이터 접근 (TODO-019)
+# ---------------------------------------------------------------------------
+
+
+async def _list_data_access(session: AsyncSession, agent_id: int) -> list[AIAgentDataAccessResponse]:
+    """데이터 접근 목록 — 대상 데이터 소스·데이터셋 이름을 붙여 돌려준다."""
+    from app.catalog.models import Dataset, DatasetSchema, Datasource
+
+    rows = (await session.execute(
+        select(AIAgentDataAccess).where(AIAgentDataAccess.agent_id == agent_id).order_by(AIAgentDataAccess.id)
+    )).scalars().all()
+    ds_ids = [r.dataset_id for r in rows if r.dataset_id]
+    pii: set[int] = set()
+    if ds_ids:
+        pii = set((await session.execute(
+            select(DatasetSchema.dataset_id).where(
+                DatasetSchema.dataset_id.in_(ds_ids), DatasetSchema.pii_type.is_not(None),
+                DatasetSchema.pii_type != "")
+            .distinct()
+        )).scalars().all())
+    out = []
+    for r in rows:
+        item = AIAgentDataAccessResponse(
+            id=r.id, target_type="dataset" if r.dataset_id else "datasource",
+            datasource_id=r.datasource_id, dataset_id=r.dataset_id, access=r.access, description=r.description,
+        )
+        if r.dataset_id:
+            item.contains_pii = r.dataset_id in pii
+            ds = await session.get(Dataset, r.dataset_id)
+            if ds:
+                item.target_name, item.target_urn = ds.name, ds.urn
+                src = await session.get(Datasource, ds.datasource_id)
+                item.datasource_name = src.name if src else None
+        elif r.datasource_id:
+            src = await session.get(Datasource, r.datasource_id)
+            if src:
+                item.target_name, item.target_urn = src.name, src.datasource_id
+        out.append(item)
+    return out
+
+
+async def _resolve_data_target(session: AsyncSession, req: AIAgentDataAccessCreate) -> tuple[int | None, int | None]:
+    """요청의 대상 → (datasource_id, dataset_id) 내부 id. 찾지 못하면 ``ValueError``."""
+    from app.catalog.models import Dataset, Datasource
+
+    if req.dataset_id is not None or req.dataset_urn:
+        q = select(Dataset.id).where(
+            Dataset.id == req.dataset_id if req.dataset_id is not None else Dataset.urn == req.dataset_urn)
+        ds_id = (await session.execute(q)).scalars().first()
+        if ds_id is None:
+            raise ValueError(f"데이터셋을 찾을 수 없습니다: {req.dataset_urn or req.dataset_id}")
+        return None, ds_id
+    if req.datasource_id is not None:
+        q = select(Datasource.id).where(Datasource.id == req.datasource_id)
+    else:
+        # 이름은 고유하지 않으므로 datasource_id(식별 문자열)로도 찾는다
+        q = select(Datasource.id).where(
+            (Datasource.name == req.datasource_name) | (Datasource.datasource_id == req.datasource_name))
+    src_ids = (await session.execute(q)).scalars().all()
+    if not src_ids:
+        raise ValueError(f"데이터 소스를 찾을 수 없습니다: {req.datasource_name or req.datasource_id}")
+    if len(src_ids) > 1:
+        raise ValueError(f"같은 이름의 데이터 소스가 여러 개입니다: {req.datasource_name} — 식별 ID 로 지정하세요")
+    return src_ids[0], None
+
+
+async def add_data_access(
+    session: AsyncSession, name: str, req: AIAgentDataAccessCreate
+) -> AIAgentDataAccessResponse | None:
+    """데이터 접근 추가(정책 버전 갱신). 대상이 없거나 이미 등록돼 있으면 ``ValueError``. 에이전트가 없으면 None."""
+    agent = await _get_agent_by_name(session, name)
+    if not agent:
+        return None
+    src_id, ds_id = await _resolve_data_target(session, req)
+    dup = (await session.execute(select(AIAgentDataAccess.id).where(
+        AIAgentDataAccess.agent_id == agent.id,
+        AIAgentDataAccess.datasource_id.is_(None) if src_id is None else AIAgentDataAccess.datasource_id == src_id,
+        AIAgentDataAccess.dataset_id.is_(None) if ds_id is None else AIAgentDataAccess.dataset_id == ds_id,
+    ))).scalars().first()
+    if dup:
+        raise ValueError("이미 등록된 데이터 접근입니다 — 기존 항목을 지우고 다시 추가하세요")
+    row = AIAgentDataAccess(agent_id=agent.id, datasource_id=src_id, dataset_id=ds_id,
+                            access=req.access, description=req.description)
+    session.add(row)
+    _bump_policy_version(agent)  # 정책 번들의 data_access 변경
+    await session.commit()
+    logger.info("AIAgent 데이터 접근 추가됨: agent=%s datasource=%s dataset=%s access=%s",
+                name, src_id, ds_id, req.access)
+    items = await _list_data_access(session, agent.id)
+    return next(i for i in items if i.id == row.id)
+
+
+async def delete_data_access(session: AsyncSession, name: str, access_id: int) -> bool:
+    return await _delete_child(session, AIAgentDataAccess, name, access_id, affects_policy=True)
+
+
+async def resource_usage(
+    session: AsyncSession, *, dataset_id: int | None = None, datasource_id: int | None = None,
+    model_id: int | None = None,
+) -> list[AgentResourceUsage]:
+    """자원을 쓰는 에이전트(역방향 조회). 하나의 자원만 받는다.
+
+    - 데이터셋: 데이터 접근에 직접 등록된 것 + 소속 데이터 소스 전체를 등록한 것(via=datasource)
+      + 리니지에 데이터셋 URN·이름으로 적힌 것(via=lineage).
+    - 데이터 소스: 데이터 접근에 데이터 소스로 등록된 것.
+    - 모델: 기반 모델(base_model_ref)로 연결된 것 + 리니지에 모델 이름·URN 으로 적힌 것.
+    """
+    from app.catalog.models import Dataset
+
+    out: list[AgentResourceUsage] = []
+
+    def _add(agent: AIAgent, relation: str, via: str, description: str | None = None):
+        out.append(AgentResourceUsage(
+            agent_id=agent.id, agent_name=agent.name, display_name=agent.display_name, status=agent.status,
+            owner_email=agent.owner_email, relation=relation, via=via, description=description))
+
+    async def _access(cond, via: str):
+        rows = (await session.execute(
+            select(AIAgent, AIAgentDataAccess).join(AIAgentDataAccess, AIAgentDataAccess.agent_id == AIAgent.id)
+            .where(cond).order_by(AIAgent.name)
+        )).all()
+        for agent, acc in rows:
+            _add(agent, acc.access, via, acc.description)
+
+    async def _lineage(target_type: str, refs: list[str]):
+        refs = [r for r in refs if r]
+        if not refs:
+            return
+        rows = (await session.execute(
+            select(AIAgent, AIAgentLineage).join(AIAgentLineage, AIAgentLineage.agent_id == AIAgent.id)
+            .where(AIAgentLineage.target_type == target_type, AIAgentLineage.target_ref.in_(refs))
+            .order_by(AIAgent.name)
+        )).all()
+        for agent, line in rows:
+            _add(agent, line.relation, "lineage", line.description)
+
+    if dataset_id is not None:
+        ds = await session.get(Dataset, dataset_id)
+        if ds is None:
+            return []
+        await _access(AIAgentDataAccess.dataset_id == ds.id, "data_access")
+        await _access(AIAgentDataAccess.datasource_id == ds.datasource_id, "datasource")
+        await _lineage("dataset", [ds.urn, ds.name, ds.qualified_name])
+    elif datasource_id is not None:
+        await _access(AIAgentDataAccess.datasource_id == datasource_id, "data_access")
+    elif model_id is not None:
+        from app.models.models import RegisteredModel
+
+        model = await session.get(RegisteredModel, model_id)
+        if model is None:
+            return []
+        for agent in (await session.execute(
+            select(AIAgent).where(AIAgent.base_model_ref == model.id).order_by(AIAgent.name)
+        )).scalars().all():
+            _add(agent, "base_model", "base_model")
+        await _lineage("model", [model.name, model.urn])
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -793,33 +1109,95 @@ async def get_metering(session: AsyncSession, name: str) -> AIAgentMeteringRespo
 # ---------------------------------------------------------------------------
 
 
+# 카탈로그 protocol 값 → A2A protocolBinding. A2A 에이전트는 JSON-RPC 가 기본 바인딩이다.
+_CARD_BINDINGS = {"a2a": "JSONRPC", "jsonrpc": "JSONRPC", "grpc": "GRPC", "rest": "HTTP+JSON", "http": "HTTP+JSON"}
+
+
+def _card_skill_id(label: str, used: set[str]) -> str:
+    """기능 이름 → skill id(소문자·숫자·하이픈). 겹치면 뒤에 번호를 붙인다."""
+    base = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-") or "skill"
+    sid, n = base, 2
+    while sid in used:
+        sid, n = f"{base}-{n}", n + 1
+    used.add(sid)
+    return sid
+
+
+def default_modes(agent: AIAgent) -> tuple[list[str], list[str]]:
+    """에이전트 기본 입출력 MIME 형식. 등록값이 없으면 텍스트에, 입출력 스키마가 있으면 JSON 을 더한다."""
+    inp = list(agent.default_input_modes or []) or (
+        ["text/plain"] + (["application/json"] if agent.input_schema else []))
+    out = list(agent.default_output_modes or []) or (
+        ["text/plain"] + (["application/json"] if agent.output_schema else []))
+    return inp, out
+
+
 async def get_agent_card(session: AsyncSession, name: str) -> AIAgentCard | None:
-    """보유 메타데이터로부터 A2A 스타일 에이전트 카드를 조립한다(별도 저장 없음)."""
+    """보유 메타데이터로부터 A2A 1.0 에이전트 카드를 조립한다(별도 저장 없음).
+
+    - skills: 등록된 스킬(``catalog_ai_agent_skills``)을 내보낸다. 스킬이 하나도 없으면 외부에 제공하는
+      기능(``capabilities`` 목록)에서 만든다. 에이전트가 호출하는 도구(tools)는 내보내지 않는다.
+    - supportedInterfaces: 호출 주소가 있을 때만. 바인딩은 ``protocol`` 에서(``_CARD_BINDINGS``, 모르면 HTTP+JSON).
+    - 입출력 형식: 등록된 기본 형식, 없으면 텍스트가 기본이고 입출력 스키마가 있으면 ``application/json`` 을 더한다.
+    - provider: A2A 는 조직 URL 이 필수라 넣지 않고, 소유자·부서 등 카탈로그 정보는 카탈로그 확장 ``params`` 에 싣는다.
+    """
     agent = await _get_agent_by_name(session, name)
     if not agent:
         return None
-    tools = (
-        (
-            await session.execute(
-                select(AIAgentTool).where(AIAgentTool.agent_id == agent.id).order_by(AIAgentTool.id)
+    interfaces = []
+    if agent.endpoint:
+        binding = _CARD_BINDINGS.get((agent.protocol or "").strip().lower(), "HTTP+JSON")
+        interfaces.append(AgentCardInterface(url=agent.endpoint, protocol_binding=binding))
+    tags = [str(t) for t in (agent.tags or [])]
+    stored = await _list_skills(session, agent.id)
+    if stored:
+        skills = [
+            AgentCardSkill(
+                id=sk.skill_key, name=sk.name, description=sk.description or sk.name,
+                tags=list(sk.tags or []), examples=sk.examples or None,
+                input_modes=sk.input_modes or None, output_modes=sk.output_modes or None,
             )
-        )
-        .scalars()
-        .all()
+            for sk in stored
+        ]
+    else:
+        used: set[str] = set()
+        skills = [
+            AgentCardSkill(id=_card_skill_id(str(c), used), name=str(c), description=str(c), tags=tags)
+            for c in (agent.capabilities or []) if str(c).strip()
+        ]
+    input_modes, output_modes = default_modes(agent)
+    params = {
+        "name": agent.name,
+        "urn": agent.urn,
+        "displayName": agent.display_name,
+        "status": agent.status,
+        "owner": agent.owner_email,
+        "department": agent.department,
+        "category": agent.category,
+        "protocol": agent.protocol,
+        "invocationMethod": agent.invocation_method,
+        "authMethod": agent.auth_method,
+        "supportedLanguages": list(agent.supported_languages or []),
+        "capabilities": list(agent.capabilities or []),
+        "riskTier": agent.risk_tier,
+        "autonomyLevel": agent.autonomy_level,
+        # skills 를 등록 스킬에서 만들었는지(skills), 기능 목록에서 만들었는지(capabilities) — 가져오기에서 구분
+        "skillSource": "skills" if stored else ("capabilities" if skills else None),
+    }
+    extension = AgentCardExtension(
+        uri=CATALOG_CARD_EXTENSION_URI,
+        description="Argus Catalog 에이전트 정보(식별 이름·상태·소유자·부서·인증 방식·위험 등급 등)",
+        params={k: v for k, v in params.items() if v not in (None, [], "")},
     )
     return AIAgentCard(
-        name=agent.name,
-        display_name=agent.display_name,
-        description=agent.description,
+        name=agent.display_name or agent.name,
+        description=agent.description or agent.display_name or agent.name,
         version=agent.version,
-        url=agent.endpoint,
-        protocol=agent.protocol,
-        auth_method=agent.auth_method,
-        provider=AgentCardProvider(organization=agent.department, contact=agent.owner_email),
-        capabilities=list(agent.capabilities or []),
-        supported_languages=list(agent.supported_languages or []),
-        skills=[AgentCardSkill(name=t.name, description=t.description) for t in tools],
-        streaming=bool(agent.streaming),
+        supported_interfaces=interfaces,
+        capabilities=AgentCardCapabilities(streaming=bool(agent.streaming), extensions=[extension]),
+        default_input_modes=input_modes,
+        default_output_modes=output_modes,
+        skills=skills,
     )
 
 
@@ -913,6 +1291,17 @@ async def get_policy_bundle(session: AsyncSession, name: str) -> AIAgentPolicyBu
         auth_method=agent.auth_method,
         protocol=agent.protocol,
         endpoint=agent.endpoint,
+        data_access=[
+            PolicyDataAccess(target_type=d.target_type, name=d.target_name, urn=d.target_urn, access=d.access)
+            for d in await _list_data_access(session, agent.id)
+        ],
+        identity=PolicyIdentity(
+            type=agent.identity_type, principal=agent.identity_principal, provider=agent.identity_provider,
+            scopes=list(agent.granted_scopes or []), on_behalf_of=bool(agent.on_behalf_of),
+        ) if agent.identity_type or agent.identity_principal else None,
+        risk_tier=agent.risk_tier,
+        autonomy_level=agent.autonomy_level,
+        log_retention_days=agent.log_retention_days,
     )
 
 

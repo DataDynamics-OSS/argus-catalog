@@ -292,7 +292,7 @@ export function OciUsageGuide({ name, version, framework }: { name: string; vers
   return (
     <div className="max-w-4xl space-y-6">
       <div className="flex items-center justify-between gap-3">
-        <p className="text-sm text-muted-foreground">
+        <p className="text-sm">
           <strong className="text-foreground">{name}</strong> v{version} 을(를) 내려받아 쓰는 방법입니다.
         </p>
         <SegmentedToggle
@@ -340,7 +340,7 @@ print(f"{len(files)}개 파일")`,
           aria-expanded={restOpen}
         >
           REST API 로 직접 호출하기
-          <span className="text-xs text-muted-foreground">{restOpen ? "접기" : "펼치기"}</span>
+          <span className="text-xs">{restOpen ? "접기" : "펼치기"}</span>
         </button>
         {restOpen && (
           <div className="border-t p-4">

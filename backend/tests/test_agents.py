@@ -33,6 +33,8 @@ _TABLES = [
     "catalog_ai_agent_tools",
     "catalog_ai_agent_mcp_servers",
     "catalog_ai_agent_lineage",
+    "catalog_ai_agent_skills",
+    "catalog_ai_agent_data_access",
     "catalog_ai_agent_evals",
     "catalog_ai_agent_invocation_log",
     "catalog_ai_agent_hook_events",
@@ -159,9 +161,17 @@ async def _run() -> None:
         # --- Phase 2: agent card (A2A) ---
         card = await service.get_agent_card(db, "cs.refund")
         assert card is not None
-        assert card.streaming is True  # AIAgent.streaming 컬럼 값
-        assert [sk.name for sk in card.skills] == ["fetch_db"]
-        assert card.provider.organization == "CS"
+        assert card.capabilities.streaming is True  # AIAgent.streaming 컬럼 값
+        # skill 은 외부에 제공하는 기능(capabilities)에서 — 호출하는 도구(fetch_db)는 내보내지 않는다
+        assert [(sk.id, sk.name) for sk in card.skills] == [("refund", "refund")]
+        assert [(i.url, i.protocol_binding, i.protocol_version) for i in card.supported_interfaces] == [
+            ("https://x/api", "HTTP+JSON", "1.0")]
+        ext = card.capabilities.extensions[0]
+        assert ext.uri == s.CATALOG_CARD_EXTENSION_URI
+        assert (ext.params["name"], ext.params["department"], ext.params["owner"]) == ("cs.refund", "CS", "ops@x.com")
+        dumped = card.model_dump(mode="json")  # A2A 1.0 JSON 키(camelCase)
+        assert {"supportedInterfaces", "defaultInputModes", "defaultOutputModes"} <= dumped.keys()
+        assert "pushNotifications" in dumped["capabilities"]
 
         # --- Phase 3 연동 인터페이스: 정책 번들 pull ---
         policy = await service.get_policy_bundle(db, "cs.refund")

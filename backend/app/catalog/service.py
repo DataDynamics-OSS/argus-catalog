@@ -14,6 +14,8 @@ import time
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.catalog import ai_ready
+from app.core.text_list import encode_list
 from app.catalog.models import (
     DataPipeline,
     Dataset,
@@ -72,6 +74,7 @@ from app.catalog.schemas import (
     TagUsage,
     TagUsageRef,
 )
+from app.schema_registry.changes import mark_changed as mark_avro_changed
 
 logger = logging.getLogger(__name__)
 
@@ -215,7 +218,8 @@ async def test_datasource_connection(datasource_type: str, config: dict) -> dict
 
     백엔드가 드라이버를 보유한 유형만 직접 테스트한다 — PostgreSQL 호환
     (postgresql / greenplum / redshift, asyncpg)과 MySQL 호환(mysql / mariadb / starrocks, aiomysql).
-    그 외 유형은 metadata-sync 서비스가 담당하므로 여기서는 미지원(``unsupported=True``)으로 응답한다.
+    metadata-sync 가 수집하는 유형(``sync_runs_service.JOB_TYPES`` — Iceberg REST·Hive·Trino·Kudu·Oracle·MS-SQL 등)은 그 서비스의 ``/v2/test`` 로 확인하고,
+    그 밖의 유형은 미지원(``unsupported=True``)으로 응답한다.
     반환: ``{"ok", "message"[, "latency_ms"][, "unsupported"]}`` — 실패해도 예외를 내지 않는다.
     """
     import asyncio
@@ -226,6 +230,11 @@ async def test_datasource_connection(datasource_type: str, config: dict) -> dict
     pg_like = t in ("postgresql", "greenplum", "redshift")
     my_like = t in ("mysql", "mariadb", "starrocks")
     if not (pg_like or my_like):
+        from app.catalog.sync_runs_service import JOB_TYPES, test_via_sync_service
+
+        if t in JOB_TYPES:
+            # 백엔드에 드라이버가 없는 유형(Iceberg REST·Hive·Trino·Kudu·Oracle·MS-SQL 등)은 metadata-sync /v2/test 에 맡긴다
+            return await test_via_sync_service(t, config)
         logger.debug("연결 테스트 미지원 유형: type=%s", t)
         return {"ok": False, "unsupported": True,
                 "message": f"이 유형({datasource_type})은 서버에서 연결 테스트를 지원하지 않습니다."}
@@ -415,7 +424,25 @@ async def _datasource_reference_counts(session: AsyncSession, datasource_id: int
         select(func.count()).select_from(McpDeployment)
         .where(McpDeployment.datasource_id == datasource_id)
     )
+    # 수집 설정(범위·예약)과 실행 이력은 FK CASCADE 로 함께 지워진다 — 삭제 화면에서 알린다(DEF-051)
+    from app.catalog.models import DatasourceSyncRun, DatasourceSyncSetting
+
+    sync_runs = await session.scalar(
+        select(func.count()).select_from(DatasourceSyncRun)
+        .where(DatasourceSyncRun.datasource_id == datasource_id)
+    )
+    # 삭제 API 와 같은 판단 — 응답이 끊긴 실행은 먼저 실패 처리(목록 조회와 같은 정리)
+    from app.catalog.sync_runs_service import active_run_id
+
+    active_runs = 1 if await active_run_id(session, datasource_id) is not None else 0
+    sync_scheduled = await session.scalar(
+        select(DatasourceSyncSetting.schedule_enabled)
+        .where(DatasourceSyncSetting.datasource_id == datasource_id)
+    )
     return {
+        "sync_run_count": int(sync_runs or 0),
+        "active_sync_run_count": int(active_runs or 0),
+        "sync_scheduled": bool(sync_scheduled),
         "alert_rule_count": int(alert_rules or 0),
         "change_request_count": int(change_requests or 0),
         "model_count": int(models or 0),
@@ -477,11 +504,37 @@ async def _cleanup_datasource_references(
 ) -> None:
     """FK 가 없어 DB cascade 로 정리되지 않는 참조를 같은 트랜잭션에서 정리한다.
 
-    - 알림 규칙(scope DATASOURCE/DATASET): 대상이 사라져 영원히 발화하지 않으므로 삭제
-    - 댓글(entity_type='dataset', entity_id=str(id)): 다형 참조라 FK 없음 → 삭제
-    - 쿼리 리니지(argus_query_lineage)의 dataset_id: NULL 로(테이블명은 남아 재해소 가능)
+    - 알림 규칙(scope DATASOURCE): 대상이 사라져 영원히 발화하지 않으므로 삭제
+    - 소속 데이터셋 참조: ``_cleanup_dataset_references``(데이터셋 단건 삭제와 공용)
     - 관계 관측치(relationship_observations.datasource_id 문자열): 삭제
     """
+    from sqlalchemy import delete as _sql_delete
+    from sqlalchemy import text as _text
+
+    from app.alert.models import AlertRule
+
+    await session.execute(_sql_delete(AlertRule).where(
+        (AlertRule.scope_type == "DATASOURCE") & (AlertRule.scope_id == datasource.id)
+    ))
+    await _cleanup_dataset_references(session, dataset_ids)
+    # 데이터 소스 전체 삭제일 때만(이 함수는 데이터 소스 삭제 경로에서만 호출됨)
+    await session.execute(
+        _text("DELETE FROM relationship_observations WHERE datasource_id = :dsid"),
+        {"dsid": datasource.datasource_id},
+    )
+
+
+async def _cleanup_dataset_references(session: AsyncSession, dataset_ids: list[int]) -> None:
+    """데이터셋 삭제 시 FK 가 없어 DB cascade 로 정리되지 않는 참조를 같은 트랜잭션에서 정리한다.
+
+    데이터 소스 삭제와 데이터셋 단건 삭제가 함께 쓴다(DEF-059 — 예전엔 데이터 소스 삭제 경로에만 있었다).
+
+    - 알림 규칙(scope DATASET): 대상이 사라져 영원히 발화하지 않으므로 삭제
+    - 댓글(entity_type='dataset', entity_id=str(id)): 다형 참조라 FK 없음 → 삭제
+    - 쿼리 리니지(argus_query_lineage)의 dataset_id: NULL 로(테이블명은 남아 재해소 가능)
+    """
+    if not dataset_ids:
+        return
     from sqlalchemy import bindparam as _bindparam
     from sqlalchemy import delete as _sql_delete
     from sqlalchemy import text as _text
@@ -489,30 +542,21 @@ async def _cleanup_datasource_references(
     from app.alert.models import AlertRule
     from app.comments.models import Comment
 
-    rule_cond = (AlertRule.scope_type == "DATASOURCE") & (AlertRule.scope_id == datasource.id)
-    if dataset_ids:
-        rule_cond = or_(
-            rule_cond,
-            (AlertRule.scope_type == "DATASET") & AlertRule.scope_id.in_(dataset_ids),
+    rules = await session.execute(_sql_delete(AlertRule).where(
+        (AlertRule.scope_type == "DATASET") & AlertRule.scope_id.in_(dataset_ids),
+    ))
+    comments = await session.execute(_sql_delete(Comment).where(
+        Comment.entity_type == "dataset",
+        Comment.entity_id.in_([str(i) for i in dataset_ids]),
+    ))
+    for col in ("source_dataset_id", "target_dataset_id"):
+        await session.execute(
+            _text(f"UPDATE argus_query_lineage SET {col} = NULL WHERE {col} IN :ids")
+            .bindparams(_bindparam("ids", expanding=True)),
+            {"ids": dataset_ids},
         )
-    await session.execute(_sql_delete(AlertRule).where(rule_cond))
-
-    if dataset_ids:
-        await session.execute(_sql_delete(Comment).where(
-            Comment.entity_type == "dataset",
-            Comment.entity_id.in_([str(i) for i in dataset_ids]),
-        ))
-        for col in ("source_dataset_id", "target_dataset_id"):
-            await session.execute(
-                _text(f"UPDATE argus_query_lineage SET {col} = NULL WHERE {col} IN :ids")
-                .bindparams(_bindparam("ids", expanding=True)),
-                {"ids": dataset_ids},
-            )
-    # 데이터 소스 전체 삭제일 때만(이 함수는 데이터 소스 삭제 경로에서만 호출됨)
-    await session.execute(
-        _text("DELETE FROM relationship_observations WHERE datasource_id = :dsid"),
-        {"dsid": datasource.datasource_id},
-    )
+    logger.debug("데이터셋 참조 정리: datasets=%d alert_rules=%s comments=%s",
+                 len(dataset_ids), rules.rowcount, comments.rowcount)
 
 
 async def remove_datasource_samples(datasource_id_str: str) -> None:
@@ -632,9 +676,19 @@ async def get_datasource_dataset_count(session: AsyncSession, datasource_id: int
 # ---------------------------------------------------------------------------
 
 async def list_tags(session: AsyncSession) -> list[TagResponse]:
-    """전체 태그 목록을 이름 오름차순으로 조회."""
+    """전체 태그 목록을 이름 오름차순으로 조회. ``dataset_count`` 는 태그가 붙은 데이터셋 수(목록과 같이 removed 제외)."""
     result = await session.execute(select(Tag).order_by(Tag.name))
-    return [TagResponse.model_validate(t) for t in result.scalars().all()]
+    tags = result.scalars().all()
+    counts = dict((await session.execute(
+        select(DatasetTag.tag_id, func.count())
+        .join(Dataset, Dataset.id == DatasetTag.dataset_id)
+        .where(Dataset.status != "removed")
+        .group_by(DatasetTag.tag_id)
+    )).all())
+    return [
+        TagResponse.model_validate(t).model_copy(update={"dataset_count": counts.get(t.id, 0)})
+        for t in tags
+    ]
 
 
 class TagError(Exception):
@@ -834,9 +888,19 @@ class GlossaryError(Exception):
 
 
 async def list_glossary_terms(session: AsyncSession) -> list[GlossaryTermResponse]:
-    """모든 용어집 용어를 이름순으로 조회한다."""
+    """모든 용어집 용어를 이름순으로 조회한다. ``dataset_count`` 는 용어가 연결된 데이터셋 수(목록과 같이 removed 제외)."""
     result = await session.execute(select(GlossaryTerm).order_by(GlossaryTerm.name))
-    return [GlossaryTermResponse.model_validate(t) for t in result.scalars().all()]
+    terms = result.scalars().all()
+    counts = dict((await session.execute(
+        select(DatasetGlossaryTerm.term_id, func.count())
+        .join(Dataset, Dataset.id == DatasetGlossaryTerm.dataset_id)
+        .where(Dataset.status != "removed")
+        .group_by(DatasetGlossaryTerm.term_id)
+    )).all())
+    return [
+        GlossaryTermResponse.model_validate(t).model_copy(update={"dataset_count": counts.get(t.id, 0)})
+        for t in terms
+    ]
 
 
 async def _ensure_unique_glossary_name(
@@ -1106,6 +1170,7 @@ async def _build_dataset_response(
         quality_status=dataset.quality_status,
         show_quality_score=(dataset.show_quality_score == "true"),
         note=dataset.note,
+        **ai_ready.response_fields(dataset),
         datasource_properties=pp,
         schema_fields=schema_fields,
         tags=tags,
@@ -1182,6 +1247,7 @@ async def create_dataset(session: AsyncSession, req: DatasetCreate, created_by: 
             if req.datasource_properties else None
         ),
         status="active",
+        is_synced="true" if req.is_synced else "false",
     )
     session.add(dataset)
     await session.flush()
@@ -1236,7 +1302,7 @@ async def create_dataset(session: AsyncSession, req: DatasetCreate, created_by: 
     # 쿼리 lineage 의 dataset_id 점증 해석 — 이 데이터셋명과 매칭되는 lineage 엣지를 연결.
     try:
         from app.catalog.lineage_resolve import resolve_lineage_for_dataset
-        await resolve_lineage_for_dataset(session, dataset.id, dataset.qualified_name)
+        await resolve_lineage_for_dataset(session, dataset.id, dataset.qualified_name, dataset.catalog_id)
     except Exception as e:
         logger.warning("생성 시 리니지 해석 실패 (%s): %s", dataset.name, e)
 
@@ -1282,9 +1348,11 @@ async def get_dataset_by_urn(session: AsyncSession, urn: str) -> DatasetResponse
 
 
 async def update_dataset(
-    session: AsyncSession, dataset_id: int, req: DatasetUpdate
+    session: AsyncSession, dataset_id: int, req: DatasetUpdate, actor: str | None = None,
 ) -> DatasetResponse | None:
     """데이터셋 부분 수정 — None 인 필드는 변경하지 않는다. 없으면 None.
+
+    '버전'·'버전 노트'가 바뀌면 데이터 버전 이력에 남긴다(``ai_ready.record_version``, ``actor`` 가 바꾼 사람).
 
     qualified_name 이 바뀌면 URN 을 다시 만든다(origin 은 URN 에 없어 불변). 커밋 후 재임베딩한다.
     """
@@ -1321,10 +1389,15 @@ async def update_dataset(
             _json.dumps(req.datasource_properties, ensure_ascii=False)
             if req.datasource_properties else None
         )
+    newly_removed = False
     if req.status is not None:
+        newly_removed = req.status.value == "removed" and dataset.status != "removed"
         dataset.status = req.status.value
+    if req.is_synced is not None:
+        dataset.is_synced = "true" if req.is_synced else "false"
 
     # --- 확장 메타데이터 (단순 passthrough; None 이면 미변경) ---
+    _LIST_FIELDS = ("pii_fields", "compliance_tags")
     _ext_fields = (
         "ingestion_frequency", "ingestion_time", "ingestion_day", "ingestion_timezone",
         "ingestion_cron", "ingestion_mode", "update_type", "freshness_sla",
@@ -1333,15 +1406,24 @@ async def update_dataset(
         "sensitivity", "pii_fields", "compliance_tags",
         "tier", "certification", "steward", "quality_status", "note",
     )
+    # 요청에 명시한 항목만 반영한다 — 화면에서 값을 비우고 저장하면(null) 지운다(DEF-102).
+    # 수집(metadata-sync) 등 프로그램 호출은 이 항목을 보내지 않거나 값을 보내므로 영향이 없다.
+    sent = req.model_fields_set
     for f in _ext_fields:
-        v = getattr(req, f, None)
-        if v is not None:
-            setattr(dataset, f, v)
+        if f in sent:
+            value = getattr(req, f)
+            if f in _LIST_FIELDS:
+                value = encode_list(value)  # 목록 → JSON 배열 문자열(값 안의 쉼표 보존, TODO-143)
+            setattr(dataset, f, value)
     # bool → "true"/"false" 문자열로 저장
     if req.contains_pii is not None:
         dataset.contains_pii = "true" if req.contains_pii else "false"
     if req.show_quality_score is not None:
         dataset.show_quality_score = "true" if req.show_quality_score else "false"
+    # AI-Ready 항목 — 명시한 null 은 지움, 시간범위 앞뒤가 바뀌면 ValueError(라우터가 422)
+    before_version = (dataset.data_version, dataset.version_notes)
+    ai_ready.apply_update(dataset, req)
+    await ai_ready.record_version(session, dataset, before_version, actor)
 
     # qualified_name 이 바뀔 때만 URN 을 재생성한다.
     # origin 은 더 이상 URN 에 포함되지 않으므로 승격(origin 변경) 시 URN 은 불변이다.
@@ -1359,6 +1441,10 @@ async def update_dataset(
             # 갱신 때 접두사 없는 경로(db.t)를 보내 생성 시와 형식이 달라졌다.
             dataset.qualified_name = f"{prefix}{path}"
 
+    if newly_removed:
+        # 외부 metadata-sync 는 원본에서 사라진 테이블을 이 API(status=removed)로 표시한다 — 알림 규칙 평가(DEF-055)
+        await evaluate_dataset_removed_alerts(session, dataset.id)
+
     await session.commit()
     await session.refresh(dataset)
     logger.info("데이터셋 수정: %s (id=%d)", dataset.name, dataset.id)
@@ -1371,7 +1457,11 @@ async def update_dataset(
 
 
 async def delete_dataset(session: AsyncSession, dataset_id: int) -> bool:
-    """데이터셋과 모든 연관 관계(태그, 소유자, 스키마 등 — DB CASCADE)를 삭제한다. 없으면 False."""
+    """데이터셋과 모든 연관 관계(태그, 소유자, 스키마, 변경 요청 등 — DB CASCADE)를 삭제한다. 없으면 False.
+
+    FK 가 없는 참조(댓글·알림 규칙·쿼리 리니지)는 ``_cleanup_dataset_references`` 로 정리하고,
+    함께 지워지는 변경 요청의 진행 중 결재 워크플로우는 커밋 뒤 취소한다.
+    """
     result = await session.execute(select(Dataset).where(Dataset.id == dataset_id))
     dataset = result.scalars().first()
     if not dataset:
@@ -1380,12 +1470,21 @@ async def delete_dataset(session: AsyncSession, dataset_id: int) -> bool:
     # 연쇄 삭제될 CR 의 진행 중 워크플로우 — 삭제 뒤엔 CR 행이 없어 미리 모은다(커밋 후 취소)
     from app.change_mgmt.service import cancel_workflows_best_effort, in_flight_workflow_ids
     workflow_ids = await in_flight_workflow_ids(session, [dataset.id])
+    # 댓글·DATASET 범위 알림 규칙·쿼리 리니지 참조 — FK 가 없어 직접 정리(DEF-059)
+    await _cleanup_dataset_references(session, [dataset.id])
     await session.delete(dataset)
     await session.commit()
     logger.info("데이터셋 삭제: %s (id=%d)", dataset.name, dataset.id)
     # 삭제가 확정된 뒤 best-effort 취소 — Temporal 장애여도 삭제는 성공(IT CHG-T26)
     await cancel_workflows_best_effort(workflow_ids)
     return True
+
+
+def _csv_values(value: str | None) -> list[str]:
+    """쉼표로 구분한 필터 값을 목록으로(빈 항목·앞뒤 공백 제거). 값이 없으면 빈 목록."""
+    if not value:
+        return []
+    return [v.strip() for v in value.split(",") if v.strip()]
 
 
 async def list_datasets(
@@ -1400,8 +1499,11 @@ async def list_datasets(
     category_id: int | None = None,
     taxonomy_id: int | None = None,
     uncategorized: bool = False,
+    tag_id: str | None = None,
+    term_id: int | None = None,
     page: int = 1,
     page_size: int = 20,
+    card: bool = False,
 ) -> PaginatedDatasets:
     """선택적 필터·페이지네이션으로 데이터셋 목록을 조회한다.
 
@@ -1410,6 +1512,9 @@ async def list_datasets(
     ``category_id`` 는 해당 분류 + 모든 하위 분류(서브트리)에 매핑된 데이터셋.
     ``taxonomy_id`` + ``uncategorized=True`` 는 해당 분류체계에 미매핑된 데이터셋.
     ``status`` 를 주지 않으면 removed 데이터셋은 제외한다. 정렬은 updated_at 내림차순.
+    ``datasource``(datasource_id)·``origin``·``status``·``tag_id`` 는 쉼표로 여러 값을 줄 수 있다(하나라도 맞으면 포함).
+    ``term_id`` 는 해당 용어집 용어가 연결된 데이터셋.
+    ``card`` 면 카드 보기용으로 앞쪽 컬럼 이름(최대 ``COLUMN_PREVIEW``개)도 채운다.
     """
     base = (
         select(
@@ -1447,8 +1552,10 @@ async def list_datasets(
             )
         )
 
-    if datasource:
-        base = base.where(Datasource.datasource_id == datasource)
+    # datasource·origin·status 는 쉼표로 여러 값을 받는다(목록 화면 다중 선택 — DEF-067)
+    datasources = _csv_values(datasource)
+    if datasources:
+        base = base.where(Datasource.datasource_id.in_(datasources))
 
     if system_id is not None:
         base = base.where(Datasource.system_id == system_id)
@@ -1484,11 +1591,13 @@ async def list_datasets(
         )
         base = base.where(Dataset.id.notin_(mapped_sub))
 
-    if origin:
-        base = base.where(Dataset.origin == origin)
+    origins = _csv_values(origin)
+    if origins:
+        base = base.where(Dataset.origin.in_(origins))
 
-    if status:
-        base = base.where(Dataset.status == status)
+    statuses = _csv_values(status)
+    if statuses:
+        base = base.where(Dataset.status.in_(statuses))
     else:
         base = base.where(Dataset.status != "removed")
 
@@ -1498,6 +1607,21 @@ async def list_datasets(
                 select(DatasetTag.dataset_id)
                 .join(Tag, DatasetTag.tag_id == Tag.id)
                 .where(Tag.name == tag)
+            )
+        )
+
+    # 태그 id 는 쉼표로 여러 개(하나라도 붙어 있으면 포함) — 목록 화면 태그 필터·태그 화면 링크(TODO-076)
+    tag_ids = [int(v) for v in _csv_values(tag_id) if v.isdigit()]
+    if tag_ids:
+        base = base.where(
+            Dataset.id.in_(select(DatasetTag.dataset_id).where(DatasetTag.tag_id.in_(tag_ids)))
+        )
+
+    if term_id is not None:
+        # 용어집 용어가 연결된 데이터셋 — 용어 화면의 "연결된 데이터셋"(TODO-076)
+        base = base.where(
+            Dataset.id.in_(
+                select(DatasetGlossaryTerm.dataset_id).where(DatasetGlossaryTerm.term_id == term_id)
             )
         )
 
@@ -1551,7 +1675,39 @@ async def list_datasets(
             updated_at=row.updated_at,
         ))
 
+    if card and items:
+        await _fill_card_fields(session, items)
+
     return PaginatedDatasets(items=items, total=total, page=page, page_size=page_size)
+
+
+COLUMN_PREVIEW = 3
+
+
+async def _fill_card_fields(session: AsyncSession, items: list[DatasetSummary]) -> None:
+    """카드 보기용 필드 — 순서상 앞쪽 컬럼 이름."""
+    ids = [i.id for i in items]
+
+    ranked = (
+        select(
+            DatasetSchema.dataset_id,
+            DatasetSchema.field_path,
+            func.row_number().over(
+                partition_by=DatasetSchema.dataset_id,
+                order_by=(DatasetSchema.ordinal, DatasetSchema.id),
+            ).label("rn"),
+        )
+        .where(DatasetSchema.dataset_id.in_(ids))
+        .subquery()
+    )
+    columns: dict[int, list[str]] = {}
+    for ds_id, path, _rn in (await session.execute(
+        select(ranked).where(ranked.c.rn <= COLUMN_PREVIEW).order_by(ranked.c.dataset_id, ranked.c.rn)
+    )).all():
+        columns.setdefault(ds_id, []).append(path)
+
+    for item in items:
+        item.column_preview = columns.get(item.id, [])
 
 
 # ---------------------------------------------------------------------------
@@ -1852,6 +2008,8 @@ async def update_dataset_properties(
         sql_delete(DatasetProperty).where(DatasetProperty.dataset_id == dataset_id)
     )
     await session.flush()
+    # 대량 DELETE 는 ORM 이벤트에 잡히지 않는다 — Avro 편집본을 지운 경우도 커밋 때 Avro 캐시를 지우게 표시
+    mark_avro_changed(session, dataset_id)
 
     new_props: list[DatasetProperty] = []
     for key, value in payload + preserved:
@@ -1953,14 +2111,15 @@ async def get_catalog_stats(session: AsyncSession, tz: str | None = None) -> Cat
 
     # 데이터 소스별 데이터셋 수 (막대 차트용) — 이름은 중복될 수 있어 id 로 묶고 이름은 라벨로만 쓴다
     result = await session.execute(
-        select(Datasource.name, func.count(Dataset.id))
+        select(Datasource.id, Datasource.datasource_id, Datasource.name, func.count(Dataset.id))
         .join(Dataset, Dataset.datasource_id == Datasource.id)
         .where(active_filter)
-        .group_by(Datasource.id, Datasource.name)
+        .group_by(Datasource.id, Datasource.datasource_id, Datasource.name)
         .order_by(func.count(Dataset.id).desc())
     )
+    # key = 외부 식별자(datasource_id 문자열) — 데이터셋 목록의 datasource 필터가 받는 값(DEF-106)
     datasets_by_datasource = [
-        {"datasource": name, "count": count} for name, count in result.all()
+        {"id": ds_id, "key": key, "datasource": name, "count": count} for ds_id, key, name, count in result.all()
     ]
 
     # 데이터 소스 유형별 데이터셋 수 (도넛 차트용)
@@ -1987,21 +2146,21 @@ async def get_catalog_stats(session: AsyncSession, tz: str | None = None) -> Cat
 
     # 데이터 소스별 스키마 필드 수 (막대 차트) — id 로 묶음(동명 데이터 소스 병합 방지)
     result = await session.execute(
-        select(Datasource.name, func.count(DatasetSchema.id))
+        select(Datasource.id, Datasource.datasource_id, Datasource.name, func.count(DatasetSchema.id))
         .join(Dataset, Dataset.datasource_id == Datasource.id)
         .join(DatasetSchema, DatasetSchema.dataset_id == Dataset.id)
         .where(active_filter)
-        .group_by(Datasource.id, Datasource.name)
+        .group_by(Datasource.id, Datasource.datasource_id, Datasource.name)
         .order_by(func.count(DatasetSchema.id).desc())
         .limit(10)
     )
     schema_fields_by_datasource = [
-        {"datasource": name, "count": count} for name, count in result.all()
+        {"id": ds_id, "key": key, "datasource": name, "count": count} for ds_id, key, name, count in result.all()
     ]
 
     # 태그가 가장 많은 데이터셋 상위 목록 — id 로 묶음(다른 데이터 소스의 같은 테이블 이름 병합 방지)
     result = await session.execute(
-        select(Dataset.name, func.count(DatasetTag.id).label("tag_count"))
+        select(Dataset.id, Dataset.name, func.count(DatasetTag.id).label("tag_count"))
         .join(DatasetTag, DatasetTag.dataset_id == Dataset.id)
         .where(active_filter)
         .group_by(Dataset.id, Dataset.name)
@@ -2009,7 +2168,7 @@ async def get_catalog_stats(session: AsyncSession, tz: str | None = None) -> Cat
         .limit(10)
     )
     top_tagged_datasets = [
-        {"name": name, "count": count} for name, count in result.all()
+        {"id": ds_id, "name": name, "count": count} for ds_id, name, count in result.all()
     ]
 
     # 신규 데이터셋 추이 — DB 에서는 UTC '시' 버킷으로만 집계하고(세션 시간대 무관),
@@ -2081,6 +2240,9 @@ def _schema_field_to_dict(f) -> dict:
         "is_primary_key": f.is_primary_key or "false",
         "is_unique": f.is_unique or "false",
         "is_indexed": f.is_indexed or "false",
+        # 파티션 · 분산도 비교한다 — 예전에는 빠져 이것만 바뀌면 이력 · 알림이 없었다(DEF-132)
+        "is_partition_key": f.is_partition_key or "false",
+        "is_distribution_key": f.is_distribution_key or "false",
     }
 
 
@@ -2094,13 +2256,22 @@ def _schema_field_to_snapshot(f) -> dict:
         "is_primary_key": f.is_primary_key or "false",
         "is_unique": f.is_unique or "false",
         "is_indexed": f.is_indexed or "false",
+        "is_partition_key": f.is_partition_key or "false",
+        "is_distribution_key": f.is_distribution_key or "false",
         "ordinal": f.ordinal,
     }
 
 
+_OPTIONAL_COL_FLAGS = ("is_partition_key", "is_distribution_key")
+
+
 def _col_info_to_dict(col) -> dict:
-    """동기화 ColumnInfo 를 비교 가능한 dict 로 변환한다."""
-    return {
+    """동기화 ColumnInfo 를 비교 가능한 dict 로 변환한다.
+
+    파티션 · 분산은 값을 가진 객체(변경 요청 적용)만 넣는다 — 원본 DB 동기화(``sync.ColumnInfo``)는
+    이 속성을 읽지 않으므로 넣으면 카탈로그 값과 늘 달라 보인다(비교는 양쪽에 있는 키만, DEF-132).
+    """
+    d = {
         "field_type": col.data_type,
         "native_type": col.native_type or "",
         "nullable": "true" if col.nullable else "false",
@@ -2108,6 +2279,10 @@ def _col_info_to_dict(col) -> dict:
         "is_unique": "true" if col.is_unique else "false",
         "is_indexed": "true" if col.is_indexed else "false",
     }
+    for attr in _OPTIONAL_COL_FLAGS:
+        if hasattr(col, attr):
+            d[attr] = "true" if getattr(col, attr) else "false"
+    return d
 
 
 def _col_info_to_snapshot(col) -> dict:
@@ -2120,6 +2295,7 @@ def _col_info_to_snapshot(col) -> dict:
         "is_primary_key": "true" if col.is_primary_key else "false",
         "is_unique": "true" if col.is_unique else "false",
         "is_indexed": "true" if col.is_indexed else "false",
+        **{a: "true" if getattr(col, a) else "false" for a in _OPTIONAL_COL_FLAGS if hasattr(col, a)},
         "ordinal": col.ordinal,
     }
 
@@ -2138,8 +2314,13 @@ def detect_schema_changes(
         변경 dict 목록: [{type, field, before, after}, ...]
     """
     if from_sync:
-        old_map = {f.field_path: _schema_field_to_dict(f) for f in old_fields}
         new_map = {c.name: _col_info_to_dict(c) for c in new_columns}
+        # 동기화가 모르는 속성(파티션 · 분산)은 비교에서 뺀다 — 새 쪽에 있는 키만 비교
+        keys = set().union(*(v.keys() for v in new_map.values())) if new_map else set()
+        old_map = {
+            f.field_path: {k: v for k, v in _schema_field_to_dict(f).items() if k in keys or not new_map}
+            for f in old_fields
+        }
     else:
         old_map = {f.field_path: _schema_field_to_dict(f) for f in old_fields}
         new_map = {f.field_path: _schema_field_to_dict(f) for f in new_columns}
@@ -2259,6 +2440,42 @@ async def save_schema_snapshot(
     logger.info("스키마 스냅샷 저장: dataset_id=%d, %s, fields=%d",
                 dataset_id, summary, len(schema_entries))
     return snapshot
+
+
+async def evaluate_dataset_removed_alerts(session: AsyncSession, dataset_id: int) -> int:
+    """데이터셋이 원본에서 사라져 ``removed`` 로 바뀔 때 알림 규칙을 평가한다(DEF-055).
+
+    테이블이 사라진 것을 "모든 컬럼 DROP" 으로 보고 ``save_schema_snapshot`` 과 같은 규칙 평가
+    (``evaluate_rules_and_create_alerts`` — 모든 변경·변경 유형·감시 컬럼·매핑 깨짐)를 거쳐 하위 데이터셋에
+    알림을 만든다. 요약 앞에 "테이블 제거됨" 을 붙인다. 스키마 행·스냅샷은 그대로 둔다(다시 나타나면 복원).
+
+    savepoint 안에서 평가하고 실패는 로그만 남긴다 — 동기화·수정 트랜잭션을 막지 않는다. 만든 알림 수를 반환.
+    """
+    from app.alert.service import evaluate_rules_and_create_alerts
+
+    try:
+        # 조회까지 savepoint 안에서 — PostgreSQL 은 실패한 문장이 바깥 트랜잭션 전체를 무효로 만든다
+        async with session.begin_nested():
+            fields = (await session.execute(
+                select(DatasetSchema).where(DatasetSchema.dataset_id == dataset_id)
+                .order_by(DatasetSchema.ordinal)
+            )).scalars().all()
+            changes = [
+                {"type": "DROP", "field": f.field_path, "before": _schema_field_to_dict(f), "after": None}
+                for f in fields
+            ]
+            if not changes:
+                logger.debug("removed 데이터셋 알림 평가 생략 — 컬럼 없음: dataset_id=%d", dataset_id)
+                return 0
+            alerts = await evaluate_rules_and_create_alerts(
+                session, dataset_id, changes, summary_prefix="테이블 제거됨 — ",
+            )
+        if alerts:
+            logger.info("removed 데이터셋 알림 %d건 생성: dataset_id=%d", len(alerts), dataset_id)
+        return len(alerts)
+    except Exception as e:  # noqa: BLE001 — 알림 실패가 동기화를 막지 않도록
+        logger.warning("removed 데이터셋 알림 평가 실패 dataset_id=%d: %s", dataset_id, e)
+        return 0
 
 
 async def get_schema_history(

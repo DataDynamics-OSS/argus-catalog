@@ -59,7 +59,7 @@ export function createModelsColumns(
               )}
             </div>
             {m.description && (
-              <p className="max-w-[520px] truncate text-xs text-muted-foreground" title={m.description}>
+              <p className="max-w-[520px] truncate text-xs" title={m.description}>
                 {m.description}
               </p>
             )}
@@ -77,7 +77,7 @@ export function createModelsColumns(
             {m.production_version
               ? <StageBadge stage="PRODUCTION" version={m.production_version} />
               : <span className="text-muted-foreground">—</span>}
-            <span className="text-xs text-muted-foreground">최신 v{m.max_version_number}</span>
+            <span className="text-xs">최신 v{m.max_version_number}</span>
           </div>
         )
       },
@@ -95,7 +95,7 @@ export function createModelsColumns(
       id: "framework",
       header: "프레임워크",
       cell: ({ row }) => (
-        <span className="block truncate text-sm text-muted-foreground" title={row.original.framework ?? undefined}>
+        <span className="block truncate text-sm" title={row.original.framework ?? undefined}>
           {row.original.framework ?? "—"}
         </span>
       ),
@@ -108,7 +108,7 @@ export function createModelsColumns(
         // 목록 응답은 zod 파싱 없이 들어와 문자열일 수 있다
         const iso = String(row.original.updated_at)
         return (
-          <span className="text-sm text-muted-foreground" title={formatDateTime(iso)}>
+          <span className="text-sm" title={formatDateTime(iso)}>
             {timeAgo(iso)}
           </span>
         )

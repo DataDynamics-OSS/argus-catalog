@@ -19,13 +19,14 @@ from fastapi import FastAPI, Request
 from fastapi.exception_handlers import http_exception_handler as _default_http_exception_handler
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy.exc import DataError, IntegrityError
+from sqlalchemy.exc import DataError, IntegrityError, OperationalError, ProgrammingError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app import __version__
 from app.agents.router import router as agents_router
 from app.ai.router import router as ai_router
 from app.alert.router import router as alert_router
+from app.apikeys.router import router as apikeys_router
 from app.apis.router import router as apis_router
 from app.audit.router import router as audit_router
 from app.audit.service import ClientIpMiddleware
@@ -33,10 +34,12 @@ from app.auth.router import router as auth_router  # SSO 인증용 추가
 from app.catalog.catalogs_router import router as catalogs_router
 from app.catalog.impala_profile_router import router as impala_profile_router
 from app.catalog.router import router as catalog_router
+from app.catalog.sync_runs_router import router as sync_runs_router
 from app.catalog.taxonomy_router import router as taxonomy_router
 from app.catalog.topology_router import router as topology_router
 from app.change_mgmt.router import router as change_mgmt_router
 from app.comments.router import router as comments_router
+from app.core.auth_gate import ApiAuthGateMiddleware
 from app.core.config import settings
 from app.core.database import (
     close_database,
@@ -46,7 +49,6 @@ from app.core.database import (
 )
 from app.core.logging import setup_logging
 from app.core.password_gate import PasswordChangeGateMiddleware
-from app.core.auth_gate import ApiAuthGateMiddleware
 from app.core.secrets import check_required_secrets
 from app.core.security import SecurityHeadersMiddleware
 from app.external.router import router as external_router
@@ -60,6 +62,7 @@ from app.models.store_router import router as model_store_router
 from app.models.uc_compat import router as uc_compat_router
 from app.oci_hub.router import router as oci_hub_router
 from app.quality.router import router as quality_router
+from app.schema_registry.router import router as schema_registry_router
 from app.search.router import router as search_router
 from app.settings.router import router as settings_router
 from app.standard.router import router as standard_router
@@ -141,6 +144,7 @@ async def lifespan(app: FastAPI):
     import app.models.models  # noqa: F401
     import app.oci_hub.models  # noqa: F401
     import app.permissions.models  # noqa: F401
+    import app.schema_registry.models  # noqa: F401
     import app.settings.models  # noqa: F401
     import app.usermgr.models  # noqa: F401
 
@@ -150,6 +154,12 @@ async def lifespan(app: FastAPI):
     await reconcile_schema()
     logger.info("스키마는 SQL DDL 로 관리됨 (런타임 스키마 훅은 no-op)")
 
+    # 서버가 쓰는 표·컬럼이 DB 에 있는지 확인 — 새 버전 DDL 을 적용하지 않은 DB 를 기동 때 알린다(기동은 계속)
+    from app.core.database import Base, engine
+    from app.core.schema_check import warn_schema_drift
+
+    await warn_schema_drift(engine, Base.metadata, settings.db_type)
+
     # 기본 데이터 시드(seed)
     from app.catalog.service import seed_datasource_metadata
     from app.core.database import async_session
@@ -158,6 +168,7 @@ async def lifespan(app: FastAPI):
         load_cors_settings,
         load_embedding_settings,
         load_llm_settings,
+        load_metadata_sync_settings,
         load_os_settings,
         seed_configuration,
     )
@@ -178,8 +189,20 @@ async def lifespan(app: FastAPI):
         await load_llm_settings(session)
         await load_auth_settings(session)
         await load_cors_settings(session)
+        await load_metadata_sync_settings(session)
         await seed_admin_user(session)
+        # 나눈 기능 키(예: taxonomies.map)의 허용 이어받기 — 실패해도 기동은 계속(권한은 관리자 전용으로 남을 뿐)
+        try:
+            from app.permissions.router import seed_default_permissions
+            await seed_default_permissions(session)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("권한 행 보정 실패: %s", e)
     logger.info("기본 데이터 시드 및 DB 설정 로딩 완료")
+
+    # 스키마 레지스트리 — Avro 입력이 바뀐 커밋 뒤 새 버전을 백그라운드로 미리 등록
+    if settings.schema_registry_enabled and settings.schema_registry_register_on_change:
+        from app.schema_registry.changes import start_background
+        start_background(async_session)
 
     # S3 버킷 존재 보장
     try:
@@ -200,10 +223,17 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("Temporal 비활성화됨 (temporal.enabled=false) — 변경관리 submit 사용 불가")
 
-    # 품질 검증 주기 스케줄러 (argus.quality_schedule property 기반)
-    from app.quality.scheduler import quality_scheduler_loop
-    quality_task = asyncio.create_task(quality_scheduler_loop())
-    logger.info("품질 검증 스케줄러 시작")
+    # 품질 진단 작업 스케줄러 — 주기가 된 작업의 Trino 진단을 대기열에 넣고 끝난 작업 실행을 마감 (TODO-089)
+    from app.quality.jobs import job_scheduler_loop
+    quality_job_task = asyncio.create_task(job_scheduler_loop())
+
+    # 데이터 소스 수집 실행 점검 (응답 없음 판정·SYNC_STALE 알림·이력 정리)
+    from app.catalog.sync_runs_service import sync_monitor_loop
+    sync_monitor_task = asyncio.create_task(sync_monitor_loop())
+
+    # AI-Ready 알림 점검 — 1시간마다 최소 요건 미충족·신고 처리 기한 (규칙이 있을 때만 판정)
+    from app.catalog.ai_ready_alerts import alert_loop as ai_ready_alert_loop
+    ai_ready_alert_task = asyncio.create_task(ai_ready_alert_loop())
 
     # 페더레이션 export 토큰 미설정 경고 — 인증 없이 메타데이터가 노출된다(샘플은 기본 차단).
     if not settings.federation_export_token:
@@ -236,7 +266,9 @@ async def lifespan(app: FastAPI):
     yield
     # --- 종료 정리: 스케줄러 취소 → 임베딩/LLM 제공자 해제 → DB 연결 종료 ---
     logger.info("백그라운드 스케줄러 중지 중")
-    quality_task.cancel()
+    quality_job_task.cancel()
+    sync_monitor_task.cancel()
+    ai_ready_alert_task.cancel()
     if harvest_task is not None:
         harvest_task.cancel()
     if mcp_task is not None:
@@ -255,13 +287,16 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.add_middleware(SecurityHeadersMiddleware)
+# 미들웨어는 모두 순수 ASGI(TODO-086) — BaseHTTPMiddleware 는 요청마다 태스크·스트림을 만들어 비싸다.
+# 나중에 추가한 것이 바깥이다: CORS → 보안 헤더 → 로그인 게이트 → 요청자 IP → 비밀번호 변경 게이트 → 라우터.
 # 강제 비밀번호 변경 게이트(로컬 모드) — 화이트리스트 외 API 를 차단
 app.add_middleware(PasswordChangeGateMiddleware)
 # 관리 감사 로그용 요청자 IP(contextvar)
 app.add_middleware(ClientIpMiddleware)
 # /api/v1/* 로그인 게이트 — 사용자 토큰 없는 요청은 401 (자체 토큰을 쓰는 경로만 예외)
 app.add_middleware(ApiAuthGateMiddleware)
+# 보안 헤더 — 게이트가 바로 돌려주는 401·403 응답에도 붙도록 게이트 바깥에 둔다
+app.add_middleware(SecurityHeadersMiddleware)
 
 
 _UC_PREFIX = "/api/2.1/unity-catalog"
@@ -309,6 +344,21 @@ async def data_error_handler(request: Request, exc: DataError):
     """
     logger.warning("DB 값 오류 (%s %s): %s", request.method, request.url.path, exc)
     return JSONResponse(status_code=400, content={"detail": "입력 값이 허용 범위(길이·형식)를 벗어나 저장할 수 없습니다."})
+
+
+@app.exception_handler(ProgrammingError)
+@app.exception_handler(OperationalError)
+async def schema_mismatch_handler(request: Request, exc: ProgrammingError | OperationalError):
+    """표·컬럼이 없어서 난 오류면 원인을 알려 준다 — 새 버전 DDL 을 적용하지 않은 DB.
+
+    화면이 "불러오지 못했습니다" 만 보여 주면 원인을 찾기 어렵다. 그 밖의 DB 오류는 기본 처리(500)에 맡긴다.
+    """
+    from app.core.schema_check import MISMATCH_MESSAGE, is_schema_mismatch
+
+    if not is_schema_mismatch(exc):
+        raise exc
+    logger.error("DB 스키마 불일치 (%s %s): %s", request.method, request.url.path, exc.orig)
+    return JSONResponse(status_code=500, content={"detail": MISMATCH_MESSAGE})
 
 
 def _integrity_message(exc: IntegrityError) -> str:
@@ -371,6 +421,11 @@ def _menu_guard(menu_key: str) -> list:
     return [_Depends(require_menu(menu_key))]
 
 
+# 스키마 레지스트리는 맨 앞에 — 기계 클라이언트가 자주 부르는 경로라, 라우트 수백 개를 순서대로 비교하는 비용(요청당 약 1ms)을
+# 줄인다. 경로 접두어(/api/v1/schema-registry)가 고유해 다른 라우트와 겹치지 않는다.
+app.include_router(schema_registry_router, prefix="/api/v1")
+# 외부 연동 API(/external/*)도 자주 불리므로 앞쪽에 둔다 — 라우트는 순서대로 비교한다(TODO-086)
+app.include_router(external_router, prefix="/api/v1")
 app.include_router(permissions_router, prefix="/api/v1")
 app.include_router(catalog_router, prefix="/api/v1")
 app.include_router(agents_router, prefix="/api/v1", dependencies=_menu_guard("ai-agents"))
@@ -379,23 +434,25 @@ app.include_router(mcp_servers_router, prefix="/api/v1", dependencies=_menu_guar
 app.include_router(mcp_deployments_router, prefix="/api/v1", dependencies=_menu_guard("mcp-servers"))
 app.include_router(topology_router, prefix="/api/v1")
 app.include_router(catalogs_router, prefix="/api/v1")
+app.include_router(sync_runs_router, prefix="/api/v1")
 app.include_router(taxonomy_router, prefix="/api/v1")
 app.include_router(comments_router, prefix="/api/v1")
 app.include_router(filesystem_router, prefix="/api/v1")
 app.include_router(models_router, prefix="/api/v1", dependencies=_menu_guard("models"))
 app.include_router(model_store_router, prefix="/api/v1")
 app.include_router(oci_hub_router, prefix="/api/v1", dependencies=_menu_guard("oci-hub"))
-app.include_router(uc_compat_router)  # /api/2.0/mlflow/unity-catalog (추가 prefix 없음)
+# /api/2.1/unity-catalog (추가 prefix 없음) — MLflow 클라이언트용 모델 API 도 MLflow 모델 메뉴 권한으로 막는다(DEF-119)
+app.include_router(uc_compat_router, dependencies=_menu_guard("models"))
 app.include_router(search_router, prefix="/api/v1")
 app.include_router(quality_router, prefix="/api/v1")
 app.include_router(settings_router, prefix="/api/v1")
 app.include_router(standard_router, prefix="/api/v1")
 app.include_router(usermgr_router, prefix="/api/v1")
+app.include_router(apikeys_router, prefix="/api/v1")
 app.include_router(audit_router, prefix="/api/v1")
 app.include_router(ai_router, prefix="/api/v1")
-app.include_router(alert_router, prefix="/api/v1")
+app.include_router(alert_router, prefix="/api/v1", dependencies=_menu_guard("alerts"))
 app.include_router(auth_router, prefix="/api/v1")  # SSO 인증용 추가
-app.include_router(external_router, prefix="/api/v1")
 app.include_router(federation_router, prefix="/api/v1", dependencies=_menu_guard("federation"))
 app.include_router(federation_export_router, prefix="/api/v1")
 app.include_router(impala_profile_router, prefix="/api/v1")

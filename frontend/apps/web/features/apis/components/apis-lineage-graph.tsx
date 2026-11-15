@@ -46,7 +46,7 @@ export function ApisLineageGraph({ apiName, lineage }: { apiName: string; lineag
         label: (
           <div className="text-xs">
             <div className="font-medium text-foreground">{e.target_label || e.target_ref}</div>
-            <div className="text-[10px] text-muted-foreground">{TARGET_TYPE_LABEL[e.target_type] ?? e.target_type}</div>
+            <div className="text-[11px]">{TARGET_TYPE_LABEL[e.target_type] ?? e.target_type}</div>
           </div>
         ),
       },
@@ -85,7 +85,7 @@ export function ApisLineageGraph({ apiName, lineage }: { apiName: string; lineag
 
   return (
     <div className="space-y-2">
-      <div className="flex items-center gap-3 text-xs text-muted-foreground">
+      <div className="flex items-center gap-3 text-xs">
         <span className="inline-flex items-center gap-1"><span className="inline-block h-2 w-4 rounded" style={{ background: RELATION_COLOR.consumes }} /> 소비</span>
         <span className="inline-flex items-center gap-1"><span className="inline-block h-2 w-4 rounded" style={{ background: RELATION_COLOR.depends_on }} /> 의존</span>
         <span className="inline-flex items-center gap-1"><span className="inline-block h-2 w-4 rounded" style={{ background: RELATION_COLOR.provides }} /> 제공</span>

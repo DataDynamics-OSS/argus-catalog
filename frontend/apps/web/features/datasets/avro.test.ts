@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { descriptionToAvroDoc, fieldTypeToAvro, generateAvroSchema, pathFromUrn } from "./avro"
+import { avroName, avroNamespace, descriptionToAvroDoc, fieldTypeToAvro, generateAvroSchema, pathFromUrn } from "./avro"
 import type { SchemaField } from "./data/schema"
 
 describe("pathFromUrn", () => {
@@ -35,7 +35,24 @@ describe("generateAvroSchema", () => {
     const fields = [{ field_path: "order_id", field_type: "INTEGER", nullable: "false" }] as unknown as SchemaField[]
     const avro = JSON.parse(generateAvroSchema(pathFromUrn("pg-1.it_ds.orders.dataset"), "pg-1", fields))
     expect(avro.name).toBe("it_ds_orders")
+    expect(avro.namespace).toBe("pg_1")
     expect(avro.fields[0]).toEqual({ name: "order_id", type: "int" })
+  })
+})
+
+// 외부 Avro API(backend/tests/test_datasets_it03.py test_avro_names_follow_avro_spec)와 같은 입력·기대값
+describe("avroName / avroNamespace (DEF-040)", () => {
+  it("Avro 이름 규칙 [A-Za-z_][A-Za-z0-9_]*", () => {
+    expect(avroName("commerce.order_events")).toBe("commerce_order_events")
+    expect(avroName("order-id")).toBe("order_id")
+    expect(avroName("2026_sales")).toBe("_2026_sales")
+    expect(avroName("")).toBe("_")
+  })
+
+  it("네임스페이스는 점으로 나눈 부분마다", () => {
+    expect(avroNamespace("s3-1a1c0a9f9a98360d4")).toBe("s3_1a1c0a9f9a98360d4")
+    expect(avroNamespace("a-b.c d")).toBe("a_b.c_d")
+    expect(avroNamespace("")).toBe("default")
   })
 })
 

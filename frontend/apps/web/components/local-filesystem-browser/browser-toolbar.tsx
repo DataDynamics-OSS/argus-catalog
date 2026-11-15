@@ -8,14 +8,12 @@ import {
   Info,
   Pencil,
   RefreshCw,
-  Search,
   Trash2,
   Upload,
-  X,
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
-import { Input } from "@workspace/ui/components/input"
+import { SearchInput } from "@/components/search-input"
 
 type BrowserToolbarProps = {
   searchValue: string
@@ -33,6 +31,8 @@ type BrowserToolbarProps = {
   isLoading: boolean
   /** 업로드/생성/삭제/이름변경 가능 여부 — false 면 해당 버튼을 숨긴다 */
   canManage?: boolean
+  /** 내려받기 버튼을 보일지(기본 true) */
+  canDownload?: boolean
 }
 
 function ToolbarSeparator() {
@@ -54,6 +54,7 @@ export function BrowserToolbar({
   onRefresh,
   isLoading,
   canManage = false,
+  canDownload = true,
 }: BrowserToolbarProps) {
   const [localSearch, setLocalSearch] = useState(searchValue)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -77,38 +78,26 @@ export function BrowserToolbar({
     onSearchChange("")
   }
 
-  function handleKeyDown(e: React.KeyboardEvent) {
-    if (e.key === "Enter") {
-      if (debounceRef.current) clearTimeout(debounceRef.current)
-      onSearchChange(localSearch)
-    }
+  function handleSearchNow() {
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    onSearchChange(localSearch)
   }
 
   return (
     <div className="flex items-center justify-between gap-2">
       <div className="flex items-center gap-2 flex-1">
-        <div className="relative w-[286px]">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-          <Input
-            placeholder="이름으로 필터..."
-            value={localSearch}
-            onChange={(e) => handleChange(e.target.value)}
-            onKeyDown={handleKeyDown}
-            className="h-8 pl-8 pr-8 text-sm"
-          />
-          {localSearch && (
-            <button
-              type="button"
-              onClick={handleClear}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          )}
-        </div>
+        <SearchInput
+          size="sm"
+          className="w-[286px]"
+          placeholder="이름으로 거르기…"
+          value={localSearch}
+          onValueChange={handleChange}
+          onSearch={handleSearchNow}
+          onClear={handleClear}
+        />
 
         {selectedCount > 0 && (
-          <span className="text-sm text-muted-foreground">
+          <span className="text-sm">
             {selectedCount}개 선택됨
           </span>
         )}
@@ -122,16 +111,18 @@ export function BrowserToolbar({
             업로드
           </Button>
         )}
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onDownload}
-          disabled={selectedCount === 0}
-          className="h-8 gap-1.5"
-        >
-          <Download className="h-4 w-4" />
-          다운로드
-        </Button>
+        {canDownload && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onDownload}
+            disabled={selectedCount === 0}
+            className="h-8 gap-1.5"
+          >
+            <Download className="h-4 w-4" />
+            내려받기
+          </Button>
+        )}
 
         {canManage && (
           <>
@@ -140,7 +131,7 @@ export function BrowserToolbar({
             {/* Create / Delete / Rename */}
             <Button variant="outline" size="sm" onClick={onCreateFolder} className="h-8 gap-1.5">
               <FolderPlus className="h-4 w-4" />
-              생성
+              폴더 만들기
             </Button>
             <Button
               variant="outline" size="sm" onClick={onDelete}

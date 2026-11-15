@@ -27,7 +27,7 @@ from app.core.database import get_session
 
 
 def test_submit_rpc_error_is_503(monkeypatch) -> None:
-    cr = SimpleNamespace(id=1, cr_code="CR-1", requested_by="alice", status="DRAFT", workflow_id=None)
+    cr = SimpleNamespace(id=1, cr_code="CR-1", requested_by="alice", status="DRAFT", workflow_id=None, dataset_id=10)
     rolled = []
 
     async def get_cr(_s, _id):
@@ -51,6 +51,11 @@ def test_submit_rpc_error_is_503(monkeypatch) -> None:
 
     monkeypatch.setattr(service, "get_cr", get_cr)
     monkeypatch.setattr(service, "submit_cr", submit_cr)
+
+    async def list_steps(_s, _cr_id):
+        return [SimpleNamespace(approver="carol")]  # 결재선 검사(DEF-050) 통과
+
+    monkeypatch.setattr(service, "list_approval_steps", list_steps)
     monkeypatch.setattr(temporal_client, "ensure_connected", connected)
 
     app = FastAPI()

@@ -23,6 +23,7 @@ import {
 import { Textarea } from "@workspace/ui/components/textarea"
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import type { FlatOrg } from "@/features/datasources/utils"
+import { SYSTEM_STATUSES, systemStatusLabel } from "@/features/topology/system-status"
 import {
   createOrganization,
   createSystem,
@@ -86,7 +87,7 @@ export function OrgDialog({
           <DialogTitle>{orgDialog.mode === "create" ? "조직 추가" : "조직 수정"}</DialogTitle>
           {orgDialog.mode === "create" && orgDialog.parentId && (
             <DialogDescription>
-              상위 조직: {flatOrgs.find((o) => o.id === orgDialog.parentId)?.name ?? orgDialog.parentId}
+              상위 조직: {flatOrgs.find((o) => o.id === orgDialog.parentId)?.path ?? orgDialog.parentId}
             </DialogDescription>
           )}
         </DialogHeader>
@@ -106,7 +107,7 @@ export function OrgDialog({
               취소
             </Button>
             <Button onClick={handleOrgSave} disabled={orgSaving || !orgDialog.name.trim()}>
-              {orgSaving ? "저장 중..." : "저장"}
+              {orgSaving ? "저장 중…" : "저장"}
             </Button>
           </div>
         </div>
@@ -226,11 +227,9 @@ export function SystemCreateDialog({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="none" className="text-sm">미분류 (조직 미배정)</SelectItem>
+                <SelectItem value="none" className="text-sm">조직 미지정</SelectItem>
                 {flatOrgs.map((o) => (
-                  <SelectItem key={o.id} value={String(o.id)} className="text-sm">
-                    {" ".repeat(o.depth * 2)}{o.name}
-                  </SelectItem>
+                  <SelectItem key={o.id} value={String(o.id)} className="text-sm">{o.path}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -252,9 +251,9 @@ export function SystemCreateDialog({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="ACTIVE" className="text-sm">ACTIVE</SelectItem>
-                <SelectItem value="INACTIVE" className="text-sm">INACTIVE</SelectItem>
-                <SelectItem value="DEPRECATED" className="text-sm">DEPRECATED</SelectItem>
+                {SYSTEM_STATUSES.map((v) => (
+                  <SelectItem key={v} value={v} className="text-sm">{systemStatusLabel(v)}</SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>
@@ -263,7 +262,7 @@ export function SystemCreateDialog({
               취소
             </Button>
             <Button onClick={handleSysSave} disabled={sysSaving || !sysDialog.name.trim()}>
-              {sysSaving ? "저장 중..." : "저장"}
+              {sysSaving ? "저장 중…" : "저장"}
             </Button>
           </div>
         </div>

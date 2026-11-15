@@ -10,6 +10,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react"
+import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { AlertTriangle, CheckCircle2, Clock, Inbox, RefreshCw } from "lucide-react"
 
@@ -23,10 +24,13 @@ import {
 } from "@/features/change-mgmt/api"
 import {
   CHANGE_TYPE_LABEL,
-  PRIORITY_LABEL,
+  PriorityBadge,
   StatusBadge,
   useUserNames,
 } from "@/features/change-mgmt/labels"
+import { schemaChangeSummary } from "@/features/change-mgmt/schema-change"
+import { datasetHref } from "@/features/datasets/links"
+import { interactiveBoxClass } from "@/components/card-hover"
 import { useAuth } from "@/features/auth"
 import { usePermissions } from "@/features/permissions/use-permissions"
 import { usePrompt } from "@/components/confirm-provider"
@@ -61,7 +65,7 @@ export default function MyApprovalsPage() {
   const { user } = useAuth()
   const askInput = usePrompt()
   // 기능 권한 changes.approve — 서버도 같은 키로 403
-  const canApprove = usePermissions().isFeatureAllowed("changes.approve")
+  const canApprove = usePermissions().canUseFeature("changes.approve")
   const me = user?.username
   const { approverLabel } = useUserNames()
 
@@ -122,7 +126,7 @@ export default function MyApprovalsPage() {
       <DashboardHeader title="내 결재함" />
       <div className="flex flex-1 flex-col gap-4 p-4">
         <div className="flex items-center justify-between">
-          <p className="text-sm text-muted-foreground">
+          <p className="text-sm">
             지금 내가 결재할 차례인 변경 요청 {items.length}건
           </p>
           <Button variant="outline" size="sm" onClick={() => void reload()} disabled={loading}>
@@ -138,7 +142,7 @@ export default function MyApprovalsPage() {
         )}
 
         {loading && items.length === 0 ? (
-          <div className="text-sm text-muted-foreground">불러오는 중...</div>
+          <div className="text-sm text-muted-foreground">불러오는 중…</div>
         ) : items.length === 0 ? (
           <div className="flex flex-col items-center gap-2 rounded-md border border-dashed p-10 text-center text-sm text-muted-foreground">
             <Inbox className="h-8 w-8 opacity-40" />
@@ -150,24 +154,26 @@ export default function MyApprovalsPage() {
               const due = myDueAt(cr, me)
               const overdue = isOverdue(due)
               const busy = busyId === cr.id
+              const summary = schemaChangeSummary(cr.schema_after, cr.schema_before)
               return (
                 <div
                   key={cr.id}
-                  className="flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between"
+                  className={`flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between ${interactiveBoxClass}`}
                 >
+                  <div className="flex flex-1 flex-col gap-1">
                   <button
                     type="button"
                     className="flex flex-1 flex-col gap-1 text-left"
                     onClick={() => router.push(`/dashboard/changes/${cr.id}`)}
                   >
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-mono text-xs text-muted-foreground">{cr.cr_code}</span>
+                      <span className="font-mono text-xs">{cr.cr_code}</span>
                       <span className="font-medium">{cr.title}</span>
                       <StatusBadge status={cr.status} />
                       <Badge variant="outline">{CHANGE_TYPE_LABEL[cr.change_type]}</Badge>
-                      <Badge variant="outline">{PRIORITY_LABEL[cr.priority]}</Badge>
+                      <PriorityBadge priority={cr.priority} />
                     </div>
-                    <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                    <div className="flex flex-wrap items-center gap-3 text-xs">
                       <span>요청자: {approverLabel(cr.requested_by)}</span>
                       <span className={overdue ? "font-medium text-rose-600" : ""}>
                         <Clock className="mr-0.5 inline h-3 w-3" />
@@ -175,6 +181,26 @@ export default function MyApprovalsPage() {
                       </span>
                     </div>
                   </button>
+                  {/* 무엇을 승인하는지 카드에서 바로 — 대상 데이터셋과 스키마 변경 요약(TODO-077) */}
+                  <div className="flex flex-wrap items-center gap-3 text-xs">
+                    <span >
+                      데이터셋:{" "}
+                      {cr.dataset_name ? (
+                        <Link href={datasetHref(cr.dataset_id)} className="text-primary hover:underline">{cr.dataset_name}</Link>
+                      ) : "(삭제된 데이터셋)"}
+                    </span>
+                    {summary ? (
+                      <span className="flex items-center gap-1.5" title="스키마 변경 — 추가 / 수정 / 삭제 컬럼 수">
+                        {summary.added > 0 && <span className="text-emerald-600 dark:text-emerald-400">+{summary.added}</span>}
+                        {summary.modified > 0 && <span className="text-amber-600 dark:text-amber-400">~{summary.modified}</span>}
+                        {summary.dropped > 0 && <span className="text-destructive">−{summary.dropped}</span>}
+                        <span >컬럼</span>
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">스키마 변경 없음</span>
+                    )}
+                  </div>
+                  </div>
 
                   <div className="flex shrink-0 gap-1">
                     {canApprove && (

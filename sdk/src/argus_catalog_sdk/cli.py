@@ -2,6 +2,7 @@
 """Argus Model CLI — Argus Catalog 모델 레지스트리용 커맨드라인 인터페이스.
 
 인증: 내려받기(pull)와 쓰기 명령(push·import·delete·agent-apply)은 로그인이 필요하다.
+    --api-key KEY 또는 환경변수 ARGUS_CATALOG_API_KEY (권장 — 카탈로그 설정 > API 키),
     --token TOKEN 또는 환경변수 ARGUS_TOKEN, 혹은 --username/--password (ARGUS_USERNAME/ARGUS_PASSWORD)
 서버: --server URL 또는 환경변수 ARGUS_SERVER (웹 UI 주소도 사용 가능 — /api/v1 을 서버로 넘겨 줌)
 종료 코드: 성공 0, 오류(서버 오류는 "오류: API error <코드>: <내용>")·삭제 확인 취소·agent-apply 실패는 1.
@@ -68,6 +69,7 @@ def _get_client(args) -> ModelClient:
     사용자명·비밀번호가 있으면 여기서 로그인하므로, 비밀번호가 틀리면 명령을 시작하기 전에 401 로 끝난다."""
     return ModelClient(
         args.server,
+        api_key=getattr(args, "api_key", None) or None,
         token=args.token or None,
         username=args.username or None,
         password=args.password or None,
@@ -348,6 +350,8 @@ def main(argv: list[str] | None = None):
     # --server 공통 부모 파서
     server_parent = argparse.ArgumentParser(add_help=False)
     server_parent.add_argument("--server", default=DEFAULT_SERVER, help="카탈로그 서버 URL (env ARGUS_SERVER)")
+    server_parent.add_argument("--api-key", default=os.environ.get("ARGUS_CATALOG_API_KEY"),
+                               help="카탈로그 API 키 — 권장 (env ARGUS_CATALOG_API_KEY)")
     server_parent.add_argument("--token", default=os.environ.get("ARGUS_TOKEN"),
                                help="액세스 토큰 (env ARGUS_TOKEN)")
     server_parent.add_argument("--username", default=os.environ.get("ARGUS_USERNAME"),

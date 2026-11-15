@@ -3,11 +3,14 @@ import "@workspace/ui/globals.css"
 // .hljs / .hljs-keyword 등의 토큰 색상 + ``<pre class="hljs">`` 컨테이너 보강 룰.
 // 한 번만 import 하면 editor·viewer 양쪽 전역 적용.
 import "@/components/comments/highlight-styles.css"
+import type { Metadata } from "next"
 import localFont from "next/font/local"
+import { TooltipProvider } from "@workspace/ui/components/tooltip"
 import { NotifyToaster } from "@/components/notify-toaster"
 import { ConfirmProvider } from "@/components/confirm-provider"
 import { ThemeProvider } from "@/components/theme-provider"
 import { AuthProviderWrapper } from "@/components/auth-provider-wrapper" // Added for SSO AUTH
+import { brandTitle } from "@/lib/branding-server"
 
 const pretendard = localFont({
   src: "./fonts/PretendardVariable.woff2",
@@ -42,6 +45,11 @@ const d2coding = localFont({
   display: "swap",
 })
 
+// 브라우저 탭 제목 = 설정 > 사이드바 표시의 제품명(TODO-147)
+export async function generateMetadata(): Promise<Metadata> {
+  return { title: await brandTitle() }
+}
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -56,11 +64,14 @@ export default function RootLayout({
       <body className="min-h-screen bg-background text-foreground text-sm font-sans antialiased">
         <ThemeProvider>
           {/* Added for SSO AUTH - wraps entire app with authentication context */}
-          <ConfirmProvider>
-            <AuthProviderWrapper>
-              {children}
-            </AuthProviderWrapper>
-          </ConfirmProvider>
+          {/* 툴팁 대기 시간은 앱 전체에서 하나(TODO-120) — 화면별 TooltipProvider 를 두지 않는다 */}
+          <TooltipProvider delayDuration={300}>
+            <ConfirmProvider>
+              <AuthProviderWrapper>
+                {children}
+              </AuthProviderWrapper>
+            </ConfirmProvider>
+          </TooltipProvider>
           <NotifyToaster />
         </ThemeProvider>
       </body>

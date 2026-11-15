@@ -16,10 +16,17 @@ export async function proxy(request: NextRequest) {
 
   const destination = `${API_BASE_URL}${pathname}${search}`
 
+  // 백엔드는 이 프록시를 ``localhost:4600`` 으로 받으므로, 브라우저가 연 주소를 넘긴다 — 내보내기(DCAT·데이터 카드)의
+  // '요청 주소' 방식이 이 값을 쓴다. 앞단 프록시가 이미 붙였으면 그대로 둔다.
+  const headers = new Headers(request.headers)
+  const host = request.headers.get("host")
+  if (host && !headers.has("x-forwarded-host")) headers.set("x-forwarded-host", host)
+  if (!headers.has("x-forwarded-proto")) headers.set("x-forwarded-proto", request.nextUrl.protocol.replace(":", ""))
+
   try {
     const backendResponse = await fetch(destination, {
       method: request.method,
-      headers: request.headers,
+      headers,
       body: request.method !== "GET" && request.method !== "HEAD" ? request.body : undefined,
       // @ts-expect-error -- Next.js supports duplex for streaming request bodies
       duplex: "half",

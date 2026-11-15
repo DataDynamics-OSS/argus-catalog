@@ -2,7 +2,7 @@
 """알림(규칙·알림·전달) 서비스·권한 테스트 (in-memory SQLite, 자기완결형).
 
 검증:
-- 스키마: 채널(EMAIL 거부)·불리언·Webhook URL·트리거별 trigger_config 형태·SYNC_STALE 거부·수정 null 가드
+- 스키마: 채널(EMAIL 거부)·불리언·Webhook URL·트리거별 trigger_config 형태(SYNC_STALE stale_hours 범위)·수정 null 가드
 - 규칙 조합: 범위 대상 필수·존재, MCP 트리거는 ALL/DATASOURCE 만, WEBHOOK 은 URL 필수, 생성자 기록
 - 수정: 병합 상태 재검증, 활성 토글은 범위 대상 삭제와 무관, Webhook 채널 해제 시 URL 제거
 - 평가: 깨진 trigger_config 규칙은 건너뛰고 나머지는 평가, 요약 500자 절단, 한국어 요약
@@ -67,7 +67,14 @@ def _test_schema_validation() -> None:
     _expect_invalid(trigger_type="SCHEMA_CHANGE", trigger_config='{"change_types": ["RENAME"]}')
     _expect_invalid(trigger_config="[1]")
     _expect_invalid(trigger_config="{not json")
-    _expect_invalid(trigger_type="SYNC_STALE")
+    # SYNC_STALE 은 수집 실행 이력으로 평가한다 — stale_hours 범위만 검증
+    _expect_invalid(trigger_type="SYNC_STALE", trigger_config='{"stale_hours": 0}')
+    _expect_invalid(trigger_type="SYNC_STALE", trigger_config='{"stale_hours": "24"}')
+    # 생략하면 예약 주기의 2배로 평가 — 저장값에 넣지 않음
+    assert json.loads(s.AlertRuleCreate(rule_name="r", scope_type="ALL", trigger_type="SYNC_STALE").trigger_config or "{}") == {}
+    assert json.loads(s.AlertRuleCreate(rule_name="r", scope_type="ALL", trigger_type="SYNC_STALE",
+                                        trigger_config='{"stale_hours": 6}').trigger_config) == {"stale_hours": 6}
+    _expect_invalid(trigger_type="SYNC_FAILED", trigger_config='{"include_partial": "no"}')
     _expect_invalid(trigger_type="QUALITY_FAILED", trigger_config='{"min_severity": "HIGH"}')
     _expect_invalid(trigger_type="MCP_POLICY_DRIFT", trigger_config='{"environments": ["QA"]}')
     _expect_invalid(webhook_url="ftp://x")
@@ -272,7 +279,7 @@ async def _run() -> None:
         assert map_notes == {("WEBHOOK", "FAILED")}, map_notes                    # HTTP 500 → FAILED
         assert all(n.channel != "EMAIL" for n in notes)
         sent = json.loads(hooks[0].content)
-        assert sent["text"].startswith("[심각] 감시 컬럼 변경") and sent["rule_name"] == "감시"
+        assert sent["text"].startswith("[치명] 감시 컬럼 변경") and sent["rule_name"] == "감시"
 
         # ── 규칙 목록: 범위 대상 삭제 표시, Webhook 은 관리자에게만 ──
         rules = {r.rule_name: r for r in await service.list_rules(db, reveal_webhook=False)}

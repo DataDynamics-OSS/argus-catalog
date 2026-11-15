@@ -18,6 +18,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 
 import { Badge } from "@workspace/ui/components/badge"
+import { StatusBadge } from "@workspace/ui/components/status-badge"
 import { Button } from "@workspace/ui/components/button"
 import {
   Card,
@@ -41,11 +42,12 @@ import {
 } from "@workspace/ui/components/tabs"
 import { CodeViewer } from "@/components/code-viewer"
 import { ConfirmDialog } from "@/components/confirm-dialog"
-import { useAuth } from "@/features/auth"
 import { usePermissions } from "@/features/permissions/use-permissions"
 import { DatasetMetadataSummary } from "@/features/datasets/components/dataset-metadata-summary"
 import type { DatasetDetail } from "@/features/datasets/data/schema"
 import { ddlTitle } from "@/features/datasets/ddl"
+import { OriginText } from "@/features/datasets/components/origin-text"
+import { datasetStatus } from "@/features/datasets/status"
 
 import {
   datasetDetail,
@@ -60,6 +62,7 @@ import {
 import { remoteItemVisible } from "./detail-visibility"
 import { LineageBody, SourceBadge } from "./search-panel"
 import { errorMessage } from "@/lib/notify"
+import { decodeList } from "@/lib/text-list"
 
 const MONO = "font-[family-name:var(--font-d2coding)]"
 
@@ -168,13 +171,19 @@ function toLocalDetail(detail: FederatedDatasetDetail, urn: string): DatasetDeta
     file_count: num(ext.file_count),
     sensitivity: str(ext.sensitivity),
     contains_pii: bool(ext.contains_pii),
-    pii_fields: str(ext.pii_fields),
-    compliance_tags: str(ext.compliance_tags),
+    // peer 는 DB 값을 그대로 보낸다 — JSON 배열(TODO-143) 또는 예전 쉼표 문자열
+    pii_fields: typeof ext.pii_fields === "string" || Array.isArray(ext.pii_fields) ? decodeList(ext.pii_fields as string | string[]) : null,
+    compliance_tags: typeof ext.compliance_tags === "string" || Array.isArray(ext.compliance_tags) ? decodeList(ext.compliance_tags as string | string[]) : null,
     tier: str(ext.tier),
     certification: str(ext.certification),
     quality_score: num(ext.quality_score),
     quality_status: str(ext.quality_status),
     note: str(ext.note),
+    // AI-Ready — 개요 요약이 읽는 항목만. 이용 유형은 peer 가 쉼표 문자열로 보낸다
+    data_version: str(ext.data_version),
+    temporal_start: str(ext.temporal_start),
+    temporal_end: str(ext.temporal_end),
+    allowed_uses: str(ext.allowed_uses)?.split(",").filter(Boolean) ?? null,
     tags,
     owners,
     glossary_terms: glossary,
@@ -190,8 +199,7 @@ function toLocalDetail(detail: FederatedDatasetDetail, urn: string): DatasetDeta
 /** 페더레이션(원격) 데이터셋 상세 — 로컬 데이터셋 상세와 동일한 모양(읽기 전용). */
 export function FederationDatasetDetailView({ urn }: { urn: string }) {
   const router = useRouter()
-  const { user } = useAuth()
-  const { isFeatureAllowed } = usePermissions()
+  const { canUseFeature } = usePermissions()
   const [detail, setDetail] = useState<FederatedDatasetDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -279,7 +287,7 @@ export function FederationDatasetDetailView({ urn }: { urn: string }) {
   if (loading) {
     return (
       <div className="flex items-center gap-2 py-16 text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" /> 불러오는 중...
+        <Loader2 className="h-4 w-4 animate-spin" /> 불러오는 중…
       </div>
     )
   }
@@ -305,7 +313,7 @@ export function FederationDatasetDetailView({ urn }: { urn: string }) {
   // 상세 설명 — 노출 시에만 children 으로 전달(undefined 면 섹션 자체 숨김).
   const descNode =
     show("description") && meta.description ? (
-      <p className="text-sm whitespace-pre-wrap text-muted-foreground">
+      <p className="text-sm whitespace-pre-wrap">
         {meta.description}
       </p>
     ) : undefined
@@ -318,9 +326,9 @@ export function FederationDatasetDetailView({ urn }: { urn: string }) {
   // 샘플/DDL 은 실데이터·구조 노출 — 로컬 상세와 같은 기능 권한으로 통제(백엔드도 동일 검사)
   // 샘플·리니지 탭은 peer 노출 항목(peer_exposed)도 본다 — 노출하지 않으면 숨김(알 수 없으면 보임)
   const peerShows = (key: string) => remoteItemVisible(key, display, detail.peer_exposed)
-  const showSample = peerShows("sample") && isFeatureAllowed("datasets.sample-view")
+  const showSample = peerShows("sample") && canUseFeature("datasets.sample-view")
   const showLineage = peerShows("lineage")
-  const showDdl = show("ddl") && !!meta.ddl && isFeatureAllowed("datasets.ddl-view")
+  const showDdl = show("ddl") && !!meta.ddl && canUseFeature("datasets.ddl-view")
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
@@ -335,7 +343,7 @@ export function FederationDatasetDetailView({ urn }: { urn: string }) {
                 {local.display_name || local.name || "(이름 없음)"}
               </CardTitle>
               {local.summary && <p className="text-sm">{local.summary}</p>}
-              <p className={`text-sm text-muted-foreground ${MONO} break-all`}>
+              <p className={`text-sm ${MONO} break-all`}>
                 {local.urn}
               </p>
             </div>
@@ -345,13 +353,13 @@ export function FederationDatasetDetailView({ urn }: { urn: string }) {
                 instanceName={detail.source_instance_name}
               />
               {show("origin") && meta.origin && (
-                <Badge variant="secondary">{meta.origin}</Badge>
+                <OriginText origin={meta.origin} />
               )}
               {show("status") && meta.status && (
-                <Badge variant="outline">{meta.status}</Badge>
+                <StatusBadge {...datasetStatus(meta.status)} />
               )}
-              {/* 로컬 승격 — 전체 메타/스키마/샘플을 로컬 카탈로그로 가져온다(백엔드 admin 전용) */}
-              {user?.is_admin && (
+              {/* 로컬 승격 — 전체 메타/스키마/샘플을 로컬 카탈로그로 가져온다(명시 허용형 federation.import, TODO-122) */}
+              {canUseFeature("federation.import") && (
                 <Button
                   size="sm"
                   variant="outline"
@@ -384,7 +392,7 @@ export function FederationDatasetDetailView({ urn }: { urn: string }) {
               </span>{" "}
               의 메타데이터·스키마·샘플(노출 범위 내)을 로컬 데이터셋으로 생성합니다.
             </p>
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs">
               가져온 데이터셋은 원본과 동기화되지 않는 로컬 사본입니다.
             </p>
           </div>
@@ -484,15 +492,15 @@ export function FederationDatasetDetailView({ urn }: { urn: string }) {
                 <TableBody>
                   {schema.map((f, idx) => (
                     <TableRow key={`${f.field_path}-${idx}`}>
-                      <TableCell className="text-muted-foreground">{idx + 1}</TableCell>
+                      <TableCell >{idx + 1}</TableCell>
                       <TableCell className={`text-sm ${MONO}`}>{f.field_path}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
+                      <TableCell className="text-sm">
                         {f.display_name || "-"}
                       </TableCell>
                       {showType && (
                         <TableCell>
                           {f.field_type ? (
-                            <Badge variant="secondary" className="font-mono text-xs">
+                            <Badge variant="secondary" className="font-mono">
                               {f.field_type}
                             </Badge>
                           ) : (
@@ -515,7 +523,7 @@ export function FederationDatasetDetailView({ urn }: { urn: string }) {
                       {showPii && (
                         <TableCell className="text-xs">
                           {f.pii_type ? (
-                            <Badge variant="outline" className="text-[10px]">
+                            <Badge size="sm" variant="outline">
                               {f.pii_type}
                             </Badge>
                           ) : (
@@ -549,7 +557,7 @@ export function FederationDatasetDetailView({ urn }: { urn: string }) {
               </CardHeader>
               <CardContent>
                 {sampleLoading ? (
-                  <Loading text="샘플 불러오는 중..." />
+                  <Loading text="샘플 불러오는 중…" />
                 ) : sampleError ? (
                   <ErrorBox msg={sampleError} onRetry={loadSample} />
                 ) : sample ? (
@@ -614,7 +622,7 @@ export function FederationDatasetDetailView({ urn }: { urn: string }) {
         {showLineage && (
           <TabsContent value="lineage" className="mt-4 overflow-auto">
             {lineageLoading ? (
-              <Loading text="리니지 불러오는 중..." />
+              <Loading text="리니지 불러오는 중…" />
             ) : lineageError ? (
               <ErrorBox msg={lineageError} onRetry={loadLineage} />
             ) : lineage ? (
@@ -644,7 +652,7 @@ function BackButton({ onClick }: { onClick: () => void }) {
 
 function Loading({ text }: { text: string }) {
   return (
-    <div className="flex items-center gap-2 py-8 text-muted-foreground">
+    <div className="flex items-center gap-2 py-8">
       <Loader2 className="h-4 w-4 animate-spin" /> {text}
     </div>
   )

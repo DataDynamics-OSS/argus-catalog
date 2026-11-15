@@ -1,9 +1,10 @@
 "use client"
 
+import { Tip } from "@/components/tip"
 import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
 import { AlertTriangle, Bell, Box, Database, Pencil, Plus, Trash2 } from "lucide-react"
-import { errorMessage, toast } from "@/lib/notify"
+import { errorMessage, toast, notifyError } from "@/lib/notify"
 
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
@@ -29,8 +30,8 @@ import {
   type TagUsage,
 } from "@/features/tags/api"
 import type { Tag } from "@/features/datasets/data/schema"
-import { useAuth } from "@/features/auth"
 import { usePermissions } from "@/features/permissions/use-permissions"
+import { datasetListHref } from "@/features/datasets/links"
 
 const TAGS_MANAGE_FEATURE = "tags.manage"
 const DEFAULT_COLOR = "#3b82f6"
@@ -56,10 +57,9 @@ function TagBadge({ tag, className }: { tag: Pick<Tag, "name" | "color">; classN
 }
 
 export default function TagsPage() {
-  const { user } = useAuth()
-  const { isFeatureGranted } = usePermissions()
+  const { canUseFeature } = usePermissions()
   // 태그 관리 — admin 이거나 권한 관리에서 tags.manage 를 명시 허용받은 역할 (미설정이면 admin 전용)
-  const canManage = !!user?.is_admin || isFeatureGranted(TAGS_MANAGE_FEATURE)
+  const canManage = canUseFeature(TAGS_MANAGE_FEATURE)
   const [tags, setTags] = useState<Tag[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -127,7 +127,7 @@ export default function TagsPage() {
       await load()
     } catch (e) {
       // 대화상자는 열어 둔 채 사유(이름 중복·색상 형식 등)를 알린다
-      toast.error(errMsg(e, editing ? "태그를 수정하지 못했습니다." : "태그를 추가하지 못했습니다."))
+      notifyError(e, editing ? "태그를 수정하지 못했습니다." : "태그를 추가하지 못했습니다.")
     } finally {
       setSaving(false)
     }
@@ -142,7 +142,7 @@ export default function TagsPage() {
       setDeleteTarget(await fetchTagUsage(tagId))
     } catch (e) {
       setDeleteDialogOpen(false)
-      toast.error(errMsg(e, "태그 사용 현황을 확인하지 못했습니다."))
+      notifyError(e, "태그 사용 현황을 확인하지 못했습니다.")
     } finally {
       setDeleteLoading(false)
     }
@@ -160,7 +160,7 @@ export default function TagsPage() {
       await load()
     } catch (e) {
       // 차단(알림 규칙이 감시 중)·권한 등 백엔드 메시지를 토스트로 노출.
-      toast.error(errMsg(e, "태그를 삭제하지 못했습니다."))
+      notifyError(e, "태그를 삭제하지 못했습니다.")
     } finally {
       setDeleting(false)
     }
@@ -175,7 +175,7 @@ export default function TagsPage() {
       <DashboardHeader title="태그" />
       <div className="flex flex-1 flex-col gap-4 p-4">
         <div className="flex items-center justify-between gap-3">
-          <p className="text-sm text-muted-foreground">
+          <p className="text-sm">
             데이터셋·OCI 모델 분류와 알림 규칙의 감시 범위에 쓰는 태그를 관리합니다
           </p>
           {canManage && (
@@ -196,7 +196,7 @@ export default function TagsPage() {
         <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
           {isLoading && tags.length === 0 ? (
             <p className="text-muted-foreground col-span-full text-center py-8">
-              태그를 불러오는 중...
+              태그를 불러오는 중…
             </p>
           ) : loadError && tags.length === 0 ? null : tags.length === 0 ? (
             <p className="text-muted-foreground col-span-full text-center py-8">
@@ -210,22 +210,30 @@ export default function TagsPage() {
                     <TagBadge tag={tag} />
                     {canManage && (
                       <div className="flex items-center">
-                        <Button variant="ghost" size="icon" className="h-8 w-8" aria-label={`${tag.name} 태그 수정`}
+                        <Tip label={`${tag.name} 태그 수정`}><Button variant="ghost" size="icon" className="h-8 w-8" aria-label={`${tag.name} 태그 수정`}
                           onClick={() => openEdit(tag)}>
                           <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button variant="ghost" size="icon" className="h-8 w-8" aria-label={`${tag.name} 태그 삭제`}
+                        </Button></Tip>
+                        <Tip label={`${tag.name} 태그 삭제`}><Button variant="ghost" size="icon" className="h-8 w-8" aria-label={`${tag.name} 태그 삭제`}
                           onClick={() => handleDeleteClick(tag.id)}>
                           <Trash2 className="h-4 w-4" />
-                        </Button>
+                        </Button></Tip>
                       </div>
                     )}
                   </div>
                 </CardHeader>
-                <CardContent>
+                <CardContent className="space-y-2">
                   <p className="text-sm text-muted-foreground">
                     {tag.description || "설명 없음"}
                   </p>
+                  {/* 이 태그가 붙은 데이터셋 목록으로(TODO-076) */}
+                  {tag.dataset_count ? (
+                    <Link href={datasetListHref({ tag: [String(tag.id)] })} className="text-sm text-primary hover:underline">
+                      사용 중인 데이터셋 {tag.dataset_count.toLocaleString()}개 보기 →
+                    </Link>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">붙은 데이터셋 없음</p>
+                  )}
                 </CardContent>
               </Card>
             ))
@@ -294,7 +302,7 @@ export default function TagsPage() {
                 취소
               </Button>
               <Button onClick={handleSave} disabled={saving || !name.trim() || !colorValid}>
-                {saving ? "저장 중..." : editing ? "저장" : "생성"}
+                {saving ? "저장 중…" : editing ? "저장" : "추가"}
               </Button>
             </div>
           </div>
@@ -319,7 +327,7 @@ export default function TagsPage() {
 
           {deleteLoading ? (
             <div className="py-6 text-center text-sm text-muted-foreground">
-              태그 사용 여부 확인 중...
+              태그 사용 여부 확인 중…
             </div>
           ) : deleteTarget ? (
             <div className="space-y-3">
@@ -328,7 +336,7 @@ export default function TagsPage() {
                   <p className="text-sm font-medium text-destructive">
                     알림 규칙 {rules.length}개가 이 태그를 감시 범위로 쓰고 있어 삭제할 수 없습니다
                   </p>
-                  <p className="text-xs text-muted-foreground mt-1">
+                  <p className="text-xs mt-1">
                     알림 규칙의 감시 범위를 바꾸거나 규칙을 먼저 삭제하세요.
                   </p>
                   <UsageList
@@ -351,7 +359,7 @@ export default function TagsPage() {
                         models.length > 0 && `OCI 모델 ${models.length}개`,
                       ].filter(Boolean).join(", ")}에서 사용 중입니다
                     </p>
-                    <p className="text-xs text-muted-foreground mt-1">
+                    <p className="text-xs mt-1">
                       태그를 삭제하면 아래 항목에서 모두 제거됩니다.
                     </p>
                   </div>
@@ -391,7 +399,7 @@ export default function TagsPage() {
               onClick={handleDeleteConfirm}
               disabled={deleting || deleteLoading || !deleteTarget || blockedByRules}
             >
-              {deleting ? "삭제 중..." : "태그 삭제"}
+              {deleting ? "삭제 중…" : "태그 삭제"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -417,7 +425,7 @@ function UsageList({
             {it.label}
           </Link>
           {it.note && (
-            <Badge variant="outline" className="text-xs shrink-0 ml-auto">{it.note}</Badge>
+            <Badge variant="outline" className="shrink-0 ml-auto">{it.note}</Badge>
           )}
         </div>
       ))}

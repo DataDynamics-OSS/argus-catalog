@@ -10,13 +10,14 @@ FONTS_DIR := pdf/fonts
 NOTO_VF_URL := https://raw.githubusercontent.com/google/fonts/main/ofl/notosanskr/NotoSansKR%5Bwght%5D.ttf
 CODING_BASE := https://raw.githubusercontent.com/google/fonts/main/ofl/nanumgothiccoding
 
-.PHONY: help install fonts build pdf diagrams preview clean
+.PHONY: help install fonts build site-for-web pdf diagrams preview clean
 
 help:
 	@echo "Argus Catalog 매뉴얼 빌드"
 	@echo "  make install   의존성 설치 (npm + asciidoctor-pdf gem + 한글 폰트)"
 	@echo "  make fonts     한글 폰트만 다운로드 ($(FONTS_DIR)/)"
 	@echo "  make build     HTML 사이트 → build/site/"
+	@echo "  make site-for-web  웹 UI 도움말용 사이트 → ../frontend/apps/web/public/manual/"
 	@echo "  make check-glyphs  PDF 글꼴에 없는 글자(이모지 등) 검사"
 	@echo "  make pdf       PDF        → $(PDF_OUT)"
 	@echo "  make diagrams  SVG/PNG 도표 재생성"
@@ -46,6 +47,10 @@ fonts:
 
 build:
 	npx antora antora-playbook.yml
+
+# 웹 UI 의 헤더 도움말(?)이 여는 /manual/ — git 워크트리·.git 없는 환경에서도 빌드되게 임시 저장소에서 빌드한다
+site-for-web:
+	tools/build-web-manual.sh ../frontend/apps/web/public/manual
 
 # PDF 글꼴(Noto Sans KR·나눔고딕코딩)에 없는 글자는 빈 네모로 찍히므로 빌드 전에 막는다.
 check-glyphs:

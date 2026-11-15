@@ -70,6 +70,35 @@ export const Indent = Extension.create<IndentOptions>({
     ]
   },
 
+  // Tab / Shift-Tab 들여쓰기. 편집기가 Tab 을 가로채지 않으면 브라우저 기본 포커스 이동이 일어나
+  // 편집 영역 밖(툴바·등록 버튼 등)으로 포커스가 튄다. 컨텍스트별로 들여쓰기를 적용하고, 표 안을
+  // 제외하고는 항상 true 를 반환해 Tab 이 편집기 밖으로 새지 않게 한다.
+  addKeyboardShortcuts() {
+    const handle = (dir: 1 | -1) => (): boolean => {
+      const editor = this.editor
+      // 표 안에서는 Table 확장의 셀 이동(Tab/Shift-Tab)에 양보.
+      if (editor.isActive("table")) return false
+      // 코드 블록: Tab = 2칸 들여쓰기 삽입. Shift-Tab 은 동작 없이 소비만.
+      if (editor.isActive("codeBlock")) {
+        if (dir === 1) editor.commands.insertContent("  ")
+        return true
+      }
+      // 체크리스트(taskItem)·글머리/번호 목록: 한 단계 sink / lift.
+      for (const item of ["taskItem", "listItem"]) {
+        if (editor.isActive(item)) {
+          if (dir === 1) editor.commands.sinkListItem(item)
+          else editor.commands.liftListItem(item)
+          return true
+        }
+      }
+      // 그 외 paragraph / heading: 커스텀 indent / outdent (최대·최소여도 소비).
+      if (dir === 1) editor.commands.indent()
+      else editor.commands.outdent()
+      return true
+    }
+    return { Tab: handle(1), "Shift-Tab": handle(-1) }
+  },
+
   addCommands() {
     type EditorLike = { isActive: (name: string) => boolean }
     function currentType(editor: EditorLike): string {

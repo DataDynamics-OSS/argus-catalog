@@ -24,10 +24,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agents import bulk, card_import, discovery, manifest, service, views
 from app.agents.models import AIAgent
 from app.agents.schemas import (
+    AgentResourceUsage,
     AIAgentCard,
     AIAgentCardImportRequest,
     AIAgentCardImportResponse,
     AIAgentCreate,
+    AIAgentDataAccessCreate,
+    AIAgentDataAccessResponse,
     AIAgentDetailResponse,
     AIAgentDiscoveryRegister,
     AIAgentDiscoveryRegisterResponse,
@@ -42,6 +45,9 @@ from app.agents.schemas import (
     AIAgentMcpServerUpdate,
     AIAgentMeteringResponse,
     AIAgentPolicyBundle,
+    AIAgentSkillCreate,
+    AIAgentSkillResponse,
+    AIAgentSkillUpdate,
     AIAgentStats,
     AIAgentStatusHistoryResponse,
     AIAgentSummary,
@@ -57,7 +63,7 @@ from app.agents.schemas import (
 )
 from app.core.auth import AdminUser, CurrentUser, OptionalUser, TokenUser
 from app.core.database import get_session
-from app.permissions.router import require_feature
+from app.permissions.router import check_feature, require_feature
 
 logger = logging.getLogger(__name__)
 
@@ -66,8 +72,10 @@ router = APIRouter(prefix="/ai-agents", tags=["ai-agents"])
 _NOT_FOUND = "AI Agent '{name}'을(를) 찾을 수 없습니다."
 
 
-async def _assert_agent_editor(session: AsyncSession, name: str, current: TokenUser):
+async def _assert_agent_editor(session: AsyncSession, name: str, current: TokenUser, feature: str = "agents.edit"):
     """에이전트 쓰기 가드 — 관리자·등록자·소유자(owner_email 이 로그인 이메일과 같음)면 통과.
+
+    역할의 기능 권한(``feature`` — 수정 ``agents.edit`` · 삭제 ``agents.delete``, 기본 허용형)도 본다(TODO-122).
 
     정보 수정·삭제와 도구·MCP·리니지·버전·평가 같은 하위 항목 변경이 모두 같은 기준을 쓴다
     (일괄 처리·정의 파일 반영과도 같다 — ``manifest._can_edit``). 없으면 404, 권한이 없으면 403.
@@ -79,7 +87,26 @@ async def _assert_agent_editor(session: AsyncSession, name: str, current: TokenU
     if not manifest._can_edit(agent, current):
         logger.warning("AI Agent 쓰기 거부: %s (요청자 %s)", name, current.username)
         raise HTTPException(status_code=403, detail="에이전트의 등록자·소유자 또는 관리자만 수행할 수 있습니다.")
+    if not await check_feature(session, current, feature):
+        logger.warning("AI Agent 쓰기 거부(기능 권한 %s): %s (요청자 %s)", feature, name, current.username)
+        raise HTTPException(status_code=403, detail=f"기능 권한이 없습니다: {feature}")
     return agent
+
+
+async def _assert_telemetry_sender(session: AsyncSession, name: str, current: TokenUser) -> bool:
+    """호출 기록 · 훅 이벤트 수집 가드 — 등록된 에이전트면 관리자 · 등록자 · 소유자만(아니면 403, DEF-125).
+
+    외부 런타임은 그 에이전트 소유자나 관리자에게 발급된 API 키로 보낸다. 아무 로그인 사용자나 남의 에이전트
+    지표(호출 수 · 비용 · 평판)와 집행 기록을 꾸며 넣지 못하게 한다. 카탈로그에 없는 이름이면 False —
+    호출한 쪽이 '미등록 에이전트' 로 기록하고 404 를 돌려준다(발견 기능은 그대로).
+    """
+    agent = (await session.execute(select(AIAgent).where(AIAgent.name == name))).scalars().first()
+    if agent is None:
+        return False
+    if not manifest._can_edit(agent, current):
+        logger.warning("AI Agent 텔레메트리 수집 거부(403): %s (요청자 %s)", name, current.username)
+        raise HTTPException(status_code=403, detail="에이전트의 등록자·소유자 또는 관리자만 호출 기록을 보낼 수 있습니다.")
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +188,7 @@ async def apply_ai_agent_manifests(
     return await manifest.apply_manifests(session, docs, current, dry_run=dry_run, source_ref=source_ref)
 
 
-@router.post("/prune")
+@router.post("/prune", dependencies=[Depends(require_feature("agents.delete"))])
 async def prune_ai_agent_manifests(
     current: CurrentUser,
     source_prefix: str = Body(..., max_length=1000),
@@ -209,7 +236,7 @@ async def import_ai_agent_card(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/bulk")
+@router.post("/bulk", dependencies=[Depends(require_feature("agents.bulk-edit")), Depends(require_feature("agents.edit"))])
 async def bulk_update_ai_agents(current: CurrentUser, req: bulk.BulkRequest,
                                 session: AsyncSession = Depends(get_session)):
     """여러 에이전트(최대 200개)의 상태·소유자·부서·분류·태그를 한 번에 바꾼다. 에이전트마다 독립 처리(HTTP 200)."""
@@ -332,6 +359,21 @@ async def reopen_ai_agent_discovery(current: AdminUser, discovery_id: int, sessi
     return await _set_discovery_status(session, discovery_id, "new", current)
 
 
+@router.get("/usage", response_model=list[AgentResourceUsage])
+async def ai_agent_resource_usage(
+    dataset_id: int | None = Query(None, description="데이터셋 id"),
+    datasource_id: int | None = Query(None, description="데이터 소스 id"),
+    model_id: int | None = Query(None, description="등록 모델 id"),
+    session: AsyncSession = Depends(get_session),
+):
+    """자원(데이터셋·데이터 소스·모델)을 쓰는 에이전트 — 자원 상세 화면의 역방향 조회. 하나만 지정한다."""
+    if sum(v is not None for v in (dataset_id, datasource_id, model_id)) != 1:
+        raise HTTPException(status_code=400, detail="dataset_id·datasource_id·model_id 중 하나만 지정하세요.")
+    logger.info("GET /ai-agents/usage: dataset=%s datasource=%s model=%s", dataset_id, datasource_id, model_id)
+    return await service.resource_usage(session, dataset_id=dataset_id, datasource_id=datasource_id,
+                                        model_id=model_id)
+
+
 @router.get("", response_model=PaginatedAIAgents)
 async def list_ai_agents(
     user: OptionalUser,
@@ -339,9 +381,9 @@ async def list_ai_agents(
     status: str | None = Query(None, description="상태 필터"),
     framework: str | None = Query(None, description="프레임워크 필터"),
     category: str | None = Query(None, description="카테고리 필터"),
-    department: str | None = Query(None, description="부서(여러 개는 쉼표)"),
+    department: str | None = Query(None, description="부서 — JSON 배열(`[\"영업\",\"재무\"]`) 또는 쉼표 구분"),
     owner: str | None = Query(None, description="소유자 이메일. 'me' 는 로그인 사용자"),
-    tag: str | None = Query(None, description="태그(여러 개는 쉼표, 모두 포함)"),
+    tag: str | None = Query(None, description="태그(모두 포함) — JSON 배열(값 안의 쉼표 보존) 또는 쉼표 구분"),
     risk: Literal["low", "medium", "high", "critical"] | None = Query(None, description="최고 도구 위험도 이 값 이상"),
     managed_by: str | None = Query(None, description="관리 방식 ui/manifest/discovered(쉼표)"),
     owner_state: str | None = Query(
@@ -349,6 +391,14 @@ async def list_ai_agents(
         description="책임자 상태 attention(확인 필요) 또는 ok/missing/unknown/inactive(쉼표)",
     ),
     incomplete: bool = Query(False, description="정보 완성도 100% 미만만"),
+    risk_tier: str | None = Query(
+        None, pattern=r"^(minimal|limited|high|prohibited|none)(,(minimal|limited|high|prohibited|none))*$",
+        description="위험 등급(쉼표). none 은 등급 미지정",
+    ),
+    autonomy_level: str | None = Query(
+        None, pattern=r"^(advisory|supervised|autonomous|none)(,(advisory|supervised|autonomous|none))*$",
+        description="자율 수준(쉼표). none 은 미지정",
+    ),
     sort: str | None = Query(
         None, pattern=r"^-?(updated|name|usage|last_invoked|completeness|risk)$",
         description="정렬 updated(기본)/name/usage/last_invoked/completeness/risk, '-' 는 반대 방향",
@@ -370,7 +420,8 @@ async def list_ai_agents(
     return await service.list_agents(
         session, search=search, status=status, framework=framework, category=category, page=page,
         page_size=page_size, department=department, owner=owner, tag=tag, risk=risk, managed_by=managed_by,
-        owner_state=owner_state, incomplete=incomplete, sort=sort,
+        owner_state=owner_state, incomplete=incomplete, sort=sort, risk_tier=risk_tier,
+        autonomy_level=autonomy_level,
     )
 
 
@@ -422,7 +473,7 @@ async def update_ai_agent(current: CurrentUser,
 async def delete_ai_agent(name: str, current: CurrentUser, session: AsyncSession = Depends(get_session)):
     """에이전트 삭제(하드 삭제) — 관리자·등록자·소유자."""
     logger.info("DELETE /ai-agents/%s", name)
-    await _assert_agent_editor(session, name, current)
+    await _assert_agent_editor(session, name, current, "agents.delete")
     if not await service.delete_agent(session, name):
         logger.warning("AI Agent 없음(삭제): %s", name)
         raise HTTPException(status_code=404, detail=_NOT_FOUND.format(name=name))
@@ -501,6 +552,61 @@ async def add_ai_agent_lineage(current: CurrentUser,
     if not line:
         raise HTTPException(status_code=404, detail=_NOT_FOUND.format(name=name))
     return line
+
+
+@router.post("/{name}/skills", response_model=AIAgentSkillResponse)
+async def add_ai_agent_skill(current: CurrentUser,
+    name: str,
+    req: AIAgentSkillCreate,
+    session: AsyncSession = Depends(get_session),
+):
+    """외부에 내세우는 스킬(A2A AgentSkill)을 추가한다. 스킬 ID 가 겹치면 409."""
+    logger.info("POST /ai-agents/%s/skills: %s", name, req.name)
+    await _assert_agent_editor(session, name, current)
+    try:
+        skill = await service.add_skill(session, name, req)
+    except ValueError as e:
+        logger.warning("POST /ai-agents/%s/skills 충돌: %s", name, e)
+        raise HTTPException(status_code=409, detail=str(e))
+    if not skill:
+        raise HTTPException(status_code=404, detail=_NOT_FOUND.format(name=name))
+    return skill
+
+
+@router.patch("/{name}/skills/{skill_id}", response_model=AIAgentSkillResponse)
+async def update_ai_agent_skill(current: CurrentUser,
+    name: str,
+    skill_id: int,
+    req: AIAgentSkillUpdate,
+    session: AsyncSession = Depends(get_session),
+):
+    """스킬을 수정한다(스킬 ID 는 바꾸지 않는다)."""
+    logger.info("PATCH /ai-agents/%s/skills/%d", name, skill_id)
+    await _assert_agent_editor(session, name, current)
+    skill = await service.update_skill(session, name, skill_id, req)
+    if not skill:
+        raise HTTPException(status_code=404, detail="스킬을 찾을 수 없습니다.")
+    return skill
+
+
+@router.post("/{name}/data-access", response_model=AIAgentDataAccessResponse)
+async def add_ai_agent_data_access(current: CurrentUser,
+    name: str,
+    req: AIAgentDataAccessCreate,
+    session: AsyncSession = Depends(get_session),
+):
+    """에이전트가 읽거나 쓰는 데이터 소스·데이터셋을 등록한다. 대상이 없거나 이미 있으면 400."""
+    logger.info("POST /ai-agents/%s/data-access: dataset=%s datasource=%s",
+                name, req.dataset_urn or req.dataset_id, req.datasource_name or req.datasource_id)
+    await _assert_agent_editor(session, name, current)
+    try:
+        row = await service.add_data_access(session, name, req)
+    except ValueError as e:
+        logger.warning("POST /ai-agents/%s/data-access 거부: %s", name, e)
+        raise HTTPException(status_code=400, detail=str(e))
+    if not row:
+        raise HTTPException(status_code=404, detail=_NOT_FOUND.format(name=name))
+    return row
 
 
 @router.get("/{name}/versions", response_model=list[AIAgentVersionResponse])
@@ -589,6 +695,30 @@ async def delete_ai_agent_lineage(current: CurrentUser,
     return {"status": "ok"}
 
 
+@router.delete("/{name}/skills/{skill_id}")
+async def delete_ai_agent_skill(current: CurrentUser,
+    name: str, skill_id: int, session: AsyncSession = Depends(get_session)
+):
+    """스킬을 삭제한다."""
+    logger.info("DELETE /ai-agents/%s/skills/%d", name, skill_id)
+    await _assert_agent_editor(session, name, current)
+    if not await service.delete_skill(session, name, skill_id):
+        raise HTTPException(status_code=404, detail="스킬을 찾을 수 없습니다.")
+    return {"status": "ok"}
+
+
+@router.delete("/{name}/data-access/{access_id}")
+async def delete_ai_agent_data_access(current: CurrentUser,
+    name: str, access_id: int, session: AsyncSession = Depends(get_session)
+):
+    """데이터 접근 등록을 지운다."""
+    logger.info("DELETE /ai-agents/%s/data-access/%d", name, access_id)
+    await _assert_agent_editor(session, name, current)
+    if not await service.delete_data_access(session, name, access_id):
+        raise HTTPException(status_code=404, detail="데이터 접근 항목을 찾을 수 없습니다.")
+    return {"status": "ok"}
+
+
 # ---------------------------------------------------------------------------
 # 평가 (Phase 2)
 # ---------------------------------------------------------------------------
@@ -628,7 +758,8 @@ async def ingest_ai_agent_invocation(
 ):
     """외부 런타임이 호출 텔레메트리를 push 한다(관측 캐시/평판 갱신)."""
     logger.info("POST /ai-agents/%s/invocations: status=%s", name, req.status)
-    if not await service.ingest_invocation(session, name, req):
+    registered = await _assert_telemetry_sender(session, name, _caller)
+    if not registered or not await service.ingest_invocation(session, name, req):
         # 카탈로그에 없는 에이전트 — 응답은 404 그대로, 이름은 '미등록 에이전트'로 기록
         await discovery.record(session, name, "invocation", _caller.username, req.consumer)
         raise HTTPException(status_code=404, detail=_NOT_FOUND.format(name=name))
@@ -650,7 +781,7 @@ async def get_ai_agent_metering(name: str, session: AsyncSession = Depends(get_s
 # ---------------------------------------------------------------------------
 
 
-@router.get("/{name}/card", response_model=AIAgentCard)
+@router.get("/{name}/card", response_model=AIAgentCard, response_model_exclude_none=True)
 async def get_ai_agent_card(name: str, session: AsyncSession = Depends(get_session)):
     """A2A 스타일 에이전트 카드(상호 검색·협업용)."""
     logger.info("GET /ai-agents/%s/card", name)
@@ -708,7 +839,8 @@ async def ingest_ai_agent_hook_event(
 ):
     """외부 런타임의 인라인 훅이 집행 결과(허용/차단/마스킹/HITL 등)를 보고한다."""
     logger.info("POST /ai-agents/%s/hook-events: %s/%s", name, req.stage, req.decision)
-    ev = await service.ingest_hook_event(session, name, req)
+    registered = await _assert_telemetry_sender(session, name, _caller)
+    ev = await service.ingest_hook_event(session, name, req) if registered else None
     if not ev:
         await discovery.record(session, name, "hook_event", _caller.username, req.consumer)
         raise HTTPException(status_code=404, detail=_NOT_FOUND.format(name=name))

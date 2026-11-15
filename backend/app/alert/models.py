@@ -30,7 +30,7 @@ class AlertRule(Base):
     - SCHEMA_CHANGE: 특정 변경 유형(DROP/MODIFY/ADD) 필터
     - COLUMN_WATCH: 특정 컬럼만 감시
     - MAPPING_BROKEN: 컬럼 매핑된 컬럼이 변경될 때만 발동
-    - QUALITY_FAILED: 품질 검증 실패 (trigger_config: {"min_severity": "WARNING"})
+    - QUALITY_FAILED: 품질 진단 실패 (trigger_config: {"min_severity": "WARNING"})
     - MCP_POLICY_DRIFT / MCP_SECURITY_WARNING: MCP 배포 finding (scope ALL 또는 DATASOURCE)
       trigger_config: {"min_severity": "high", "environments": ["PROD"], "kinds": [...]}
     """

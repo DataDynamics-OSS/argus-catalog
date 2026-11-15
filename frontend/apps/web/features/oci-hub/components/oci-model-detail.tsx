@@ -5,7 +5,7 @@ import dynamic from "next/dynamic"
 import Link from "next/link"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import {
-  ArrowLeft, Clock, Download, ExternalLink, FileJson, FolderOpen, Globe, Loader2, Pencil, Plus, RefreshCw, Trash2, X,
+  ArrowLeft, Clock, Download, ExternalLink, FileJson, FolderOpen, Globe, Loader2, MoreHorizontal, Pencil, Plus, RefreshCw, Trash2, X,
 } from "lucide-react"
 import Markdown from "react-markdown"
 import remarkGfm from "remark-gfm"
@@ -16,15 +16,24 @@ import { useConfirm } from "@/components/confirm-provider"
 
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
+import { DisabledReason, Tip } from "@/components/tip"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@workspace/ui/components/dialog"
 import { Input } from "@workspace/ui/components/input"
 import { Popover, PopoverContent, PopoverTrigger } from "@workspace/ui/components/popover"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@workspace/ui/components/tabs"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@workspace/ui/components/dropdown-menu"
+import { DetailSection, LINE_TABS_LIST, LINE_TABS_TRIGGER } from "@/components/detail-section"
 import { CommentSection } from "@/components/comments"
 import { CodeViewer } from "@/components/code-viewer"
 import { useAuth } from "@/features/auth"
+import { usePermissions } from "@/features/permissions/use-permissions"
 import { MONACO_FONT_SIZE } from "@/lib/monaco"
 
 import {
@@ -41,6 +50,7 @@ import { OciFilesTab } from "./oci-files-tab"
 import { OciUsageGuide } from "./oci-guides"
 import { OciLineageTab } from "./oci-lineage"
 import { OciModelDialog } from "./oci-model-dialog"
+import { SearchInput } from "@/components/search-input"
 
 const MonacoEditor = dynamic(() => import("@monaco-editor/react").then((m) => m.default), {
   ssr: false,
@@ -64,7 +74,7 @@ function TagEditor({
 
   useEffect(() => {
     if (open && all === null) {
-      fetchCatalogTags().then(setAll).catch((e) => { toast.error(errorMessage(e) ?? "태그를 불러오지 못했습니다."); setAll([]) })
+      fetchCatalogTags().then(setAll).catch((e) => { notifyError(e, "태그를 불러오지 못했습니다."); setAll([]) })
     }
   }, [open, all])
 
@@ -73,14 +83,14 @@ function TagEditor({
     (t) => !attached.has(t.id) && t.name.toLowerCase().includes(filter.trim().toLowerCase()),
   )
 
-  async function run(id: number, fn: () => Promise<void>, ok: string) {
+  async function run(id: number, fn: () => Promise<void>, ok: string, fail: string) {
     setBusy(id)
     try {
       await fn()
       toast.success(ok)
       onChanged()
     } catch (e) {
-      toast.error(errorMessage(e) ?? "처리하지 못했습니다.")
+      notifyError(e, fail)
     } finally {
       setBusy(null)
     }
@@ -89,18 +99,18 @@ function TagEditor({
   return (
     <>
       {model.tags.map((t) => (
-        <Badge key={t.id} variant="outline" className="text-xs gap-1" style={{ borderColor: t.color, color: t.color }}>
+        <Badge key={t.id} variant="outline" className="gap-1" style={{ borderColor: t.color, color: t.color }}>
           {t.name}
           {canEdit && (
-            <button
+            <Tip label={`${t.name} 태그 제거`}><button
               type="button"
               className="ml-0.5 rounded hover:bg-muted disabled:opacity-50"
               aria-label={`${t.name} 태그 제거`}
               disabled={busy === t.id}
-              onClick={() => run(t.id, () => removeTag(model.name, t.id), `'${t.name}' 태그를 제거했습니다.`)}
+              onClick={() => run(t.id, () => removeTag(model.name, t.id), `'${t.name}' 태그를 제거했습니다.`, `'${t.name}' 태그를 제거하지 못했습니다.`)}
             >
               <X className="h-3 w-3" />
-            </button>
+            </button></Tip>
           )}
         </Badge>
       ))}
@@ -108,13 +118,13 @@ function TagEditor({
         <Popover open={open} onOpenChange={setOpen}>
           <PopoverTrigger asChild>
             <Button variant="outline" size="sm" className="h-5 px-1.5 text-xs">
-              <Plus className="h-3 w-3 mr-0.5" />태그
+              <Plus className="h-3 w-3 mr-0.5" />태그 추가
             </Button>
           </PopoverTrigger>
           <PopoverContent className="w-64 p-2" align="start">
-            <Input
-              placeholder="태그 검색" value={filter} onChange={(e) => setFilter(e.target.value)}
-              className="h-8 mb-2" autoFocus
+            <SearchInput
+              size="sm" className="mb-2"
+              placeholder="태그 검색…" value={filter} onValueChange={setFilter} autoFocus
             />
             <div className="max-h-60 overflow-y-auto space-y-0.5">
               {all === null ? (
@@ -129,7 +139,7 @@ function TagEditor({
                   type="button"
                   disabled={busy !== null}
                   className="flex w-full items-center gap-2 rounded px-2 py-1 text-sm hover:bg-muted text-left"
-                  onClick={() => run(t.id, () => addTag(model.name, t.id), `'${t.name}' 태그를 추가했습니다.`)}
+                  onClick={() => run(t.id, () => addTag(model.name, t.id), `'${t.name}' 태그를 추가했습니다.`, `'${t.name}' 태그를 추가하지 못했습니다.`)}
                 >
                   <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ background: t.color }} />
                   {t.name}
@@ -222,11 +232,12 @@ function ReadmeTab({
   }
 
   return (
-    <div>
-      {canEdit && (
-        <div className="flex items-center justify-end gap-2 mb-2">
+    <DetailSection
+      title="README"
+      actions={canEdit ? (
+        <>
           {editing && (
-            <div role="group" aria-label="README 보기 방식" className="mr-auto inline-flex rounded-md border p-0.5">
+            <div role="group" aria-label="README 보기 방식" className="inline-flex rounded-md border p-0.5">
               {README_VIEWS.map((v) => (
                 <button
                   key={v.value}
@@ -251,11 +262,12 @@ function ReadmeTab({
             </div>
           ) : (
             <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
-              <Pencil className="h-3.5 w-3.5 mr-1.5" />README 수정
+              <Pencil className="h-3.5 w-3.5 mr-1.5" />README 편집
             </Button>
           )}
-        </div>
-      )}
+        </>
+      ) : undefined}
+    >
       {editing ? (
         <div
           className={`grid auto-rows-fr gap-3 ${view === "split" ? "grid-cols-1 lg:grid-cols-2" : "grid-cols-1"}`}
@@ -296,18 +308,18 @@ function ReadmeTab({
           )}
         </div>
       )}
-    </div>
+    </DetailSection>
   )
 }
 
 // ─── 버전 ───
 
 function VersionsTab({
-  modelName, versions, canEdit, onShowFiles, onDeleted,
+  modelName, versions, canDelete, onShowFiles, onDeleted,
 }: {
   modelName: string
   versions: OciModelVersion[]
-  canEdit: boolean
+  canDelete: boolean
   onShowFiles: (v: number) => void
   onDeleted: () => void
 }) {
@@ -377,7 +389,7 @@ function VersionsTab({
                         ? <span title={v.content_digest}>{v.content_digest.slice(0, 19)}…{v.content_digest.slice(-8)}</span>
                         : <span className="text-muted-foreground">-</span>}
                   </td>
-                  <td className="px-3 py-2 text-xs text-muted-foreground" title={formatDateTime(v.created_at)}>
+                  <td className="px-3 py-2 text-xs" title={formatDateTime(v.created_at)}>
                     {formatDateTime(v.created_at)}
                   </td>
                   <td className="px-3 py-2">
@@ -387,16 +399,15 @@ function VersionsTab({
                           <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => onShowFiles(v.version)}>파일 보기</Button>
                           {v.manifest && (
                             <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => setManifest(v)}>
-                              <FileJson className="h-3 w-3 mr-1" />manifest
+                              <FileJson className="h-3 w-3 mr-1" />매니페스트
                             </Button>
                           )}
                         </>
                       )}
-                      {canEdit && (
-                        <Button
+                      {canDelete && (
+                        <DisabledReason reason={v.status === "importing" && "가져오는 중인 버전은 끝난 뒤 삭제할 수 있습니다."}><Button
                           variant="ghost" size="sm" className="h-6 text-xs text-destructive hover:text-destructive"
                           aria-label={`v${v.version} 삭제`}
-                          title={v.status === "importing" ? "가져오는 중인 버전은 끝난 뒤 삭제할 수 있습니다." : `v${v.version} 삭제`}
                           disabled={v.status === "importing" || deletingVersion !== null}
                           onClick={() => removeVersion(v)}
                         >
@@ -404,7 +415,7 @@ function VersionsTab({
                             ? <Loader2 className="h-3 w-3 mr-1 animate-spin" />
                             : <Trash2 className="h-3 w-3 mr-1" />}
                           삭제
-                        </Button>
+                        </Button></DisabledReason>
                       )}
                     </div>
                   </td>
@@ -434,6 +445,7 @@ function VersionsTab({
 /** OCI 모델 상세 — `/dashboard/oci-hub/{name}?tab=...&version=...`. */
 export function OciModelDetailView({ name }: { name: string }) {
   const { user } = useAuth()
+  const { canUseFeature } = usePermissions()
   const router = useRouter()
   const pathname = usePathname()
   const params = useSearchParams()
@@ -497,9 +509,12 @@ export function OciModelDetailView({ name }: { name: string }) {
     : (readyVersions[0]?.version ?? null)
   const latestReady = readyVersions[0] ?? null
 
-  const canEdit = !!user && !!detail && (
+  // 소유자 · 관리자이면서 역할의 기능 권한(수정 oci.edit · 삭제 oci.delete)도 있어야 한다(TODO-122)
+  const isOwner = !!user && !!detail && (
     user.is_admin || [detail.owner, detail.created_by].includes(user.username)
   )
+  const canEdit = isOwner && canUseFeature("oci.edit")
+  const canDelete = isOwner && canUseFeature("oci.delete")
 
   const backHref = "/dashboard/oci-hub?tab=models"
 
@@ -511,7 +526,7 @@ export function OciModelDetailView({ name }: { name: string }) {
       toast.success(`모델 '${detail.name}' 을(를) 삭제했습니다.`)
       router.push(backHref)
     } catch (e) {
-      toast.error(errorMessage(e) ?? "삭제하지 못했습니다.")
+      notifyError(e, `모델 '${detail.name}' 을(를) 삭제하지 못했습니다.`)
       setDeleting(false)
     }
   }
@@ -522,7 +537,7 @@ export function OciModelDetailView({ name }: { name: string }) {
       className="h-7 -ml-2 self-start px-2 text-muted-foreground hover:text-foreground"
       onClick={() => (window.history.length > 1 ? router.back() : router.push(backHref))}
     >
-      <ArrowLeft className="h-4 w-4 mr-1" />모델 목록으로
+      <ArrowLeft className="h-4 w-4 mr-1" />목록으로
     </Button>
   )
 
@@ -567,21 +582,28 @@ export function OciModelDetailView({ name }: { name: string }) {
         description={detail.description}
         actions={
           <>
-            <Button variant="ghost" size="icon-sm" onClick={reload} aria-label="새로고침" title="새로고침">
+            <Tip label="새로고침"><Button variant="ghost" size="icon-sm" onClick={reload} aria-label="새로고침">
               <RefreshCw className="h-3.5 w-3.5" />
-            </Button>
+            </Button></Tip>
             {canEdit && (
-              <>
-                <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
-                  <Pencil className="h-3.5 w-3.5 mr-1.5" />수정
-                </Button>
-                <Button
-                  variant="outline" size="sm" className="text-destructive hover:text-destructive"
-                  onClick={() => { setDeleteConfirm(""); setDeleteOpen(true) }}
-                >
-                  <Trash2 className="h-3.5 w-3.5 mr-1.5" />삭제
-                </Button>
-              </>
+              <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
+                <Pencil className="h-3.5 w-3.5 mr-1.5" />편집
+              </Button>
+            )}
+            {/* 덜 쓰는 작업(삭제)은 ⋯ 메뉴로 — 다른 상세 화면과 같은 배치(TODO-141) */}
+            {canDelete && (
+              <DropdownMenu>
+                <Tip label="더 보기"><DropdownMenuTrigger asChild>
+                  <Button size="sm" variant="outline" className="w-8 px-0" aria-label="더 보기">
+                    <MoreHorizontal className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger></Tip>
+                <DropdownMenuContent align="end" className="min-w-44">
+                  <DropdownMenuItem variant="destructive" onClick={() => { setDeleteConfirm(""); setDeleteOpen(true) }}>
+                    <Trash2 /> 삭제
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             )}
           </>
         }
@@ -593,13 +615,13 @@ export function OciModelDetailView({ name }: { name: string }) {
       )}
 
       <Tabs value={tab} onValueChange={(v) => setQuery({ tab: v === "overview" ? null : v, version: v === "files" ? params.get("version") : null })}>
-        <TabsList variant="line">
-          <TabsTrigger value="overview" className="text-base">{DETAIL_TAB_LABELS.overview}</TabsTrigger>
-          <TabsTrigger value="versions" className="text-base">{DETAIL_TAB_LABELS.versions} <span className="ml-1 text-xs text-muted-foreground">{versions.length}</span></TabsTrigger>
-          <TabsTrigger value="files" className="text-base">{DETAIL_TAB_LABELS.files}</TabsTrigger>
-          <TabsTrigger value="lineage" className="text-base">{DETAIL_TAB_LABELS.lineage} <span className="ml-1 text-xs text-muted-foreground">{detail.lineage.length}</span></TabsTrigger>
-          <TabsTrigger value="usage" className="text-base">{DETAIL_TAB_LABELS.usage}</TabsTrigger>
-          <TabsTrigger value="activity" className="text-base">{DETAIL_TAB_LABELS.activity}</TabsTrigger>
+        <TabsList variant="line" className={LINE_TABS_LIST}>
+          <TabsTrigger value="overview" className={LINE_TABS_TRIGGER}>{DETAIL_TAB_LABELS.overview}</TabsTrigger>
+          <TabsTrigger value="versions" className={LINE_TABS_TRIGGER}>{DETAIL_TAB_LABELS.versions} ({versions.length})</TabsTrigger>
+          <TabsTrigger value="files" className={LINE_TABS_TRIGGER}>{DETAIL_TAB_LABELS.files}</TabsTrigger>
+          <TabsTrigger value="lineage" className={LINE_TABS_TRIGGER}>{DETAIL_TAB_LABELS.lineage} ({detail.lineage.length})</TabsTrigger>
+          <TabsTrigger value="usage" className={LINE_TABS_TRIGGER}>{DETAIL_TAB_LABELS.usage}</TabsTrigger>
+          <TabsTrigger value="activity" className={LINE_TABS_TRIGGER}>{DETAIL_TAB_LABELS.activity}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="mt-4">
@@ -637,14 +659,14 @@ export function OciModelDetailView({ name }: { name: string }) {
                   <div className="space-y-2 text-sm">
                     <div className="flex items-baseline gap-2">
                       <span className="text-lg font-semibold">v{latestReady.version}</span>
-                      <span className="text-muted-foreground">{formatSize(latestReady.total_size)} · 파일 {latestReady.file_count}개</span>
+                      <span >{formatSize(latestReady.total_size)} · 파일 {latestReady.file_count}개</span>
                     </div>
                     {latestReady.content_digest && (
-                      <p className="truncate font-mono text-xs text-muted-foreground" title={latestReady.content_digest}>
+                      <p className="truncate font-mono text-xs" title={latestReady.content_digest}>
                         {latestReady.content_digest}
                       </p>
                     )}
-                    <p className="text-xs text-muted-foreground">{formatDateTime(latestReady.created_at)} 게시</p>
+                    <p className="text-xs">{formatDateTime(latestReady.created_at)} 게시</p>
                     <Button variant="outline" size="sm" className="w-full" onClick={() => setQuery({ tab: "files", version: null })}>
                       <FolderOpen className="h-3.5 w-3.5 mr-1.5" />파일 보기
                     </Button>
@@ -664,7 +686,7 @@ export function OciModelDetailView({ name }: { name: string }) {
                     <Link href={sourceLink.href} className="text-sm text-primary hover:underline break-all">{sourceLink.label}</Link>
                   )}
                   {detail.source_revision && detail.source_revision !== "main" && (
-                    <p className="mt-1 text-xs text-muted-foreground">리비전 {detail.source_revision}</p>
+                    <p className="mt-1 text-xs">리비전 {detail.source_revision}</p>
                   )}
                 </SideCard>
               )}
@@ -692,7 +714,7 @@ export function OciModelDetailView({ name }: { name: string }) {
           <VersionsTab
             modelName={detail.name}
             versions={versions}
-            canEdit={canEdit}
+            canDelete={canDelete}
             onShowFiles={(v) => setQuery({ tab: "files", version: v === readyVersions[0]?.version ? null : String(v) })}
             onDeleted={reload}
           />
@@ -704,6 +726,7 @@ export function OciModelDetailView({ name }: { name: string }) {
             versions={versions}
             version={fileVersion}
             onVersionChange={(v) => setQuery({ version: v === readyVersions[0]?.version ? null : String(v) })}
+            canDownload={canUseFeature("oci.download")}
           />
         </TabsContent>
 
@@ -715,13 +738,15 @@ export function OciModelDetailView({ name }: { name: string }) {
           <OciUsageGuide name={detail.name} version={latestReady?.version ?? 0} framework={detail.framework} />
         </TabsContent>
 
-        <TabsContent value="activity" className="mt-4 space-y-4">
+        <TabsContent value="activity" className="mt-4 space-y-6">
           <div className="grid gap-3 sm:grid-cols-3">
             <StatCard icon={Download} label="다운로드 (누적)" value={detail.download_count.toLocaleString()} hint="다운로드 주소 발급 기준" />
             <StatCard icon={Clock} label="최근 수정" value={timeAgo(detail.updated_at)} hint={formatDateTime(detail.updated_at)} />
             <StatCard icon={FileJson} label="게시된 버전" value={readyVersions.length} hint={latestReady ? `최신 v${latestReady.version}` : "없음"} />
           </div>
-          <CommentSection entityType="oci-model" entityId={detail.name} />
+          <DetailSection title="댓글">
+            <CommentSection entityType="oci-model" entityId={detail.name} />
+          </DetailSection>
         </TabsContent>
       </Tabs>
 

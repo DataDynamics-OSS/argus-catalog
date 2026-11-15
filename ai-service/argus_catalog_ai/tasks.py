@@ -29,11 +29,15 @@ from argus_catalog_ai.prompts import (
 
 logger = logging.getLogger(__name__)
 
-# 지원 작업 이름 — ``enrich all``(구 generate-all)·worker 는 이 전체를 실행한다
+# 지원 작업 이름 — ``enrich all``·worker 는 이 전체를 실행한다
 TASK_NAMES = ("describe", "summarize", "columns", "tags", "pii")
 
 
-def _gather_context(catalog: CatalogClient, dataset: dict) -> tuple[dict | None, list[dict]]:
+# 작업 컨텍스트 — (샘플 행, 용어집 TERM 목록)
+Context = tuple[dict | None, list[dict]]
+
+
+def _gather_context(catalog: CatalogClient, dataset: dict) -> Context:
     """샘플·용어집 컨텍스트 수집 — 실패해도 생성은 계속한다."""
     sample = catalog.get_sample_rows(dataset["id"])
     terms = catalog.get_glossary_terms()
@@ -66,9 +70,10 @@ def _submit(catalog: CatalogClient, cfg: AgentConfig, dataset: dict,
 # 개별 작업
 # ---------------------------------------------------------------------------
 
-def run_describe(catalog: CatalogClient, llm: LLMClient, cfg: AgentConfig, dataset: dict) -> str:
+def run_describe(catalog: CatalogClient, llm: LLMClient, cfg: AgentConfig, dataset: dict,
+                 context: Context | None = None) -> str:
     """데이터셋 상세 설명 생성."""
-    sample, terms = _gather_context(catalog, dataset)
+    sample, terms = context or _gather_context(catalog, dataset)
     result = llm.generate(build_description_prompt(dataset, sample, terms), SYSTEM_PROMPT)
     item = {
         "entity_type": "dataset", "generation_type": "description",
@@ -80,9 +85,10 @@ def run_describe(catalog: CatalogClient, llm: LLMClient, cfg: AgentConfig, datas
                    apply_fields={"description": result["text"]} if cfg.mode == "apply" else None)
 
 
-def run_summarize(catalog: CatalogClient, llm: LLMClient, cfg: AgentConfig, dataset: dict) -> str:
+def run_summarize(catalog: CatalogClient, llm: LLMClient, cfg: AgentConfig, dataset: dict,
+                  context: Context | None = None) -> str:
     """한 줄 요약 생성 — 서버와 동일하게 summary generation_type 으로 제안."""
-    sample, terms = _gather_context(catalog, dataset)
+    sample, terms = context or _gather_context(catalog, dataset)
     result = llm.generate(build_summary_prompt(dataset, sample, terms), SYSTEM_PROMPT)
     item = {
         "entity_type": "dataset", "generation_type": "summary",
@@ -92,9 +98,10 @@ def run_summarize(catalog: CatalogClient, llm: LLMClient, cfg: AgentConfig, data
     return _submit(catalog, cfg, dataset, [item])
 
 
-def run_columns(catalog: CatalogClient, llm: LLMClient, cfg: AgentConfig, dataset: dict) -> str:
+def run_columns(catalog: CatalogClient, llm: LLMClient, cfg: AgentConfig, dataset: dict,
+                context: Context | None = None) -> str:
     """컬럼별 설명 생성 — 컬럼명을 schema field id 로 매핑해 제안."""
-    sample, terms = _gather_context(catalog, dataset)
+    sample, terms = context or _gather_context(catalog, dataset)
     parsed, result = llm.generate_json(build_columns_prompt(dataset, sample, terms), SYSTEM_PROMPT)
     if not isinstance(parsed, list):
         logger.warning("컬럼 설명 JSON 파싱 실패 — 생략: dataset=%s", dataset.get("name"))
@@ -116,9 +123,10 @@ def run_columns(catalog: CatalogClient, llm: LLMClient, cfg: AgentConfig, datase
     return _submit(catalog, cfg, dataset, items)
 
 
-def run_tags(catalog: CatalogClient, llm: LLMClient, cfg: AgentConfig, dataset: dict) -> str:
+def run_tags(catalog: CatalogClient, llm: LLMClient, cfg: AgentConfig, dataset: dict,
+             context: Context | None = None) -> str:
     """태그 추천 — 항상 제안 (태그 체계는 사람이 관리)."""
-    sample, terms = _gather_context(catalog, dataset)
+    sample, terms = context or _gather_context(catalog, dataset)
     parsed, result = llm.generate_json(build_tags_prompt(dataset, sample, terms), SYSTEM_PROMPT)
     if not isinstance(parsed, list):
         logger.warning("태그 JSON 파싱 실패 — 생략: dataset=%s", dataset.get("name"))
@@ -133,9 +141,10 @@ def run_tags(catalog: CatalogClient, llm: LLMClient, cfg: AgentConfig, dataset: 
     return _submit(catalog, cfg, dataset, [item])
 
 
-def run_pii(catalog: CatalogClient, llm: LLMClient, cfg: AgentConfig, dataset: dict) -> str:
+def run_pii(catalog: CatalogClient, llm: LLMClient, cfg: AgentConfig, dataset: dict,
+            context: Context | None = None) -> str:
     """PII 컬럼 감지 — 민감 정보라 모드와 무관하게 항상 제안만 (사람 승인 강제)."""
-    sample, _ = _gather_context(catalog, dataset)
+    sample, _ = context or _gather_context(catalog, dataset)
     parsed, result = llm.generate_json(build_pii_prompt(dataset, sample), SYSTEM_PROMPT)
     if not isinstance(parsed, list):
         logger.warning("PII JSON 파싱 실패 — 생략: dataset=%s", dataset.get("name"))
@@ -169,9 +178,11 @@ def run_for_dataset(catalog: CatalogClient, llm: LLMClient, cfg: AgentConfig,
                     dataset: dict, task_names: list[str]) -> dict:
     """한 데이터셋에 대해 지정한 작업들을 순차 실행 — 실패는 작업 단위로 격리."""
     outcomes: dict[str, str] = {}
+    # 샘플·용어집은 작업마다 같으므로 한 번만 모은다 (TODO-040)
+    context = _gather_context(catalog, dataset)
     for name in task_names:
         try:
-            outcomes[name] = TASKS[name](catalog, llm, cfg, dataset)
+            outcomes[name] = TASKS[name](catalog, llm, cfg, dataset, context=context)
             logger.info("  [%s] %s — %s", name, dataset.get("name"), outcomes[name])
         except Exception as e:  # noqa: BLE001 — 한 작업 실패가 나머지를 막지 않도록
             outcomes[name] = f"실패: {e}"

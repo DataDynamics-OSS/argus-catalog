@@ -7,12 +7,13 @@ dataset_id(int) 와 URN(string) 양쪽 식별자를 모두 지원하며, TTL 캐
 """
 
 import logging
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import AdminUser, OptionalUser
+from app.core.auth import OptionalUser, TokenUser
 from app.core.config import settings
 from app.core.database import get_session
 from app.external.cache import get_cache
@@ -22,8 +23,12 @@ from app.external.service import (
     get_dataset_avro_schema,
     get_dataset_metadata,
 )
+from app.permissions.router import require_feature_granted
 
 logger = logging.getLogger(__name__)
+
+# 캐시 관리 — 관리자, 또는 위임 기능 settings.cache(명시 허용형)를 받은 역할(TODO-123)
+CacheManager = Annotated[TokenUser, Depends(require_feature_granted("settings.cache"))]
 router = APIRouter(prefix="/external", tags=["external"])
 
 
@@ -90,6 +95,98 @@ async def get_avro_by_urn(
 
 
 # ---------------------------------------------------------------------------
+# AI-Ready 내보내기 — DCAT · Croissant JSON-LD, 데이터 카드 (TODO-096 3단계)
+# 캐시하지 않는다(메타데이터·점검 결과를 고치면 바로 반영되게). 데이터셋 ID 와 URN 둘 다 받는다.
+# ---------------------------------------------------------------------------
+
+_JSONLD = "application/ld+json"
+
+
+async def _ai_ready_target(session: AsyncSession, identifier: str | int) -> int:
+    resolved = await _resolve_dataset_id(session, identifier)
+    if resolved is None:
+        raise HTTPException(status_code=404, detail="데이터셋을(를) 찾을 수 없습니다.")
+    return resolved[0]
+
+
+async def _base(request: Request, session: AsyncSession) -> str:
+    """내보내기에 넣을 이 서버의 주소 — 설정 › AI-Ready › 외부 공개 주소."""
+    from app.catalog.public_url import public_base
+
+    return await public_base(session, request)
+
+
+async def _export(kind: str, request: Request, session: AsyncSession, identifier: str | int):
+    from app.catalog import ai_ready_export
+
+    dataset_id = await _ai_ready_target(session, identifier)
+    base = await _base(request, session)
+    if kind == "dcat":
+        return JSONResponse(await ai_ready_export.build_dcat(session, dataset_id, base), media_type=_JSONLD)
+    if kind == "croissant":
+        return JSONResponse(await ai_ready_export.build_croissant(session, dataset_id, base), media_type=_JSONLD)
+    text = await ai_ready_export.build_data_card(session, dataset_id, base)
+    return PlainTextResponse(text, media_type="text/markdown; charset=utf-8")
+
+
+@router.get("/dcat/catalog")
+async def get_dcat_catalog(
+    request: Request,
+    page: int = Query(1, ge=1),
+    size: int = Query(100, ge=1, le=500),
+    user: OptionalUser = None,
+    session: AsyncSession = Depends(get_session),
+):
+    """활성 데이터셋 전체의 DCAT 카탈로그(JSON-LD, 쪽 단위) — 포털 수확용. 다음 쪽은 ``argus:next``."""
+    from app.catalog import ai_ready_export
+
+    body = await ai_ready_export.build_dcat_catalog(session, await _base(request, session), page=page, size=size)
+    return JSONResponse(body, media_type=_JSONLD)
+
+
+@router.get("/dcat")
+async def get_dcat_by_urn(request: Request, urn: str = Query(...), user: OptionalUser = None,
+                          session: AsyncSession = Depends(get_session)):
+    """URN 으로 데이터셋 DCAT JSON-LD."""
+    return await _export("dcat", request, session, urn)
+
+
+@router.get("/croissant")
+async def get_croissant_by_urn(request: Request, urn: str = Query(...), user: OptionalUser = None,
+                               session: AsyncSession = Depends(get_session)):
+    """URN 으로 데이터셋 Croissant 1.0 JSON-LD."""
+    return await _export("croissant", request, session, urn)
+
+
+@router.get("/data-card")
+async def get_data_card_by_urn(request: Request, urn: str = Query(...), user: OptionalUser = None,
+                               session: AsyncSession = Depends(get_session)):
+    """URN 으로 데이터 카드(Markdown, 가이드라인 부록 5)."""
+    return await _export("data-card", request, session, urn)
+
+
+@router.get("/datasets/{dataset_id}/dcat")
+async def get_dcat_by_id(dataset_id: int, request: Request, user: OptionalUser = None,
+                         session: AsyncSession = Depends(get_session)):
+    """데이터셋 DCAT JSON-LD — DCAT v3 + 가이드라인 표 9~12 속성."""
+    return await _export("dcat", request, session, dataset_id)
+
+
+@router.get("/datasets/{dataset_id}/croissant")
+async def get_croissant_by_id(dataset_id: int, request: Request, user: OptionalUser = None,
+                              session: AsyncSession = Depends(get_session)):
+    """데이터셋 Croissant 1.0 JSON-LD(+RAI)."""
+    return await _export("croissant", request, session, dataset_id)
+
+
+@router.get("/datasets/{dataset_id}/data-card")
+async def get_data_card_by_id(dataset_id: int, request: Request, user: OptionalUser = None,
+                              session: AsyncSession = Depends(get_session)):
+    """데이터 카드(Markdown, 가이드라인 부록 5)."""
+    return await _export("data-card", request, session, dataset_id)
+
+
+# ---------------------------------------------------------------------------
 # dataset_id(int) 기준 — 하위 호환
 # ---------------------------------------------------------------------------
 
@@ -134,7 +231,7 @@ async def get_avro_by_id(
 
 @router.delete("/datasets/{dataset_id}/cache")
 async def invalidate_by_id(
-    _guard: AdminUser,
+    _guard: CacheManager,
     dataset_id: int,
     user: OptionalUser = None,
     session: AsyncSession = Depends(get_session),
@@ -158,7 +255,7 @@ async def invalidate_by_id(
 
 
 @router.delete("/cache")
-async def clear_cache(_guard: AdminUser, user: OptionalUser = None):
+async def clear_cache(_guard: CacheManager, user: OptionalUser = None):
     """전체 캐시를 비운다. 운영 중 dataset 일괄 재동기화 후 사용."""
     cache = get_cache()
     cleared = await cache.clear()
@@ -167,15 +264,15 @@ async def clear_cache(_guard: AdminUser, user: OptionalUser = None):
 
 
 @router.get("/cache/stats")
-async def cache_stats(user: OptionalUser = None):
-    """캐시 크기·적중률 등 통계 조회(인증 선택)."""
+async def cache_stats(_admin: CacheManager):
+    """캐시 크기·적중률 등 통계 조회 — 관리자 전용(설정 > 캐시, DEF-127)."""
     cache = get_cache()
     return await cache.stats()
 
 
 @router.get("/cache/config", response_model=CacheConfigResponse)
-async def get_cache_config(user: OptionalUser = None):
-    """현재 캐시 설정(최대 크기·TTL·사용 여부)과 항목 수 조회."""
+async def get_cache_config(_admin: CacheManager):
+    """현재 캐시 설정(최대 크기·TTL·사용 여부)과 항목 수 조회 — 관리자 전용(설정 > 캐시, DEF-127)."""
     cache = get_cache()
     return CacheConfigResponse(
         max_size=cache.max_size,
@@ -186,7 +283,7 @@ async def get_cache_config(user: OptionalUser = None):
 
 
 @router.put("/cache/config", response_model=CacheConfigResponse)
-async def update_cache_config(body: CacheConfigUpdate, _admin: AdminUser):
+async def update_cache_config(body: CacheConfigUpdate, _admin: CacheManager):
     """캐시 설정 변경 — 관리자 전용(설정 > 캐시). 메모리에만 반영되어 재기동 시 config 값으로 돌아간다."""
     before = {"max_size": settings.cache_max_size, "ttl_seconds": settings.cache_ttl_seconds,
               "enabled": settings.cache_enabled}

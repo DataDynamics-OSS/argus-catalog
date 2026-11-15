@@ -8,10 +8,10 @@ import { useConfirm } from "@/components/confirm-provider"
 
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
+import { DisabledReason, InfoTip, Tip } from "@/components/tip"
 import { Input } from "@workspace/ui/components/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@workspace/ui/components/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@workspace/ui/components/tabs"
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@workspace/ui/components/tooltip"
 import { cn } from "@workspace/ui/lib/utils"
 
 import {
@@ -20,6 +20,7 @@ import {
 import { JsonBlock, MethodBadge, TabEmpty, paramDataType } from "./apis-detail-shared"
 import { EndpointEditDialog, protocolOps } from "./endpoint-edit-dialog"
 import { EndpointTryIt, GraphQLTryIt, SoapTryIt } from "./endpoint-try-it"
+import { usePermissions } from "@/features/permissions/use-permissions"
 
 // 파라미터 표시 — 이름 / 위치 / 데이터 타입 / 필수 / 설명 표(읽기 전용).
 function ParametersView({ parameters }: { parameters: Record<string, unknown>[] | null }) {
@@ -40,8 +41,8 @@ function ParametersView({ parameters }: { parameters: Record<string, unknown>[] 
             return (
               <tr key={`${pp.in}:${pp.name}:${i}`} className="border-t align-top">
                 <td className="px-3 py-2"><span className="font-mono text-sm text-black">{pp.name}</span>{pp.required && <span className="ml-1 text-red-600" title="필수">*</span>}</td>
-                <td className="px-3 py-2"><Badge variant="outline" className="text-sm">{pp.in || "-"}</Badge></td>
-                <td className="px-3 py-2 font-mono text-sm text-muted-foreground">{dataType}</td>
+                <td className="px-3 py-2"><Badge variant="outline">{pp.in || "-"}</Badge></td>
+                <td className="px-3 py-2 font-mono text-sm">{dataType}</td>
                 <td className="px-3 py-2 text-sm break-words">{pp.description || "-"}</td>
               </tr>
             )
@@ -137,7 +138,9 @@ function EndpointRows({ endpoints, open, toggle, keyOf, api, server, credId, fav
   onDelete?: (e: ApiEndpoint) => void
 }) {
   const protocol = api.protocol || "REST"
-  const canTry = ["REST", "GraphQL", "SOAP"].includes(protocol)
+  // 호출(Try-it)은 역할의 기능 권한 apis.try-it 도 필요하다(서버와 같은 기준, TODO-122)
+  const tryAllowed = usePermissions().canUseFeature("apis.try-it")
+  const canTry = tryAllowed && ["REST", "GraphQL", "SOAP"].includes(protocol)
   return (
     <div className="overflow-hidden rounded-md border">
       <table className="w-full text-sm">
@@ -148,33 +151,33 @@ function EndpointRows({ endpoints, open, toggle, keyOf, api, server, credId, fav
             return (
               <Fragment key={k}>
                 <tr data-ep-id={e.id} className="cursor-pointer scroll-mt-4 border-b hover:bg-muted/40" onClick={() => toggle(k)}>
-                  <td className="w-6 py-2 pl-3 align-middle text-muted-foreground">{isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}</td>
+                  <td className="w-6 py-2 pl-3 align-middle">{isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}</td>
                   <td className="py-2 pr-3 align-middle">
                     <div className="flex items-center gap-2">
                       <MethodBadge method={e.method} />
                       <span className="text-sm">{e.path}</span>
-                      {e.summary && <span className="text-sm text-muted-foreground">— {e.summary}</span>}
+                      {e.summary && <span className="text-sm">— {e.summary}</span>}
                     </div>
                   </td>
                   <td className="py-2 pr-3 align-middle text-right whitespace-nowrap">
                     {canEdit && (
                       <>
-                        <button type="button" onClick={(ev) => { ev.stopPropagation(); onEdit?.(e) }} title="수정" aria-label="수정" className="inline-flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-muted"><Pencil className="h-4 w-4" /></button>
-                        <button type="button" onClick={(ev) => { ev.stopPropagation(); onDelete?.(e) }} title="삭제" aria-label="삭제" className="inline-flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-muted"><Trash2 className="h-4 w-4" /></button>
+                        <Tip label="수정"><button type="button" onClick={(ev) => { ev.stopPropagation(); onEdit?.(e) }} aria-label="수정" className="inline-flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-muted"><Pencil className="h-4 w-4" /></button></Tip>
+                        <Tip label="삭제"><button type="button" onClick={(ev) => { ev.stopPropagation(); onDelete?.(e) }} aria-label="삭제" className="inline-flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-muted"><Trash2 className="h-4 w-4" /></button></Tip>
                       </>
                     )}
                     {(() => {
                       const fav = favorites.has(`${e.method} ${e.path}`)
                       return (
-                        <button
+                        <Tip label={fav ? "즐겨찾기 해제" : "즐겨찾기"}><button
                           type="button"
                           onClick={(ev) => { ev.stopPropagation(); onToggleFav(e.method, e.path) }}
-                          title={fav ? "즐겨찾기 해제" : "즐겨찾기"}
+                         
                           aria-label={fav ? "즐겨찾기 해제" : "즐겨찾기"}
                           className="inline-flex h-7 w-7 items-center justify-center rounded hover:bg-muted"
                         >
                           <Star className={cn("h-4 w-4", fav ? "fill-amber-400 text-amber-400" : "text-muted-foreground")} />
-                        </button>
+                        </button></Tip>
                       )
                     })()}
                   </td>
@@ -237,14 +240,14 @@ function EndpointsHeader({ hasOpen, onCollapseAll, legendMethods = ["GET", "POST
   return (
     <div className="space-y-4">
       <div className="space-y-1">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
           {legendMethods.map((m) => (
             <span key={m} className="inline-flex items-center gap-1.5"><MethodBadge method={m} /></span>
           ))}
         </div>
         <details className="rounded-md border bg-muted/20 p-2">
           <summary className="cursor-pointer text-[11px] font-medium text-muted-foreground">범례 도움말 (펼치기)</summary>
-          <div className="mt-2 space-y-2 text-xs text-muted-foreground">
+          <div className="mt-2 space-y-2 text-xs">
             <p>색상 배지는 각 엔드포인트의 <b>HTTP 메서드(REST)</b> 또는 <b>오퍼레이션 유형(GraphQL)</b>을 나타냅니다. 동작의 성격(조회/변경 등)을 색으로 빠르게 구분하기 위한 것입니다.</p>
             <div>
               <p className="font-medium text-foreground">REST 메서드</p>
@@ -291,7 +294,7 @@ function EndpointsHeader({ hasOpen, onCollapseAll, legendMethods = ["GET", "POST
         </details>
       </div>
       <div className="flex items-start justify-between gap-2">
-        <p className="text-sm text-muted-foreground">
+        <p className="text-sm">
           스펙에서 추출한 엔드포인트(메서드·경로)를 카테고리(태그)별로 묶어 보여주는 화면입니다. 각 행을 펼치면 문서(파라미터·요청 바디·응답 스키마)와 호출(Try-it)을 함께 확인할 수 있습니다. 호출에 쓸 서버·자격증명은 아래에서 한 번만 지정하면 모든 엔드포인트에 공유됩니다.
         </p>
         {onCollapseAll && (
@@ -403,18 +406,17 @@ export function EndpointsTab({ api, credentials, endpointFilter, hideHeader, can
   const endpoints = !controlled && favOnly ? baseEndpoints.filter((e) => favorites.has(favKey(e.method, e.path))) : baseEndpoints
   const favBar = controlled ? null : (
     <div className="space-y-2">
-      <Button
+      <DisabledReason reason={favCount === 0 ? "즐겨찾기한 엔드포인트가 없습니다(행 오른쪽 ★ 로 추가)" : undefined}><Button
         size="sm"
         variant={favOnly ? "secondary" : "outline"}
         aria-pressed={favOnly}
         disabled={favCount === 0 && !favOnly}
         onClick={() => setFavOnly((v) => !v)}
-        title={favCount === 0 ? "즐겨찾기한 엔드포인트가 없습니다(행 오른쪽 ★ 로 추가)" : undefined}
       >
         <Star className={cn("mr-1 h-4 w-4", favOnly && "fill-amber-400 text-amber-400")} /> 즐겨찾기만 보기 ({favCount})
-      </Button>
+      </Button></DisabledReason>
       {missingFavCount > 0 && (
-        <p className="flex items-center gap-1 text-xs text-muted-foreground">
+        <p className="flex items-center gap-1 text-xs">
           <Info className="h-3.5 w-3.5 shrink-0" />
           즐겨찾기한 엔드포인트 중 {missingFavCount}개가 현재 목록에 없습니다(스펙 변경·경로 수정 등).
           <Link href="/dashboard/apis/favorites" className="text-primary hover:underline">즐겨찾기 화면에서 정리</Link>
@@ -428,7 +430,7 @@ export function EndpointsTab({ api, credentials, endpointFilter, hideHeader, can
   const controls = (
     <div className="grid gap-3 rounded-md border bg-muted/20 p-3 sm:grid-cols-2">
       <div className="space-y-1.5">
-        <p className="text-xs font-medium text-muted-foreground">서버 / Base URL (호출 시 사용)</p>
+        <p className="text-xs font-medium">서버 / Base URL (호출 시 사용)</p>
         {servers.length > 0 ? (
           <Select value={server} onValueChange={setServer}>
             <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="서버 선택" /></SelectTrigger>
@@ -442,7 +444,7 @@ export function EndpointsTab({ api, credentials, endpointFilter, hideHeader, can
         )}
       </div>
       <div className="space-y-1.5">
-        <p className="text-xs font-medium text-muted-foreground" title="시크릿 유출을 막기 위해 서버 목록·Base URL 과 같은 주소로 호출할 때만 주입합니다.">
+        <p className="text-xs font-medium" title="시크릿 유출을 막기 위해 서버 목록·Base URL 과 같은 주소로 호출할 때만 주입합니다.">
           자격증명 (시크릿은 서버 보관·주입, 이 API 의 서버 주소로만 전송)
         </p>
         <Select value={credId} onValueChange={setCredId}>
@@ -486,7 +488,6 @@ export function EndpointsTab({ api, credentials, endpointFilter, hideHeader, can
   }
 
   return (
-    <TooltipProvider delayDuration={150}>
       <div className="space-y-4">
         {!hideHeader && <EndpointsHeader hasOpen={open.size > 0} onCollapseAll={() => setOpen(new Set())} legendMethods={legendMethods} />}
         {controls}
@@ -500,17 +501,10 @@ export function EndpointsTab({ api, credentials, endpointFilter, hideHeader, can
           return (
             <div key={tag} className="space-y-1.5">
               <div className="flex flex-wrap items-baseline gap-x-2">
-                {desc ? (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="cursor-help text-sm font-semibold text-foreground underline decoration-dotted decoration-muted-foreground/50 underline-offset-2">{name}</span>
-                    </TooltipTrigger>
-                    <TooltipContent side="right" className="max-w-sm whitespace-pre-wrap">{desc}</TooltipContent>
-                  </Tooltip>
-                ) : (
-                  <span className="text-sm font-semibold text-foreground">{name}</span>
-                )}
-                <span className="text-xs text-muted-foreground">{eps.length}개</span>
+                <InfoTip tip={desc} side="right">
+                  <span className="text-base font-semibold text-foreground">{name}</span>
+                </InfoTip>
+                <span className="text-xs">{eps.length}개</span>
               </div>
               <EndpointRows endpoints={eps} open={open} toggle={toggle} keyOf={(e) => `${tag}#${e.id}`} api={api} server={server} credId={credId} favorites={favorites} onToggleFav={toggleFav} canEdit={canEdit} onEdit={openEdit} onDelete={onDelete} />
             </div>
@@ -518,6 +512,5 @@ export function EndpointsTab({ api, credentials, endpointFilter, hideHeader, can
         })}
         {editDialog}
       </div>
-    </TooltipProvider>
   )
 }

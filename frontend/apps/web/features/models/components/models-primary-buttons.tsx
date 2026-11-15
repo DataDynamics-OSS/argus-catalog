@@ -2,10 +2,12 @@
 
 import { useState } from "react"
 import { ArchiveRestore, Trash2 } from "lucide-react"
-import { errorMessage, toast } from "@/lib/notify"
+import { errorMessage, toast, notifyError } from "@/lib/notify"
 
 import { Button } from "@workspace/ui/components/button"
+import { DisabledReason } from "@/components/tip"
 import { useAuth } from "@/features/auth"
+import { usePermissions } from "@/features/permissions/use-permissions"
 import { restoreModel } from "../api"
 import { useModels } from "./models-provider"
 
@@ -16,6 +18,8 @@ import { useModels } from "./models-provider"
  */
 export function ModelsPrimaryButtons() {
   const { user } = useAuth()
+  // 삭제는 역할의 기능 권한 models.delete 도 필요하다(서버와 같은 기준, TODO-122)
+  const canDelete = usePermissions().canUseFeature("models.delete")
   const {
     setOpen, models, rowSelection, selectedNames, setDeleteTargetNames,
     showDeleted, refreshModels, clearSelection,
@@ -39,7 +43,7 @@ export function ModelsPrimaryButtons() {
       setRestoring(false)
       const ok = selectedNames.length - failed.length
       if (ok > 0) toast.success(`${ok}개 모델을 복원했습니다.`)
-      if (failed.length) toast.error(`복원 실패 — ${failed.join(", ")}`)
+      if (failed.length) notifyError(failed.join("\n"), "일부 모델을 복원하지 못했습니다.")
       clearSelection()
       await refreshModels()
     }
@@ -47,7 +51,7 @@ export function ModelsPrimaryButtons() {
       <>
         <Button size="sm" variant="outline" disabled={selectedNames.length === 0 || restoring} onClick={restore}>
           <ArchiveRestore className="mr-1 h-4 w-4" />
-          {restoring ? "복원 중..." : "복원"}
+          {restoring ? "복원 중…" : "복원"}
         </Button>
         <Button
           size="sm"
@@ -74,18 +78,14 @@ export function ModelsPrimaryButtons() {
   )
 
   // 선택한 모델이 있을 때만 삭제 버튼을 보인다
-  if (selectedNames.length === 0) return null
+  if (selectedNames.length === 0 || !canDelete) return null
 
   return (
+    <DisabledReason reason={notEditable.length > 0 && `소유자 또는 관리자만 삭제할 수 있습니다: ${notEditable.map((m) => m.name).join(", ")}`}>
     <Button
       size="sm"
       variant="destructive"
       disabled={notEditable.length > 0}
-      title={
-        notEditable.length > 0
-          ? `소유자 또는 관리자만 삭제할 수 있습니다: ${notEditable.map((m) => m.name).join(", ")}`
-          : undefined
-      }
       onClick={() => {
         setDeleteTargetNames(selectedNames)
         setOpen("delete")
@@ -94,5 +94,6 @@ export function ModelsPrimaryButtons() {
       <Trash2 className="mr-1 h-4 w-4" />
       {selectedNames.length}개 삭제
     </Button>
+    </DisabledReason>
   )
 }

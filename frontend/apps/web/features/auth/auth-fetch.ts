@@ -5,6 +5,8 @@
  * as an Authorization header into every API request.
  */
 
+import { loginPath } from "@/lib/navigation"
+
 const TOKEN_KEY = "argus_tokens"
 
 type StoredTokens = {
@@ -60,9 +62,10 @@ export async function authFetch(
 
   // If we get a 401, redirect to login
   if (res.status === 401 && typeof window !== "undefined") {
-    const { pathname } = window.location
+    const { pathname, search } = window.location
     if (pathname !== "/login") {
-      window.location.href = "/login"
+      // 세션 만료 뒤 다시 로그인하면 보던 화면으로 돌아온다(DEF-063)
+      window.location.href = loginPath(pathname + search)
     }
   }
 

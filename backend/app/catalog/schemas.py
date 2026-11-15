@@ -5,11 +5,14 @@
 리니지·분류체계의 Pydantic 모델을 모은다. "true"/"false" 문자열 플래그는 DB 컬럼 형식을 따른다.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+from app.core.html_sanitize import RichHtml
+from app.core.text_list import ListField, encode_list
 
 # ---------------------------------------------------------------------------
 # 열거형(Enum)
@@ -193,6 +196,10 @@ class OrganizationResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# 시스템 상태 — 화면(features/topology/system-status.ts)과 같은 세 값만 받는다(TODO-103)
+SystemStatus = Literal["ACTIVE", "INACTIVE", "DEPRECATED"]
+
+
 class SystemCreate(BaseModel):
     """시스템 생성 요청."""
     name: str = Field(..., min_length=1, max_length=200)
@@ -200,7 +207,7 @@ class SystemCreate(BaseModel):
     summary: str | None = Field(None, max_length=200)
     description: str | None = None
     owner: str | None = None
-    status: str = "ACTIVE"
+    status: SystemStatus = "ACTIVE"
     sort_order: int = 0
 
     _name = field_validator("name")(_strip_name)
@@ -213,7 +220,7 @@ class SystemUpdate(BaseModel):
     summary: str | None = Field(None, max_length=200)
     description: str | None = None
     owner: str | None = None
-    status: str | None = None
+    status: SystemStatus | None = None
     sort_order: int | None = None
 
     _name = field_validator("name")(_strip_name)
@@ -267,6 +274,7 @@ class TopologyOrganization(BaseModel):
     id: int
     name: str
     parent_id: int | None = None
+    description: str | None = None
     children: list["TopologyOrganization"] = Field(default_factory=list)
     systems: list[TopologySystem] = Field(default_factory=list)
 
@@ -337,6 +345,250 @@ class EngineCatalogsResponse(BaseModel):
     supported: bool = True
     message: str | None = None
     catalogs: list[EngineCatalogEntry] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# 데이터 소스 수집 — 범위·실행 (design/datasource-sync-scope-design.md)
+# ---------------------------------------------------------------------------
+
+def _clean_path(v: list[str]) -> list[str]:
+    out = [p.strip() for p in v]
+    if any(not p or len(p) > 255 for p in out):
+        raise ValueError("경로의 각 부분은 1~255자여야 합니다.")
+    return out
+
+
+class SyncScopeItem(BaseModel):
+    """수집 대상 컨테이너 하나 — 경로(예: ``["sales", "emea"]``).
+
+    ``tables`` 가 없으면 컨테이너 전체(앞으로 생기는 테이블 포함), 있으면 그 테이블만(컨테이너 안 상대 이름 —
+    Trino 는 ``schema.table``).
+    """
+    path: list[str] = Field(min_length=1, max_length=10)
+    tables: list[str] | None = Field(default=None, max_length=1000)
+
+    @field_validator("path")
+    @classmethod
+    def _clean(cls, v: list[str]) -> list[str]:
+        return _clean_path(v)
+
+    @field_validator("tables")
+    @classmethod
+    def _clean_tables(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return None
+        out: list[str] = []
+        for t in v:
+            t = t.strip()
+            if not t or len(t) > 511:
+                raise ValueError("테이블 이름은 1~511자여야 합니다.")
+            if t not in out:
+                out.append(t)
+        return out or None
+
+
+class SyncScopeExclude(BaseModel):
+    """제외 패턴(glob, 대소문자 무시) — 테이블 이름(또는 컨테이너 안 상대 이름)과 맞으면 수집하지 않는다.
+    ``path`` 를 주면 그 컨테이너에서만, 없으면 모든 컨테이너에서."""
+    path: list[str] | None = Field(default=None, min_length=1, max_length=10)
+    table_pattern: str = Field(min_length=1, max_length=255)
+
+    @field_validator("path")
+    @classmethod
+    def _clean(cls, v: list[str] | None) -> list[str] | None:
+        return None if v is None else _clean_path(v)
+
+    @field_validator("table_pattern")
+    @classmethod
+    def _clean_pattern(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("제외 패턴이 비어 있습니다.")
+        return v
+
+
+class SyncScope(BaseModel):
+    """수집 범위. ``include_all`` 이면 전체, 아니면 ``include`` 의 컨테이너(또는 일부 테이블)만.
+    ``exclude`` 패턴은 어느 쪽이든 다시 뺀다."""
+    include_all: bool = False
+    include: list[SyncScopeItem] = Field(default_factory=list, max_length=500)
+    exclude: list[SyncScopeExclude] = Field(default_factory=list, max_length=50)
+
+    @model_validator(mode="after")
+    def _non_empty(self):
+        if not self.include_all and not self.include:
+            raise ValueError("전체를 선택하거나 수집할 대상을 하나 이상 지정하세요.")
+        if self.include_all:
+            self.include = []
+        return self
+
+
+class SyncSettingsUpdate(BaseModel):
+    """수집 범위 저장. ``scope`` 가 None 이면 범위를 지운다(이후 수집 차단).
+
+    ``remove_outside`` 가 true 면 새 범위 밖에 남은 수집 데이터셋을 제거(removed)로 표시한다(기본은 그대로 둠).
+    """
+    scope: SyncScope | None = None
+    remove_outside: bool = False
+
+
+# 예약 주기(분) — 15분 ~ 7일
+SYNC_SCHEDULE_MIN_MINUTES = 15
+SYNC_SCHEDULE_MAX_MINUTES = 7 * 24 * 60
+
+
+class SyncScheduleUpdate(BaseModel):
+    """예약 수집 설정. 켜려면 주기가 필요하고, 저장된 수집 범위로 돈다."""
+    enabled: bool
+    interval_minutes: int | None = Field(None, ge=SYNC_SCHEDULE_MIN_MINUTES, le=SYNC_SCHEDULE_MAX_MINUTES)
+
+    @model_validator(mode="after")
+    def _interval_when_enabled(self):
+        if self.enabled and self.interval_minutes is None:
+            raise ValueError("예약을 켜려면 주기(interval_minutes)를 지정하세요.")
+        return self
+
+
+class SyncScopePreviewRequest(BaseModel):
+    scope: SyncScope | None = None
+
+
+class SyncScopePreview(BaseModel):
+    """범위를 저장하기 전 영향 — 새 범위 밖에 남는 수집 데이터셋 수와 예시."""
+    outside_count: int
+    outside_containers: list[str] = []
+    in_scope_count: int = 0
+
+
+class SyncBrowseItem(BaseModel):
+    name: str
+    path: list[str]
+    system: bool = False
+    expandable: bool = False
+    # container: 범위로 고를 수 있는 컨테이너, group: 펼치기만 하는 중간 계층(Trino 스키마), table: 테이블
+    kind: Literal["container", "group", "table"] = "container"
+    # table 일 때 — 범위에 넣을 컨테이너 경로와 컨테이너 안 상대 이름
+    container: list[str] | None = None
+    table: str | None = None
+    # 이 컨테이너에서 이미 수집된(활성) 데이터셋 수 / 원본에서 사라져 제거로 표시된 수
+    collected: int = 0
+    removed: int = 0
+
+
+class SyncBrowseResponse(BaseModel):
+    path: list[str]
+    items: list[SyncBrowseItem]
+    total: int
+    next_cursor: int | None = None
+
+
+class SyncSettingsResponse(BaseModel):
+    datasource_id: int
+    scope: SyncScope | None = None
+    # BUILTIN(백엔드 내장 sync) / METADATA_SYNC / None(이 유형은 아직 수집 미지원)
+    executor: str | None = None
+    container_label: str = "대상"
+    supports_containers: bool = True
+    updated_by: str | None = None
+    updated_at: datetime | None = None
+    # 저장하면서 제거로 표시한 범위 밖 데이터셋 수(저장 응답에서만)
+    removed_outside: int | None = None
+    # 탐색 시 하위 단계를 펼칠 수 있는 유형(Iceberg 중첩 네임스페이스)
+    nested_containers: bool = False
+    # 쿼리 엔진(ENGINE)인데 카탈로그에 '수집'(SYNC)으로 연결되지 않음 — 수집하면 409 이므로 화면이 미리 막는다(DEF-068)
+    sync_catalog_missing: bool = False
+    # 예약 수집 — 다음 예정 시각은 마지막 실행(수동 포함) 접수 시각 + 주기
+    schedule_enabled: bool = False
+    schedule_interval_minutes: int | None = None
+    next_scheduled_at: datetime | None = None
+
+
+class SyncRunStart(BaseModel):
+    """수집 시작. ``scope`` 를 주면 이번 한 번만 그 범위로(저장된 범위는 그대로)."""
+    scope: SyncScope | None = None
+
+
+class SyncRunItemResponse(BaseModel):
+    id: int
+    level: str
+    target: str | None = None
+    message: str
+    occurred_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class SyncRunResponse(BaseModel):
+    id: int
+    datasource_id: int
+    # 데이터 소스의 외부 식별자(문자열 ``datasource_id``) — 데이터셋 목록 필터(``?datasource=``) 링크용(TODO-074)
+    datasource_key: str | None = None
+    datasource_name: str | None = None
+    datasource_type: str | None = None
+    trigger_type: str
+    executor: str
+    scope: SyncScope | None = None
+    status: str
+    phase: str | None = None
+    current_target: str | None = None
+    progress_done: int = 0
+    progress_total: int | None = None
+    created_count: int = 0
+    updated_count: int = 0
+    removed_count: int = 0
+    failed_count: int = 0
+    items_total: int = 0
+    error_message: str | None = None
+    requested_by: str | None = None
+    cancel_requested_by: str | None = None
+    queued_at: datetime | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    heartbeat_at: datetime | None = None
+    # 실행 중인데 마지막 보고 후 지난 초(응답 없음 표시용). 끝났으면 None
+    silent_seconds: int | None = None
+
+
+class SyncRunReportItem(BaseModel):
+    level: Literal["ERROR", "WARNING"] = "ERROR"
+    target: str | None = Field(default=None, max_length=500)
+    message: str = Field(max_length=4000)
+
+
+class SyncRunReport(BaseModel):
+    """metadata-sync → 백엔드 진행·결과 보고(``PATCH /internal/sync-runs/{id}``)."""
+    status: Literal["QUEUED", "RUNNING", "SUCCEEDED", "PARTIAL", "FAILED", "CANCELLED"]
+    phase: str | None = Field(default=None, max_length=20)
+    current_target: str | None = None
+    progress_done: int = Field(default=0, ge=0)
+    progress_total: int | None = Field(default=None, ge=0)
+    created: int = Field(default=0, ge=0)
+    updated: int = Field(default=0, ge=0)
+    skipped: int = Field(default=0, ge=0)
+    failed: int = Field(default=0, ge=0)
+    removed: int = Field(default=0, ge=0)
+    error_message: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    items: list[SyncRunReportItem] | None = Field(default=None, max_length=1000)
+    items_total: int | None = Field(default=None, ge=0)
+
+
+class SyncRunSummary(BaseModel):
+    """대시보드 카드 — 지금 실행 중·대기와 최근 24시간 실패."""
+    active: int
+    failed_24h: int
+    succeeded_24h: int
+
+
+class SyncServiceStatus(BaseModel):
+    """metadata-sync 작업 서비스 상태(관리 화면 상단)."""
+    reachable: bool
+    workers: int | None = None
+    running: int | None = None
+    queued: int | None = None
+    version: str | None = None
+    message: str | None = None
 
 
 class CatalogResponse(BaseModel):
@@ -468,6 +720,8 @@ class TagResponse(BaseModel):
     description: str | None = None
     color: str
     created_at: datetime
+    # 태그 목록(GET /tags)에서만 채운다 — 붙은 데이터셋 수(removed 제외). 다른 응답에서는 None.
+    dataset_count: int | None = None
 
     model_config = {"from_attributes": True}
 
@@ -523,6 +777,8 @@ class GlossaryTermResponse(BaseModel):
     term_type: str = "TERM"
     created_at: datetime
     updated_at: datetime
+    # 용어 목록(GET /glossary)에서만 채운다 — 연결된 데이터셋 수(removed 제외). 다른 응답에서는 None.
+    dataset_count: int | None = None
 
     model_config = {"from_attributes": True}
 
@@ -570,7 +826,7 @@ class DatasetCreate(BaseModel):
     display_name: str | None = Field(default=None, max_length=255)
     datasource_id: int
     summary: str | None = Field(default=None, max_length=200)
-    description: str | None = None
+    description: RichHtml | None = None  # 상세 설명 — 리치 텍스트, 저장 전 정화(TODO-027)
     # 생략하면 데이터 소스의 환경(origin)을 따른다(UI 와 동일) — 이전에는 항상 PROD 였다.
     origin: DatasetOrigin | None = None
     qualified_name: str | None = None
@@ -587,6 +843,8 @@ class DatasetCreate(BaseModel):
     tags: list[int] = Field(default_factory=list, description="Tag IDs to attach")
     owners: list[OwnerCreate] = Field(default_factory=list)
     properties: list[DatasetPropertyCreate] = Field(default_factory=list)
+    # 수집으로 들어온 데이터셋 표시(metadata-sync 가 true 로 보냄) — 수집 범위 밖 판정·탐색 건수가 이 표시를 본다.
+    is_synced: bool | None = None
 
 
 class DatasetUpdate(BaseModel):
@@ -594,7 +852,7 @@ class DatasetUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=255)
     display_name: str | None = Field(default=None, max_length=255)
     summary: str | None = Field(default=None, max_length=200)
-    description: str | None = None
+    description: RichHtml | None = None  # 상세 설명 — 리치 텍스트, 저장 전 정화(TODO-027)
     origin: DatasetOrigin | None = None
     qualified_name: str | None = None
     table_type: str | None = None
@@ -602,6 +860,7 @@ class DatasetUpdate(BaseModel):
     ddl: str | None = None
     datasource_properties: dict | None = None
     status: DatasetStatus | None = None
+    is_synced: bool | None = None  # 수집으로 들어온 데이터셋 표시(metadata-sync)
     # --- 확장 메타데이터 (편집 가능) ---
     ingestion_frequency: str | None = None
     ingestion_time: str | None = None
@@ -623,14 +882,97 @@ class DatasetUpdate(BaseModel):
     file_count: int | None = None
     sensitivity: str | None = None
     contains_pii: bool | None = None
-    pii_fields: str | None = None
-    compliance_tags: str | None = None
+    pii_fields: ListField = None   # 개인정보 항목 목록(저장은 JSON 배열 문자열, TODO-143)
+    compliance_tags: ListField = None   # 규제 태그 목록
     tier: str | None = None
     certification: str | None = None
     steward: str | None = None
     quality_status: str | None = None
     show_quality_score: bool | None = None  # 품질 점수는 자동 연동, 표시 여부만 편집
     note: str | None = None
+    # --- AI-Ready (app/catalog/ai_ready.py) — 명시한 null 은 값을 지운다(다른 확장 항목과 같음) ---
+    legal_basis: str | None = Field(default=None, max_length=4000)
+    publisher: str | None = Field(default=None, max_length=200)
+    landing_page: str | None = Field(default=None, max_length=1000)
+    contact_email: str | None = Field(default=None, max_length=255)
+    data_language: str | None = Field(default=None, max_length=50)
+    persistent_id: str | None = Field(default=None, max_length=255)
+    temporal_start: date | None = None
+    temporal_end: date | None = None
+    spatial_coverage: str | None = Field(default=None, max_length=255)
+    data_version: str | None = Field(default=None, max_length=50)
+    version_notes: str | None = Field(default=None, max_length=4000)
+    license: str | None = Field(default=None, max_length=30)
+    license_url: str | None = Field(default=None, max_length=1000)
+    rights: str | None = Field(default=None, max_length=4000)
+    allowed_uses: list[str] | None = None
+    contains_synthetic: bool | None = None
+    contains_machine_annotation: bool | None = None
+    data_biases: str | None = Field(default=None, max_length=4000)
+    known_limitations: str | None = Field(default=None, max_length=4000)
+    missing_data_info: str | None = Field(default=None, max_length=4000)
+    missing_value_notation: str | None = Field(default=None, max_length=100)
+    privacy_measures: str | None = Field(default=None, max_length=4000)
+
+    @field_validator(
+        "legal_basis", "publisher", "persistent_id", "spatial_coverage", "data_version", "version_notes",
+        "rights", "data_biases", "known_limitations", "missing_data_info", "missing_value_notation",
+        "privacy_measures",
+    )
+    @classmethod
+    def _ai_ready_text(cls, v: str | None) -> str | None:
+        from app.catalog.ai_ready import norm_text
+        return norm_text(v)
+
+    @field_validator("landing_page")
+    @classmethod
+    def _ai_ready_landing_page(cls, v: str | None) -> str | None:
+        from app.catalog.ai_ready import check_url
+        return check_url(v, "제공시스템 URL")
+
+    @field_validator("license_url")
+    @classmethod
+    def _ai_ready_license_url(cls, v: str | None) -> str | None:
+        from app.catalog.ai_ready import check_url
+        return check_url(v, "라이선스 URL")
+
+    @field_validator("contact_email")
+    @classmethod
+    def _ai_ready_contact_email(cls, v: str | None) -> str | None:
+        from app.catalog.ai_ready import check_email
+        return check_email(v)
+
+    @field_validator("data_language")
+    @classmethod
+    def _ai_ready_language(cls, v: str | None) -> str | None:
+        from app.catalog.ai_ready import check_language
+        return check_language(v)
+
+    @field_validator("license")
+    @classmethod
+    def _ai_ready_license(cls, v: str | None) -> str | None:
+        from app.catalog.ai_ready import check_license
+        return check_license(v)
+
+    @field_validator("allowed_uses")
+    @classmethod
+    def _ai_ready_allowed_uses(cls, v: list[str] | None) -> list[str] | None:
+        from app.catalog.ai_ready import check_allowed_uses
+        return check_allowed_uses(v)
+
+    @model_validator(mode="after")
+    def _ai_ready_temporal(self):
+        if self.temporal_start and self.temporal_end and self.temporal_start > self.temporal_end:
+            raise ValueError("시간범위의 시작일이 종료일보다 늦습니다.")
+        return self
+
+    @field_validator("compliance_tags")
+    @classmethod
+    def _compliance_len(cls, v: list[str] | None) -> list[str] | None:
+        # 저장 컬럼은 String(255) — JSON 배열로 이어 붙인 길이를 미리 본다
+        if len(encode_list(v) or "") > 255:
+            raise ValueError("규제 태그가 너무 깁니다 — 이어 붙인 길이가 255자를 넘습니다.")
+        return v
 
 
 class DatasetResponse(BaseModel):
@@ -671,8 +1013,8 @@ class DatasetResponse(BaseModel):
     file_count: int | None = None
     sensitivity: str | None = None
     contains_pii: bool | None = None
-    pii_fields: str | None = None
-    compliance_tags: str | None = None
+    pii_fields: ListField = None   # 개인정보 항목 목록(저장은 JSON 배열 문자열, TODO-143)
+    compliance_tags: ListField = None   # 규제 태그 목록
     tier: str | None = None
     certification: str | None = None
     steward: str | None = None
@@ -683,6 +1025,29 @@ class DatasetResponse(BaseModel):
     quality_status: str | None = None
     show_quality_score: bool = False
     note: str | None = None
+    # --- AI-Ready — 비어 있으면 화면·내보내기가 설정의 기관 기본값(GET /catalog/ai-ready/defaults)을 쓴다 ---
+    legal_basis: str | None = None
+    publisher: str | None = None
+    landing_page: str | None = None
+    contact_email: str | None = None
+    data_language: str | None = None
+    persistent_id: str | None = None
+    temporal_start: date | None = None
+    temporal_end: date | None = None
+    spatial_coverage: str | None = None
+    data_version: str | None = None
+    version_notes: str | None = None
+    license: str | None = None
+    license_url: str | None = None
+    rights: str | None = None
+    allowed_uses: list[str] | None = None  # null = 정하지 않음, [] = 모두 허용하지 않음
+    contains_synthetic: bool | None = None
+    contains_machine_annotation: bool | None = None
+    data_biases: str | None = None
+    known_limitations: str | None = None
+    missing_data_info: str | None = None
+    missing_value_notation: str | None = None
+    privacy_measures: str | None = None
     datasource_properties: dict | None = None
     schema_fields: list[SchemaFieldResponse] = Field(default_factory=list)
     tags: list[TagResponse] = Field(default_factory=list)
@@ -713,6 +1078,8 @@ class DatasetSummary(BaseModel):
     created_by: str | None = None
     created_at: datetime
     updated_at: datetime
+    # 카드 보기용(목록 조회에 card=true 일 때만 채운다) — 앞쪽 컬럼 이름
+    column_preview: list[str] | None = None
 
 
 class PaginatedDatasets(BaseModel):
@@ -1131,3 +1498,4 @@ class DatasetCategoryRef(BaseModel):
     taxonomy_id: int
     taxonomy_name: str
     path: str = ""  # "분류체계 > 상위 > ... > 카테고리" 경로
+

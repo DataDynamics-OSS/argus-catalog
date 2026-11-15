@@ -54,7 +54,7 @@ export function ModelsDeleteDialog() {
       if (hard) {
         const res = await hardDeleteModels(deleteTargetNames)
         toast.success(`${res.deleted.length}개 모델을 영구 삭제했습니다.`)
-        if (res.not_found.length) toast.warning(`찾을 수 없음: ${res.not_found.join(", ")}`)
+        if (res.not_found.length) toast.warning("일부 모델을 찾을 수 없어 건너뛰었습니다.", { description: res.not_found.join(", ") })
       } else {
         const failed: string[] = []
         for (const name of deleteTargetNames) {
@@ -107,7 +107,7 @@ export function ModelsDeleteDialog() {
           </p>
 
           <div className="rounded-md border p-3 max-h-32 overflow-y-auto">
-            <ul className="text-sm text-muted-foreground space-y-1">
+            <ul className="text-sm space-y-1">
               {deleteTargetNames.map((name) => (
                 <li key={name} className="truncate">{name}</li>
               ))}
@@ -133,7 +133,7 @@ export function ModelsDeleteDialog() {
 
           {hard && (
             <div className="grid gap-2">
-              <p className="text-sm text-muted-foreground">
+              <p className="text-sm">
                 확인을 위해 <strong>{CONFIRM_TEXT}</strong> 를 입력하세요:
               </p>
               <Input
@@ -152,7 +152,7 @@ export function ModelsDeleteDialog() {
               취소
             </Button>
             <Button variant="destructive" onClick={handleDelete} disabled={!canSubmit || deleting}>
-              {deleting ? "삭제 중..." : hard ? "영구 삭제" : "삭제"}
+              {deleting ? "삭제 중…" : hard ? "영구 삭제" : "삭제"}
             </Button>
           </div>
         </div>

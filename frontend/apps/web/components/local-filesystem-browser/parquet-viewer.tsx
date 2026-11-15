@@ -20,7 +20,7 @@ export function ParquetViewer({ data }: ParquetViewerProps) {
   return (
     <div className="flex flex-col gap-3 h-full text-sm">
       <div className="flex items-end gap-3">
-        <span className="text-sm text-muted-foreground ml-auto">
+        <span className="text-sm ml-auto">
           {rows.length === total_rows
             ? `${total_rows} rows`
             : `Showing ${rows.length} of ${total_rows} rows`}{" "}
@@ -49,7 +49,7 @@ export function ParquetViewer({ data }: ParquetViewerProps) {
             <tbody className="divide-y">
               {rows.map((row, ri) => (
                 <tr key={ri} className="hover:bg-muted/30">
-                  <td className="px-2 py-1 text-right text-muted-foreground border-r tabular-nums">
+                  <td className="px-2 py-1 text-right border-r tabular-nums">
                     {ri + 1}
                   </td>
                   {columns.map((_, ci) => {
@@ -72,7 +72,7 @@ export function ParquetViewer({ data }: ParquetViewerProps) {
         </div>
       ) : (
         <div className="flex items-center justify-center h-[200px]">
-          <p className="text-sm text-muted-foreground">No data</p>
+          <p className="text-sm">No data</p>
         </div>
       )}
     </div>

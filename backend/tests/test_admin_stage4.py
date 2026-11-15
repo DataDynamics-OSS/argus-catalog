@@ -33,10 +33,11 @@ from app.core import passwords
 from app.core.auth import TokenUser, get_current_user, get_optional_user
 from app.core.config import settings
 from app.core.database import Base, get_session
+from app.permissions.models import Permission
 from app.usermgr import ownership
 from app.usermgr import router as umr
 from app.usermgr import service as usvc
-from app.usermgr.models import ArgusRole, ArgusUser
+from app.usermgr.models import ArgusRole, ArgusUser, ArgusUserPreference
 
 
 @pytest.fixture(autouse=True)
@@ -50,7 +51,7 @@ def _fast_hash(monkeypatch):
 @pytest.fixture
 async def factory(monkeypatch):
     engine = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool)
-    tables = [ArgusRole.__table__, ArgusUser.__table__, AdminAuditLog.__table__] + [
+    tables = [Permission.__table__, ArgusRole.__table__, ArgusUser.__table__, ArgusUserPreference.__table__, AdminAuditLog.__table__] + [
         a.model.__table__ for a in ownership._registry()
     ]
     async with engine.begin() as conn:

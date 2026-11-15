@@ -3,6 +3,7 @@
 import { useMemo } from "react"
 import { BarChart3 } from "lucide-react"
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
+import { AXIS_TICK, GRID, SERIES } from "@/components/charts/chart-style"
 
 import { Badge } from "@workspace/ui/components/badge"
 import { cn } from "@workspace/ui/lib/utils"
@@ -48,7 +49,7 @@ export function PerformanceTab({ metrics, versions }: { metrics: VersionMetrics[
               {keys.map((k) => (
                 <th key={k} className="px-3 py-2 text-right font-medium">
                   {k}
-                  <span className="ml-1 text-[11px] font-normal text-muted-foreground">{isLowerBetter(k) ? "↓좋음" : "↑좋음"}</span>
+                  <span className="ml-1 text-[11px] font-normal">{isLowerBetter(k) ? "↓좋음" : "↑좋음"}</span>
                 </th>
               ))}
             </tr>
@@ -71,7 +72,7 @@ export function PerformanceTab({ metrics, versions }: { metrics: VersionMetrics[
                     const isBest = metrics.length > 1 && v === best[k]
                     return (
                       <td key={k} className="px-3 py-2 text-right font-mono">
-                        {isBest && <Badge variant="outline" className="mr-1.5 px-1 py-0 text-[10px]">최고</Badge>}
+                        {isBest && <Badge size="sm" variant="outline" className="mr-1.5">최고</Badge>}
                         <span className={cn(isBest && "font-semibold text-emerald-700")}>{formatMetric(v)}</span>
                         {delta !== undefined && delta !== 0 && (
                           <span className={cn("ml-1.5 text-xs", improved ? "text-emerald-600" : "text-red-600")} title="직전 버전 대비">
@@ -98,11 +99,11 @@ export function PerformanceTab({ metrics, versions }: { metrics: VersionMetrics[
                 <p className="mb-2 text-sm font-medium">{k} 추이</p>
                 <ResponsiveContainer width="100%" height={160}>
                   <LineChart data={series} margin={{ left: 0, right: 10, top: 5, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="version" fontSize={11} />
-                    <YAxis fontSize={11} width={48} domain={["auto", "auto"]} />
+                    <CartesianGrid {...GRID} />
+                    <XAxis dataKey="version" tick={AXIS_TICK} />
+                    <YAxis tick={AXIS_TICK} width={48} domain={["auto", "auto"]} />
                     <Tooltip formatter={(val) => (typeof val === "number" ? formatMetric(val) : String(val))} />
-                    <Line type="monotone" dataKey="value" name={k} stroke="#3b82f6" strokeWidth={2} dot={{ r: 3 }} isAnimationActive={false} />
+                    <Line type="monotone" dataKey="value" name={k} stroke={SERIES[0]} strokeWidth={2} dot={{ r: 3 }} isAnimationActive={false} />
                   </LineChart>
                 </ResponsiveContainer>
               </div>

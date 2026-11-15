@@ -1,11 +1,13 @@
 "use client"
 
 // 정의 파일 보기 — 현재 에이전트 내용을 정의 파일(agent.yaml) 형식으로 보여 주고 복사·내려받기.
+// 내용은 읽기 전용 Monaco(CodeViewer, YAML 강조·줄 번호, 글꼴 text-sm)로 표시한다.
 // 내려받은 파일을 그대로 반영하면 '변경 없음'이 된다(GET /ai-agents/{name}/manifest).
 
 import { useEffect, useState } from "react"
 import { Copy, Download, Loader2 } from "lucide-react"
 import { errorMessage, toast } from "@/lib/notify"
+import { CodeViewer } from "@/components/code-viewer"
 
 import { Button } from "@workspace/ui/components/button"
 import {
@@ -18,6 +20,7 @@ import {
 } from "@workspace/ui/components/dialog"
 
 import { fetchAgentManifest } from "../api"
+import { copyText } from "@/lib/clipboard"
 
 export function AIAgentsManifestDialog({
   agentName,
@@ -45,7 +48,7 @@ export function AIAgentsManifestDialog({
   async function copy() {
     if (!text) return
     try {
-      await navigator.clipboard.writeText(text)
+      await copyText(text)
       toast.success("정의 파일 내용을 클립보드에 복사했습니다.")
     } catch {
       toast.error("클립보드에 복사하지 못했습니다.")
@@ -77,17 +80,22 @@ export function AIAgentsManifestDialog({
             소유자·부서·분류 중 비어 있는 항목(null)이 있습니다. 정의 파일로 반영하려면 먼저 채워야 합니다.
           </p>
         )}
-        <div className="min-h-0 flex-1 overflow-auto rounded-md border bg-muted/40">
-          {error ? (
-            <p className="p-4 text-sm text-destructive">{error}</p>
-          ) : text == null ? (
-            <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" /> 불러오는 중...
-            </div>
-          ) : (
-            <pre className="p-4 font-mono text-xs leading-relaxed whitespace-pre">{text}</pre>
-          )}
-        </div>
+        {error ? (
+          <p className="rounded-md border p-4 text-sm text-destructive">{error}</p>
+        ) : text == null ? (
+          <div className="flex h-32 items-center justify-center rounded-md border text-sm text-muted-foreground">
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" /> 불러오는 중…
+          </div>
+        ) : (
+          // 대화상자(max-h 90vh) 안에서 머리·안내·버튼을 뺀 높이. Monaco 가 자체 스크롤한다.
+          <CodeViewer
+            code={text}
+            language="yaml"
+            height="min(60vh, 640px)"
+            copyLabel="정의 파일"
+            border
+          />
+        )}
         <DialogFooter className="gap-2">
           <Button variant="outline" onClick={() => onOpenChange(false)}>닫기</Button>
           <Button variant="secondary" disabled={!text} onClick={copy}>

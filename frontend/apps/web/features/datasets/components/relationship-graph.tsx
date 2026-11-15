@@ -1,5 +1,6 @@
 "use client"
 
+import { Tip } from "@/components/tip"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import {
   ReactFlow,
@@ -25,6 +26,7 @@ import { Button } from "@workspace/ui/components/button"
 
 import { authFetch } from "@/features/auth/auth-fetch"
 import { getDatasourceColor } from "./lineage-tab"
+import { datasetHref } from "@/features/datasets/links"
 
 const BASE = "/api/v1/catalog"
 
@@ -69,7 +71,7 @@ function RelNode({ data }: { data: GraphNode }) {
   return (
     <div className={`relative px-4 py-3 rounded-lg border-2 min-w-[200px] ${emphasis}`}>
       {data.isFocus && (
-        <span className="absolute -top-2.5 right-2 rounded-full bg-primary px-2 py-0.5 text-[10px] font-semibold text-primary-foreground shadow">
+        <span className="absolute -top-2.5 right-2 rounded-full bg-primary px-2 py-0.5 text-[11px] font-semibold text-primary-foreground shadow">
           현재
         </span>
       )}
@@ -79,17 +81,17 @@ function RelNode({ data }: { data: GraphNode }) {
       <div className="flex items-center gap-2 mb-1">
         <Database className={`h-4 w-4 flex-shrink-0 ${pc.icon}`} />
         <Link
-          href={`/dashboard/datasets/${data.id}`}
+          href={datasetHref(data.id, "relationships")}
           className="text-sm font-semibold text-foreground hover:underline truncate"
         >
           {data.name}
         </Link>
       </div>
       <div className="flex items-center gap-1.5">
-        <Badge className={`text-[10px] px-1.5 py-0 font-normal border-0 ${pc.badge}`}>
+        <Badge size="sm" className={`font-normal border-0 ${pc.badge}`}>
           {data.datasourceType}
         </Badge>
-        <span className="text-xs text-muted-foreground truncate">
+        <span className="text-xs truncate">
           {data.datasourceName}
         </span>
       </div>
@@ -152,7 +154,7 @@ function FloatingEdge({ id, source, target, style, selected, data }: {
         <EdgeLabelRenderer>
           <div
             style={{ transform: `translate(-50%,-50%) translate(${labelX}px,${labelY}px)` }}
-            className={`absolute rounded-full border px-1.5 py-0 text-[10px] font-semibold tabular-nums pointer-events-none ${
+            className={`absolute rounded-full border px-1.5 py-0 text-[11px] font-semibold tabular-nums pointer-events-none ${
               selected ? "bg-primary text-primary-foreground border-primary" : "bg-background text-muted-foreground"
             }`}
           >
@@ -347,12 +349,12 @@ export function RelationshipGraph({ datasetId }: { datasetId: number }) {
         <div className="absolute right-3 top-3 z-10 w-72 rounded-lg border bg-background/95 backdrop-blur-sm shadow-lg">
           <div className="flex items-center justify-between border-b px-3 py-2">
             <span className="text-sm font-semibold truncate">{selected.aName} ↔ {selected.bName}</span>
-            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setSelected(null)}>
+            <Tip label="닫기"><Button aria-label="닫기" variant="ghost" size="icon" className="h-6 w-6" onClick={() => setSelected(null)}>
               <X className="h-3.5 w-3.5" />
-            </Button>
+            </Button></Tip>
           </div>
           <div className="max-h-72 space-y-2 overflow-auto p-3">
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs">
               총 {selected.edge.joinCount}회 함께 조인 (명시 {selected.edge.explicitCount} · 암묵 {selected.edge.implicitCount})
             </p>
             {selected.edge.columns
@@ -362,10 +364,10 @@ export function RelationshipGraph({ datasetId }: { datasetId: number }) {
                 <div key={i} className="rounded border px-2 py-1.5 text-xs">
                   <div className="font-mono">
                     {nameOf.get(c.sourceDatasetId)?.split(".").pop()}.{c.sourceField}
-                    <span className="mx-1 text-muted-foreground">↔</span>
+                    <span className="mx-1">↔</span>
                     {nameOf.get(c.targetDatasetId)?.split(".").pop()}.{c.targetField}
                   </div>
-                  <div className="mt-0.5 text-[10px] text-muted-foreground tabular-nums">
+                  <div className="mt-0.5 text-[11px] tabular-nums">
                     {c.joinCount}회 · 명시 {c.explicitCount} · 암묵 {c.implicitCount}
                   </div>
                 </div>
@@ -374,7 +376,7 @@ export function RelationshipGraph({ datasetId }: { datasetId: number }) {
         </div>
       )}
 
-      <div className="absolute bottom-3 left-3 z-10 rounded border bg-background/90 px-2 py-1 text-[10px] text-muted-foreground backdrop-blur-sm">
+      <div className="absolute bottom-3 left-3 z-10 rounded border bg-background/90 px-2 py-1 text-[11px] backdrop-blur-sm">
         선 굵기 = 함께 조인된 빈도 · 엣지 클릭 시 컬럼 관계 표시
       </div>
     </div>

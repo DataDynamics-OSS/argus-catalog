@@ -18,6 +18,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     Column,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
@@ -167,6 +168,71 @@ class CatalogConnection(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
+class DatasourceSyncSetting(Base):
+    """데이터 소스의 수집 설정 — 범위·예약 (design/datasource-sync-scope-design.md §6).
+
+    행이 없거나 ``scope_json`` 이 비어 있으면 범위 미지정 → 수집을 막는다(결정 사항 1).
+    """
+
+    __tablename__ = "catalog_datasource_sync_settings"
+
+    datasource_id = Column(
+        Integer, ForeignKey("catalog_datasources.id", ondelete="CASCADE"), primary_key=True
+    )
+    scope_json = Column(Text)  # {"include_all": bool, "include": [{"path": [...]}]}
+    schedule_enabled = Column(Boolean, nullable=False, default=False)
+    schedule_interval_minutes = Column(Integer)
+    updated_by = Column(String(200))
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class DatasourceSyncRun(Base):
+    """수집 실행 1회 — 백그라운드 작업의 상태·진행·결과(§6, §7)."""
+
+    __tablename__ = "catalog_datasource_sync_runs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    datasource_id = Column(
+        Integer, ForeignKey("catalog_datasources.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    trigger_type = Column(String(20), nullable=False, default="MANUAL")  # MANUAL / SCHEDULE
+    executor = Column(String(20), nullable=False)  # BUILTIN(백엔드 내장 sync) / METADATA_SYNC
+    scope_json = Column(Text, nullable=False)  # 실행 당시 범위
+    # QUEUED / RUNNING / SUCCEEDED / PARTIAL / FAILED / CANCELLED
+    status = Column(String(20), nullable=False, default="QUEUED", index=True)
+    phase = Column(String(20))  # LISTING / COLLECTING / REMOVING / DONE
+    current_target = Column(String(500))
+    progress_done = Column(Integer, nullable=False, default=0)
+    progress_total = Column(Integer)
+    created_count = Column(Integer, nullable=False, default=0)
+    updated_count = Column(Integer, nullable=False, default=0)
+    removed_count = Column(Integer, nullable=False, default=0)
+    failed_count = Column(Integer, nullable=False, default=0)
+    items_total = Column(Integer, nullable=False, default=0)
+    error_message = Column(Text)
+    requested_by = Column(String(200))
+    cancel_requested_by = Column(String(200))
+    queued_at = Column(DateTime(timezone=True), server_default=func.now())
+    started_at = Column(DateTime(timezone=True))
+    finished_at = Column(DateTime(timezone=True))
+    heartbeat_at = Column(DateTime(timezone=True))
+
+
+class DatasourceSyncRunItem(Base):
+    """실행의 실패·경고 항목 — 성공은 건수만 세고 여기에는 남기지 않는다(실행당 최대 1,000건)."""
+
+    __tablename__ = "catalog_datasource_sync_run_items"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(
+        Integer, ForeignKey("catalog_datasource_sync_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    level = Column(String(10), nullable=False, default="ERROR")  # ERROR / WARNING
+    target = Column(String(500))
+    message = Column(Text, nullable=False)
+    occurred_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
 class DatasourceConfiguration(Base):
     """데이터 소스 인스턴스의 접속 및 설정 정보(데이터 소스당 1행).
 
@@ -239,8 +305,8 @@ class Dataset(Base):
     # C. 거버넌스·보안
     sensitivity = Column(String(20))           # PUBLIC/INTERNAL/CONFIDENTIAL/RESTRICTED
     contains_pii = Column(String(5))           # "true"/"false"
-    pii_fields = Column(Text)                  # 개인정보 항목(쉼표)
-    compliance_tags = Column(String(255))      # 규제 태그(쉼표)
+    pii_fields = Column(Text)                  # 개인정보 항목 — JSON 배열 문자열(예전 쉼표 구분도 읽음, app/core/text_list.py)
+    compliance_tags = Column(String(255))      # 규제 태그 — JSON 배열 문자열(예전 쉼표 구분도 읽음)
     # D. 비즈니스
     tier = Column(String(20))                  # GOLD/SILVER/BRONZE
     certification = Column(String(20))         # CERTIFIED/IN_REVIEW/DEPRECATED/NONE
@@ -255,6 +321,30 @@ class Dataset(Base):
     show_quality_score = Column(String(5), default="false")  # 품질 점수 표시 여부
     # 자유 메모(비고)
     note = Column(Text)
+    # AI-Ready (행정안전부 「공공데이터의 인공지능 친화적 관리 가이드라인」 — design/ai-ready-public-data-guideline-review.md §5.2).
+    # 수집이 덮어쓰지 않는 큐레이션 항목. 비어 있으면 설정(ai_ready_*)의 기관 기본값을 쓴다(제공기관·언어·라이선스·연락처).
+    legal_basis = Column(Text)                       # 관련법령 dct:references
+    publisher = Column(String(200))                  # 제공기관 dct:publisher
+    landing_page = Column(String(1000))              # 제공시스템 dcat:landingPage
+    contact_email = Column(String(255))              # 공용 문의 연락처 dcat:contactPoint
+    data_language = Column(String(50))               # 언어 ISO 639-1(쉼표) dct:language
+    persistent_id = Column(String(255))              # 영구 식별자 dct:identifier — 비면 URN
+    temporal_start = Column(Date)                    # 시간범위 시작 dct:temporal
+    temporal_end = Column(Date)                      # 시간범위 끝
+    spatial_coverage = Column(String(255))           # 공간범위 dct:spatial
+    data_version = Column(String(50))                # 버전 owl:versionInfo
+    version_notes = Column(Text)                     # 버전 노트 adms:versionNotes
+    license = Column(String(30))                     # 라이선스 코드(KOGL-1~4, CC-*, CUSTOM) dct:license
+    license_url = Column(String(1000))               # 라이선스·이용약관 URL
+    rights = Column(Text)                            # 저작권·이용 조건 dct:rights
+    allowed_uses = Column(String(100))               # 허용 이용 유형(쉼표) VIEW/ANALYSIS/COMBINE/AI_TRAINING
+    contains_synthetic = Column(String(5))           # 합성 데이터 포함 "true"/"false"
+    contains_machine_annotation = Column(String(5))  # 기계 자동 주석(라벨) 포함 "true"/"false"
+    data_biases = Column(Text)                       # 알려진 편향 rai:dataBiases
+    known_limitations = Column(Text)                 # 한계·유의사항 rai:knownLimitations
+    missing_data_info = Column(Text)                 # 결측 비율·사유·처리 rai:dataCollectionMissingData
+    missing_value_notation = Column(String(100))     # 결측·특수값 표기 규칙 (예: NULL, -9999=측정불가)
+    privacy_measures = Column(Text)                  # 개인정보 보호조치(비식별·가명처리 방식, 적정성 검토)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -674,3 +764,73 @@ class DatasetCategory(Base):
         Integer, ForeignKey("catalog_categories.id", ondelete="CASCADE"), nullable=False, index=True
     )
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class AiReadyJudgment(Base):
+    """AI-Ready 체크리스트 항목의 수동 판정 — 자동 판정보다 우선한다(TODO-096 2단계, app/catalog/ai_ready_check.py).
+
+    자동 판정은 저장하지 않고 조회할 때 계산한다. 이 표에는 담당자가 고른 판정(적정·미흡·해당없음)과 근거만 남고,
+    행을 지우면 그 항목은 다시 자동 판정을 따른다.
+    """
+
+    __tablename__ = "catalog_ai_ready_judgment"
+    __table_args__ = (
+        UniqueConstraint("dataset_id", "item_key", name="uq_ai_ready_judgment"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    dataset_id = Column(
+        Integer, ForeignKey("catalog_datasets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    item_key = Column(String(10), nullable=False)       # 체크리스트 항목 키 — C01~C33(공통), T1~T5(유형별)
+    status = Column(String(10), nullable=False)          # PASS(적정) / FAIL(미흡) / NA(해당없음)
+    note = Column(Text)                                  # 근거 — 문서 링크·메모
+    judged_by = Column(String(200))                      # 판정한 사용자
+    judged_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class DatasetVersion(Base):
+    """데이터 버전 이력 — 데이터셋의 '버전'(owl:versionInfo)을 바꿀 때마다 한 줄(TODO-096 4단계, 체크리스트 C32).
+
+    가이드라인 §3 "버전 부여(기존 버전 보존), 버전별 변경 내용·사유·담당자 기록". Argus 는 데이터 값을 보관하지 않으므로
+    버전은 담당자가 붙이는 라벨이고, 이력은 라벨·노트·바꾼 사람·시각이다. 같은 버전의 노트를 고치면 그 줄을 고친다.
+    """
+
+    __tablename__ = "catalog_dataset_version"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    dataset_id = Column(
+        Integer, ForeignKey("catalog_datasets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    version = Column(String(50), nullable=False)   # 버전 라벨 owl:versionInfo
+    notes = Column(Text)                           # 버전 노트 adms:versionNotes — 이전 버전 대비 변경 사항
+    created_by = Column(String(200))               # 버전을 붙인 사용자
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class DatasetDistribution(Base):
+    """데이터셋 배포본 — 데이터를 내려받거나 접속하는 경로 하나(dcat:Distribution, TODO-096 3단계).
+
+    Argus 는 데이터 값을 배포하지 않으므로 포털·API·파일 서버에 있는 배포본의 위치와 형식·용량·체크섬만 기록한다.
+    DCAT 의 ``dcat:distribution``, Croissant 의 ``cr:FileObject`` 로 내보낸다.
+    """
+
+    __tablename__ = "catalog_dataset_distribution"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    dataset_id = Column(
+        Integer, ForeignKey("catalog_datasets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    title = Column(String(200))                    # 배포본 이름 dct:title (예: 2025년 전체 CSV)
+    description = Column(Text)                     # 설명 dct:description
+    format = Column(String(30))                    # 형식 dct:format (CSV/JSON/PARQUET/API …)
+    media_type = Column(String(100))               # MIME dcat:mediaType — 비면 형식에서 정함
+    access_url = Column(String(1000), nullable=False)  # 접속 URL dcat:accessURL (포털 페이지·API 엔드포인트)
+    download_url = Column(String(1000))            # 내려받기 URL dcat:downloadURL (파일 직접 경로)
+    byte_size = Column(BigInteger)                 # 용량 dcat:byteSize
+    checksum_algorithm = Column(String(20))        # 체크섬 알고리즘 spdx:algorithm (SHA-256/SHA-512/SHA-1/MD5)
+    checksum = Column(String(200))                 # 체크섬 값(16진수) spdx:checksumValue
+    ordinal = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

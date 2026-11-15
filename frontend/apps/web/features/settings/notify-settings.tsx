@@ -116,7 +116,7 @@ export function NotifySettings() {
           <div className="flex items-center justify-between">
             <div>
               <Label>알림 발송 활성화</Label>
-              <p className="text-xs text-muted-foreground mt-0.5">비활성화 시 발송 요청은 조용히 무시됩니다.</p>
+              <p className="text-xs mt-0.5">비활성화 시 발송 요청은 조용히 무시됩니다.</p>
             </div>
             <Switch checked={cfg.enabled} onCheckedChange={(v) => setCfg((c) => ({ ...c, enabled: v }))} />
           </div>
@@ -174,7 +174,7 @@ export function NotifySettings() {
                 테스트 메시지 발송
               </Button>
             </div>
-            <p className="text-xs text-muted-foreground">테스트는 현재 입력값을 저장한 뒤 활성 제공자({providerLabel})로 발송합니다.</p>
+            <p className="text-xs">테스트는 현재 입력값을 저장한 뒤 활성 제공자({providerLabel})로 발송합니다.</p>
           </div>
         </CardContent>
       </Card>

@@ -19,7 +19,9 @@
 "use client"
 
 import { type Row } from "@tanstack/react-table"
-import { KeyRound, LockOpen, MoreHorizontal, Trash2, UserPen } from "lucide-react"
+import { KeyRound, LockOpen, MoreHorizontal, Pencil, Trash2 } from "lucide-react"
+
+import { MenuItemContent } from "@/components/menu-item-content"
 import { notifyError, toast } from "@/lib/notify"
 
 import { Button } from "@workspace/ui/components/button"
@@ -47,6 +49,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   // Keycloak 모드에서는 비밀번호를 Keycloak 에서 관리(서버도 400)
   const local = authType === "local"
   const isSelf = !!user && user.username === row.original.username
+  // 사용자 관리를 위임받은 사람(관리자 아님)은 관리자 계정을 다룰 수 없다(서버도 403, TODO-123)
   // 로그인 실패 반복으로 잠긴 계정 — 로컬 인증에서만 잠긴다
   const locked = local && !!row.original.lockedUntil
   const handleUnlock = async () => {
@@ -58,6 +61,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
       notifyError(e, "계정 잠금을 해제하지 못했습니다.")
     }
   }
+  if (!user?.is_admin && row.original.role === "argus-admin") return null
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
@@ -66,7 +70,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
           className="flex h-8 w-8 p-0 data-[state=open]:bg-muted"
         >
           <MoreHorizontal className="h-4 w-4" />
-          <span className="sr-only">메뉴 열기</span>
+          <span className="sr-only">{row.original.username} 메뉴</span>
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-[160px]">
@@ -77,10 +81,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
             setOpen("edit")
           }}
         >
-          수정
-          <span className="ml-auto">
-            <UserPen size={16} />
-          </span>
+          <Pencil /> 편집
         </DropdownMenuItem>
         {/* Change password action: opens the admin password-reset dialog */}
         {local && (
@@ -90,35 +91,25 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
               setOpen("changePassword")
             }}
           >
-            비밀번호 변경
-            <span className="ml-auto">
-              <KeyRound size={16} />
-            </span>
+            <KeyRound /> 비밀번호 변경
           </DropdownMenuItem>
         )}
         {locked && (
           <DropdownMenuItem onClick={handleUnlock}>
-            잠금 해제
-            <span className="ml-auto">
-              <LockOpen size={16} />
-            </span>
+            <LockOpen /> 잠금 해제
           </DropdownMenuItem>
         )}
         <DropdownMenuSeparator />
         {/* Delete action: opens the user delete confirmation dialog */}
         <DropdownMenuItem
+          variant="destructive"
           disabled={isSelf}
-          title={isSelf ? "본인 계정은 삭제할 수 없습니다" : undefined}
           onClick={() => {
             setCurrentRow(row.original)
             setOpen("delete")
           }}
-          className="text-red-500!"
         >
-          {isSelf ? "삭제 (본인 불가)" : "삭제"}
-          <span className="ml-auto">
-            <Trash2 size={16} />
-          </span>
+          <MenuItemContent icon={Trash2} label="삭제" hint={isSelf ? "본인 계정은 삭제할 수 없습니다." : undefined} />
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

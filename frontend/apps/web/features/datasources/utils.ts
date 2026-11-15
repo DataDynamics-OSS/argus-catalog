@@ -1,16 +1,20 @@
-import { toast } from "@/lib/notify"
+import { toast, notifyError } from "@/lib/notify"
 
 import type { ConnectionTestResult } from "@/features/datasources/api"
 import type { DatasourceFieldDef } from "@/features/datasources/datasource-configs"
 import type { Topology, TopologyOrganization, TopologySystem } from "@/features/topology/api"
 
-// 서버가 연결 테스트를 지원하는 유형(PG/MySQL 프로토콜 호환) — 그 외 유형은 버튼을 숨긴다
-export const CONNECTION_TEST_TYPES = new Set(["postgresql", "greenplum", "redshift", "mysql", "mariadb", "starrocks"])
+// 서버가 연결 테스트를 지원하는 유형 — 그 외 유형은 버튼을 숨긴다.
+// 앞의 6개는 백엔드가 직접, 나머지는 metadata-sync /v2/test 로 확인한다(백엔드 sync_runs_service.JOB_TYPES)
+export const CONNECTION_TEST_TYPES = new Set([
+  "postgresql", "greenplum", "redshift", "mysql", "mariadb", "starrocks",
+  "iceberg-rest", "iceberg-hadoop", "hive", "trino", "kudu", "oracle", "mssql",
+])
 
 export function toastTestResult(r: ConnectionTestResult) {
-  if (r.ok) toast.success(`연결 성공${r.latency_ms != null ? ` (${r.latency_ms}ms)` : ""}`)
+  if (r.ok) toast.success(`연결에 성공했습니다${r.latency_ms != null ? `(${r.latency_ms}ms)` : ""}.`)
   else if (r.unsupported) toast.info(r.message)
-  else toast.error(`연결 실패: ${r.message}`)
+  else notifyError(r.message, "데이터 소스에 연결하지 못했습니다.")
 }
 
 // ---------------------------------------------------------------------------
@@ -83,6 +87,8 @@ export interface FlatOrg {
   id: number
   name: string
   depth: number
+  /** 최상위부터 이 조직까지 "본부 › 팀" — 선택지에 이것을 보인다(같은 이름의 하위 조직 구별, DEF-108) */
+  path: string
 }
 export interface FlatSystem {
   id: number
@@ -90,10 +96,13 @@ export interface FlatSystem {
   orgName: string
 }
 
-export function flattenOrgs(orgs: TopologyOrganization[], depth = 0, acc: FlatOrg[] = []): FlatOrg[] {
+export function flattenOrgs(
+  orgs: TopologyOrganization[], depth = 0, acc: FlatOrg[] = [], parentPath = "",
+): FlatOrg[] {
   for (const o of orgs) {
-    acc.push({ id: o.id, name: o.name, depth })
-    flattenOrgs(o.children, depth + 1, acc)
+    const path = parentPath ? `${parentPath} › ${o.name}` : o.name
+    acc.push({ id: o.id, name: o.name, depth, path })
+    flattenOrgs(o.children, depth + 1, acc, path)
   }
   return acc
 }
@@ -125,4 +134,20 @@ export function findSystem(topology: Topology, id: number): TopologySystem | nul
     return null
   }
   return walk(topology.organizations) ?? (topology.unassigned.systems ?? []).find((s) => s.id === id) ?? null
+}
+
+/** 하위 조직까지 합한 시스템 · 데이터 소스 · 데이터셋 수 */
+export function orgTotals(o: TopologyOrganization): { systems: number; datasources: number; datasets: number } {
+  const own = o.systems.reduce(
+    (acc, s) => ({
+      systems: acc.systems + 1,
+      datasources: acc.datasources + s.datasources.length,
+      datasets: acc.datasets + s.datasources.reduce((n, d) => n + d.dataset_count, 0),
+    }),
+    { systems: 0, datasources: 0, datasets: 0 },
+  )
+  return o.children.map(orgTotals).reduce(
+    (a, b) => ({ systems: a.systems + b.systems, datasources: a.datasources + b.datasources, datasets: a.datasets + b.datasets }),
+    own,
+  )
 }

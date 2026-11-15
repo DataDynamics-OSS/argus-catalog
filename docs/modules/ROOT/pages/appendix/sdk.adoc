@@ -76,7 +76,7 @@ $ python3 -m venv venv && . venv/bin/activate
 $ pip install argus-catalog-sdk        # 사내 배포 패키지가 없으면 저장소의 sdk/ 디렉터리: pip install ./sdk
 $ pip show argus-catalog-sdk | grep -E "^(Name|Version|Requires):"
 Name: argus-catalog-sdk
-Version: 0.5.0
+Version: 0.8.0
 Requires: httpx, PyYAML, rich
 $ argus-model --help
 usage: argus-model [-h]
@@ -95,6 +95,7 @@ usage: argus-model [-h]
 | 옵션 | 환경 변수 | 설명
 
 | `--server URL` | `ARGUS_SERVER` | 카탈로그 서버 주소 (기본 `http://localhost:4600`). 웹 UI 주소를 넣어도 됩니다
+| `--api-key KEY` | `ARGUS_CATALOG_API_KEY` | 카탈로그 API 키(`argus_sk_…`, *설정 → API 키* 에서 발급). 스크립트 · 파이프라인은 이것을 씁니다. 가장 먼저 쓰입니다
 | `--username`, `--password` | `ARGUS_USERNAME`, `ARGUS_PASSWORD` | 명령을 실행할 때 로그인
 | `--token TOKEN` | `ARGUS_TOKEN` | 이미 받은 액세스 토큰. 사용자명·비밀번호보다 우선
 |===
@@ -326,12 +327,18 @@ image::diagrams/appendix-sdk-01.png[온라인 모델을 에어갭으로 반입,r
 $ argus-model oci-import-hf bert-base-uncased --name bert-base --server http://online-catalog:4600
 $ argus-model pull bert-base 1 ./bert-base --server http://online-catalog:4600
 # ── USB · 파일 전송으로 ./bert-base 를 에어갭 PC 로 ──
-$ argus-model push ./bert-base bert-base --server http://airgap-catalog:4600
+$ argus-model push ./bert-base bert-base --server http://airgap-catalog:4600 \
+    --description "BERT base uncased" --task fill-mask --framework pytorch --presigned-min-mb 100
 ----
 
-받은 디렉터리의 `manifest.json` 은 push 할 때 그대로 올라가도 되지만, 에어갭 서버가 확정할 때 새로 만들어 덮어씁니다.
+* `pull` 의 버전 번호는 `oci-import-hf` 가 출력한 번호를 씁니다(같은 이름의 모델이 있었다면 1 이 아닙니다).
+* `pull` 은 파일만 받습니다. 설명 · 태스크 · 프레임워크는 `push` 옵션으로 다시 적고(새 모델일 때만 적용), 언어 · 라이선스 ·
+  HuggingFace 원본 정보는 옮겨지지 않아 출처가 *직접 등록* 으로 기록됩니다. `README.md` 는 모델 카드로 올라갑니다.
+* 받은 디렉터리의 `manifest.json` 은 push 할 때 그대로 올라가도 되지만, 에어갭 서버가 확정할 때 새로 만들어 덮어씁니다.
 
 **방법 2 — `import-local` (관리자, MLflow 레지스트리).** 파일을 **카탈로그 서버가 읽을 수 있는 경로**에 먼저 복사한 뒤, 그 서버 경로를 지정합니다.
+컨테이너로 운영한다면 `docker exec <백엔드 컨테이너> mkdir -p /data/transferred` 뒤 `docker cp ./my-model <백엔드 컨테이너>:/data/transferred/my-model` 처럼 컨테이너 안에 넣거나 반입용 폴더를 볼륨으로 연결합니다.
+파일은 조각 단위로 저장소에 올라가므로 큰 모델도 서버 메모리를 크게 쓰지 않고, 숨김 경로(`.git/` · `sub/.DS_Store`)는 올리지 않습니다.
 
 [source,console]
 ----
@@ -464,7 +471,7 @@ with ModelClient("http://catalog.corp:4600", username="mjkim", password="...") a
 ----
 
 * `with` 블록이 끝나면 연결을 닫습니다. `with` 없이 쓰면 다 쓴 뒤 `c.close()` 를 부르세요. 요청마다 연결을 새로 열지 않고 재사용합니다.
-* 인증은 `token=` 이 `username=`/`password=` 보다 우선합니다. 둘 다 없으면 조회를 포함한 모든 호출이 401 로 거부됩니다.
+* 인증 우선순위는 `api_key=` > `token=` > `username=`/`password=` > 환경 변수 `ARGUS_CATALOG_API_KEY` 입니다. 모두 없으면 조회를 포함한 모든 호출이 401 로 거부됩니다.
 
 === 오류 처리
 
@@ -548,7 +555,7 @@ with ModelClient("https://catalog.corp", username="mjkim", password="...", http_
 
 | `API error 401: 인증이 필요합니다.`
 | 로그인 정보 없음
-| `ARGUS_USERNAME`/`ARGUS_PASSWORD` 또는 `ARGUS_TOKEN` 설정
+| `ARGUS_CATALOG_API_KEY`, `ARGUS_USERNAME`/`ARGUS_PASSWORD` 또는 `ARGUS_TOKEN` 설정
 
 | `API error 401: 사용자명 또는 비밀번호가 올바르지 않습니다.`
 | 비밀번호 오류 또는 토큰 만료
@@ -568,7 +575,7 @@ with ModelClient("https://catalog.corp", username="mjkim", password="...", http_
 
 | `API error 401: 서버 디스크에 저장된 MLflow 모델 파일은 로그인해야 볼 수 있습니다.`
 | MLflow 클라이언트로 기록한 모델을 로그인 없이 조회
-| `ARGUS_USERNAME`/`ARGUS_PASSWORD` 또는 `ARGUS_TOKEN` 설정
+| `ARGUS_CATALOG_API_KEY`, `ARGUS_USERNAME`/`ARGUS_PASSWORD` 또는 `ARGUS_TOKEN` 설정
 
 | `files`·`pull` 이 `API error 403: 메뉴 접근 권한이 없습니다: models` / `등록된 MLflow 모델의 파일만 볼 수 있습니다…`
 | 내 역할에 *MLflow 모델* 메뉴가 막혀 있음, 또는 소프트 삭제된 모델
@@ -605,7 +612,7 @@ with ModelClient("https://catalog.corp", username="mjkim", password="...", http_
 
 == 명령 레퍼런스
 
-모든 명령은 공통으로 `--server`, `--token`, `--username`, `--password` 를 받습니다.
+모든 명령은 공통으로 `--server`, `--api-key`, `--token`, `--username`, `--password` 를 받습니다.
 
 [cols="2,3,1",options="header"]
 |===

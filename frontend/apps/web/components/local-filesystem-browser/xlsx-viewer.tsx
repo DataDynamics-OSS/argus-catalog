@@ -79,7 +79,7 @@ export function XlsxViewer({ data: initialData, entryKey, previewFile }: XlsxVie
             </Select>
           </div>
         )}
-        <span className="text-sm text-muted-foreground ml-auto">
+        <span className="text-sm ml-auto">
           {isLoadingSheet && <Loader2 className="inline h-3.5 w-3.5 animate-spin mr-1.5" />}
           {rows.length}행 · {columnCount}열
           {sheet_names.length > 1 && ` · 시트 ${sheet_names.length}개`}
@@ -107,7 +107,7 @@ export function XlsxViewer({ data: initialData, entryKey, previewFile }: XlsxVie
             <tbody className="divide-y">
               {rows.map((row, ri) => (
                 <tr key={ri} className="hover:bg-muted/30">
-                  <td className="px-2 py-1 text-right text-muted-foreground border-r tabular-nums">
+                  <td className="px-2 py-1 text-right border-r tabular-nums">
                     {ri + 1}
                   </td>
                   {Array.from({ length: columnCount }, (_, ci) => (
@@ -126,7 +126,7 @@ export function XlsxViewer({ data: initialData, entryKey, previewFile }: XlsxVie
         </div>
       ) : (
         <div className="flex items-center justify-center h-[200px]">
-          <p className="text-sm text-muted-foreground">No data in this sheet</p>
+          <p className="text-sm">No data in this sheet</p>
         </div>
       )}
     </div>

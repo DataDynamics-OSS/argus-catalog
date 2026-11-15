@@ -8,6 +8,9 @@ describe("notificationStatus", () => {
     expect(notificationStatus("ACKED").label).toBe("확인됨")
     expect(notificationStatus("FAILED").label).toBe("실패")
   })
+  it("통지 꺼짐으로 보내지 않은 에스컬레이션은 발송 안 함 (DEF-004)", () => {
+    expect(notificationStatus("SKIPPED").label).toBe("발송 안 함")
+  })
   it("모르는 값은 원문", () => {
     expect(notificationStatus("ESCALATED").label).toBe("ESCALATED")
   })

@@ -1,22 +1,24 @@
 "use client"
 
+import { Tip } from "@/components/tip"
 import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
-import { AlertTriangle, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Search, Star, X } from "lucide-react"
+import { AlertTriangle, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Star, X } from "lucide-react"
 import { errorMessage, notifyError, toast } from "@/lib/notify"
 
 import { Button } from "@workspace/ui/components/button"
-import { Input } from "@workspace/ui/components/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@workspace/ui/components/select"
+import { StatusBadge } from "@workspace/ui/components/status-badge"
 import { cn } from "@workspace/ui/lib/utils"
 
 import {
   type ApiCredential, type ApiDetail, type ApiFavorite,
   addApiFavorite, fetchAllFavorites, fetchApiCredentials, fetchApiDetail, removeApiFavorite,
 } from "../api"
-import { API_STATUS_LABEL, API_STATUS_VARIANTS, protocolLabel } from "./apis-constants"
+import { apiStatus, protocolLabel } from "./apis-constants"
 import { MethodBadge, TabEmpty, TabError, TabLoading } from "./apis-detail-shared"
 import { EndpointsTab } from "./endpoints-tab"
+import { SearchInput } from "@/components/search-input"
 
 type FavSort = "name" | "recent"
 type Group = {
@@ -119,7 +121,7 @@ export function ApisFavorites() {
   if (!favorites) return <TabLoading />
 
   const intro = (
-    <p className="text-sm text-muted-foreground">
+    <p className="text-sm">
       자주 사용하는 엔드포인트를 API별로 모아 보는 화면입니다. API 상세의 엔드포인트 행 오른쪽 ★ 아이콘으로 추가하며, 각 항목을 펼쳐 문서 확인·호출(Try-it)을 이 화면에서 바로 할 수 있습니다.
     </p>
   )
@@ -130,7 +132,7 @@ export function ApisFavorites() {
         <div className="flex flex-col items-center gap-2 rounded-md border border-dashed py-16 text-center">
           <Star className="h-8 w-8 text-muted-foreground" />
           <p className="text-sm text-muted-foreground">즐겨찾기한 엔드포인트가 없습니다.</p>
-          <p className="text-xs text-muted-foreground">API 상세 → 엔드포인트 행 오른쪽의 ★ 아이콘을 눌러 추가하세요.</p>
+          <p className="text-xs">API 상세 → 엔드포인트 행 오른쪽의 ★ 아이콘을 눌러 추가하세요.</p>
           <Link href="/dashboard/apis" className="text-xs text-primary hover:underline">API 목록으로 이동</Link>
         </div>
       </div>
@@ -180,23 +182,16 @@ export function ApisFavorites() {
         <p className="mr-auto text-sm">
           엔드포인트 <b>{favorites.length}</b>개 · API <b>{allGroups.length}</b>개
           {missingTotal > 0 && <span className="ml-2 text-amber-600">· 현재 목록에 없는 엔드포인트 {missingTotal}개</span>}
-          {q && <span className="ml-2 text-muted-foreground">(검색 결과 {shownCount}개)</span>}
+          {q && <span className="ml-2">(검색 결과 {shownCount}개)</span>}
         </p>
-        <div className="relative">
-          <Search className="pointer-events-none absolute top-1/2 left-2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            aria-label="즐겨찾기 검색"
-            placeholder="API·메서드·경로·설명 검색"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="h-8 w-[260px] pr-7 pl-8 text-sm"
-          />
-          {search && (
-            <button type="button" aria-label="검색어 지우기" onClick={() => setSearch("")} className="absolute top-1/2 right-2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
-              <X className="h-3.5 w-3.5" />
-            </button>
-          )}
-        </div>
+        <SearchInput
+          size="sm"
+          className="w-[260px]"
+          aria-label="즐겨찾기 검색"
+          placeholder="API·메서드·경로·설명 검색…"
+          value={search}
+          onValueChange={setSearch}
+        />
         <Select value={sort} onValueChange={(v) => setSort(v as FavSort)}>
           <SelectTrigger className="h-8 w-[130px] text-sm" aria-label="정렬"><SelectValue /></SelectTrigger>
           <SelectContent>
@@ -221,7 +216,7 @@ export function ApisFavorites() {
         return (
           <section key={g.apiName} className="rounded-md border">
             <div className="flex flex-wrap items-center gap-2 px-3 py-2">
-              <button
+              <Tip label={open ? "접기" : "펼치기"}><button
                 type="button"
                 aria-expanded={open}
                 aria-label={open ? "접기" : "펼치기"}
@@ -229,18 +224,16 @@ export function ApisFavorites() {
                 className="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted"
               >
                 {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-              </button>
+              </button></Tip>
               <Link href={`/dashboard/apis?api=${encodeURIComponent(g.apiName)}`} className="text-sm font-semibold hover:underline" title="API 상세 열기">
                 {g.displayName || g.apiName}
               </Link>
-              {g.displayName && <span className="font-mono text-xs text-muted-foreground">{g.apiName}</span>}
+              {g.displayName && <span className="font-mono text-xs">{g.apiName}</span>}
               {g.status && (
-                <span className={cn("rounded px-1.5 py-0.5 text-[11px] font-medium", API_STATUS_VARIANTS[g.status] ?? API_STATUS_VARIANTS.draft)}>
-                  {API_STATUS_LABEL[g.status] ?? g.status}
-                </span>
+                <StatusBadge {...apiStatus(g.status)} size="sm" />
               )}
-              {g.protocol && <span className="rounded border px-1.5 py-0.5 text-[11px] text-muted-foreground">{protocolLabel(g.protocol)}</span>}
-              <span className="text-xs text-muted-foreground">{g.items.length}개</span>
+              {g.protocol && <span className="rounded border px-1.5 py-0.5 text-[11px]">{protocolLabel(g.protocol)}</span>}
+              <span className="text-xs">{g.items.length}개</span>
               {missing.length > 0 && <span className="text-xs text-amber-600">(없는 엔드포인트 {missing.length})</span>}
             </div>
             {showBody && (
@@ -258,7 +251,7 @@ export function ApisFavorites() {
                       {missing.map((f) => (
                         <li key={f.id} className="flex items-center gap-2 text-sm">
                           <MethodBadge method={f.method} />
-                          <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground line-through" title={f.path}>{f.path}</span>
+                          <span className="min-w-0 flex-1 truncate font-mono text-xs line-through" title={f.path}>{f.path}</span>
                           <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => void unfavorite(f)}>
                             <X className="mr-1 h-3.5 w-3.5" /> 해제
                           </Button>

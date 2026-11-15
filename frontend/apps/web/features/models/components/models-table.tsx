@@ -9,13 +9,13 @@ import {
   getSortedRowModel,
   useReactTable,
 } from "@tanstack/react-table"
-import { Archive, Search, X } from "lucide-react"
+import { Archive, LayoutGrid, List, X } from "lucide-react"
 import { useRouter } from "next/navigation"
 import { toast } from "@/lib/notify"
+import { Tip } from "@/components/tip"
 
 import { cn } from "@workspace/ui/lib/utils"
 import { Button } from "@workspace/ui/components/button"
-import { Input } from "@workspace/ui/components/input"
 import {
   Select,
   SelectContent,
@@ -33,11 +33,31 @@ import {
 } from "@workspace/ui/components/table"
 import { DataTablePagination } from "@/components/data-table"
 import { useAuth } from "@/features/auth"
+import { usePermissions } from "@/features/permissions/use-permissions"
 import { type ModelSummary } from "../data/schema"
 import { createModelsColumns } from "./models-columns"
+import { ModelsCardView } from "./models-card-view"
 import { ModelsPrimaryButtons } from "./models-primary-buttons"
 import { ModelsRegisterGuide } from "./models-register-guide"
 import { useModels } from "./models-provider"
+import { SearchInput } from "@/components/search-input"
+
+const VIEW_KEY = "argus.models.viewMode"
+
+/** 보기(표 / 카드) — 브라우저에 기억한다. 첫 렌더는 표(서버 렌더와 같게), 마운트 뒤 기억한 값으로 */
+function useViewMode(): ["table" | "card", (v: "table" | "card") => void] {
+  const [view, setViewState] = useState<"table" | "card">("table")
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem(VIEW_KEY) === "card") setViewState("card")
+    } catch { /* 저장소를 못 쓰면 표로 */ }
+  }, [])
+  const setView = useCallback((v: "table" | "card") => {
+    setViewState(v)
+    try { window.localStorage.setItem(VIEW_KEY, v) } catch { /* 무시 */ }
+  }, [])
+  return [view, setView]
+}
 
 type ModelsTableProps = {
   data: ModelSummary[]
@@ -51,6 +71,8 @@ export function ModelsTable({ data, isLoading }: ModelsTableProps) {
     showDeleted, setShowDeleted,
   } = useModels()
   const { user } = useAuth()
+  // 등록 안내는 모델을 등록할 수 있는 사람에게만(models.register — 서버도 403)
+  const canRegister = usePermissions().canUseFeature("models.register")
   const router = useRouter()
   const openDetail = useCallback(
     (name: string) => {
@@ -82,6 +104,9 @@ export function ModelsTable({ data, isLoading }: ModelsTableProps) {
   const [sorting, setSorting] = useState<SortingState>([])
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
   const [guideOpen, setGuideOpen] = useState(false)
+  const [viewMode, setViewMode] = useViewMode()
+  // 삭제된 모델 보기는 선택(복원 · 영구 삭제)이 필요해 표로만 — 카드에는 선택 상자가 없다
+  const view = showDeleted ? "table" : viewMode
 
   // --- Filter state ---
   // 초기값은 provider 에 마지막으로 적용된 필터 — 상세에서 돌아와도 입력 UI 와 목록이 일치한다.
@@ -193,16 +218,13 @@ export function ModelsTable({ data, isLoading }: ModelsTableProps) {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-1 items-center gap-2">
           {/* Search input */}
-          <div className="relative max-w-xs flex-1">
-            <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              placeholder="모델 이름 검색"
-              value={searchQuery}
-              onChange={(e) => handleSearchChange(e.target.value)}
-              onKeyDown={handleSearchKeyDown}
-              className="pl-8 h-9"
-            />
-          </div>
+          <SearchInput
+            className="max-w-xs flex-1"
+            placeholder="모델 이름 검색…"
+            value={searchQuery}
+            onValueChange={handleSearchChange}
+            onKeyDown={handleSearchKeyDown}
+          />
 
           {/* Status filter */}
           <Select value={statusFilter} onValueChange={setStatusFilter}>
@@ -251,6 +273,23 @@ export function ModelsTable({ data, isLoading }: ModelsTableProps) {
               {showDeleted ? "삭제된 모델 닫기" : "삭제된 모델"}
             </Button>
           )}
+          {/* 보기 — 표 / 카드(브라우저에 기억) */}
+          {!showDeleted && (
+            <div className="flex items-center rounded-md border p-0.5">
+              <Tip label="테이블 보기">
+                <Button size="icon" variant={view === "table" ? "secondary" : "ghost"} className="h-7 w-7"
+                  onClick={() => setViewMode("table")} aria-label="테이블 보기" aria-pressed={view === "table"}>
+                  <List className="h-4 w-4" />
+                </Button>
+              </Tip>
+              <Tip label="카드 보기">
+                <Button size="icon" variant={view === "card" ? "secondary" : "ghost"} className="h-7 w-7"
+                  onClick={() => setViewMode("card")} aria-label="카드 보기" aria-pressed={view === "card"}>
+                  <LayoutGrid className="h-4 w-4" />
+                </Button>
+              </Tip>
+            </div>
+          )}
           <ModelsPrimaryButtons />
         </div>
       </div>
@@ -261,7 +300,25 @@ export function ModelsTable({ data, isLoading }: ModelsTableProps) {
         </div>
       )}
 
-      {/* Table */}
+      {view === "card" ? (
+        isLoading ? (
+          <div className="flex h-24 items-center justify-center rounded-md border text-sm text-muted-foreground">모델을 불러오는 중…</div>
+        ) : data.length === 0 ? (
+          <div className="flex min-h-24 flex-col items-center justify-center gap-1 rounded-md border py-6 text-sm">
+            <p>모델이 없습니다.</p>
+            {canRegister && (
+              <p className="text-xs">
+                모델은 MLflow 클라이언트로 학습 결과를 기록할 때 등록됩니다.{" "}
+                <button type="button" className="font-medium text-primary underline-offset-4 hover:underline" onClick={() => setGuideOpen(true)}>
+                  등록 방법 보기
+                </button>
+              </p>
+            )}
+          </div>
+        ) : (
+          <ModelsCardView data={data} />
+        )
+      ) : (
       <div className="overflow-hidden rounded-md border">
         <Table>
           <TableHeader>
@@ -295,7 +352,7 @@ export function ModelsTable({ data, isLoading }: ModelsTableProps) {
                   colSpan={columns.length}
                   className="h-24 text-center"
                 >
-                  <p className="text-muted-foreground">모델을 불러오는 중...</p>
+                  <p className="text-muted-foreground">모델을 불러오는 중…</p>
                 </TableCell>
               </TableRow>
             ) : table.getRowModel().rows?.length ? (
@@ -332,16 +389,18 @@ export function ModelsTable({ data, isLoading }: ModelsTableProps) {
                   {showDeleted ? "삭제된 모델이 없습니다." : (
                     <div className="space-y-1">
                       <p>모델이 없습니다.</p>
-                      <p className="text-xs text-muted-foreground">
-                        모델은 MLflow 클라이언트로 학습 결과를 기록할 때 등록됩니다.{" "}
-                        <button
-                          type="button"
-                          className="font-medium text-primary underline-offset-4 hover:underline"
-                          onClick={() => setGuideOpen(true)}
-                        >
-                          등록 방법 보기
-                        </button>
-                      </p>
+                      {canRegister && (
+                        <p className="text-xs">
+                          모델은 MLflow 클라이언트로 학습 결과를 기록할 때 등록됩니다.{" "}
+                          <button
+                            type="button"
+                            className="font-medium text-primary underline-offset-4 hover:underline"
+                            onClick={() => setGuideOpen(true)}
+                          >
+                            등록 방법 보기
+                          </button>
+                        </p>
+                      )}
                     </div>
                   )}
                 </TableCell>
@@ -350,6 +409,7 @@ export function ModelsTable({ data, isLoading }: ModelsTableProps) {
           </TableBody>
         </Table>
       </div>
+      )}
 
       <DataTablePagination table={table} className="mt-auto" />
       <ModelsRegisterGuide open={guideOpen} onOpenChange={setGuideOpen} />

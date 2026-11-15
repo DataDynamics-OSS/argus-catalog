@@ -110,7 +110,9 @@ export function UsersDeleteDialog({
       ? "관리자"
       : currentRow.role === "argus-superuser"
         ? "슈퍼유저"
-        : "사용자"
+        : currentRow.role === "argus-user"
+          ? "사용자"
+          : currentRow.role
 
   return (
     <ConfirmDialog
@@ -143,7 +145,7 @@ export function UsersDeleteDialog({
               <p>
                 이 사용자가 소유한 자산이 있습니다. 삭제하려면 넘겨받을 사용자를 고르세요.
               </p>
-              <ul className="list-inside list-disc text-muted-foreground">
+              <ul className="list-inside list-disc">
                 {owned.items.filter((i) => i.count > 0).map((i) => (
                   <li key={i.key}>{i.label} {i.count}건</li>
                 ))}

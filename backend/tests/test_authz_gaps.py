@@ -66,7 +66,7 @@ async def test_gate_blocks_anonymous(gate_app, url):
 
 @pytest.mark.parametrize("method,url", [
     ("POST", "/api/v1/auth/login"), ("POST", "/api/v1/auth/refresh"), ("POST", "/api/v1/auth/logout"),
-    ("GET", "/api/v1/auth/type"),
+    ("GET", "/api/v1/auth/type"), ("GET", "/api/v1/settings/branding/public"),
     ("GET", "/api/v1/federation/export/datasets"), ("GET", "/api/v1/federation/export/capabilities"),
     ("GET", "/api/v1/mcp-deployments/d1/policy-bundle"), ("POST", "/api/v1/mcp-deployments/d1/audit-events"),
     ("GET", "/api/v1/filesystem/download?path=/x&token=t"), ("GET", "/api/v1/model-store/browse/file?path=/x&token=t"),

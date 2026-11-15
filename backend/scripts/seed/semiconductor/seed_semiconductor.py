@@ -11,8 +11,11 @@ Catalog Server Standard API를 호출하여 반도체 Fab 표준 단어/도메�
   - 사용자: ``--username`` > 환경변수 ``ARGUS_USERNAME`` > ``admin``
   - 비밀번호: ``--password`` > 환경변수 ``ARGUS_PASSWORD`` > (터미널이면) 입력 프롬프트
   - 이미 받은 토큰: ``--token`` 또는 환경변수 ``ARGUS_TOKEN`` (주면 로그인 생략)
+  - API 키(권장): ``--api-key`` 또는 환경변수 ``ARGUS_CATALOG_API_KEY`` (주면 로그인 생략 — 표준사전 편집 권한이 있는 역할의
+    ``catalog:write`` 키)
 
 Usage:
+    ARGUS_CATALOG_API_KEY=argus_sk_... python seed_semiconductor.py   # API 키(권장)
     ARGUS_PASSWORD=... python seed_semiconductor.py      # localhost:4600, admin 계정
     python seed_semiconductor.py --base-url http://localhost:4600 --username admin
     python seed_semiconductor.py --dry-run                # API 호출 없이 데이터 검증만(로그인 안 함)
@@ -424,6 +427,11 @@ def authenticate(args: argparse.Namespace) -> None:
     """토큰을 정해 ``_access_token`` 에 둔다. 실패하면 메시지를 찍고 종료."""
     global _access_token
 
+    if args.api_key:
+        _access_token = args.api_key
+        print("  Auth:    --api-key / ARGUS_CATALOG_API_KEY 사용")
+        return
+
     if args.token:
         _access_token = args.token
         print("  Auth:    --token / ARGUS_TOKEN 사용")
@@ -455,8 +463,8 @@ Examples:
   python seed_semiconductor.py --base-url http://localhost:4600 --username admin
   python seed_semiconductor.py --dry-run                  # 데이터 검증만(로그인 안 함)
 
-계정: --username / ARGUS_USERNAME (기본 admin), --password / ARGUS_PASSWORD
-(없으면 터미널에서 입력), 또는 --token / ARGUS_TOKEN.
+인증: --api-key / ARGUS_CATALOG_API_KEY (권장), 또는 --username / ARGUS_USERNAME (기본 admin),
+--password / ARGUS_PASSWORD (없으면 터미널에서 입력), 또는 --token / ARGUS_TOKEN.
         """,
     )
     parser.add_argument(
@@ -478,6 +486,11 @@ Examples:
         "--password",
         default=os.environ.get("ARGUS_PASSWORD"),
         help="로그인 비밀번호 (env ARGUS_PASSWORD, 없으면 입력 프롬프트)",
+    )
+    parser.add_argument(
+        "--api-key",
+        default=os.environ.get("ARGUS_CATALOG_API_KEY"),
+        help="카탈로그 API 키 (env ARGUS_CATALOG_API_KEY, 권장 — 주면 로그인 생략)",
     )
     parser.add_argument(
         "--token",

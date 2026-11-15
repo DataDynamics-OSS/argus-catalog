@@ -1,11 +1,13 @@
 "use client"
 
-import React, { useCallback, useEffect, useRef, useState } from "react"
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 
 import useDialogState from "@/hooks/use-dialog-state"
 import { notifyError } from "@/lib/notify"
 import { fetchDatasets, type PaginatedDatasets } from "../api"
 import { type DatasetSummary } from "../data/schema"
+import { type DatasetListState, datasetListQuery, parseDatasetListParams } from "../links"
 
 type DatasetsDialogType = "add" | "edit" | "delete"
 
@@ -13,15 +15,8 @@ export type DatasetsViewMode = "table" | "card"
 
 const VIEW_MODE_KEY = "argus.datasets.viewMode"
 
-type SearchParams = {
-  search: string
-  datasource: string
-  origin: string
-  status: string
-  tag: string
-  orgId: string
-  systemId: string
-}
+/** 목록 화면이 바꾸는 조건 — 페이지·크기를 뺀 나머지. */
+export type DatasetsFilters = Omit<DatasetListState, "page" | "size">
 
 type DatasetsContextType = {
   open: DatasetsDialogType | null
@@ -35,15 +30,16 @@ type DatasetsContextType = {
   isLoading: boolean
   setPage: (page: number) => void
   setPageSize: (size: number) => void
-  searchDatasets: (params: SearchParams) => void
+  /** 지금 주소에 걸린 조회 조건 */
+  filters: DatasetsFilters
+  /** 조건을 바꿔 1페이지부터 다시 조회(주소도 바뀐다) */
+  searchDatasets: (params: DatasetsFilters) => void
   refreshDatasets: () => Promise<void>
   viewMode: DatasetsViewMode
   setViewMode: (m: DatasetsViewMode) => void
 }
 
 const DatasetsContext = React.createContext<DatasetsContextType | null>(null)
-
-const DEFAULT_PAGE_SIZE = 20
 
 export function DatasetsProvider({
   children,
@@ -54,8 +50,6 @@ export function DatasetsProvider({
   const [currentRow, setCurrentRow] = useState<DatasetSummary | null>(null)
   const [datasets, setDatasets] = useState<DatasetSummary[]>([])
   const [total, setTotal] = useState(0)
-  const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [isLoading, setIsLoading] = useState(true)
   // 뷰 모드 — localStorage 영속화. 초기값은 mount 시점에 읽음(SSR/CSR mismatch 방지).
   const [viewMode, setViewModeState] = useState<DatasetsViewMode>("table")
@@ -71,107 +65,98 @@ export function DatasetsProvider({
     }
   }, [])
 
-  const appliedFiltersRef = useRef<SearchParams>({
-    search: "",
-    datasource: "",
-    origin: "",
-    status: "",
-    tag: "",
-    orgId: "",
-    systemId: "",
-  })
+  // 주소의 ?view=card|table 이 있으면 그 보기로 연다(사이드바 브랜드의 기본 링크 — TODO-145). 고른 보기는 기억한다.
+  const viewParam = useSearchParams().get("view")
+  useEffect(() => {
+    if (viewParam === "card" || viewParam === "table") setViewMode(viewParam)
+  }, [viewParam, setViewMode])
 
-  // 마지막 요청 번호 — 요청이 겹치면(페이지 크기 변경·검색·페이지 이동 연속) 가장 마지막 요청의 응답만 반영.
+  // 조회 조건은 주소(쿼리스트링)가 원본이다 — 링크로 걸러 들어오거나 상세에서 돌아와도 같은 목록(TODO-073).
+  // 화면 조작은 주소만 바꾸고, 주소가 바뀌면 다시 조회한다.
+  const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+  const queryKey = searchParams.toString()
+  const listState = useMemo(() => parseDatasetListParams(new URLSearchParams(queryKey)), [queryKey])
+  const { page, size: pageSize } = listState
+  const filters = useMemo<DatasetsFilters>(() => {
+    const { page: _p, size: _s, ...rest } = listState
+    return rest
+  }, [listState])
+
+  // 마지막 요청 번호 — 요청이 겹치면(주소가 연달아 바뀜) 가장 마지막 요청의 응답만 반영.
   const requestSeqRef = useRef(0)
 
-  const loadDatasets = useCallback(
-    async (params: {
-      page: number
-      pageSize: number
-      search: string
-      datasource: string
-      origin: string
-      status: string
-      tag: string
-      orgId: string
-      systemId: string
-    }) => {
-      const seq = ++requestSeqRef.current
-      try {
-        setIsLoading(true)
-        const data: PaginatedDatasets = await fetchDatasets({
-          page: params.page,
-          pageSize: params.pageSize,
-          search: params.search || undefined,
-          datasource: params.datasource || undefined,
-          origin: params.origin || undefined,
-          status: params.status || undefined,
-          tag: params.tag || undefined,
-          orgId: params.orgId ? Number(params.orgId) : undefined,
-          systemId: params.systemId ? Number(params.systemId) : undefined,
-        })
-        if (seq !== requestSeqRef.current) return
-        setDatasets(data.items)
-        setTotal(data.total)
-      } catch (err) {
-        if (seq !== requestSeqRef.current) return
-        console.error("Failed to fetch datasets:", err)
-        notifyError(err, "데이터셋 목록을 불러오지 못했습니다.")
-      } finally {
-        if (seq === requestSeqRef.current) setIsLoading(false)
+  const loadDatasets = useCallback(async (state: DatasetListState, card: boolean) => {
+    const seq = ++requestSeqRef.current
+    const join = (v: string[]) => (v.length ? v.join(",") : undefined)
+    try {
+      setIsLoading(true)
+      const data: PaginatedDatasets = await fetchDatasets({
+        page: state.page,
+        pageSize: state.size,
+        search: state.q || undefined,
+        // 다중 선택은 쉼표로 이어 보낸다 — 백엔드가 여러 값을 받는다(DEF-067)
+        datasource: join(state.datasource),
+        origin: join(state.origin),
+        status: join(state.status),
+        tagIds: join(state.tag),
+        termId: state.term ? Number(state.term) : undefined,
+        categoryId: state.category ? Number(state.category) : undefined,
+        orgId: state.org ? Number(state.org) : undefined,
+        systemId: state.system ? Number(state.system) : undefined,
+        // 카드 보기면 컬럼 미리보기도 받는다(TODO-111)
+        card,
+      })
+      if (seq !== requestSeqRef.current) return
+      setDatasets(data.items)
+      setTotal(data.total)
+    } catch (err) {
+      if (seq !== requestSeqRef.current) return
+      console.error("Failed to fetch datasets:", err)
+      notifyError(err, "데이터셋 목록을 불러오지 못했습니다.")
+    } finally {
+      if (seq === requestSeqRef.current) setIsLoading(false)
+    }
+  }, [])
+
+  // 보기 방식을 바꿔도 다시 조회한다 — 카드 보기에만 필요한 필드가 있다
+  const wantCard = viewMode === "card"
+  useEffect(() => {
+    loadDatasets(listState, wantCard)
+  }, [listState, wantCard, loadDatasets])
+
+  // 새 조건을 주소에 쓴다. 주소가 그대로면(같은 조건으로 다시 검색) 바로 다시 조회한다.
+  const navigate = useCallback(
+    (next: DatasetListState) => {
+      const q = datasetListQuery(next)
+      if (q === queryKey) {
+        loadDatasets(next, wantCard)
+        return
       }
+      router.replace(q ? `${pathname}?${q}` : pathname, { scroll: false })
     },
-    []
+    [queryKey, pathname, router, loadDatasets, wantCard]
   )
 
-  // 최초 1회 로드. pageSize 를 의존성에 두면 페이지 크기 변경 시 필터 없는 조회가 한 번 더 나가
-  // handleSetPageSize 의 (필터 유지) 조회 결과를 덮어쓸 수 있으므로, 이후 조회는 각 핸들러가 담당한다.
-  useEffect(() => {
-    loadDatasets({
-      page: 1,
-      pageSize: DEFAULT_PAGE_SIZE,
-      search: "",
-      datasource: "",
-      origin: "",
-      status: "",
-      tag: "",
-      orgId: "",
-      systemId: "",
-    })
-  }, [loadDatasets])
-
   const handleSetPage = useCallback(
-    (newPage: number) => {
-      setPage(newPage)
-      const f = appliedFiltersRef.current
-      loadDatasets({ page: newPage, pageSize, ...f })
-    },
-    [loadDatasets, pageSize]
+    (newPage: number) => navigate({ ...listState, page: newPage }),
+    [navigate, listState]
   )
 
   const handleSetPageSize = useCallback(
-    (size: number) => {
-      setPageSize(size)
-      setPage(1)
-      const f = appliedFiltersRef.current
-      loadDatasets({ page: 1, pageSize: size, ...f })
-    },
-    [loadDatasets]
+    (size: number) => navigate({ ...listState, size, page: 1 }),
+    [navigate, listState]
   )
 
   const searchDatasets = useCallback(
-    (params: SearchParams) => {
-      appliedFiltersRef.current = params
-      setPage(1)
-      loadDatasets({ page: 1, pageSize, ...params })
-    },
-    [loadDatasets, pageSize]
+    (params: DatasetsFilters) => navigate({ ...params, page: 1, size: pageSize }),
+    [navigate, pageSize]
   )
 
   const refreshDatasets = useCallback(async () => {
-    const f = appliedFiltersRef.current
-    await loadDatasets({ page, pageSize, ...f })
-  }, [loadDatasets, page, pageSize])
+    await loadDatasets(listState, wantCard)
+  }, [loadDatasets, listState, wantCard])
 
   return (
     <DatasetsContext
@@ -187,6 +172,7 @@ export function DatasetsProvider({
         isLoading,
         setPage: handleSetPage,
         setPageSize: handleSetPageSize,
+        filters,
         searchDatasets,
         refreshDatasets,
         viewMode,

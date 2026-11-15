@@ -39,16 +39,13 @@ import { useAuth } from "@/features/auth"
 import { bulkUpdateAgents, type BulkResult, type BulkSet } from "../api"
 import { AGENT_STATUS_LABEL } from "../data/schema"
 import { useAIAgents } from "./ai-agents-provider"
+import { StatusBadge, type StatusTone } from "@workspace/ui/components/status-badge"
+import { TagInput } from "@/components/tag-input"
 
 const KEEP = "__keep__"
 const ACTION_LABEL = { updated: "갱신", unchanged: "변경 없음", failed: "실패" } as const
-const ACTION_CLASS = {
-  updated: "bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300",
-  unchanged: "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300",
-  failed: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300",
-} as const
+const ACTION_TONE: Record<keyof typeof ACTION_LABEL, StatusTone> = { updated: "info", unchanged: "neutral", failed: "danger" }
 
-const splitTags = (v: string) => v.split(",").map((t) => t.trim()).filter(Boolean)
 
 export function AIAgentsBulkDialog() {
   const { user } = useAuth()
@@ -57,8 +54,8 @@ export function AIAgentsBulkDialog() {
   const [owner, setOwner] = useState("")
   const [department, setDepartment] = useState("")
   const [category, setCategory] = useState("")
-  const [addTags, setAddTags] = useState("")
-  const [removeTags, setRemoveTags] = useState("")
+  const [addTags, setAddTags] = useState<string[]>([])
+  const [removeTags, setRemoveTags] = useState<string[]>([])
   const [result, setResult] = useState<BulkResult | null>(null)
   const [busy, setBusy] = useState<"preview" | "apply" | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -68,8 +65,8 @@ export function AIAgentsBulkDialog() {
     ...(owner.trim() && { owner: owner.trim() }),
     ...(department.trim() && { department: department.trim() }),
     ...(category.trim() && { category: category.trim() }),
-    ...(splitTags(addTags).length && { add_tags: splitTags(addTags) }),
-    ...(splitTags(removeTags).length && { remove_tags: splitTags(removeTags) }),
+    ...(addTags.length && { add_tags: addTags }),
+    ...(removeTags.length && { remove_tags: removeTags }),
   }
   const hasChange = Object.keys(set).length > 0
   const previewed = !!result?.dry_run
@@ -80,8 +77,8 @@ export function AIAgentsBulkDialog() {
     setOwner("")
     setDepartment("")
     setCategory("")
-    setAddTags("")
-    setRemoveTags("")
+    setAddTags([])
+    setRemoveTags([])
     setResult(null)
     setError(null)
   }
@@ -104,8 +101,8 @@ export function AIAgentsBulkDialog() {
       setResult(r)
       if (!dryRun) {
         const { updated, failed } = r.summary
-        if (failed) toast.warning(`일괄 변경 — 갱신 ${updated} · 실패 ${failed}`)
-        else toast.success(`일괄 변경 — 갱신 ${updated}`)
+        if (failed) toast.warning("일부 에이전트를 변경하지 못했습니다.", { description: `갱신 ${updated} · 실패 ${failed}` })
+        else toast.success("에이전트를 일괄 변경했습니다.", { description: `갱신 ${updated}` })
         setSelectedNames([])
         await refreshAgents()
         bumpStats()
@@ -161,12 +158,12 @@ export function AIAgentsBulkDialog() {
               <Input id="bulk-cat" value={category} placeholder="바꾸지 않음" onChange={(e) => edit(setCategory)(e.target.value)} />
             </div>
             <div className="grid gap-1.5">
-              <Label htmlFor="bulk-add">태그 추가(쉼표)</Label>
-              <Input id="bulk-add" value={addTags} onChange={(e) => edit(setAddTags)(e.target.value)} />
+              <Label htmlFor="bulk-add">태그 추가</Label>
+              <TagInput id="bulk-add" value={addTags} onChange={edit(setAddTags)} />
             </div>
             <div className="grid gap-1.5">
-              <Label htmlFor="bulk-remove">태그 빼기(쉼표)</Label>
-              <Input id="bulk-remove" value={removeTags} onChange={(e) => edit(setRemoveTags)(e.target.value)} />
+              <Label htmlFor="bulk-remove">태그 빼기</Label>
+              <TagInput id="bulk-remove" value={removeTags} onChange={edit(setRemoveTags)} />
             </div>
           </div>
 
@@ -177,9 +174,9 @@ export function AIAgentsBulkDialog() {
               <div className="flex flex-wrap items-center gap-2 text-sm">
                 <span className="font-medium">{result.dry_run ? "미리 보기 결과" : "반영 결과"}</span>
                 {(Object.keys(ACTION_LABEL) as (keyof typeof ACTION_LABEL)[]).map((k) => (
-                  <span key={k} className={`rounded-full px-2 py-0.5 text-xs ${ACTION_CLASS[k]}`}>
+                  <StatusBadge key={k} tone={ACTION_TONE[k]}>
                     {ACTION_LABEL[k]} {result.summary[k]}
-                  </span>
+                  </StatusBadge>
                 ))}
               </div>
               <div className="rounded-md border">
@@ -196,9 +193,7 @@ export function AIAgentsBulkDialog() {
                       <TableRow key={r.name}>
                         <TableCell className="font-mono text-xs">{r.name}</TableCell>
                         <TableCell>
-                          <span className={`rounded-full px-2 py-0.5 text-xs ${ACTION_CLASS[r.action]}`}>
-                            {ACTION_LABEL[r.action]}
-                          </span>
+                          <StatusBadge tone={ACTION_TONE[r.action]}>{ACTION_LABEL[r.action]}</StatusBadge>
                         </TableCell>
                         <TableCell className="text-xs">
                           {r.error ? (
@@ -231,7 +226,7 @@ export function AIAgentsBulkDialog() {
             <>
               <Button variant="secondary" disabled={!hasChange || !!busy} onClick={() => run(true)}>
                 {busy === "preview" && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
-                미리 보기
+                미리보기
               </Button>
               <Button disabled={!hasChange || !previewed || !!busy} onClick={() => run(false)}>
                 {busy === "apply" && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}

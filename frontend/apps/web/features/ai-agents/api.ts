@@ -14,23 +14,28 @@ export type AgentListQuery = {
   status?: string
   framework?: string
   category?: string
+  /** 부서 — JSON 배열 문자열(TODO-144) 또는 예전 쉼표 문자열 */
   department?: string
   /** 소유자 이메일. "me" 는 로그인 사용자 */
   owner?: string
-  /** 태그(쉼표, 모두 포함) */
+  /** 태그(모두 포함) — JSON 배열 문자열(값 안의 쉼표 보존, TODO-144) 또는 예전 쉼표 문자열 */
   tag?: string
   risk?: "low" | "medium" | "high" | "critical"
   managed_by?: string
   /** attention(확인 필요) 또는 ok/missing/unknown/inactive */
   owner_state?: string
   incomplete?: boolean
+  /** 위험 등급(쉼표) minimal/limited/high/prohibited, none 은 미지정 */
+  risk_tier?: string
+  /** 자율 수준(쉼표) advisory/supervised/autonomous, none 은 미지정 */
+  autonomy_level?: string
   /** updated(기본)/name/usage/last_invoked/completeness/risk, "-" 접두는 반대 방향 */
   sort?: string
 }
 
 export const LIST_QUERY_KEYS: (keyof AgentListQuery)[] = [
   "search", "status", "framework", "category", "department", "owner", "tag", "risk", "managed_by",
-  "owner_state", "incomplete", "sort",
+  "owner_state", "incomplete", "risk_tier", "autonomy_level", "sort",
 ]
 
 /** 빈 값을 뺀 질의(저장·비교용). */
@@ -71,6 +76,10 @@ export type AIAgentStats = {
   by_status: { name: string; count: number }[]
   by_framework: { name: string; count: number }[]
   by_category: { name: string; count: number }[]
+  /** 위험 등급별 건수(미지정 제외) */
+  by_risk_tier: { name: string; count: number }[]
+  unassessed_risk_count: number
+  high_risk_unassessed_count: number
   multi_agent_count: number
   hitl_required_count: number
   total_invocations: number
@@ -137,6 +146,41 @@ export type AIAgentLineageItem = {
   target_type: string
   target_ref: string
   relation: string
+  description: string | null
+  /** 대상을 카탈로그 엔티티로 해석한 id (agent/model/dataset). 외부 대상이거나 찾지 못하면 null */
+  target_id: number | null
+}
+
+/** 외부에 내세우는 스킬 (A2A AgentSkill) — 에이전트가 호출하는 도구와 다르다. */
+export type AIAgentSkill = {
+  id: number
+  skill_key: string
+  name: string
+  description: string | null
+  tags: string[] | null
+  examples: string[] | null
+  input_modes: string[] | null
+  output_modes: string[] | null
+  sort_order: number
+}
+
+export type DataAccessMode = "read" | "write" | "read_write"
+
+/** 에이전트가 읽거나 쓰는 데이터 소스·데이터셋. */
+export type AIAgentDataAccess = {
+  id: number
+  target_type: "datasource" | "dataset"
+  datasource_id: number | null
+  dataset_id: number | null
+  /** 데이터 소스 이름 또는 데이터셋 이름 */
+  target_name: string | null
+  /** 데이터셋 URN 또는 데이터 소스 식별 ID */
+  target_urn: string | null
+  /** 데이터셋이면 소속 데이터 소스 이름 */
+  datasource_name: string | null
+  /** 데이터셋에 개인정보 컬럼이 있는지 (데이터 소스 전체 접근은 null) */
+  contains_pii: boolean | null
+  access: DataAccessMode
   description: string | null
 }
 
@@ -216,11 +260,40 @@ export type AIAgentDetail = {
   completeness?: number | null
   missing_fields?: string[]
   max_risk?: string | null
+  /** 기본 입출력 MIME 형식 (A2A defaultInputModes/defaultOutputModes) */
+  default_input_modes: string[] | null
+  default_output_modes: string[] | null
+  /** 위험 등급·규제 준수 */
+  risk_tier: RiskTier | null
+  risk_rationale: string | null
+  impact_assessed_at: string | null
+  impact_assessment_result: ImpactResult | null
+  impact_assessment_ref: string | null
+  compliance: string[] | null
+  log_retention_days: number | null
+  autonomy_level: AutonomyLevel | null
+  /** 실행 신원·권한·위임 */
+  identity_type: IdentityType | null
+  identity_principal: string | null
+  identity_provider: string | null
+  granted_scopes: string[] | null
+  on_behalf_of: boolean
+  /** 실행 신원이 사용자 목록에 있는지 — ok / unknown / inactive / null(확인 대상 아님) */
+  identity_state: "ok" | "unknown" | "inactive" | null
+  /** base_model_ref 가 가리키는 등록 모델 이름 */
+  base_model_name: string | null
   tools: AIAgentTool[]
   mcp_servers: AIAgentMcpServer[]
   lineage: AIAgentLineageItem[]
   versions: AIAgentVersionItem[]
+  skills: AIAgentSkill[]
+  data_access: AIAgentDataAccess[]
 }
+
+export type RiskTier = "minimal" | "limited" | "high" | "prohibited"
+export type ImpactResult = "passed" | "conditional" | "failed" | "pending"
+export type AutonomyLevel = "advisory" | "supervised" | "autonomous"
+export type IdentityType = "service_account" | "oauth_client" | "workload" | "user_delegated"
 
 export async function fetchAIAgentDetail(name: string): Promise<AIAgentDetail> {
   const res = await authFetch(`${BASE}/${encodeURIComponent(name)}`)
@@ -294,6 +367,22 @@ export type AIAgentUpdatePayload = Partial<{
   dlp_policies: string[] | null
   guardrails: Record<string, unknown> | null
   hitl_config: Record<string, unknown> | null
+  inference_params: Record<string, unknown> | null
+  default_input_modes: string[] | null
+  default_output_modes: string[] | null
+  risk_tier: RiskTier | null
+  risk_rationale: string | null
+  impact_assessed_at: string | null
+  impact_assessment_result: ImpactResult | null
+  impact_assessment_ref: string | null
+  compliance: string[] | null
+  log_retention_days: number | null
+  autonomy_level: AutonomyLevel | null
+  identity_type: IdentityType | null
+  identity_principal: string | null
+  identity_provider: string | null
+  granted_scopes: string[] | null
+  on_behalf_of: boolean
 }>
 
 export async function updateAIAgent(
@@ -416,6 +505,77 @@ export async function deleteAIAgentLineage(name: string, lineageId: number): Pro
   if (!res.ok) await throwOnError(res, "리니지를 삭제하지 못했습니다.")
 }
 
+export type AIAgentSkillPayload = {
+  skill_key?: string
+  name: string
+  description?: string | null
+  tags?: string[] | null
+  examples?: string[] | null
+  input_modes?: string[] | null
+  output_modes?: string[] | null
+}
+
+export async function addAIAgentSkill(name: string, payload: AIAgentSkillPayload): Promise<AIAgentSkill> {
+  const res = await authFetch(`${BASE}/${encodeURIComponent(name)}/skills`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) await throwOnError(res, "스킬을 등록하지 못했습니다.")
+  return res.json()
+}
+
+export async function deleteAIAgentSkill(name: string, skillId: number): Promise<void> {
+  const res = await authFetch(`${BASE}/${encodeURIComponent(name)}/skills/${skillId}`, { method: "DELETE" })
+  if (!res.ok) await throwOnError(res, "스킬을 삭제하지 못했습니다.")
+}
+
+export async function addAIAgentDataAccess(
+  name: string,
+  payload: {
+    dataset_urn?: string
+    datasource_name?: string
+    access: DataAccessMode
+    description?: string
+  },
+): Promise<AIAgentDataAccess> {
+  const res = await authFetch(`${BASE}/${encodeURIComponent(name)}/data-access`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) await throwOnError(res, "데이터 접근을 등록하지 못했습니다.")
+  return res.json()
+}
+
+export async function deleteAIAgentDataAccess(name: string, accessId: number): Promise<void> {
+  const res = await authFetch(`${BASE}/${encodeURIComponent(name)}/data-access/${accessId}`, { method: "DELETE" })
+  if (!res.ok) await throwOnError(res, "데이터 접근을 삭제하지 못했습니다.")
+}
+
+/** 자원(데이터셋·데이터 소스·모델)을 쓰는 에이전트 한 건 — 자원 상세 화면의 역방향 조회. */
+export type AgentResourceUsage = {
+  agent_id: number
+  agent_name: string
+  display_name: string | null
+  status: string
+  owner_email: string | null
+  /** read/write/read_write · base_model · 리니지 관계 */
+  relation: string
+  /** data_access / datasource(소속 데이터 소스 경유) / base_model / lineage */
+  via: "data_access" | "datasource" | "base_model" | "lineage"
+  description: string | null
+}
+
+export async function fetchAgentResourceUsage(
+  target: { dataset_id: number } | { datasource_id: number } | { model_id: number },
+): Promise<AgentResourceUsage[]> {
+  const q = new URLSearchParams(Object.entries(target).map(([k, v]) => [k, String(v)]))
+  const res = await authFetch(`${BASE}/usage?${q}`)
+  if (!res.ok) throw new Error(`이 자원을 쓰는 에이전트를 불러오지 못했습니다. (HTTP ${res.status})`)
+  return res.json()
+}
+
 export async function addAIAgentVersion(
   name: string,
   payload: { version: string; source?: string; system_prompt?: string; changelog?: string },
@@ -501,19 +661,28 @@ export async function fetchAIAgentMetering(name: string): Promise<AIAgentMeterin
   return res.json()
 }
 
+/** A2A 1.0 에이전트 카드. 카탈로그 정보는 capabilities.extensions 의 카탈로그 확장 params 에 있다. */
 export type AIAgentCard = {
   name: string
-  display_name: string | null
-  description: string | null
+  description: string
   version: string
-  url: string | null
-  protocol: string | null
-  auth_method: string | null
-  provider: { organization: string | null; contact: string | null }
-  capabilities: string[]
-  supported_languages: string[]
-  skills: { name: string; description: string | null }[]
-  streaming: boolean
+  supportedInterfaces: { url: string; protocolBinding: string; protocolVersion: string }[]
+  capabilities: {
+    streaming: boolean
+    pushNotifications: boolean
+    extensions: { uri: string; description: string | null; required: boolean; params: Record<string, unknown> }[]
+  }
+  defaultInputModes: string[]
+  defaultOutputModes: string[]
+  skills: {
+    id: string
+    name: string
+    description: string
+    tags: string[]
+    examples?: string[]
+    inputModes?: string[]
+    outputModes?: string[]
+  }[]
 }
 
 export async function fetchAIAgentCard(name: string): Promise<AIAgentCard> {
@@ -546,6 +715,17 @@ export type AIAgentPolicyBundle = {
   auth_method: string | null
   protocol: string | null
   endpoint: string | null
+  data_access: { target_type: string; name: string | null; urn: string | null; access: string }[]
+  identity: {
+    type: string | null
+    principal: string | null
+    provider: string | null
+    scopes: string[]
+    on_behalf_of: boolean
+  } | null
+  risk_tier: string | null
+  autonomy_level: string | null
+  log_retention_days: number | null
 }
 
 export async function fetchAIAgentPolicy(name: string): Promise<AIAgentPolicyBundle> {

@@ -1,10 +1,12 @@
 "use client"
 
+import { Tip } from "@/components/tip"
 import { type ColumnDef } from "@tanstack/react-table"
-import { Database, MoreHorizontal } from "lucide-react"
+import { Database, MoreHorizontal, Trash2 } from "lucide-react"
 import Link from "next/link"
 
-import { Badge } from "@workspace/ui/components/badge"
+import { StatusBadge } from "@workspace/ui/components/status-badge"
+import { cn } from "@workspace/ui/lib/utils"
 import { Button } from "@workspace/ui/components/button"
 import {
   DropdownMenu,
@@ -13,34 +15,34 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
-import { useAuth } from "@/features/auth"
-import { canManageDataset } from "../permissions"
+import { useCanDeleteDataset } from "../use-can-delete-dataset"
+import { datasetStatus } from "../status"
 import { type DatasetSummary } from "../data/schema"
 import { useDatasets } from "./datasets-provider"
+import { OriginText } from "./origin-text"
+import { SyncedBadge } from "./synced-badge"
+import { LinkMenuItems } from "@/components/link-menu-items"
 
 // URN path 추출은 avro.ts 로 옮김 — 기존 import 호환용 재노출
 export { pathFromUrn } from "../avro"
 
 function RowActions({ row }: { row: DatasetSummary }) {
   const { setOpen, setCurrentRow } = useDatasets()
-  const { user } = useAuth()
-  // 삭제는 서버와 같은 기준(생성자 또는 관리자)일 때만 노출
-  const canDelete = canManageDataset(user, row.created_by)
+  // 삭제는 서버와 같은 기준(생성자 또는 관리자 + datasets.delete 기능 권한)일 때만 노출
+  const canDelete = useCanDeleteDataset()(row)
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
+      <Tip label={`${row.name} 메뉴`}><DropdownMenuTrigger asChild>
+        <Button aria-label={`${row.name} 메뉴`}
           variant="ghost"
           className="h-8 w-8 p-0"
           onClick={(e) => e.stopPropagation()}
         >
           <MoreHorizontal className="h-4 w-4" />
         </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuItem asChild>
-          <Link href={`/dashboard/datasets/${row.id}`}>상세 보기</Link>
-        </DropdownMenuItem>
+      </DropdownMenuTrigger></Tip>
+      <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+        <LinkMenuItems href={`/dashboard/datasets/${row.id}`} urn={row.urn} />
         {canDelete && (
           <>
             <DropdownMenuSeparator />
@@ -49,9 +51,9 @@ function RowActions({ row }: { row: DatasetSummary }) {
                 setCurrentRow(row)
                 setOpen("delete")
               }}
-              className="text-destructive focus:text-destructive"
+              variant="destructive"
             >
-              삭제
+              <Trash2 /> 삭제
             </DropdownMenuItem>
           </>
         )}
@@ -72,21 +74,25 @@ export const datasetsColumns: ColumnDef<DatasetSummary>[] = [
       const summary = row.original.summary
       return (
         <div className="min-w-0">
-          {/* logical 이 있으면 logical 만, 없으면 정규화 경로(database.schema.table)를 메인으로. */}
-          <Link
-            href={`/dashboard/datasets/${row.original.id}`}
-            className={
-              logical
-                ? "font-medium text-sm hover:underline"
-                : "font-medium text-sm hover:underline uppercase"
-            }
-            onClick={(e) => e.stopPropagation()}
-          >
-            {logical || qualified}
-          </Link>
+          {/* 표시 이름(한글 등)이 있으면 왼쪽에 표시 이름, 오른쪽에 정규화 경로(SAKILA.CUSTOMERS) — 둘 다 보인다(TODO-142).
+              없으면 정규화 경로만 메인으로. */}
+          <div className="flex min-w-0 items-baseline gap-2">
+            <Link
+              href={`/dashboard/datasets/${row.original.id}`}
+              className={cn("shrink-0 text-sm font-medium hover:underline", !logical && "uppercase")}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {logical || qualified}
+            </Link>
+            {logical && (
+              <span className="min-w-0 truncate font-mono text-xs uppercase text-muted-foreground" title={qualified}>
+                {qualified}
+              </span>
+            )}
+          </div>
           {/* 메인 라인 하단에 summary 노출 */}
           {summary && (
-            <p className="text-xs text-muted-foreground truncate max-w-[400px]" title={summary}>
+            <p className="text-xs truncate max-w-[400px]" title={summary}>
               {summary}
             </p>
           )}
@@ -109,19 +115,8 @@ export const datasetsColumns: ColumnDef<DatasetSummary>[] = [
     accessorKey: "origin",
     header: "환경",
     cell: ({ row }) => {
-      // 데이터 소스 카드 legend 와 동일: PROD=emerald, STAGING=orange, DEV=sky
-      const origin = row.original.origin
-      const bg =
-        origin === "PROD"
-          ? "bg-emerald-600"
-          : origin === "STAGING"
-            ? "bg-orange-500"
-            : "bg-sky-500"
-      return (
-        <Badge className={`text-xs text-white ${bg}`}>
-          {origin}
-        </Badge>
-      )
+      // 환경은 점 + 글자(TODO-107) — 데이터 소스 화면 · 트리와 같은 `OriginText`
+      return <OriginText origin={row.original.origin} />
     },
     meta: { className: "w-[120px] text-center" },
   },
@@ -129,26 +124,7 @@ export const datasetsColumns: ColumnDef<DatasetSummary>[] = [
     accessorKey: "status",
     header: "상태",
     cell: ({ row }) => {
-      const status = row.original.status
-      const label =
-        status === "active"
-          ? "활성"
-          : status === "inactive"
-            ? "비활성"
-            : status === "deprecated"
-              ? "사용 중단"
-              : status === "removed"
-                ? "삭제됨"
-                : status
-      const className =
-        status === "active"
-          ? "bg-primary text-primary-foreground text-xs"
-          : status === "inactive"
-            ? "bg-amber-500 text-white text-xs"
-            : status === "deprecated"
-              ? "bg-zinc-600 text-white text-xs"
-              : "bg-destructive text-destructive-foreground text-xs"
-      return <Badge className={className}>{label}</Badge>
+      return <StatusBadge {...datasetStatus(row.original.status)} />
     },
     meta: { className: "w-[100px] text-center" },
   },
@@ -157,9 +133,7 @@ export const datasetsColumns: ColumnDef<DatasetSummary>[] = [
     header: "동기화",
     cell: ({ row }) =>
       row.original.is_synced === "true" ? (
-        <span className="inline-flex items-center rounded-full border border-orange-400 px-1.5 py-0.5 text-[9px] font-semibold text-orange-500">
-          동기화됨
-        </span>
+        <SyncedBadge />
       ) : null,
     meta: { className: "w-[80px] text-center" },
   },
@@ -167,7 +141,7 @@ export const datasetsColumns: ColumnDef<DatasetSummary>[] = [
     id: "schema_field_count",
     header: "필드",
     cell: ({ row }) => (
-      <span className="text-sm text-muted-foreground">
+      <span className="text-sm">
         {row.original.schema_field_count}
       </span>
     ),
@@ -184,7 +158,7 @@ export const datasetsColumns: ColumnDef<DatasetSummary>[] = [
       if (Number.isNaN(d.getTime())) return null
       const pad = (n: number) => String(n).padStart(2, "0")
       return (
-        <span className="text-sm text-muted-foreground">
+        <span className="text-sm">
           {`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`}
         </span>
       )

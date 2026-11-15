@@ -6,7 +6,8 @@
 
 - ``quality.rules-manage`` / ``quality.run`` / ``quality.schedule`` / ``changes.create`` /
   ``changes.approve``: open-by-default — 미설정이면 로그인 사용자 모두, 역할을 빼면 403.
-- ``taxonomies.edit``: 명시 허용형 — 미설정이면 admin 전용, 역할을 명시 허용하면 그 역할도 가능.
+- ``taxonomies.edit`` / ``taxonomies.map``: 명시 허용형 — 미설정이면 admin 전용, 역할을 명시 허용하면 그 역할도 가능.
+  데이터셋 분류 매핑은 ``taxonomies.map`` 으로 나뉘었다(TODO-138).
 
 또 백엔드 ``FEATURE_KEYS``/``DEFAULT_DENY_FEATURES`` 와 프런트 ``permission-registry.ts`` 가 일치하는지 본다
 (서버는 목록에 없는 key 를 저장하지 않으므로, 어긋나면 화면의 체크박스가 효과 없이 남는다).
@@ -45,10 +46,11 @@ ENDPOINTS: dict[str, list[tuple[str, str, dict | None]]] = {
         ("DELETE", "/api/v1/quality/rules/1", None),
     ],
     "quality.run": [
-        ("POST", "/api/v1/quality/datasets/1/profile", None),
-        ("POST", "/api/v1/quality/datasets/1/check", None),
+        ("POST", "/api/v1/quality/datasets/1/runs", None),
+        ("POST", "/api/v1/quality/runs/1/cancel", None),
     ],
-    "quality.schedule": [("PUT", "/api/v1/quality/datasets/1/schedule", {"schedule": "daily"})],
+    # quality.schedule 은 품질 진단 작업의 주기 저장에서 본다(관리 메뉴 API — quality.run 을 명시 허용받아야 닿는다)
+    #   — 그 검사(router._require_schedule)의 테스트는 TODO-094 에 남아 있다
     "changes.create": [("POST", "/api/v1/changes", {})],
     "changes.approve": [("POST", "/api/v1/changes/1/decisions", {"decision": "APPROVED"})],
     "taxonomies.edit": [
@@ -58,11 +60,14 @@ ENDPOINTS: dict[str, list[tuple[str, str, dict | None]]] = {
         ("POST", "/api/v1/catalog/categories", {"taxonomy_id": 1, "name": "c"}),
         ("PUT", "/api/v1/catalog/categories/1", {"name": "c"}),
         ("DELETE", "/api/v1/catalog/categories/1", None),
+    ],
+    "taxonomies.map": [
         ("POST", "/api/v1/catalog/datasets/1/categories/1", None),
         ("DELETE", "/api/v1/catalog/datasets/1/categories/1", None),
     ],
 }
-OPEN_BY_DEFAULT = [k for k in ENDPOINTS if k != "taxonomies.edit"]
+DENY_BY_DEFAULT = ["taxonomies.edit", "taxonomies.map"]
+OPEN_BY_DEFAULT = [k for k in ENDPOINTS if k not in DENY_BY_DEFAULT]
 
 
 def _tu(name: str, admin: bool = False) -> TokenUser:
@@ -121,19 +126,29 @@ def _run_http() -> None:
     for k, m, p, b in calls(ENDPOINTS):
         assert _status(c, m, p, b)[0] == 401, (k, m, p)
 
-    # 미설정: open-by-default 키는 일반 사용자 허용, taxonomies.edit 는 admin 전용
+    # 미설정: open-by-default 키는 일반 사용자 허용, 명시 허용형 키는 admin 전용
     who["user"] = _tu("bob")
     for k, m, p, b in calls(OPEN_BY_DEFAULT):
         assert _status(c, m, p, b)[0] != 403, (k, m, p)
-    for k, m, p, b in calls(["taxonomies.edit"]):
-        assert _status(c, m, p, b) == (403, "기능 권한이 없습니다: taxonomies.edit"), (m, p)
+    for k, m, p, b in calls(DENY_BY_DEFAULT):
+        assert _status(c, m, p, b) == (403, f"기능 권한이 없습니다: {k}"), (k, m, p)
 
-    # 매트릭스에서 user 역할을 빼면 403, taxonomies.edit 는 user 에 명시 허용하면 통과
+    # 매트릭스에서 user 역할을 빼면 403, 명시 허용형 키는 user 에 명시 허용하면 통과
     asyncio.run(_set_matrix(factory, {**{k: ["argus-superuser"] for k in OPEN_BY_DEFAULT},
-                                      "taxonomies.edit": ["argus-user"]}))
+                                      **{k: ["argus-user"] for k in DENY_BY_DEFAULT}}))
     for k, m, p, b in calls(OPEN_BY_DEFAULT):
         assert _status(c, m, p, b) == (403, f"기능 권한이 없습니다: {k}"), (k, m, p)
+    for k, m, p, b in calls(DENY_BY_DEFAULT):
+        assert _status(c, m, p, b)[0] != 403, (k, m, p)
+
+    # 분류 정의 편집만 허용하면 매핑은 여전히 403 (그 반대도) — 두 키는 따로 판정한다
+    asyncio.run(_set_matrix(factory, {"taxonomies.edit": ["argus-user"], "taxonomies.map": []}))
+    for k, m, p, b in calls(["taxonomies.map"]):
+        assert _status(c, m, p, b) == (403, "기능 권한이 없습니다: taxonomies.map"), (m, p)
+    asyncio.run(_set_matrix(factory, {"taxonomies.edit": [], "taxonomies.map": ["argus-user"]}))
     for k, m, p, b in calls(["taxonomies.edit"]):
+        assert _status(c, m, p, b) == (403, "기능 권한이 없습니다: taxonomies.edit"), (m, p)
+    for k, m, p, b in calls(["taxonomies.map"]):
         assert _status(c, m, p, b)[0] != 403, (m, p)
 
     # admin 은 매트릭스와 무관하게 허용
@@ -156,7 +171,8 @@ def _registry_matches_server() -> None:
     assert deny == set(perm.DEFAULT_DENY_FEATURES), (deny ^ set(perm.DEFAULT_DENY_FEATURES))
     for k in ENDPOINTS:
         assert k in perm.FEATURE_KEYS, k
-    assert "taxonomies.edit" in perm.DEFAULT_DENY_FEATURES
+    for k in DENY_BY_DEFAULT:
+        assert k in perm.DEFAULT_DENY_FEATURES, k
 
 
 def test_feature_keys_enforced() -> None:

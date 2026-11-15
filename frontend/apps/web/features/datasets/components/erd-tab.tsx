@@ -5,11 +5,11 @@ import Link from "next/link"
 import { ReactFlow, Background, Controls, MarkerType, Position, Handle, useEdgesState, useNodesState, type Edge, type Node } from "@xyflow/react"
 import "@xyflow/react/dist/style.css"
 import { Copy, Key, Link2, Table2 } from "lucide-react"
-import { errorMessage, toast } from "@/lib/notify"
+import { errorMessage, notifyError, toast } from "@/lib/notify"
 
 import { Button } from "@workspace/ui/components/button"
-import { Card, CardContent } from "@workspace/ui/components/card"
 import { authFetch, throwOnError } from "@/features/auth/auth-fetch"
+import { copyText } from "@/lib/clipboard"
 
 // ---------------------------------------------------------------------------
 // Types — GET /catalog/datasets/{id}/erd 응답
@@ -59,7 +59,7 @@ function TableNode({ data }: { data: ErdTable & { expanded: boolean; onToggle: (
           {data.name}
         </Link>
         {data.is_center && (
-          <span className="rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold text-primary-foreground">현재</span>
+          <span className="rounded-full bg-primary px-1.5 py-0.5 text-[11px] font-semibold text-primary-foreground">현재</span>
         )}
         {data.quality_status && data.quality_status !== "GOOD" && (
           <span className={`ml-auto h-2.5 w-2.5 rounded-full ${
@@ -76,8 +76,8 @@ function TableNode({ data }: { data: ErdTable & { expanded: boolean; onToggle: (
                c.fk_to ? <Link2 className="h-3 w-3 text-sky-600" /> : null}
             </span>
             <span className={c.is_pk ? "font-semibold" : ""}>{c.name}</span>
-            {c.nullable && <span className="text-muted-foreground">?</span>}
-            <span className="ml-auto pl-3 text-muted-foreground">{c.type}</span>
+            {c.nullable && <span >?</span>}
+            <span className="ml-auto pl-3">{c.type}</span>
           </div>
         ))}
         {hidden > 0 && (
@@ -304,33 +304,35 @@ export function ErdTab({ datasetId, datasourceId }: { datasetId?: number; dataso
 
   const copyMermaid = () => {
     if (!data) return
-    navigator.clipboard.writeText(toMermaid(data))
-    toast.success("Mermaid erDiagram 소스를 복사했습니다.")
+    copyText(toMermaid(data)).then(
+      () => toast.success("Mermaid erDiagram 소스를 복사했습니다."),
+      (e) => notifyError(e, "클립보드에 복사하지 못했습니다."),
+    )
   }
 
   if (loading) {
-    return <p className="py-12 text-center text-sm text-muted-foreground">ER 다이어그램 구성 중...</p>
+    return <p className="py-12 text-center text-sm text-muted-foreground">ER 다이어그램 구성 중…</p>
   }
   if (loadError) {
     return (
-      <Card><CardContent className="py-12 text-center text-sm text-destructive">
+      <p className="py-12 text-center text-sm text-destructive">
         ER 다이어그램을 불러오지 못했습니다. {loadError !== "ER 다이어그램을 불러오지 못했습니다." && loadError}
-      </CardContent></Card>
+      </p>
     )
   }
   if (!data || data.tables.length === 0) {
     return (
-      <Card><CardContent className="py-12 text-center text-sm text-muted-foreground">
+      <p className="py-12 text-center text-sm text-muted-foreground">
         ERD 를 구성할 수 없습니다 — DDL 또는 스키마 정보가 필요합니다.
-      </CardContent></Card>
+      </p>
     )
   }
 
   return (
-    <Card>
-      <CardContent className="p-3">
+    // 박스는 다이어그램 캔버스 하나 — 범례 · 복사 단추는 위 한 줄
+    <div>
         <div className="mb-2 flex items-center justify-between">
-          <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+          <div className="flex flex-wrap items-center gap-3 text-xs">
             <span className="inline-flex items-center gap-1"><Key className="h-3 w-3 text-amber-600" /> PK</span>
             <span className="inline-flex items-center gap-1"><Link2 className="h-3 w-3 text-sky-600" /> FK</span>
             <span><span className="font-mono">?</span> = NULL 허용</span>
@@ -348,7 +350,7 @@ export function ErdTab({ datasetId, datasourceId }: { datasetId?: number; dataso
             <Copy className="h-3.5 w-3.5" /> Mermaid 복사
           </Button>
         </div>
-        <div style={{ height: datasourceId != null ? 720 : 560 }} className="rounded border">
+        <div style={{ height: datasourceId != null ? 720 : 560 }} className="rounded-md border">
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -364,7 +366,6 @@ export function ErdTab({ datasetId, datasourceId }: { datasetId?: number; dataso
             <Controls showInteractive={false} />
           </ReactFlow>
         </div>
-      </CardContent>
-    </Card>
+    </div>
   )
 }

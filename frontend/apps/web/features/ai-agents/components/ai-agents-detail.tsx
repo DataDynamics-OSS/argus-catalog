@@ -1,37 +1,36 @@
 "use client"
 
+import { Tip } from "@/components/tip"
+import { CodeEditor } from "@/components/code-editor"
 import { Fragment, useCallback, useEffect, useState } from "react"
 import dynamic from "next/dynamic"
 import {
-  Activity,
   ArrowLeft,
-  BookOpen,
   Check,
   ChevronDown,
   ChevronRight,
-  ClipboardCheck,
   Copy,
   FileCode2,
-  History,
-  Layers,
   Loader2,
-  Network,
+  MoreHorizontal,
   Pencil,
-  Plug,
   Plus,
   Save,
-  Share2,
-  ShieldCheck,
   Trash2,
-  Wrench,
-  X,
 } from "lucide-react"
 import { errorMessage, notifyError, toast } from "@/lib/notify"
+import { FieldError } from "@/components/field-error"
 import type { EditorProps, OnMount } from "@monaco-editor/react"
 
 import { Badge } from "@workspace/ui/components/badge"
+import { StatusBadge, statusMeta, type StatusMeta } from "@workspace/ui/components/status-badge"
 import { Button } from "@workspace/ui/components/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@workspace/ui/components/card"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@workspace/ui/components/dropdown-menu"
 import {
   Dialog,
   DialogContent,
@@ -50,7 +49,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@workspace/ui/components/select"
-import { Separator } from "@workspace/ui/components/separator"
 import {
   Table,
   TableBody,
@@ -60,16 +58,17 @@ import {
   TableRow,
 } from "@workspace/ui/components/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@workspace/ui/components/tabs"
-import { Textarea } from "@workspace/ui/components/textarea"
+import { DetailSection, LINE_TABS_LIST, LINE_TABS_TRIGGER } from "@/components/detail-section"
 import {
   Tooltip,
   TooltipContent,
-  TooltipProvider,
+
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { useAuth } from "@/features/auth"
+import { usePermissions } from "@/features/permissions/use-permissions"
 import { fetchUsers } from "@/features/users/api"
 import { type User } from "@/features/users/data/schema"
 
@@ -96,11 +95,31 @@ import {
   type AIAgentMetering,
   type AIAgentPolicyBundle,
 } from "../api"
-import { AGENT_STATUS_VARIANTS, COMPLETENESS_LABEL, OWNER_STATE_HINT, OWNER_STATE_LABEL } from "../data/schema"
+import { RiskBadge } from "@/components/risk-badge"
+import { LIFECYCLE_LABEL, LIFECYCLE_STATUS, LIFECYCLE_STATUSES } from "@/lib/lifecycle"
+import { RISK_LABEL, RISK_LEVELS } from "@/lib/risk"
+import {
+  AGENT_LINK_RELATION_LABEL, AGENT_LINK_TARGET_LABEL, COMPLETENESS_LABEL, HOOK_DECISION, HOOK_STAGE_LABEL, OWNER_STATE_HINT, OWNER_STATE_LABEL,
+} from "../data/schema"
 import { AgentMcpCard } from "./ai-agents-mcp-card"
+import {
+  AgentDataAccessCard,
+  AgentSkillsCard,
+  AUTONOMY_LABEL,
+  IDENTITY_STATE_LABEL,
+  IDENTITY_TYPE_LABEL,
+  IMPACT_RESULT_LABEL,
+  RISK_TIER_LABEL,
+  RiskTierBadge,
+  agentHref,
+  datasetHref,
+  modelHref,
+} from "./ai-agents-skills-data"
 import { useAIAgents } from "./ai-agents-provider"
 import { AIAgentsManifestDialog } from "./ai-agents-manifest-dialog"
 import { MONACO_FONT_SIZE } from "@/lib/monaco"
+import { copyText } from "@/lib/clipboard"
+import { TagInput } from "@/components/tag-input"
 
 function StringList({ items }: { items: string[] | null }) {
   if (!items || items.length === 0) return <span className="text-muted-foreground">-</span>
@@ -127,7 +146,6 @@ function AgentOwnerValue({ email, user }: { email: string | null; user: User | n
       : user.username
     : email
   return (
-    <TooltipProvider delayDuration={150}>
       <Tooltip>
         <TooltipTrigger asChild>
           <span className="cursor-help font-medium underline decoration-dotted decoration-muted-foreground/50 underline-offset-2">
@@ -143,7 +161,6 @@ function AgentOwnerValue({ email, user }: { email: string | null; user: User | n
           </div>
         </TooltipContent>
       </Tooltip>
-    </TooltipProvider>
   )
 }
 
@@ -166,7 +183,7 @@ const JSON_VIEWER_OPTIONS: NonNullable<EditorProps["options"]> = {
   // 스크롤바·줄바꿈 — 가로/세로 스크롤바를 숨기고 wordWrap 으로 가로 넘침 방지.
   scrollbar: { vertical: "hidden", horizontal: "hidden", handleMouseWheel: false, alwaysConsumeMouseWheel: false },
   wordWrap: "on",
-  lineNumbers: "off",
+  lineNumbers: "on",
   folding: false,
   fontSize: MONACO_FONT_SIZE,
   fontFamily: "D2Coding, Menlo, Consolas, monospace",
@@ -195,7 +212,7 @@ function JsonViewer({ value }: { value: unknown }) {
   }
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(json)
+      await copyText(json)
       setCopied(true)
       toast.success("JSON 을 클립보드에 복사했습니다.")
       setTimeout(() => setCopied(false), 2000)
@@ -215,17 +232,17 @@ function JsonViewer({ value }: { value: unknown }) {
         onMount={handleMount}
       />
       {/* 클립보드 복사 버튼 — 항상 노출(우상단). */}
-      <Button
+      <Tip label={copied ? "복사됨" : "복사"}><Button
         type="button"
         variant="secondary"
         size="icon"
         onClick={handleCopy}
-        title={copied ? "복사됨" : "복사"}
+       
         aria-label={copied ? "복사됨" : "복사"}
         className="absolute top-1 right-1 z-10 h-7 w-7 shadow-sm"
       >
         {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-      </Button>
+      </Button></Tip>
     </div>
   )
 }
@@ -357,12 +374,10 @@ const userDisplayName = (u: User) =>
 // 빈 값은 "-" 로 표시
 const dash = (v: unknown) => (v === null || v === undefined || v === "" ? "-" : String(v))
 
-// 에이전트 상태 코드 → 한글 라벨 / 표시 순서
-const STATUS_LABEL: Record<string, string> = {
-  draft: "초안", staging: "스테이징", active: "활성",
-  blocked: "차단", deprecated: "사용 중단", retired: "폐기",
-}
-const STATUS_ORDER = ["draft", "staging", "active", "blocked", "deprecated", "retired"]
+// 에이전트 상태 — MCP 와 같은 수명 주기 맵(`lib/lifecycle.ts`, TODO-107)
+const STATUS_LABEL: Record<string, string> = LIFECYCLE_LABEL
+const STATUS_ORDER: readonly string[] = LIFECYCLE_STATUSES
+const lifecycle = (status: string): StatusMeta => LIFECYCLE_STATUS[status] ?? { label: status, tone: "neutral" }
 
 // 프리셋 선택 + "사용자 입력" 시 우측 Input 노출.
 function ComboInput({
@@ -469,44 +484,6 @@ function OwnerCombo({
   )
 }
 
-// 태그 배지 입력 — 입력 후 Enter→배지 추가, X→삭제. 저장 포맷은 콤마 구분 문자열.
-function TagsInput({ value, onChange }: { value: string; onChange: (next: string) => void }) {
-  const [text, setText] = useState("")
-  const tags = value.split(",").map((t) => t.trim()).filter(Boolean)
-  const commit = (raw: string) => {
-    const incoming = raw.split(",").map((t) => t.trim()).filter(Boolean)
-    if (incoming.length === 0) return
-    const next = [...tags]
-    for (const t of incoming) if (!next.includes(t)) next.push(t)
-    onChange(next.join(", "))
-    setText("")
-  }
-  const remove = (t: string) => onChange(tags.filter((x) => x !== t).join(", "))
-  return (
-    <div className="flex w-full flex-wrap items-center gap-1">
-      {tags.map((t) => (
-        <Badge key={t} variant="secondary" className="gap-1 text-xs">
-          {t}
-          <button type="button" className="hover:opacity-70" onClick={() => remove(t)} aria-label={`${t} 제거`}>
-            <X className="h-3 w-3" />
-          </button>
-        </Badge>
-      ))}
-      <Input
-        className="h-8 min-w-[100px] flex-1 text-sm"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") { e.preventDefault(); commit(text) }
-          else if (e.key === "Backspace" && text === "" && tags.length > 0) remove(tags[tags.length - 1]!)
-        }}
-        onBlur={() => { if (text.trim()) commit(text) }}
-        placeholder="입력 후 Enter"
-      />
-    </div>
-  )
-}
-
 // 지원 언어 목록 — 한국어/영어/일본어 우선, 이후 사용 빈도순.
 const LANGUAGES = [
   "한국어", "영어", "일본어", "중국어", "독일어", "프랑스어", "스페인어",
@@ -514,12 +491,12 @@ const LANGUAGES = [
   "베트남어", "태국어", "인도네시아어",
 ]
 
-// 언어 다중 선택 — 배지 토글. 저장 포맷은 콤마 구분 문자열.
-function LangMultiSelect({ value, onChange }: { value: string; onChange: (next: string) => void }) {
-  const selected = value.split(",").map((s) => s.trim()).filter(Boolean)
+// 언어 다중 선택 — 배지 토글. 값은 목록(TODO-143).
+function LangMultiSelect({ value, onChange }: { value: string[]; onChange: (next: string[]) => void }) {
+  const selected = value
   const toggle = (lang: string) => {
     const next = selected.includes(lang) ? selected.filter((l) => l !== lang) : [...selected, lang]
-    onChange(next.join(", "))
+    onChange(next)
   }
   return (
     <div className="flex flex-wrap gap-1">
@@ -529,7 +506,7 @@ function LangMultiSelect({ value, onChange }: { value: string; onChange: (next: 
           <button type="button" key={lang} onClick={() => toggle(lang)} aria-pressed={on}>
             <Badge
               variant={on ? "default" : "outline"}
-              className={cn("cursor-pointer text-xs", !on && "text-muted-foreground hover:bg-muted")}
+              className={cn("cursor-pointer", !on && "text-muted-foreground hover:bg-muted")}
             >
               {lang}
             </Badge>
@@ -540,32 +517,21 @@ function LangMultiSelect({ value, onChange }: { value: string; onChange: (next: 
   )
 }
 
-// 프리셋 토글 + 사용자 정의 추가가 가능한 다중 선택(예: DLP 정책). 저장 포맷은 콤마 구분 문자열.
+// 프리셋 토글 + 사용자 정의 값(배지 입력)을 함께 쓰는 다중 선택(예: DLP 정책). 값은 목록(TODO-143).
 function ChipMultiSelect({
   value,
   onChange,
   options,
   placeholder,
 }: {
-  value: string
-  onChange: (next: string) => void
+  value: string[]
+  onChange: (next: string[]) => void
   options: string[]
   placeholder?: string
 }) {
-  const [text, setText] = useState("")
-  const selected = value.split(",").map((s) => s.trim()).filter(Boolean)
+  const selected = value
   const customs = selected.filter((s) => !options.includes(s))
-  const toggle = (o: string) =>
-    onChange((selected.includes(o) ? selected.filter((x) => x !== o) : [...selected, o]).join(", "))
-  const remove = (o: string) => onChange(selected.filter((x) => x !== o).join(", "))
-  const addCustom = (raw: string) => {
-    const incoming = raw.split(",").map((t) => t.trim()).filter(Boolean)
-    if (incoming.length === 0) return
-    const next = [...selected]
-    for (const t of incoming) if (!next.includes(t)) next.push(t)
-    onChange(next.join(", "))
-    setText("")
-  }
+  const toggle = (o: string) => onChange(selected.includes(o) ? selected.filter((x) => x !== o) : [...selected, o])
   return (
     <div className="space-y-1.5">
       <div className="flex flex-wrap gap-1">
@@ -573,32 +539,18 @@ function ChipMultiSelect({
           const on = selected.includes(o)
           return (
             <button type="button" key={o} onClick={() => toggle(o)} aria-pressed={on}>
-              <Badge variant={on ? "default" : "outline"} className={cn("cursor-pointer text-xs", !on && "text-muted-foreground hover:bg-muted")}>
+              <Badge variant={on ? "default" : "outline"} className={cn("cursor-pointer", !on && "text-muted-foreground hover:bg-muted")}>
                 {o}
               </Badge>
             </button>
           )
         })}
       </div>
-      {customs.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {customs.map((c) => (
-            <Badge key={c} variant="secondary" className="gap-1 text-xs">
-              {c}
-              <button type="button" className="hover:opacity-70" onClick={() => remove(c)} aria-label={`${c} 제거`}>
-                <X className="h-3 w-3" />
-              </button>
-            </Badge>
-          ))}
-        </div>
-      )}
-      <Input
-        className="h-8 text-sm"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCustom(text) } }}
-        onBlur={() => { if (text.trim()) addCustom(text) }}
-        placeholder={placeholder ?? "사용자 정의 추가 후 Enter"}
+      <TagInput
+        size="sm"
+        value={customs}
+        onChange={(next) => onChange([...selected.filter((s) => options.includes(s)), ...next])}
+        placeholder={placeholder ?? "사용자 정의 값 입력 후 Enter"}
       />
     </div>
   )
@@ -611,7 +563,7 @@ type OverviewDraft = {
   category: string
   department: string
   owner_email: string
-  tags: string
+  tags: string[]
   base_model: string
   model_provider: string
   framework: string
@@ -626,24 +578,29 @@ type OverviewDraft = {
   streaming: boolean
 }
 const EMPTY_DRAFT: OverviewDraft = {
-  description: "", version: "", category: "", department: "", owner_email: "", tags: "",
+  description: "", version: "", category: "", department: "", owner_email: "", tags: [],
   base_model: "", model_provider: "", framework: "", execution_policy: "",
   memory_type: "", max_steps: "", endpoint: "", protocol: "",
   invocation_method: "", auth_method: "", is_multi_agent: false, streaming: false,
 }
 
-// 기능·I/O 탭 편집 draft — 목록은 콤마 문자열, 스키마는 JSON 텍스트로 보관.
+// 기능·I/O 탭 편집 draft — 목록은 배열(값 안의 쉼표 보존, TODO-143), 스키마는 JSON 텍스트로 보관.
 type CapDraft = {
-  capabilities: string
-  supported_languages: string
-  use_cases: string
-  limitations: string
+  capabilities: string[]
+  supported_languages: string[]
+  use_cases: string[]
+  limitations: string[]
   input_schema: string
   output_schema: string
+  default_input_modes: string[]
+  default_output_modes: string[]
+  inference_params: string
 }
+type CapListField = "capabilities" | "supported_languages" | "use_cases" | "limitations" | "default_input_modes" | "default_output_modes"
+type CapJsonField = Exclude<keyof CapDraft, CapListField>
 const EMPTY_CAP: CapDraft = {
-  capabilities: "", supported_languages: "", use_cases: "", limitations: "",
-  input_schema: "", output_schema: "",
+  capabilities: [], supported_languages: [], use_cases: [], limitations: [],
+  input_schema: "", output_schema: "", default_input_modes: [], default_output_modes: [], inference_params: "",
 }
 
 // 거버넌스 탭 편집 draft.
@@ -653,31 +610,43 @@ type GovDraft = {
   budget_limit: string
   hitl_required: boolean
   audit_log_ref: string
-  dlp_policies: string // 콤마 구분
+  dlp_policies: string[]
   guardrails: string // JSON 텍스트
   hitl_config: string // JSON 텍스트
+  // 위험 등급·규제 준수 (TODO-020)
+  risk_tier: string
+  risk_rationale: string
+  impact_assessed_at: string // YYYY-MM-DD
+  impact_assessment_result: string
+  impact_assessment_ref: string
+  compliance: string[]
+  log_retention_days: string
+  autonomy_level: string
+  // 실행 신원·권한 (TODO-021)
+  identity_type: string
+  identity_principal: string
+  identity_provider: string
+  granted_scopes: string[]
+  on_behalf_of: boolean
 }
 const EMPTY_GOV: GovDraft = {
   pii_handling: "", data_residency: "", budget_limit: "", hitl_required: false,
-  audit_log_ref: "", dlp_policies: "", guardrails: "", hitl_config: "",
+  audit_log_ref: "", dlp_policies: [], guardrails: "", hitl_config: "",
+  risk_tier: "", risk_rationale: "", impact_assessed_at: "", impact_assessment_result: "", impact_assessment_ref: "",
+  compliance: [], log_retention_days: "", autonomy_level: "",
+  identity_type: "", identity_principal: "", identity_provider: "", granted_scopes: [], on_behalf_of: false,
 }
+// 선택 항목의 [값, 표시 이름] 목록 — 거버넌스 편집기(select)용
+const choices = (labels: Record<string, string>): [string, string][] => Object.entries(labels)
+const OPT_COMPLIANCE = ["PIPA(개인정보보호법)", "신용정보법", "EU AI Act", "GDPR", "ISO/IEC 42001", "ISO/IEC 27001", "NIST AI RMF"]
 
-// 도구 위험도 배지 — low/medium/high/critical 색상 구분.
-const RISK_META: Record<string, { label: string; cls: string }> = {
-  low: { label: "낮음", cls: "border-emerald-300 text-emerald-700 dark:text-emerald-400" },
-  medium: { label: "보통", cls: "border-amber-300 text-amber-700 dark:text-amber-400" },
-  high: { label: "높음", cls: "border-orange-400 text-orange-700 dark:text-orange-400" },
-  critical: { label: "치명", cls: "border-red-500 text-red-700 dark:text-red-400" },
-}
-const RISK_OPTIONS = ["low", "medium", "high", "critical"]
-function RiskBadge({ risk }: { risk: string | null }) {
-  if (!risk) return <span className="text-muted-foreground">-</span>
-  const m = RISK_META[risk] ?? { label: risk, cls: "" }
-  return <Badge variant="outline" className={cn("text-xs", m.cls)}>{m.label}</Badge>
-}
+// 도구 위험도 — 이름 · 색은 목록 · MCP 와 공용(`lib/risk.ts` · `components/risk-badge.tsx`)
+const RISK_OPTIONS = RISK_LEVELS
 
 type MetaTableRow = [React.ReactNode, React.ReactNode, React.ReactNode, Source?]
-function MetaTable({ groups }: { groups: { title: string; rows: MetaTableRow[] }[] }) {
+
+/** 항목 · 설정값 · 설명 3열 표 — 라벨 칸 음영, 칸 사이 선. 묶음 제목은 바깥 DetailSection 이 단다(TODO-131) */
+function MetaRowsTable({ children }: { children: React.ReactNode }) {
   return (
     <div className="overflow-hidden rounded-md border">
       <table className="w-full table-fixed border-collapse text-sm">
@@ -686,45 +655,54 @@ function MetaTable({ groups }: { groups: { title: string; rows: MetaTableRow[] }
           <col className="w-[34%]" />
           <col />
         </colgroup>
-        <thead>
-          <tr className="bg-muted/40">
-            <th className="border px-3 py-2 text-left font-bold">항목</th>
-            <th className="border px-3 py-2 text-left font-bold">설정값</th>
-            <th className="border px-3 py-2 text-left font-bold">설명</th>
-          </tr>
-        </thead>
-        <tbody>
-          {groups.map((g, gi) => (
-            <Fragment key={gi}>
-              <tr>
-                <th colSpan={3} className="border bg-muted px-3 py-2 text-left text-sm font-semibold">
-                  {g.title}
-                </th>
-              </tr>
-              {g.rows.map(([label, value, desc, source], ri) => (
-                <tr key={ri}>
-                  <th className="border bg-muted/50 px-3 py-2 text-left align-middle font-medium text-foreground">
-                    <span className="inline-flex flex-wrap items-center gap-1">
-                      {label}
-                      <SourceBadge source={source} />
-                    </span>
-                  </th>
-                  <td className="border px-3 py-2 align-middle break-words">
-                    {value === null || value === undefined || value === "" ? "-" : value}
-                  </td>
-                  <td className="border px-3 py-2 align-top text-foreground">{desc}</td>
-                </tr>
-              ))}
-            </Fragment>
-          ))}
-        </tbody>
+        <tbody className="divide-y">{children}</tbody>
       </table>
     </div>
   )
 }
 
+/** MetaRowsTable 의 한 행. 값이 비면 "-" */
+function MetaRow({ label, source, desc, children }: {
+  label: React.ReactNode
+  source?: Source
+  desc: React.ReactNode
+  children?: React.ReactNode
+}) {
+  return (
+    <tr>
+      <th className="border-r bg-muted/40 px-3 py-2 text-left align-middle font-medium">
+        <span className="inline-flex flex-wrap items-center gap-1">
+          {label}
+          <SourceBadge source={source} />
+        </span>
+      </th>
+      <td className="border-r px-3 py-2 align-middle break-words">
+        {children === null || children === undefined || children === "" ? "-" : children}
+      </td>
+      <td className="px-3 py-2 align-top">{desc}</td>
+    </tr>
+  )
+}
+
+/** 읽기 전용 묶음들 — 묶음마다 제목 + 3열 표(에이전트 카드 · 집행 탭) */
+function MetaTable({ groups }: { groups: { title: string; rows: MetaTableRow[] }[] }) {
+  return (
+    <div className="space-y-6">
+      {groups.map((g) => (
+        <DetailSection key={g.title} title={g.title}>
+          <MetaRowsTable>
+            {g.rows.map(([label, value, desc, source], ri) => (
+              <MetaRow key={ri} label={label} source={source} desc={desc}>{value}</MetaRow>
+            ))}
+          </MetaRowsTable>
+        </DetailSection>
+      ))}
+    </div>
+  )
+}
 export function AIAgentsDetail({ agentName }: { agentName: string }) {
   const { setSelectedAgentName, setDeleteTargetName, setOpen } = useAIAgents()
+  const { canUseFeature } = usePermissions()
   const { user } = useAuth()
   const [agent, setAgent] = useState<AIAgentDetail | null>(null)
   const [evals, setEvals] = useState<AIAgentEval[]>([])
@@ -755,11 +733,36 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
   const [editingRag, setEditingRag] = useState(false)
   const [savingRag, setSavingRag] = useState(false)
   const [ragText, setRagText] = useState("")
-  const [networkText, setNetworkText] = useState("")
+  const [networkList, setNetworkList] = useState<string[]>([])
   // 거버넌스 탭 편집
   const [editingGov, setEditingGov] = useState(false)
   const [savingGov, setSavingGov] = useState(false)
   const [govDraft, setGovDraft] = useState<GovDraft>(EMPTY_GOV)
+  // JSON 입력란 검증 오류(필드 이름 → 문구) — 기능·I/O · RAG · 거버넌스 편집이 함께 쓴다. 각 입력란 아래에 보인다.
+  const [jsonErrors, setJsonErrors] = useState<Record<string, string>>({})
+  const clearJsonErrors = (...keys: string[]) => setJsonErrors((e) => {
+    if (!keys.some((k) => k in e)) return e
+    const n = { ...e }
+    for (const k of keys) delete n[k]
+    return n
+  })
+  const clearJsonError = (k: string) => clearJsonErrors(k)
+  /** JSON 입력란들을 파싱한다. 실패한 입력란마다 "<라벨>이(가) 올바른 JSON 형식이 아닙니다." 를 jsonErrors 에 담고 null 을 돌려준다. */
+  const parseJsonFields = (fields: { key: string; label: string; text: string }[]): Record<string, Record<string, unknown> | null> | null => {
+    const out: Record<string, Record<string, unknown> | null> = {}
+    const errs: Record<string, string> = {}
+    for (const f of fields) {
+      try { out[f.key] = f.text.trim() === "" ? null : JSON.parse(f.text) }
+      catch { errs[f.key] = `${f.label} 올바른 JSON 형식이 아닙니다.` }
+    }
+    // 이 섹션의 입력란 오류만 바꾼다(다른 섹션을 함께 편집 중일 수 있다)
+    setJsonErrors((e) => {
+      const n = { ...e }
+      for (const f of fields) delete n[f.key]
+      return { ...n, ...errs }
+    })
+    return Object.keys(errs).length > 0 ? null : out
+  }
 
   // 상세를 다시 읽을 때 정책 번들·에이전트 카드도 함께 — 도구·MCP·거버넌스·상태 변경이 '집행(연동)'·'에이전트 카드' 탭에 바로 보이도록
   const reloadDetail = useCallback(async () => {
@@ -803,7 +806,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
       category: agent.category ?? "",
       department: agent.department ?? "",
       owner_email: agent.owner_email ?? "",
-      tags: (agent.tags ?? []).join(", "),
+      tags: agent.tags ?? [],
       base_model: agent.base_model ?? "",
       model_provider: agent.model_provider ?? "",
       framework: agent.framework ?? "",
@@ -824,7 +827,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
       .catch(() => setPickerUsers([]))
   }
 
-  const setD = (k: keyof OverviewDraft, v: string | boolean) =>
+  const setD = (k: keyof OverviewDraft, v: string | string[] | boolean) =>
     setDraft((d) => ({ ...d, [k]: v }))
 
   // 빈 문자열 → null, 그 외 trim. 숫자/태그는 개별 변환.
@@ -839,7 +842,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
         category: s(draft.category),
         department: s(draft.department),
         owner_email: s(draft.owner_email),
-        tags: draft.tags.split(",").map((t) => t.trim()).filter(Boolean),
+        tags: draft.tags,
         base_model: s(draft.base_model),
         model_provider: s(draft.model_provider),
         framework: s(draft.framework),
@@ -868,38 +871,44 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
     if (!agent) return
     const j = (v: unknown) => (v == null ? "" : JSON.stringify(v, null, 2))
     setCapDraft({
-      capabilities: (agent.capabilities ?? []).join(", "),
-      supported_languages: (agent.supported_languages ?? []).join(", "),
-      use_cases: (agent.use_cases ?? []).join(", "),
-      limitations: (agent.limitations ?? []).join(", "),
+      capabilities: agent.capabilities ?? [],
+      supported_languages: agent.supported_languages ?? [],
+      use_cases: agent.use_cases ?? [],
+      limitations: agent.limitations ?? [],
       input_schema: j(agent.input_schema),
       output_schema: j(agent.output_schema),
+      default_input_modes: agent.default_input_modes ?? [],
+      default_output_modes: agent.default_output_modes ?? [],
+      inference_params: j(agent.inference_params),
     })
+    clearJsonErrors("input_schema", "output_schema", "inference_params")
     setEditingCap(true)
   }
-  const setCap = (k: keyof CapDraft, v: string) => setCapDraft((d) => ({ ...d, [k]: v }))
+  const setCap = <K extends keyof CapDraft>(k: K, v: CapDraft[K]) => { setCapDraft((d) => ({ ...d, [k]: v })); clearJsonError(k) }
 
   const handleSaveCap = async () => {
     if (!agent) return
-    const toList = (s: string) => s.split(",").map((t) => t.trim()).filter(Boolean)
-    let inputSchema: Record<string, unknown> | null = null
-    let outputSchema: Record<string, unknown> | null = null
-    try {
-      inputSchema = capDraft.input_schema.trim() === "" ? null : JSON.parse(capDraft.input_schema)
-      outputSchema = capDraft.output_schema.trim() === "" ? null : JSON.parse(capDraft.output_schema)
-    } catch {
-      toast.error("입력/출력 스키마가 올바른 JSON 형식이 아닙니다.")
-      return
-    }
+    const parsed = parseJsonFields([
+      { key: "input_schema", label: "입력 스키마가", text: capDraft.input_schema },
+      { key: "output_schema", label: "출력 스키마가", text: capDraft.output_schema },
+      { key: "inference_params", label: "추론 파라미터가", text: capDraft.inference_params },
+    ])
+    if (!parsed) return
+    const inputSchema = parsed.input_schema ?? null
+    const outputSchema = parsed.output_schema ?? null
+    const inferenceParams = parsed.inference_params ?? null
     setSavingCap(true)
     try {
       await updateAIAgent(agent.name, {
-        capabilities: toList(capDraft.capabilities),
-        supported_languages: toList(capDraft.supported_languages),
-        use_cases: toList(capDraft.use_cases),
-        limitations: toList(capDraft.limitations),
+        capabilities: capDraft.capabilities,
+        supported_languages: capDraft.supported_languages,
+        use_cases: capDraft.use_cases,
+        limitations: capDraft.limitations,
         input_schema: inputSchema,
         output_schema: outputSchema,
+        default_input_modes: capDraft.default_input_modes,
+        default_output_modes: capDraft.default_output_modes,
+        inference_params: inferenceParams,
       })
       await reloadDetail()
       setEditingCap(false)
@@ -915,23 +924,20 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
   const startEditRag = () => {
     if (!agent) return
     setRagText(agent.rag_config == null ? "" : JSON.stringify(agent.rag_config, null, 2))
-    setNetworkText((agent.network_allowlist ?? []).join(", "))
+    setNetworkList(agent.network_allowlist ?? [])
+    clearJsonErrors("rag_config")
     setEditingRag(true)
   }
   const handleSaveRag = async () => {
     if (!agent) return
-    let ragConfig: Record<string, unknown> | null = null
-    try {
-      ragConfig = ragText.trim() === "" ? null : JSON.parse(ragText)
-    } catch {
-      toast.error("RAG 설정이 올바른 JSON 형식이 아닙니다.")
-      return
-    }
+    const parsed = parseJsonFields([{ key: "rag_config", label: "RAG 설정이", text: ragText }])
+    if (!parsed) return
+    const ragConfig = parsed.rag_config ?? null
     setSavingRag(true)
     try {
       await updateAIAgent(agent.name, {
         rag_config: ragConfig,
-        network_allowlist: networkText.split(",").map((t) => t.trim()).filter(Boolean),
+        network_allowlist: networkList,
       })
       await reloadDetail()
       setEditingRag(false)
@@ -953,25 +959,37 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
       budget_limit: agent.budget_limit == null ? "" : String(agent.budget_limit),
       hitl_required: agent.hitl_required ?? false,
       audit_log_ref: agent.audit_log_ref ?? "",
-      dlp_policies: (agent.dlp_policies ?? []).join(", "),
+      dlp_policies: agent.dlp_policies ?? [],
       guardrails: j(agent.guardrails),
       hitl_config: j(agent.hitl_config),
+      risk_tier: agent.risk_tier ?? "",
+      risk_rationale: agent.risk_rationale ?? "",
+      impact_assessed_at: agent.impact_assessed_at ?? "",
+      impact_assessment_result: agent.impact_assessment_result ?? "",
+      impact_assessment_ref: agent.impact_assessment_ref ?? "",
+      compliance: agent.compliance ?? [],
+      log_retention_days: agent.log_retention_days == null ? "" : String(agent.log_retention_days),
+      autonomy_level: agent.autonomy_level ?? "",
+      identity_type: agent.identity_type ?? "",
+      identity_principal: agent.identity_principal ?? "",
+      identity_provider: agent.identity_provider ?? "",
+      granted_scopes: agent.granted_scopes ?? [],
+      on_behalf_of: agent.on_behalf_of ?? false,
     })
+    clearJsonErrors("guardrails", "hitl_config")
     setEditingGov(true)
   }
-  const setGov = (k: keyof GovDraft, v: string | boolean) => setGovDraft((d) => ({ ...d, [k]: v }))
+  const setGov = (k: keyof GovDraft, v: string | string[] | boolean) => { setGovDraft((d) => ({ ...d, [k]: v })); clearJsonError(k) }
   const handleSaveGov = async () => {
     if (!agent) return
     const s = (v: string) => (v.trim() === "" ? null : v.trim())
-    let guardrails: Record<string, unknown> | null = null
-    let hitlConfig: Record<string, unknown> | null = null
-    try {
-      guardrails = govDraft.guardrails.trim() === "" ? null : JSON.parse(govDraft.guardrails)
-      hitlConfig = govDraft.hitl_config.trim() === "" ? null : JSON.parse(govDraft.hitl_config)
-    } catch {
-      toast.error("가드레일/HITL 설정이 올바른 JSON 형식이 아닙니다.")
-      return
-    }
+    const parsed = parseJsonFields([
+      { key: "guardrails", label: "가드레일 설정이", text: govDraft.guardrails },
+      { key: "hitl_config", label: "HITL 설정이", text: govDraft.hitl_config },
+    ])
+    if (!parsed) return
+    const guardrails = parsed.guardrails ?? null
+    const hitlConfig = parsed.hitl_config ?? null
     setSavingGov(true)
     try {
       await updateAIAgent(agent.name, {
@@ -980,9 +998,22 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
         budget_limit: govDraft.budget_limit.trim() === "" ? null : Number(govDraft.budget_limit),
         hitl_required: govDraft.hitl_required,
         audit_log_ref: s(govDraft.audit_log_ref),
-        dlp_policies: govDraft.dlp_policies.split(",").map((t) => t.trim()).filter(Boolean),
+        dlp_policies: govDraft.dlp_policies,
         guardrails,
         hitl_config: hitlConfig,
+        risk_tier: (s(govDraft.risk_tier) as AIAgentDetail["risk_tier"]),
+        risk_rationale: s(govDraft.risk_rationale),
+        impact_assessed_at: s(govDraft.impact_assessed_at),
+        impact_assessment_result: (s(govDraft.impact_assessment_result) as AIAgentDetail["impact_assessment_result"]),
+        impact_assessment_ref: s(govDraft.impact_assessment_ref),
+        compliance: govDraft.compliance,
+        log_retention_days: govDraft.log_retention_days.trim() === "" ? null : Number(govDraft.log_retention_days),
+        autonomy_level: (s(govDraft.autonomy_level) as AIAgentDetail["autonomy_level"]),
+        identity_type: (s(govDraft.identity_type) as AIAgentDetail["identity_type"]),
+        identity_principal: s(govDraft.identity_principal),
+        identity_provider: s(govDraft.identity_provider),
+        granted_scopes: govDraft.granted_scopes,
+        on_behalf_of: govDraft.on_behalf_of,
       })
       await reloadDetail()
       setEditingGov(false)
@@ -1021,7 +1052,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
     }
   }, [agentName])
 
-  // owner_email → 사용자 레코드 조회(소속/부서/이름). 이메일이 정확히 일치하는 사용자만 사용.
+  // owner_email → 사용자 레코드 조회(소속/부서/이름). 이메일은 대소문자를 무시해 비교한다 — 목록(서버 _owner_infos)과 같은 기준(DEF-084).
   useEffect(() => {
     const email = agent?.owner_email?.trim()
     if (!email) {
@@ -1031,7 +1062,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
     let active = true
     fetchUsers({ search: email, pageSize: 0 })
       .then((r) => {
-        if (active) setOwnerUser(r.items.find((u) => u.email === email) ?? null)
+        if (active) setOwnerUser(r.items.find((u) => u.email?.toLowerCase() === email.toLowerCase()) ?? null)
       })
       .catch(() => active && setOwnerUser(null))
     return () => {
@@ -1048,7 +1079,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
           className="w-fit"
           onClick={() => setSelectedAgentName(null)}
         >
-          <ArrowLeft className="mr-1 h-4 w-4" /> AI Agent 목록으로
+          <ArrowLeft className="mr-1 h-4 w-4" /> 목록으로
         </Button>
         <p className="text-sm text-destructive">{error}</p>
       </div>
@@ -1056,15 +1087,18 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
   }
 
   if (!agent) {
-    return <p className="p-4 text-muted-foreground">불러오는 중...</p>
+    return <p className="p-4 text-muted-foreground">불러오는 중…</p>
   }
 
   // 수정·삭제·하위 항목 변경은 관리자·등록자·소유자(소유자 이메일 = 로그인 이메일)만 — 서버와 같은 기준.
-  const canEdit = !!user && (
+  // 역할의 기능 권한(수정 agents.edit · 삭제 agents.delete)도 함께 본다(TODO-122).
+  const isAgentOwner = !!user && (
     user.is_admin
     || (!!agent.created_by && agent.created_by === user.username)
     || (!!agent.owner_email && !!user.email && agent.owner_email.toLowerCase() === user.email.toLowerCase())
   )
+  const canEdit = isAgentOwner && canUseFeature("agents.edit")
+  const canDelete = isAgentOwner && canUseFeature("agents.delete")
 
   return (
     <div className="flex flex-col gap-4">
@@ -1077,7 +1111,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
             className="-ml-2 w-fit"
             onClick={() => setSelectedAgentName(null)}
           >
-            <ArrowLeft className="mr-1 h-4 w-4" /> AI Agent 목록으로
+            <ArrowLeft className="mr-1 h-4 w-4" /> 목록으로
           </Button>
           <div className="flex items-center gap-2">
             <h2 className="text-xl font-semibold">{agent.display_name || agent.name}</h2>
@@ -1085,13 +1119,11 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
             {canEdit && (user?.is_admin || agent.status !== "blocked") ? (
             <Select value={agent.status} onValueChange={changeStatus}>
               <SelectTrigger
-                className={cn(
-                  "h-auto w-auto gap-1 rounded-md border-0 px-2 py-1 text-xs font-medium shadow-none focus:ring-0 focus:ring-offset-0",
-                  AGENT_STATUS_VARIANTS[agent.status] ?? AGENT_STATUS_VARIANTS.draft,
-                )}
+                className="h-auto w-auto gap-1 border-0 bg-transparent p-0 shadow-none focus:ring-0 focus:ring-offset-0 dark:bg-transparent"
                 title="상태 변경"
+                aria-label={`상태: ${lifecycle(agent.status).label} — 변경`}
               >
-                <SelectValue />
+                <StatusBadge {...lifecycle(agent.status)} />
               </SelectTrigger>
               <SelectContent>
                 {STATUS_ORDER.map((s) => (
@@ -1102,42 +1134,44 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
               </SelectContent>
             </Select>
             ) : (
-              <Badge
-                className={cn(
-                  "border-0 px-2 py-1 text-xs font-medium shadow-none",
-                  AGENT_STATUS_VARIANTS[agent.status] ?? AGENT_STATUS_VARIANTS.draft,
-                )}
-              >
-                {STATUS_LABEL[agent.status] ?? agent.status}
-              </Badge>
+              <StatusBadge {...lifecycle(agent.status)} />
             )}
-            <Badge variant="outline" className="text-xs font-medium">
+            <Badge variant="outline" className="font-medium">
               {agent.version}
             </Badge>
             {agent.reputation_score != null && (
               <Badge variant="secondary">평판 {agent.reputation_score}</Badge>
             )}
           </div>
-          <p className="font-mono text-xs text-muted-foreground">{agent.urn}</p>
+          <p className="font-mono text-xs">{agent.urn}</p>
           {agent.description && (
-            <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{agent.description}</p>
+            <p className="mt-1 max-w-3xl text-sm">{agent.description}</p>
           )}
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <Button variant="outline" size="sm" onClick={() => setManifestOpen(true)}>
             <FileCode2 className="mr-1 h-4 w-4" /> 정의 파일 보기
           </Button>
-          {canEdit && (
-          <Button
-            variant="destructive"
-            size="sm"
-            onClick={() => {
-              setDeleteTargetName(agent.name)
-              setOpen("delete")
-            }}
-          >
-            <Trash2 className="mr-1 h-4 w-4" /> 삭제
-          </Button>
+          {/* 덜 쓰는 작업(삭제)은 ⋯ 메뉴로 — MCP 서버 정의 · 배포 상세와 같은 배치(TODO-131) */}
+          {canDelete && (
+          <DropdownMenu>
+            <Tip label="더 보기"><DropdownMenuTrigger asChild>
+              <Button size="sm" variant="outline" className="w-8 px-0" aria-label="더 보기">
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger></Tip>
+            <DropdownMenuContent align="end" className="min-w-44">
+              <DropdownMenuItem
+                variant="destructive"
+                onClick={() => {
+                  setDeleteTargetName(agent.name)
+                  setOpen("delete")
+                }}
+              >
+                <Trash2 /> 삭제
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           )}
         </div>
       </div>
@@ -1176,61 +1210,47 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
             )}
           </div>
           {(agent.missing_fields?.length ?? 0) > 0 && (
-            <p className="mt-0.5 text-xs text-muted-foreground">
+            <p className="mt-0.5 text-xs">
               채우면 좋은 항목: {agent.missing_fields!.map((k) => COMPLETENESS_LABEL[k] ?? k).join(", ")}
             </p>
           )}
         </div>
       )}
 
-      <Separator />
+      {((agent.identity_state && agent.identity_state !== "ok")
+        || ((agent.risk_tier === "high" || agent.risk_tier === "prohibited") && !agent.impact_assessed_at)) && (
+        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+          {agent.identity_state && agent.identity_state !== "ok" && (
+            <div>
+              <span className="font-medium">실행 신원 확인 필요</span> — {agent.identity_principal}:{" "}
+              {IDENTITY_STATE_LABEL[agent.identity_state] ?? agent.identity_state}. 거버넌스 탭에서 신원을 바꾸거나 계정을 정리하세요.
+            </div>
+          )}
+          {(agent.risk_tier === "high" || agent.risk_tier === "prohibited") && !agent.impact_assessed_at && (
+            <div>
+              <span className="font-medium">{RISK_TIER_LABEL[agent.risk_tier]} 등급인데 영향 평가 기록이 없습니다.</span>{" "}
+              거버넌스 탭에 평가일·결과·문서를 남기세요.
+            </div>
+          )}
+        </div>
+      )}
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="h-auto flex-wrap">
-          <TabsTrigger value="overview" className="gap-1.5">
-            <BookOpen className="h-4 w-4" />
-            개요
-          </TabsTrigger>
-          <TabsTrigger value="capability" className="gap-1.5">
-            <Layers className="h-4 w-4" />
-            기능·I/O
-          </TabsTrigger>
-          <TabsTrigger value="tools" className="gap-1.5">
-            <Wrench className="h-4 w-4" />
-            도구·통합
-          </TabsTrigger>
-          <TabsTrigger value="governance" className="gap-1.5">
-            <ShieldCheck className="h-4 w-4" />
-            거버넌스
-          </TabsTrigger>
-          <TabsTrigger value="observability" className="gap-1.5">
-            <Activity className="h-4 w-4" />
-            관측·비용
-          </TabsTrigger>
-          <TabsTrigger value="eval" className="gap-1.5">
-            <ClipboardCheck className="h-4 w-4" />
-            평가
-          </TabsTrigger>
-          <TabsTrigger value="lineage" className="gap-1.5">
-            <Share2 className="h-4 w-4" />
-            리니지
-          </TabsTrigger>
-          <TabsTrigger value="versions" className="gap-1.5">
-            <History className="h-4 w-4" />
-            버전
-          </TabsTrigger>
-          <TabsTrigger value="card" className="gap-1.5">
-            <Network className="h-4 w-4" />
-            에이전트 카드(A2A)
-          </TabsTrigger>
-          <TabsTrigger value="enforcement" className="gap-1.5">
-            <Plug className="h-4 w-4" />
-            집행(연동)
-          </TabsTrigger>
+        <TabsList variant="line" className={LINE_TABS_LIST}>
+          <TabsTrigger value="overview" className={LINE_TABS_TRIGGER}>개요</TabsTrigger>
+          <TabsTrigger value="capability" className={LINE_TABS_TRIGGER}>기능·I/O</TabsTrigger>
+          <TabsTrigger value="tools" className={LINE_TABS_TRIGGER}>도구·통합 ({agent.tools.length})</TabsTrigger>
+          <TabsTrigger value="governance" className={LINE_TABS_TRIGGER}>거버넌스</TabsTrigger>
+          <TabsTrigger value="observability" className={LINE_TABS_TRIGGER}>관측·비용</TabsTrigger>
+          <TabsTrigger value="eval" className={LINE_TABS_TRIGGER}>평가 ({evals.length})</TabsTrigger>
+          <TabsTrigger value="lineage" className={LINE_TABS_TRIGGER}>리니지</TabsTrigger>
+          <TabsTrigger value="versions" className={LINE_TABS_TRIGGER}>버전</TabsTrigger>
+          <TabsTrigger value="card" className={LINE_TABS_TRIGGER}>에이전트 카드(A2A)</TabsTrigger>
+          <TabsTrigger value="enforcement" className={LINE_TABS_TRIGGER}>집행(연동)</TabsTrigger>
         </TabsList>
 
         {/* 정보 출처 범례 — 표/항목의 색상 원 의미 */}
-        <div className="mt-2 flex items-center gap-3 text-xs text-muted-foreground">
+        <div className="mt-2 flex items-center gap-3 text-xs">
           <span className="inline-flex items-center gap-1">
             <span className="inline-block h-2.5 w-2.5 rounded-full bg-sky-500" /> 사용자 입력
           </span>
@@ -1240,9 +1260,9 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
         </div>
 
         {/* 개요 — 4개 박스를 단일 표로 통합 (그룹 헤더 + key/value 행) */}
-        <TabsContent value="overview" className="mt-4">
-          <div className="mb-4 flex items-start justify-between gap-2">
-            <p className="text-sm text-muted-foreground">
+        <TabsContent value="overview" className="mt-4 space-y-6">
+          <div className="flex items-start justify-between gap-2">
+            <p className="text-sm">
               에이전트의 식별·소유, 모델·아키텍처, 인터페이스, 관측 요약 등 기본 메타데이터를 정리한 화면입니다.
               {editingOverview && " 사용자 입력(파랑) 항목만 편집할 수 있습니다."}
             </p>
@@ -1266,21 +1286,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
               )}
             </div>
           </div>
-          <div className="overflow-hidden rounded-md border">
-                <table className="w-full table-fixed border-collapse text-sm">
-                  <colgroup>
-                    <col className="w-[160px]" />
-                    <col className="w-[34%]" />
-                    <col />
-                  </colgroup>
-                  <thead>
-                    <tr className="bg-muted/40">
-                      <th className="border px-3 py-2 text-left font-bold">항목</th>
-                      <th className="border px-3 py-2 text-left font-bold">설정값</th>
-                      <th className="border px-3 py-2 text-left font-bold">설명</th>
-                    </tr>
-                  </thead>
-                  <tbody>
+          <div className="space-y-6">
                     {([
                       {
                         title: "식별 / 소유",
@@ -1292,7 +1298,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                           { label: "소속", display: ownerUser?.organization ?? null, desc: "소유자(사용자) 프로필에서 자동 연동되는 조직/회사", source: "auto" },
                           { label: "부서", display: agent.department, desc: "에이전트를 운영·소유하는 부서/팀(소유자 선택 시 자동 입력)", source: "input", field: "department", combo: OPT_DEPARTMENT },
                           { label: "소유자", display: <AgentOwnerValue email={agent.owner_email} user={ownerUser} />, desc: "데이터 책임자(이메일로 등록). 이름(username)에 마우스를 올리면 소속·소속부서·Username·Email 표시", source: "input", field: "owner_email" },
-                          { label: "태그", display: <StringList items={agent.tags} />, desc: "검색·분류용 라벨(쉼표로 구분)", source: "input", field: "tags" },
+                          { label: "태그", display: <StringList items={agent.tags} />, desc: "검색·분류용 라벨(입력 후 Enter 로 하나씩)", source: "input", field: "tags" },
                         ],
                       },
                       {
@@ -1313,7 +1319,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                                 <li>· router(라우팅): 입력을 분류해 적절한 도구/하위 흐름으로 분기</li>
                                 <li>· multi_agent(다중 에이전트): 여러 하위 에이전트가 역할을 분담해 협업</li>
                               </ul>
-                              <div className="mt-1 text-muted-foreground">※ 프레임워크별 실제 명칭은 다를 수 있음(LangChain·LangGraph·CrewAI 등)</div>
+                              <div className="mt-1">※ 프레임워크별 실제 명칭은 다를 수 있음(LangChain·LangGraph·CrewAI 등)</div>
                             </div>
                           ) },
                           { label: "메모리", display: agent.memory_type, source: "input", field: "memory_type", combo: OPT_MEMORY, desc: (
@@ -1328,10 +1334,14 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                                 <li>· entity(엔티티): 핵심 엔티티·사실 단위로 추출·보관</li>
                                 <li>· hybrid(혼합): 단기 버퍼 + 장기 검색을 결합</li>
                               </ul>
-                              <div className="mt-1 text-muted-foreground">※ 프레임워크별 실제 명칭은 다를 수 있음(LangChain·LlamaIndex·CrewAI 등)</div>
+                              <div className="mt-1">※ 프레임워크별 실제 명칭은 다를 수 있음(LangChain·LlamaIndex·CrewAI 등)</div>
                             </div>
                           ) },
+                          { label: "등록 모델 연결", display: agent.base_model_ref == null ? null : agent.base_model_name ? (
+                            <a href={modelHref(agent.base_model_name)} className="text-primary hover:underline">{agent.base_model_name}</a>
+                          ) : `#${agent.base_model_ref} (삭제된 모델)`, desc: "카탈로그의 MLflow 모델과 연결(정의 파일 spec.model.registryRef 로 지정). 모델 상세의 '이 자원을 쓰는 에이전트'에 표시됨", source: "input" },
                           { label: "멀티 에이전트", display: agent.is_multi_agent ? "예" : "아니오", desc: "여러 하위 에이전트가 협업하는 구조인지 여부", source: "input", field: "is_multi_agent", kind: "bool" },
+                          { label: "하위 에이전트", display: (agent.sub_agents?.length ?? 0) > 0 ? <JsonViewer value={agent.sub_agents} /> : null, desc: "멀티 에이전트 구성의 하위 에이전트(정의 파일 spec.runtime.subAgents)", source: "input" },
                           { label: "최대 단계", display: agent.max_steps, desc: "한 번의 실행에서 허용되는 최대 추론·도구 호출 단계 수", source: "input", field: "max_steps", kind: "num" },
                         ],
                       },
@@ -1370,7 +1380,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                                 <li>· cli(CLI): 커맨드라인에서 실행</li>
                                 <li>· scheduled(예약 실행): 배치/크론 등 스케줄 기반 실행</li>
                               </ul>
-                              <div className="mt-1 text-muted-foreground">※ 게이트웨이/프레임워크별 실제 명칭은 다를 수 있음</div>
+                              <div className="mt-1">※ 게이트웨이/프레임워크별 실제 명칭은 다를 수 있음</div>
                             </div>
                           ) },
                           { label: "인증", display: agent.auth_method, source: "input", field: "auth_method", combo: OPT_AUTH, desc: (
@@ -1386,7 +1396,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                                 <li>· hmac(HMAC 서명): 공유 비밀키로 요청 본문을 서명·검증</li>
                                 <li>· mtls(상호 TLS): 클라이언트·서버 양방향 인증서 검증</li>
                               </ul>
-                              <div className="mt-1 text-muted-foreground">※ 게이트웨이/프레임워크별 실제 명칭은 다를 수 있음</div>
+                              <div className="mt-1">※ 게이트웨이/프레임워크별 실제 명칭은 다를 수 있음</div>
                             </div>
                           ) },
                         ],
@@ -1403,35 +1413,24 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                         ],
                       },
                     ] as { title: string; rows: { label: string; display: React.ReactNode; desc: React.ReactNode; source?: Source; field?: keyof OverviewDraft; kind?: "text" | "num" | "bool"; combo?: string[] }[] }[]).map((g) => (
-                      <Fragment key={g.title}>
-                        <tr>
-                          <th colSpan={3} className="border bg-muted px-3 py-2 text-left text-sm font-semibold">
-                            {g.title}
-                          </th>
-                        </tr>
+                      <DetailSection key={g.title} title={g.title}>
+                        <MetaRowsTable>
                         {/* 관측 요약은 (편집 중이 아니고) 호출 텔레메트리가 없으면 안내 문구를 표시 */}
                         {g.title === "관측 요약" &&
                         [agent.usage_count, agent.latency_p50, agent.latency_p95, agent.error_rate, agent.avg_token_usage, agent.reputation_score]
                           .every((v) => v === null || v === undefined) ? (
                           <tr>
-                            <td colSpan={3} className="border px-3 py-3 text-sm text-muted-foreground">
+                            <td colSpan={3} className="px-3 py-3 text-sm">
                               아직 수집된 호출 텔레메트리가 없습니다. 에이전트 런타임이 호출 지표를 전송하면
                               누적 호출·지연(p50/p95)·오류율·평균 토큰·평판 점수가 자동으로 표시됩니다.
                             </td>
                           </tr>
                         ) : (
                           g.rows.map((r) => (
-                            <tr key={r.label}>
-                              <th className="border bg-muted/50 px-3 py-2 text-left align-middle font-medium text-foreground">
-                                <span className="inline-flex flex-wrap items-center gap-1">
-                                  {r.label}
-                                  <SourceBadge source={r.source} />
-                                </span>
-                              </th>
-                              <td className="border px-3 py-2 align-middle break-words">
+                            <MetaRow key={r.label} label={r.label} source={r.source} desc={r.desc}>
                                 {editingOverview && r.field ? (
                                   r.field === "tags" ? (
-                                    <TagsInput value={draft.tags} onChange={(v) => setD("tags", v)} />
+                                    <TagInput value={draft.tags} onChange={(v) => setD("tags", v)} />
                                   ) : r.field === "owner_email" ? (
                                     <OwnerCombo
                                       users={pickerUsers}
@@ -1468,24 +1467,19 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                                 ) : (
                                   r.display
                                 )}
-                              </td>
-                              <td className="border px-3 py-2 align-top text-foreground">
-                                {r.desc}
-                              </td>
-                            </tr>
+                              </MetaRow>
                           ))
                         )}
-                      </Fragment>
+                      </MetaRowsTable>
+                      </DetailSection>
                     ))}
-                  </tbody>
-                </table>
-              </div>
+          </div>
         </TabsContent>
 
         {/* 기능·I/O — 개요 탭과 동일한 표 형식(항목/설정값/설명) */}
-        <TabsContent value="capability" className="mt-4">
-          <div className="mb-4 flex items-start justify-between gap-2">
-            <p className="text-sm text-muted-foreground">
+        <TabsContent value="capability" className="mt-4 space-y-6">
+          <div className="flex items-start justify-between gap-2">
+            <p className="text-sm">
               에이전트가 제공하는 기능·지원 언어·활용 사례·제약과 입출력 데이터 계약(스키마)을 정의합니다.
               {editingCap && " 목록은 Enter로 배지 추가, 스키마는 JSON으로 입력합니다."}
             </p>
@@ -1509,21 +1503,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
               )}
             </div>
           </div>
-          <div className="overflow-hidden rounded-md border">
-                <table className="w-full table-fixed border-collapse text-sm">
-                  <colgroup>
-                    <col className="w-[160px]" />
-                    <col className="w-[34%]" />
-                    <col />
-                  </colgroup>
-                  <thead>
-                    <tr className="bg-muted/40">
-                      <th className="border px-3 py-2 text-left font-bold">항목</th>
-                      <th className="border px-3 py-2 text-left font-bold">설정값</th>
-                      <th className="border px-3 py-2 text-left font-bold">설명</th>
-                    </tr>
-                  </thead>
-                  <tbody>
+          <div className="space-y-6">
                     {([
                       {
                         title: "기능",
@@ -1539,67 +1519,61 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                         rows: [
                           { label: "입력 스키마", display: <JsonViewer value={agent.input_schema} />, desc: "에이전트 호출 시 전달하는 입력 데이터 구조 정의(JSON Schema). 예: { query: string(필수), top_k: number(기본 5) }", field: "input_schema", editor: "json" },
                           { label: "출력 스키마", display: <JsonViewer value={agent.output_schema} />, desc: "에이전트가 반환하는 출력 데이터 구조 정의(JSON Schema). 예: { answer: string, sources: string[], confidence: number }", field: "output_schema", editor: "json" },
+                          { label: "기본 입력 형식", display: <StringList items={agent.default_input_modes} />, desc: "받는 데이터의 MIME 형식(A2A defaultInputModes). 비우면 text/plain, 입력 스키마가 있으면 application/json 추가. 예: text/plain, application/json, image/png", field: "default_input_modes", editor: "tags" },
+                          { label: "기본 출력 형식", display: <StringList items={agent.default_output_modes} />, desc: "돌려주는 데이터의 MIME 형식(A2A defaultOutputModes). 비우면 입력과 같은 규칙", field: "default_output_modes", editor: "tags" },
+                        ],
+                      },
+                      {
+                        title: "추론 설정",
+                        rows: [
+                          { label: "추론 파라미터", display: <JsonViewer value={agent.inference_params} />, desc: "모델 호출 파라미터(JSON). 예: { temperature: 0.2, top_p: 0.9, max_tokens: 1024 }", field: "inference_params", editor: "json" },
                         ],
                       },
                     ] as { title: string; rows: { label: string; display: React.ReactNode; desc: React.ReactNode; field: keyof CapDraft; editor: "tags" | "json" | "lang" }[] }[]).map((g) => (
-                      <Fragment key={g.title}>
-                        <tr>
-                          <th colSpan={3} className="border bg-muted px-3 py-2 text-left text-sm font-semibold">
-                            {g.title}
-                          </th>
-                        </tr>
+                      <DetailSection key={g.title} title={g.title}>
+                        <MetaRowsTable>
                         {g.rows.map((r) => (
-                          <tr key={r.label}>
-                            <th className="border bg-muted/50 px-3 py-2 text-left align-middle font-medium text-foreground">
-                              <span className="inline-flex flex-wrap items-center gap-1">
-                                {r.label}
-                                <SourceBadge source="input" />
-                              </span>
-                            </th>
-                            <td className="border px-3 py-2 align-middle break-words">
+                          <MetaRow key={r.label} label={r.label} source="input" desc={r.desc}>
                               {editingCap ? (
                                 r.editor === "tags" ? (
-                                  <TagsInput value={capDraft[r.field]} onChange={(v) => setCap(r.field, v)} />
+                                  <TagInput value={capDraft[r.field as CapListField]} onChange={(v) => setCap(r.field as CapListField, v)} />
                                 ) : r.editor === "lang" ? (
-                                  <LangMultiSelect value={capDraft[r.field]} onChange={(v) => setCap(r.field, v)} />
+                                  <LangMultiSelect value={capDraft[r.field as CapListField]} onChange={(v) => setCap(r.field as CapListField, v)} />
                                 ) : (
-                                  <Textarea
-                                    value={capDraft[r.field]}
-                                    onChange={(e) => setCap(r.field, e.target.value)}
-                                    placeholder='JSON 형식 (예: {"query": {"type": "string"}})'
-                                    className="min-h-32 w-full font-mono text-xs"
-                                  />
+                                  <div className="space-y-1">
+                                    <CodeEditor
+                                      language="json"
+                                      value={capDraft[r.field as CapJsonField]}
+                                      invalid={!!jsonErrors[r.field]}
+                                      onChange={(v) => setCap(r.field as CapJsonField, v)}
+                                      placeholder='JSON 형식 (예: {"query": {"type": "string"}})'
+                                      minHeight={128}
+                                    />
+                                    <FieldError>{jsonErrors[r.field]}</FieldError>
+                                  </div>
                                 )
                               ) : (
                                 r.display
                               )}
-                            </td>
-                            <td className="border px-3 py-2 align-top text-foreground">
-                              {r.desc}
-                            </td>
-                          </tr>
+                            </MetaRow>
                         ))}
-                      </Fragment>
+                      </MetaRowsTable>
+                      </DetailSection>
                     ))}
-                  </tbody>
-                </table>
-              </div>
+          </div>
+          <AgentSkillsCard agent={agent} canEdit={canEdit} onChanged={reloadDetail} />
         </TabsContent>
 
         {/* 도구·통합 (관리 가능) */}
-        <TabsContent value="tools" className="mt-4 space-y-4">
-          <p className="text-sm text-muted-foreground">
+        <TabsContent value="tools" className="mt-4 space-y-6">
+          <p className="text-sm">
             에이전트가 사용하는 도구(Tool)와 연동된 MCP 서버 등 외부 통합 구성을 관리합니다.
           </p>
-          <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between gap-2">
-                <CardTitle className="text-sm">도구 ({agent.tools.length}) <SourceBadge source="input" className="ml-1 align-middle" /></CardTitle>
-                {canEdit && <AddToolDialog agentName={agent.name} onAdded={reloadDetail} />}
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              <Table>
+          <DetailSection
+            title={<>도구 ({agent.tools.length}) <SourceBadge source="input" className="ml-1 align-middle" /></>}
+            actions={canEdit && <AddToolDialog agentName={agent.name} onAdded={reloadDetail} />}
+          >
+              <div className="rounded-md border"><Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-8" />
@@ -1628,7 +1602,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                           <TableRow>
                             <TableCell className="align-top">
                               {hasSchema && (
-                                <button
+                                <Tip label="파라미터 펼치기"><button
                                   type="button"
                                   className="text-muted-foreground hover:text-foreground"
                                   onClick={() =>
@@ -1642,27 +1616,27 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                                   aria-label="파라미터 펼치기"
                                 >
                                   {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                                </button>
+                                </button></Tip>
                               )}
                             </TableCell>
                             <TableCell className="align-top">
                               <div className="font-medium">{t.name}</div>
-                              {t.description && <div className="text-xs text-muted-foreground">{t.description}</div>}
+                              {t.description && <div className="text-xs">{t.description}</div>}
                             </TableCell>
                             <TableCell className="align-top"><RiskBadge risk={t.risk} /></TableCell>
                             <TableCell className="align-top">
                               {t.requires_approval ? (
-                                <Badge variant="outline" className="border-amber-300 text-xs text-amber-700 dark:text-amber-400">필요</Badge>
+                                <StatusBadge tone="warning">필요</StatusBadge>
                               ) : (
                                 <span className="text-muted-foreground">-</span>
                               )}
                             </TableCell>
-                            <TableCell className="align-top text-muted-foreground">
+                            <TableCell className="align-top">
                               {hasSchema ? `${paramCount}개 항목` : "-"}
                             </TableCell>
                             <TableCell className="align-top">
                               {canEdit && (
-                              <Button
+                              <Tip label="도구 삭제"><Button aria-label="도구 삭제"
                                 variant="ghost"
                                 size="icon"
                                 className="h-7 w-7"
@@ -1672,7 +1646,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                                 }}
                               >
                                 <Trash2 className="h-4 w-4" />
-                              </Button>
+                              </Button></Tip>
                               )}
                             </TableCell>
                           </TableRow>
@@ -1680,7 +1654,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                             <TableRow>
                               <TableCell />
                               <TableCell colSpan={5} className="bg-muted/30">
-                                <p className="mb-1 text-xs text-muted-foreground">파라미터 스키마 (JSON)</p>
+                                <p className="mb-1 text-xs">파라미터 스키마 (JSON)</p>
                                 <JsonViewer value={t.tool_schema} />
                               </TableCell>
                             </TableRow>
@@ -1690,15 +1664,12 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                     })
                   )}
                 </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
+              </Table></div>
+            </DetailSection>
           <AgentMcpCard agentName={agent.name} items={agent.mcp_servers} onChanged={reloadDetail} canEdit={canEdit} />
-          <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between gap-2">
-                <CardTitle className="text-sm">RAG 설정 / 네트워크 <SourceBadge source="input" className="ml-1 align-middle" /></CardTitle>
-                <div className="flex gap-2">
+          <DetailSection
+            title={<>RAG 설정 / 네트워크 <SourceBadge source="input" className="ml-1 align-middle" /></>}
+            actions={<>
                   {editingRag ? (
                     <>
                       <Button size="sm" variant="outline" disabled={savingRag} onClick={() => setEditingRag(false)}>취소</Button>
@@ -1714,40 +1685,44 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                     </Button>
                     )
                   )}
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-3">
+            </>}
+          >
+            <div className="space-y-3">
               <div>
-                <p className="mb-1 text-sm text-muted-foreground">RAG 설정 (rag_config)</p>
+                <p className="mb-1 text-sm">RAG 설정 (rag_config)</p>
                 {editingRag ? (
-                  <Textarea
-                    value={ragText}
-                    onChange={(e) => setRagText(e.target.value)}
-                    placeholder='JSON 형식 (예: {"vector_store":"pgvector","top_k":5})'
-                    className="min-h-32 w-full font-mono text-xs"
-                  />
+                  <div className="space-y-1">
+                    <CodeEditor
+                      language="json"
+                      value={ragText}
+                      invalid={!!jsonErrors.rag_config}
+                      onChange={(v) => { setRagText(v); clearJsonError("rag_config") }}
+                      placeholder='JSON 형식 (예: {"vector_store":"pgvector","top_k":5})'
+                      minHeight={128}
+                    />
+                    <FieldError>{jsonErrors.rag_config}</FieldError>
+                  </div>
                 ) : (
                   <JsonViewer value={agent.rag_config} />
                 )}
               </div>
               <div>
-                <p className="mb-1 text-sm text-muted-foreground">네트워크 허용목록 (network_allowlist)</p>
+                <p className="mb-1 text-sm">네트워크 허용목록 (network_allowlist)</p>
                 {editingRag ? (
-                  <TagsInput value={networkText} onChange={setNetworkText} />
+                  <TagInput value={networkList} onChange={setNetworkList} />
                 ) : (
                   <StringList items={agent.network_allowlist} />
                 )}
               </div>
-            </CardContent>
-          </Card>
+            </div>
+          </DetailSection>
         </TabsContent>
 
         {/* 거버넌스 */}
-        <TabsContent value="governance" className="mt-4">
-          <div className="mb-4 flex items-start justify-between gap-2">
-            <p className="text-sm text-muted-foreground">
-              개인정보(PII)·데이터 레지던시·예산·HITL 등 보안·거버넌스 정책과 가드레일·DLP 설정입니다.
+        <TabsContent value="governance" className="mt-4 space-y-6">
+          <div className="flex items-start justify-between gap-2">
+            <p className="text-sm">
+              개인정보(PII)·데이터 레지던시·예산·HITL 등 보안·거버넌스 정책과 가드레일·DLP 설정, 위험 등급·규제 준수, 실행 신원·권한입니다.
             </p>
             <div className="flex shrink-0 gap-2">
               {editingGov ? (
@@ -1767,21 +1742,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
               )}
             </div>
           </div>
-          <div className="overflow-hidden rounded-md border">
-            <table className="w-full table-fixed border-collapse text-sm">
-              <colgroup>
-                <col className="w-[160px]" />
-                <col className="w-[34%]" />
-                <col />
-              </colgroup>
-              <thead>
-                <tr className="bg-muted/40">
-                  <th className="border px-3 py-2 text-left font-bold">항목</th>
-                  <th className="border px-3 py-2 text-left font-bold">설정값</th>
-                  <th className="border px-3 py-2 text-left font-bold">설명</th>
-                </tr>
-              </thead>
-              <tbody>
+          <div className="space-y-6">
                 {([
                   {
                     title: "보안 / 정책",
@@ -1814,27 +1775,107 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                       { label: "HITL 설정(hitl_config)", display: <JsonViewer value={agent.hitl_config} />, desc: "사람 개입 트리거·승인 흐름 설정(JSON)", field: "hitl_config", editor: "json" },
                     ],
                   },
-                ] as { title: string; rows: { label: string; display: React.ReactNode; desc: React.ReactNode; field: keyof GovDraft; editor: "combo" | "num" | "bool" | "text" | "chips" | "json"; options?: string[] }[] }[]).map((g) => (
-                  <Fragment key={g.title}>
-                    <tr>
-                      <th colSpan={3} className="border bg-muted px-3 py-2 text-left text-sm font-semibold">{g.title}</th>
-                    </tr>
+                  {
+                    title: "위험 등급 / 규제 준수",
+                    rows: [
+                      { label: "위험 등급", display: agent.risk_tier ? <RiskTierBadge tier={agent.risk_tier} /> : null, field: "risk_tier", editor: "select", choices: choices(RISK_TIER_LABEL), desc: (
+                        <div>
+                          <div>에이전트 자체의 위험 분류(EU AI Act 4단계와 같은 이름). 도구 위험도에서 계산한 &lsquo;최고 위험도&rsquo;와 별개입니다.</div>
+                          <ul className="mt-1 space-y-0.5">
+                            <li>· 최소(minimal): 업무 영향이 거의 없는 보조 기능</li>
+                            <li>· 제한(limited): 사용자에게 AI임을 알려야 하는 수준(챗봇 등)</li>
+                            <li>· 고위험(high): 신용·채용·의료·법적 판단 등 사람에게 중대한 영향 — 영향 평가·사람 감독·로그 보존 필요</li>
+                            <li>· 금지(prohibited): 운영하면 안 되는 용도</li>
+                          </ul>
+                        </div>
+                      ) },
+                      { label: "등급 근거", display: dash(agent.risk_rationale), desc: "위험 등급을 매긴 이유(영향 대상·결정 범위 등)", field: "risk_rationale", editor: "text" },
+                      { label: "영향 평가일", display: dash(agent.impact_assessed_at), desc: "영향 평가(ISO/IEC 42001 AI 영향 평가 등)를 수행한 날짜", field: "impact_assessed_at", editor: "date" },
+                      { label: "영향 평가 결과", display: agent.impact_assessment_result ? (IMPACT_RESULT_LABEL[agent.impact_assessment_result] ?? agent.impact_assessment_result) : null, desc: "통과·조건부 통과·미통과·진행 중", field: "impact_assessment_result", editor: "select", choices: choices(IMPACT_RESULT_LABEL) },
+                      { label: "영향 평가 문서", display: dash(agent.impact_assessment_ref), desc: "평가 보고서 위치(위키·문서 링크 등)", field: "impact_assessment_ref", editor: "text" },
+                      { label: "준수 대상", display: <StringList items={agent.compliance} />, desc: "적용되는 규제·표준(프리셋 선택 또는 직접 추가)", field: "compliance", editor: "compliance" },
+                      { label: "로그 보존 기간", display: agent.log_retention_days == null ? null : `${agent.log_retention_days}일`, desc: "호출·판단 로그를 보관하는 기간(일). 고위험 등급은 규제가 정한 기간 이상", field: "log_retention_days", editor: "days" },
+                      { label: "자율 수준", display: agent.autonomy_level ? (AUTONOMY_LABEL[agent.autonomy_level] ?? agent.autonomy_level) : null, field: "autonomy_level", editor: "select", choices: choices(AUTONOMY_LABEL), desc: (
+                        <div>
+                          <div>에이전트가 결과를 얼마나 스스로 실행하는지(전체 운영 방식).</div>
+                          <ul className="mt-1 space-y-0.5">
+                            <li>· 제안만(advisory): 결과를 사람에게 제안하고 실행은 사람이 함</li>
+                            <li>· 사람 승인 후 실행(supervised): 실행 전에 사람이 승인</li>
+                            <li>· 자율 실행(autonomous): 사람 승인 없이 실행</li>
+                          </ul>
+                          <div className="mt-1">※ &lsquo;HITL 필요&rsquo;는 특정 행동(도구 승인 등)에 사람 개입이 필요한지이고, 자율 수준은 에이전트 전체의 운영 방식입니다.</div>
+                        </div>
+                      ) },
+                    ],
+                  },
+                  {
+                    title: "실행 신원 / 권한",
+                    rows: [
+                      { label: "신원 유형", display: agent.identity_type ? (IDENTITY_TYPE_LABEL[agent.identity_type] ?? agent.identity_type) : null, field: "identity_type", editor: "select", choices: choices(IDENTITY_TYPE_LABEL), desc: (
+                        <div>
+                          <div>에이전트가 다른 시스템을 호출할 때 쓰는 신원. &lsquo;인증&rsquo;(개요 탭)은 이 에이전트를 호출하는 방법이라 다릅니다.</div>
+                          <ul className="mt-1 space-y-0.5">
+                            <li>· 서비스 계정: 사용자 관리에 등록된 계정(비활성 여부를 확인함)</li>
+                            <li>· OAuth 클라이언트: client credentials 로 토큰을 받는 클라이언트</li>
+                            <li>· 워크로드 신원: Kubernetes 서비스 계정·SPIFFE ID·클라우드 IAM 역할</li>
+                            <li>· 사용자 위임: 요청한 사용자의 권한으로 실행</li>
+                          </ul>
+                        </div>
+                      ) },
+                      { label: "신원 식별자", display: agent.identity_principal ? (
+                        <span>
+                          <span className="font-mono">{agent.identity_principal}</span>
+                          {agent.identity_state && (
+                            <StatusBadge tone={agent.identity_state === "ok" ? "success" : "warning"} className="ml-2">
+                              {IDENTITY_STATE_LABEL[agent.identity_state] ?? agent.identity_state}
+                            </StatusBadge>
+                          )}
+                        </span>
+                      ) : null, desc: "계정 ID·client_id·SPIFFE ID 등. 서비스 계정·사용자 위임은 사용자 관리의 사용자 이름·이메일과 대조해 비활성·미등록 계정을 표시", field: "identity_principal", editor: "text" },
+                      { label: "신원 제공자", display: dash(agent.identity_provider), desc: "신원을 발급·관리하는 곳. 예: keycloak, ldap, k8s, aws-iam", field: "identity_provider", editor: "text" },
+                      { label: "권한 범위", display: <StringList items={agent.granted_scopes} />, desc: "부여된 OAuth 스코프·역할(입력 후 Enter 로 하나씩). 정책 번들에 실림. 예: order:read · refund:write", field: "granted_scopes", editor: "tags" },
+                      { label: "사용자 대신 실행", display: agent.on_behalf_of ? "예" : "아니오", desc: "요청한 사용자를 대신해(OBO) 그 사용자 권한으로 실행하는지", field: "on_behalf_of", editor: "bool" },
+                    ],
+                  },
+                ] as { title: string; rows: { label: string; display: React.ReactNode; desc: React.ReactNode; field: keyof GovDraft; editor: "combo" | "num" | "bool" | "text" | "chips" | "json" | "select" | "date" | "days" | "tags" | "compliance"; options?: string[]; choices?: [string, string][] }[] }[]).map((g) => (
+                  <DetailSection key={g.title} title={g.title}>
+                        <MetaRowsTable>
                     {g.rows.map((r) => (
-                      <tr key={r.label}>
-                        <th className="border bg-muted/50 px-3 py-2 text-left align-middle font-medium text-foreground">
-                          <span className="inline-flex flex-wrap items-center gap-1">
-                            {r.label}
-                            <SourceBadge source="input" />
-                          </span>
-                        </th>
-                        <td className="border px-3 py-2 align-middle break-words">
+                      <MetaRow key={r.label} label={r.label} source="input" desc={r.desc}>
                           {editingGov ? (
                             r.editor === "combo" ? (
                               <ComboInput value={govDraft[r.field] as string} onChange={(v) => setGov(r.field, v)} options={r.options ?? []} />
                             ) : r.editor === "chips" ? (
-                              <ChipMultiSelect value={govDraft[r.field] as string} onChange={(v) => setGov(r.field, v)} options={OPT_DLP} />
+                              <ChipMultiSelect value={govDraft[r.field] as string[]} onChange={(v) => setGov(r.field, v)} options={OPT_DLP} />
+                            ) : r.editor === "compliance" ? (
+                              <ChipMultiSelect value={govDraft[r.field] as string[]} onChange={(v) => setGov(r.field, v)} options={OPT_COMPLIANCE} />
+                            ) : r.editor === "tags" ? (
+                              <TagInput value={govDraft[r.field] as string[]} onChange={(v) => setGov(r.field, v)} />
+                            ) : r.editor === "select" ? (
+                              <Select value={(govDraft[r.field] as string) || COMBO_UNSET} onValueChange={(v) => setGov(r.field, v === COMBO_UNSET ? "" : v)}>
+                                <SelectTrigger className="h-8 w-full text-sm"><SelectValue placeholder="미지정" /></SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value={COMBO_UNSET} className="text-muted-foreground">미지정</SelectItem>
+                                  {(r.choices ?? []).map(([v, l]) => (
+                                    <SelectItem key={v} value={v}>{l} ({v})</SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            ) : r.editor === "date" ? (
+                              <Input type="date" value={govDraft[r.field] as string} onChange={(e) => setGov(r.field, e.target.value)} className="h-8 w-full text-sm" />
+                            ) : r.editor === "days" ? (
+                              <div className="flex items-center gap-1">
+                                <Input
+                                  inputMode="numeric"
+                                  value={govDraft[r.field] as string}
+                                  onChange={(e) => setGov(r.field, e.target.value.replace(/[^0-9]/g, ""))}
+                                  placeholder="숫자"
+                                  className="h-8 w-full text-sm"
+                                />
+                                <span className="shrink-0 text-sm">일</span>
+                              </div>
                             ) : r.editor === "bool" ? (
-                              <Select value={govDraft.hitl_required ? "yes" : "no"} onValueChange={(v) => setGov("hitl_required", v === "yes")}>
+                              <Select value={govDraft[r.field] ? "yes" : "no"} onValueChange={(v) => setGov(r.field, v === "yes")}>
                                 <SelectTrigger className="h-8 w-full text-sm"><SelectValue /></SelectTrigger>
                                 <SelectContent>
                                   <SelectItem value="yes">예</SelectItem>
@@ -1842,7 +1883,10 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                                 </SelectContent>
                               </Select>
                             ) : r.editor === "json" ? (
-                              <Textarea value={govDraft[r.field] as string} onChange={(e) => setGov(r.field, e.target.value)} placeholder='JSON 형식' className="min-h-28 w-full font-mono text-xs" />
+                              <div className="space-y-1">
+                                <CodeEditor language="json" value={govDraft[r.field] as string} invalid={!!jsonErrors[r.field]} onChange={(v) => setGov(r.field, v)} placeholder="JSON 형식" minHeight={112} />
+                                <FieldError>{jsonErrors[r.field]}</FieldError>
+                              </div>
                             ) : r.editor === "num" ? (
                               <div className="flex items-center gap-1">
                                 <Input
@@ -1852,7 +1896,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                                   placeholder="숫자"
                                   className="h-8 w-full text-sm"
                                 />
-                                <span className="shrink-0 text-sm text-muted-foreground">만원</span>
+                                <span className="shrink-0 text-sm">만원</span>
                               </div>
                             ) : (
                               <Input value={govDraft[r.field] as string} onChange={(e) => setGov(r.field, e.target.value)} className="h-8 w-full text-sm" />
@@ -1862,24 +1906,21 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                           ) : (
                             r.display
                           )}
-                        </td>
-                        <td className="border px-3 py-2 align-top text-foreground">{r.desc}</td>
-                      </tr>
+                        </MetaRow>
                     ))}
-                  </Fragment>
-                ))}
-              </tbody>
-            </table>
+                  </MetaRowsTable>
+                      </DetailSection>
+                    ))}
           </div>
         </TabsContent>
 
         {/* 관측·비용 (미터링) */}
-        <TabsContent value="observability" className="mt-4 space-y-4">
-          <p className="text-sm text-muted-foreground">
+        <TabsContent value="observability" className="mt-4 space-y-6">
+          <p className="text-sm">
             실제 호출 텔레메트리로 집계한 사용량·지연·오류율·토큰·비용 등 운영 지표입니다.
           </p>
           {!metering ? (
-            <p className="text-sm text-muted-foreground">미터링 데이터를 불러오는 중...</p>
+            <p className="text-sm text-muted-foreground">미터링 데이터를 불러오는 중…</p>
           ) : (
             <>
               <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -1897,13 +1938,14 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                   value={metering.total_input_tokens + metering.total_output_tokens}
                 />
                 <Metric label="총 비용" value={metering.total_cost} />
+                <Metric label="호출당 비용" value={agent.cost_per_call ?? "-"} />
+                <Metric
+                  label="마지막 호출"
+                  value={agent.last_invoked_at ? new Date(agent.last_invoked_at).toLocaleString("ko-KR") : "-"}
+                />
               </div>
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-sm">소비자별 호출 ({metering.by_consumer.length}) <SourceBadge source="auto" className="ml-1 align-middle" /></CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <Table>
+              <DetailSection title={<>소비자별 호출 ({metering.by_consumer.length}) <SourceBadge source="auto" className="ml-1 align-middle" /></>}>
+                  <div className="rounded-md border"><Table>
                     <TableHeader>
                       <TableRow>
                         <TableHead>소비자</TableHead>
@@ -1923,7 +1965,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                           <TableRow key={c.name}>
                             <TableCell>{c.name}</TableCell>
                             <TableCell className="text-right font-medium">{c.count.toLocaleString()}</TableCell>
-                            <TableCell className="text-right text-muted-foreground">
+                            <TableCell className="text-right">
                               {metering.total_invocations > 0
                                 ? `${((c.count / metering.total_invocations) * 100).toFixed(1)}%`
                                 : "-"}
@@ -1932,24 +1974,19 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                         ))
                       )}
                     </TableBody>
-                  </Table>
-                </CardContent>
-              </Card>
+                  </Table></div>
+                </DetailSection>
             </>
           )}
         </TabsContent>
 
         {/* 평가 */}
-        <TabsContent value="eval" className="mt-4 space-y-4">
-          <p className="text-sm text-muted-foreground">
+        <TabsContent value="eval" className="mt-4 space-y-6">
+          <p className="text-sm">
             에이전트 품질을 검증하는 평가(Eval) 실행 결과와 점수입니다.
           </p>
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-sm">평가 결과 ({evals.length}) <SourceBadge source="input" className="ml-1 align-middle" /></CardTitle>
-            </CardHeader>
-            <CardContent>
-              <Table>
+          <DetailSection title={<>평가 결과 ({evals.length}) <SourceBadge source="input" className="ml-1 align-middle" /></>}>
+              <div className="rounded-md border"><Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>유형</TableHead>
@@ -1977,14 +2014,14 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                         <TableCell>
                           {e.passed == null ? "-" : e.passed ? "✅" : "❌"}
                         </TableCell>
-                        <TableCell className="text-xs text-muted-foreground">
+                        <TableCell className="text-xs">
                           {new Date(e.evaluated_at).toLocaleString()}
                         </TableCell>
                       </TableRow>
                     ))
                   )}
                 </TableBody>
-              </Table>
+              </Table></div>
               {canEdit && (
               <AddEvalForm
                 agentName={agent.name}
@@ -1994,21 +2031,17 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                 }}
               />
               )}
-            </CardContent>
-          </Card>
+            </DetailSection>
         </TabsContent>
 
         {/* 리니지 (관리 가능) */}
-        <TabsContent value="lineage" className="mt-4">
-          <p className="mb-4 text-sm text-muted-foreground">
-            에이전트가 의존하거나 생성하는 데이터·모델·에이전트 간 연결 관계(리니지)입니다.
+        <TabsContent value="lineage" className="mt-4 space-y-6">
+          <p className="text-sm">
+            에이전트가 접근하는 데이터와, 의존하거나 생성하는 데이터·모델·에이전트 간 연결 관계(리니지)입니다.
           </p>
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-sm">의존 관계 ({agent.lineage.length}) <SourceBadge source="input" className="ml-1 align-middle" /></CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              <Table>
+          <AgentDataAccessCard agent={agent} canEdit={canEdit} onChanged={reloadDetail} />
+          <DetailSection title={<>의존 관계 ({agent.lineage.length}) <SourceBadge source="input" className="ml-1 align-middle" /></>}>
+              <div className="rounded-md border"><Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>관계</TableHead>
@@ -2028,15 +2061,30 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                     agent.lineage.map((l) => (
                       <TableRow key={l.id}>
                         <TableCell>
-                          <Badge variant="outline">{l.relation}</Badge>
+                          <Badge variant="outline">{AGENT_LINK_RELATION_LABEL[l.relation] ?? l.relation}</Badge>
                         </TableCell>
                         <TableCell>
-                          <Badge variant="secondary">{l.target_type}</Badge>
+                          <Badge variant="outline">{AGENT_LINK_TARGET_LABEL[l.target_type] ?? l.target_type}</Badge>
                         </TableCell>
-                        <TableCell className="font-mono text-xs break-all">{l.target_ref}</TableCell>
+                        <TableCell className="font-mono text-xs break-all">
+                          {l.target_id == null ? (
+                            <span title="카탈로그에서 찾지 못한 대상(외부 대상이거나 이름이 다름)">{l.target_ref}</span>
+                          ) : (
+                            <a
+                              href={
+                                l.target_type === "dataset" ? datasetHref(l.target_id)
+                                  : l.target_type === "model" ? modelHref(l.target_ref)
+                                    : agentHref(l.target_ref)
+                              }
+                              className="text-primary hover:underline"
+                            >
+                              {l.target_ref}
+                            </a>
+                          )}
+                        </TableCell>
                         <TableCell>
                           {canEdit && (
-                          <Button
+                          <Tip label="계보 삭제"><Button aria-label="계보 삭제"
                             variant="ghost"
                             size="icon"
                             className="h-7 w-7"
@@ -2046,30 +2094,25 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                             }}
                           >
                             <Trash2 className="h-4 w-4" />
-                          </Button>
+                          </Button></Tip>
                           )}
                         </TableCell>
                       </TableRow>
                     ))
                   )}
                 </TableBody>
-              </Table>
+              </Table></div>
               {canEdit && <AddLineageForm agentName={agent.name} onAdded={reloadDetail} />}
-            </CardContent>
-          </Card>
+            </DetailSection>
         </TabsContent>
 
         {/* 버전 (관리 가능) */}
-        <TabsContent value="versions" className="mt-4">
-          <p className="mb-4 text-sm text-muted-foreground">
+        <TabsContent value="versions" className="mt-4 space-y-6">
+          <p className="text-sm">
             에이전트의 버전 이력과 각 버전의 변경 내용입니다.
           </p>
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-sm">버전 이력 ({agent.versions.length}) <SourceBadge source="input" className="ml-1 align-middle" /></CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              <Table>
+          <DetailSection title={<>버전 이력 ({agent.versions.length}) <SourceBadge source="input" className="ml-1 align-middle" /></>}>
+              <div className="rounded-md border"><Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-28">버전</TableHead>
@@ -2091,23 +2134,18 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                           <Badge variant="outline">{v.version}</Badge>
                         </TableCell>
                         <TableCell className="whitespace-pre-wrap">{v.changelog || "-"}</TableCell>
-                        <TableCell className="text-xs text-muted-foreground">
+                        <TableCell className="text-xs">
                           {new Date(v.created_at).toLocaleString()}
                         </TableCell>
                       </TableRow>
                     ))
                   )}
                 </TableBody>
-              </Table>
+              </Table></div>
               {canEdit && <AddVersionForm agentName={agent.name} onAdded={reloadDetail} />}
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-sm">상태 변경 이력 ({statusHistory.length}) <SourceBadge source="auto" className="ml-1 align-middle" /></CardTitle>
-            </CardHeader>
-            <CardContent>
-              <Table>
+            </DetailSection>
+          <DetailSection title={<>상태 변경 이력 ({statusHistory.length}) <SourceBadge source="auto" className="ml-1 align-middle" /></>}>
+              <div className="rounded-md border"><Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>변경</TableHead>
@@ -2130,36 +2168,36 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                         <TableCell>
                           <span className="inline-flex items-center gap-1.5">
                             {h.from_status ? (
-                              <Badge variant="outline" className="text-xs">{STATUS_LABEL[h.from_status] ?? h.from_status}</Badge>
+                              <StatusBadge {...lifecycle(h.from_status)} />
                             ) : (
                               <span className="text-muted-foreground">—</span>
                             )}
-                            <span className="text-muted-foreground">→</span>
-                            <Badge variant="secondary" className="text-xs">{STATUS_LABEL[h.to_status] ?? h.to_status}</Badge>
+                            <span >→</span>
+                            <StatusBadge {...lifecycle(h.to_status)} />
                           </span>
                         </TableCell>
-                        <TableCell className="text-xs text-muted-foreground">
+                        <TableCell className="text-xs">
                           {new Date(h.changed_at).toLocaleString()}
                         </TableCell>
-                        <TableCell className="text-xs text-muted-foreground">{h.changed_by || "-"}</TableCell>
-                        <TableCell className="text-xs text-muted-foreground">{h.note || "-"}</TableCell>
+                        <TableCell className="text-xs">{h.changed_by || "-"}</TableCell>
+                        <TableCell className="text-xs">{h.note || "-"}</TableCell>
                       </TableRow>
                     ))
                   )}
                 </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
+              </Table></div>
+            </DetailSection>
         </TabsContent>
 
         {/* 카드 (A2A) */}
-        <TabsContent value="card" className="mt-4">
-          <div className="mb-4 flex items-start justify-between gap-2">
-            <p className="text-sm text-muted-foreground">
+        <TabsContent value="card" className="mt-4 space-y-6">
+          <div className="flex items-start justify-between gap-2">
+            <p className="text-sm">
               에이전트 카드(Agent Card)는 A2A(Agent-to-Agent) 프로토콜에서 에이전트가 자신을 다른
               에이전트·시스템에 소개하기 위해 게시하는 표준 메타데이터입니다. 사람의 명함처럼 이름·버전·
-              접근 URL·프로토콜·인증·제공자·노출 스킬을 담아, 다른 에이전트가 이를 읽고 자동으로 발견·연동할 수 있게 합니다.
-              아래 값은 개요·도구 탭의 정보를 그대로 가져와 자동 구성한 읽기 전용 미리보기입니다.
+              호출 주소·입출력 형식·제공 기능(스킬)을 담아, 다른 에이전트가 이를 읽고 자동으로 발견·연동할 수 있게 합니다.
+              A2A 1.0 형식이며, 소유자·부서·인증 방식 등 카탈로그 정보는 카탈로그 확장에 함께 싣습니다.
+              아래 값은 개요·기능 탭의 정보로 자동 구성한 읽기 전용 미리보기입니다.
             </p>
             {canEdit && (
             <Button size="sm" variant="outline" className="shrink-0" onClick={() => setActiveTab("overview")}>
@@ -2168,7 +2206,7 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
             )}
           </div>
           {!card ? (
-            <p className="text-sm text-muted-foreground">에이전트 카드를 불러오는 중...</p>
+            <p className="text-sm text-muted-foreground">에이전트 카드를 불러오는 중…</p>
           ) : (
             <MetaTable
               groups={[
@@ -2177,12 +2215,14 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                       rows: [
                         ["이름", card.name, "에이전트 식별 이름(식별자)", "input"],
                         ["버전", card.version, "에이전트 버전 — 개요에서 편집", "input"],
-                        ["URL", card.url, "에이전트 접근 URL — 개요 > 엔드포인트", "input"],
-                        ["프로토콜", card.protocol, "통신 프로토콜 — 개요에서 편집", "input"],
-                        ["인증", card.auth_method, "호출 인증 방식 — 개요에서 편집", "input"],
+                        ["호출 주소", card.supportedInterfaces[0]?.url ?? null, "에이전트 접근 URL — 개요 > 엔드포인트", "input"],
+                        ["프로토콜 바인딩", card.supportedInterfaces[0] ? `${card.supportedInterfaces[0].protocolBinding} (A2A ${card.supportedInterfaces[0].protocolVersion})` : null, "개요의 프로토콜에서 정해짐 — A2A: JSONRPC, REST: HTTP+JSON", "auto"],
+                        ["인증", agent.auth_method, "호출 인증 방식 — 개요에서 편집(카탈로그 확장에 실림)", "input"],
                         ["제공자", `${ownerUser?.organization || "-"} / ${agent.department || "-"} / ${ownerUser ? `${userDisplayName(ownerUser)} (${ownerUser.username})` : (agent.owner_email || "-")}`, "소속 / 부서 / 소유자 — 개요에서 편집", "input"],
-                        ["스트리밍", card.streaming ? "예" : "아니오", "스트리밍 응답 지원 여부 — 개요 > 인터페이스", "input"],
-                        ["스킬", <StringList key="skills" items={card.skills.map((sk) => sk.name)} />, "외부에 노출하는 스킬 — 도구·통합 탭의 도구(tools)에서 구성됨", "input"],
+                        ["스트리밍", card.capabilities.streaming ? "예" : "아니오", "스트리밍 응답 지원 여부 — 개요 > 인터페이스", "input"],
+                        ["입출력 형식", `${card.defaultInputModes.join(", ")} → ${card.defaultOutputModes.join(", ")}`, "기능·I/O 탭의 기본 입출력 형식. 비우면 텍스트가 기본이고 입출력 스키마가 있으면 application/json 추가", "auto"],
+                        ["스킬", <StringList key="skills" items={card.skills.map((sk) => sk.name)} />, agent.skills.length > 0 ? "외부에 제공하는 기능 — 기능·I/O 탭의 스킬. 호출하는 도구는 싣지 않음" : "외부에 제공하는 기능 — 등록된 스킬이 없어 기능·I/O 탭의 수행 기능 목록에서 만듦. 호출하는 도구는 싣지 않음", "input"],
+                        ["위험 등급", card.capabilities.extensions[0]?.params?.riskTier ? RISK_TIER_LABEL[String(card.capabilities.extensions[0].params.riskTier)] ?? String(card.capabilities.extensions[0].params.riskTier) : null, "거버넌스 탭의 위험 등급(카탈로그 확장에 실림)", "input"],
                       ],
                     },
                     {
@@ -2197,8 +2237,8 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
         </TabsContent>
 
         {/* 집행(연동) — 외부 Execution Plane 연동 인터페이스 (읽기 전용) */}
-        <TabsContent value="enforcement" className="mt-4 space-y-4">
-          <p className="text-sm text-muted-foreground">
+        <TabsContent value="enforcement" className="mt-4 space-y-6">
+          <p className="text-sm">
             외부 실행 런타임(Execution Plane)이 연동하는 계약입니다. 카탈로그는 정책을 내려주고
             (pull) 집행 결과를 수신(push)만 하며, 실제 격리 실행·인라인 훅·egress 강제는 외부
             런타임이 수행합니다.
@@ -2214,14 +2254,8 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                   },
                 ]}
           />
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-sm">
-                집행 훅 이벤트 (런타임이 push) — POST /hook-events ({hookEvents.length}) <SourceBadge source="auto" className="ml-1 align-middle" />
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <Table>
+          <DetailSection title={<>집행 훅 이벤트 (런타임이 push) — POST /hook-events ({hookEvents.length}) <SourceBadge source="auto" className="ml-1 align-middle" /></>}>
+              <div className="rounded-md border"><Table>
                   <TableHeader>
                     <TableRow>
                       <TableHead>단계</TableHead>
@@ -2242,25 +2276,24 @@ export function AIAgentsDetail({ agentName }: { agentName: string }) {
                       hookEvents.map((h) => (
                         <TableRow key={h.id}>
                           <TableCell>
-                            <Badge variant="secondary">{h.stage}</Badge>
+                            <Badge variant="outline">{HOOK_STAGE_LABEL[h.stage] ?? h.stage}</Badge>
                           </TableCell>
                           <TableCell>
-                            <Badge variant="outline">{h.decision}</Badge>
+                            <StatusBadge {...statusMeta(HOOK_DECISION, h.decision)} />
                           </TableCell>
                           <TableCell className="font-mono text-xs">{h.policy_ref || "-"}</TableCell>
-                          <TableCell className="font-mono text-xs text-muted-foreground">
+                          <TableCell className="font-mono text-xs">
                             {h.target || "-"}
                           </TableCell>
-                          <TableCell className="text-xs text-muted-foreground">
+                          <TableCell className="text-xs">
                             {h.reason || "-"}
                           </TableCell>
                         </TableRow>
                       ))
                     )}
                   </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
+                </Table></div>
+              </DetailSection>
         </TabsContent>
       </Tabs>
     </div>
@@ -2350,7 +2383,7 @@ function AddToolDialog({ agentName, onAdded }: { agentName: string; onAdded: () 
                 <SelectContent>
                   <SelectItem value={COMBO_UNSET} className="text-muted-foreground">미지정</SelectItem>
                   {RISK_OPTIONS.map((r) => (
-                    <SelectItem key={r} value={r}>{RISK_META[r]?.label ?? r} ({r})</SelectItem>
+                    <SelectItem key={r} value={r}>{RISK_LABEL[r] ?? r} ({r})</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -2361,12 +2394,14 @@ function AddToolDialog({ agentName, onAdded }: { agentName: string; onAdded: () 
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label>파라미터 스키마 (JSON, 선택)</Label>
-            <Textarea
+            <Label htmlFor="tool-schema">파라미터 스키마 (JSON, 선택)</Label>
+            <CodeEditor
+              id="tool-schema"
+              language="json"
               placeholder='{"type":"object","properties":{"q":{"type":"string"}}}'
               value={schemaText}
-              onChange={(e) => setSchemaText(e.target.value)}
-              className="min-h-28 font-mono text-xs"
+              onChange={setSchemaText}
+              minHeight={112}
             />
           </div>
           {err && <p className="text-sm text-destructive">{err}</p>}
@@ -2374,7 +2409,7 @@ function AddToolDialog({ agentName, onAdded }: { agentName: string; onAdded: () 
         <DialogFooter>
           <Button variant="outline" onClick={() => setOpen(false)} disabled={busy}>취소</Button>
           <Button onClick={submit} disabled={busy || !name.trim()}>
-            {busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Plus className="mr-1 h-4 w-4" />}
+            {busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : null}
             추가
           </Button>
         </DialogFooter>
@@ -2422,7 +2457,7 @@ function AddLineageForm({
         onChange={(e) => setTargetRef(e.target.value)}
         className="h-8"
       />
-      <Button
+      <Tip label="리니지 추가"><Button aria-label="리니지 추가"
         size="sm"
         disabled={busy || !targetRef.trim()}
         onClick={async () => {
@@ -2443,7 +2478,7 @@ function AddLineageForm({
         }}
       >
         <Plus className="h-4 w-4" />
-      </Button>
+      </Button></Tip>
     </div>
   )
 }
@@ -2474,7 +2509,7 @@ function AddVersionForm({
           onChange={(e) => setChangelog(e.target.value)}
           className="h-8"
         />
-        <Button
+        <Tip label="버전 추가"><Button aria-label="버전 추가"
           size="sm"
           disabled={busy || !version.trim()}
           onClick={async () => {
@@ -2497,7 +2532,7 @@ function AddVersionForm({
           }}
         >
           <Plus className="h-4 w-4" />
-        </Button>
+        </Button></Tip>
       </div>
       {err && <p className="text-xs text-destructive">{err}</p>}
     </div>

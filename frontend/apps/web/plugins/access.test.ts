@@ -10,13 +10,17 @@ const menus: MenuGroup[] = [
     items: [
       { id: "acme-billing", title: "정산", url: "/dashboard/x/acme/billing", icon: "Receipt" },
       { id: "acme-audit", title: "감사", url: "/dashboard/x/acme/audit", icon: "Shield", adminOnly: true },
+      { id: "acme-ops", title: "운영", url: "/dashboard/x/acme/ops", icon: "Shield", adminOnly: true, grantedBy: ["acme.ops"] },
     ],
   },
 ]
 
-vi.mock("@/plugins/registry", () => ({ pluginMenus: menus, pluginScreens: {}, pluginIcons: {} }))
+vi.mock("@/plugins/registry", () => ({
+  pluginMenus: menus, pluginScreens: {}, pluginIcons: {},
+  pluginFeatures: [{ key: "acme.ops", label: "ACME 운영", menuKey: "plugin.acme-ops", description: "운영 화면", defaultDeny: true }],
+}))
 
-const { MENU_GROUP_ORDER, MENU_REGISTRY, urlToMenuKey } = await import("@/lib/permission-registry")
+const { FEATURE_REGISTRY, MENU_GROUP_ORDER, MENU_REGISTRY, urlToMenuKey } = await import("@/lib/permission-registry")
 const { canAccessPluginScreen, pluginScreenUrl } = await import("./access")
 
 const allowAll = () => true
@@ -26,7 +30,9 @@ describe("권한 레지스트리 — 플러그인 메뉴", () => {
   it("플러그인 메뉴 아이템마다 plugin.<id> 행을 추가한다", () => {
     expect(MENU_REGISTRY.filter((m) => m.key.startsWith("plugin."))).toEqual([
       { key: "plugin.acme-billing", label: "정산", group: "ACME", url: "/dashboard/x/acme/billing" },
-      { key: "plugin.acme-audit", label: "감사", group: "ACME", url: "/dashboard/x/acme/audit" },
+      // 관리자 전용 메뉴는 권한 표에서도 관리자 전용(고정) — 백엔드 플러그인 menus 의 admin_only 와 맞춘다(TODO-123)
+      { key: "plugin.acme-audit", label: "감사", group: "ACME", url: "/dashboard/x/acme/audit", adminOnly: true },
+      { key: "plugin.acme-ops", label: "운영", group: "ACME", url: "/dashboard/x/acme/ops", adminOnly: true, grantedBy: ["acme.ops"] },
     ])
   })
 
@@ -67,6 +73,16 @@ describe("canAccessPluginScreen", () => {
   it("adminOnly 메뉴는 관리자만 접근할 수 있다", () => {
     expect(canAccessPluginScreen(audit, menus, false, allowAll)).toBe(false)
     expect(canAccessPluginScreen(audit, menus, true, allowAll)).toBe(true)
+  })
+
+  it("관리자 전용 플러그인 메뉴는 grantedBy 기능을 받은 사람에게도 열린다(TODO-123)", () => {
+    const ops = pluginScreenUrl("acme/ops")
+    expect(canAccessPluginScreen(ops, menus, false, allowAll)).toBe(false)
+    expect(canAccessPluginScreen(ops, menus, false, allowAll, (k) => k === "acme.ops")).toBe(true)
+    expect(canAccessPluginScreen(audit, menus, false, allowAll, () => true)).toBe(false)
+    const row = MENU_REGISTRY.find((m) => m.key === "plugin.acme-ops")
+    expect(row).toMatchObject({ adminOnly: true, grantedBy: ["acme.ops"] })
+    expect(FEATURE_REGISTRY.some((f) => f.key === "acme.ops" && f.defaultDeny)).toBe(true)
   })
 
   it("메뉴 아이템이 없는 화면은 dashboard 메뉴 권한을 따른다", () => {

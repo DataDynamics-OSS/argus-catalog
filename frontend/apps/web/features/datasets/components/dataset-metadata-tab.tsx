@@ -1,11 +1,11 @@
 "use client"
 
-import { useState } from "react"
-import { Loader2, Save, X } from "lucide-react"
+import { useEffect, useState } from "react"
+import { Loader2, Save, Wand2 } from "lucide-react"
 import { notifyError, toast } from "@/lib/notify"
 
-import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
+import { Checkbox } from "@workspace/ui/components/checkbox"
 import { Input } from "@workspace/ui/components/input"
 import {
   Select,
@@ -17,8 +17,11 @@ import {
 import { Switch } from "@workspace/ui/components/switch"
 import { Textarea } from "@workspace/ui/components/textarea"
 
-import { updateDataset } from "../api"
+import { fetchAiReadyDefaults, fetchAiReadySuggestions, updateDataset, type AiReadyDefaults } from "../api"
+import { DatasetVersionHistoryButton } from "./dataset-version-history"
 import { type DatasetDetail } from "../data/schema"
+import { TagInput } from "@/components/tag-input"
+import { joinCsv, splitCsv } from "@/lib/text-list"
 
 const NONE = "__none__" // Select 에서 "미지정" 표현 (빈 문자열 SelectItem 불가)
 
@@ -68,6 +71,17 @@ const SENSITIVITY = ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"]
 const TIER = ["GOLD", "SILVER", "BRONZE"]
 const CERTIFICATION = ["CERTIFIED", "IN_REVIEW", "DEPRECATED", "NONE"]
 const QUALITY = ["GOOD", "WARN", "BAD", "UNKNOWN"]
+// 포함 여부(미지정 / 포함 / 없음) — null 은 "확인하지 않음"이라 Switch 대신 선택으로 받는다.
+const PRESENCE: Opt[] = [
+  { value: "true", label: "포함" },
+  { value: "false", label: "없음" },
+]
+// 서버 응답이 오기 전·실패 시 쓰는 선택지 (GET /catalog/ai-ready/defaults 와 같은 값)
+const FALLBACK_LICENSES = ["KOGL-1", "KOGL-2", "KOGL-3", "KOGL-4", "CC-BY-4.0", "CC0-1.0", "CUSTOM"].map((c) => ({ code: c, label: c }))
+const FALLBACK_USES = [
+  { code: "VIEW", label: "열람" }, { code: "ANALYSIS", label: "분석" },
+  { code: "COMBINE", label: "결합" }, { code: "AI_TRAINING", label: "AI 학습" },
+]
 
 // 바이트 크기 단위 (저장은 항상 bytes). 사용자 요청 단위 목록.
 const BYTE_UNITS: { value: string; label: string; factor: number }[] = [
@@ -109,13 +123,38 @@ type FormState = {
   file_count: string
   sensitivity: string
   contains_pii: boolean
-  pii_fields: string
-  compliance_tags: string
+  pii_fields: string[]
+  compliance_tags: string[]
   tier: string
   certification: string
   quality_status: string
   note: string
+  // AI-Ready
+  legal_basis: string
+  publisher: string
+  landing_page: string
+  contact_email: string
+  data_language: string
+  persistent_id: string
+  temporal_start: string
+  temporal_end: string
+  spatial_coverage: string
+  data_version: string
+  version_notes: string
+  license: string
+  license_url: string
+  rights: string
+  allowed_uses: string[] | null // null = 정하지 않음
+  contains_synthetic: string // "" | "true" | "false"
+  contains_machine_annotation: string
+  data_biases: string
+  known_limitations: string
+  missing_data_info: string
+  missing_value_notation: string
+  privacy_measures: string
 }
+
+const presence = (v: boolean | null | undefined) => (v == null ? "" : v ? "true" : "false")
 
 function initForm(d: DatasetDetail): FormState {
   const s = (v: string | null | undefined) => v ?? ""
@@ -141,70 +180,38 @@ function initForm(d: DatasetDetail): FormState {
     file_count: n(d.file_count),
     sensitivity: d.sensitivity || "INTERNAL",
     contains_pii: d.contains_pii === true,
-    pii_fields: s(d.pii_fields),
-    compliance_tags: s(d.compliance_tags),
+    pii_fields: d.pii_fields ?? [],
+    compliance_tags: d.compliance_tags ?? [],
     tier: d.tier || "BRONZE",
     certification: d.certification || "NONE",
     quality_status: d.quality_status || "UNKNOWN",
     note: s(d.note),
+    legal_basis: s(d.legal_basis),
+    publisher: s(d.publisher),
+    landing_page: s(d.landing_page),
+    contact_email: s(d.contact_email),
+    data_language: s(d.data_language),
+    persistent_id: s(d.persistent_id),
+    temporal_start: s(d.temporal_start),
+    temporal_end: s(d.temporal_end),
+    spatial_coverage: s(d.spatial_coverage),
+    data_version: s(d.data_version),
+    version_notes: s(d.version_notes),
+    license: s(d.license),
+    license_url: s(d.license_url),
+    rights: s(d.rights),
+    allowed_uses: d.allowed_uses ?? null,
+    contains_synthetic: presence(d.contains_synthetic),
+    contains_machine_annotation: presence(d.contains_machine_annotation),
+    data_biases: s(d.data_biases),
+    known_limitations: s(d.known_limitations),
+    missing_data_info: s(d.missing_data_info),
+    missing_value_notation: s(d.missing_value_notation),
+    privacy_measures: s(d.privacy_measures),
   }
 }
 
-type MetaGroup = { name: string; rows: { label: string; control: React.ReactNode; desc: string }[] }
-
-// 콤마 구분 문자열을 배지로 편집하는 입력. 입력 후 Enter → 배지 추가, X → 삭제.
-// 저장 포맷은 기존과 동일한 콤마 구분 문자열을 유지한다.
-function TagsInput({
-  value,
-  onChange,
-  placeholder,
-}: {
-  value: string
-  onChange: (next: string) => void
-  placeholder?: string
-}) {
-  const [text, setText] = useState("")
-  const tags = value.split(",").map((t) => t.trim()).filter(Boolean)
-
-  // 콤마/Enter 로 한 번에 여러 개 입력 허용. 중복은 무시.
-  const commit = (raw: string) => {
-    const incoming = raw.split(",").map((t) => t.trim()).filter(Boolean)
-    if (incoming.length === 0) return
-    const next = [...tags]
-    for (const t of incoming) if (!next.includes(t)) next.push(t)
-    onChange(next.join(", "))
-    setText("")
-  }
-  const remove = (t: string) => onChange(tags.filter((x) => x !== t).join(", "))
-
-  return (
-    <div className="flex w-full flex-wrap items-center gap-1">
-      {tags.map((t) => (
-        <Badge key={t} variant="secondary" className="gap-1 text-xs">
-          {t}
-          <button type="button" className="hover:opacity-70" onClick={() => remove(t)} aria-label={`${t} 제거`}>
-            <X className="h-3 w-3" />
-          </button>
-        </Badge>
-      ))}
-      <Input
-        className="h-9 min-w-[120px] flex-1 text-sm"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault()
-            commit(text)
-          } else if (e.key === "Backspace" && text === "" && tags.length > 0) {
-            remove(tags[tags.length - 1]!)
-          }
-        }}
-        onBlur={() => { if (text.trim()) commit(text) }}
-        placeholder={placeholder}
-      />
-    </div>
-  )
-}
+type MetaGroup = { name: string; rows: { label: string; control: React.ReactNode; desc: React.ReactNode }[] }
 
 export function DatasetMetadataTab({
   dataset,
@@ -214,13 +221,22 @@ export function DatasetMetadataTab({
 }: {
   dataset: DatasetDetail
   onSaved: (updated: DatasetDetail) => void
-  /** 표 맨 앞에 추가로 렌더할 그룹(예: 분류·소유 — 태그/소유자/용어집 인라인 편집). */
+  /** 표 맨 앞에 추가로 렌더할 그룹(예: 분류·소유 — 태그/소유자/용어집 인라인 편집). 각 칸이 자기 권한을 따르며 canEdit 로 비활성화하지 않는다. */
   extraGroup?: MetaGroup
   /** 편집 가능 여부 — 데이터셋 소유자 또는 관리자(서버 PUT 과 같은 기준). false 면 읽기 전용(입력 비활성, 저장 버튼 없음). */
   canEdit?: boolean
 }) {
   const [form, setForm] = useState<FormState>(() => initForm(dataset))
   const [saving, setSaving] = useState(false)
+  const [aiDefaults, setAiDefaults] = useState<AiReadyDefaults | null>(null)
+  const [suggesting, setSuggesting] = useState(false)
+
+  // 기관 기본값·선택지 — 실패해도 입력은 가능(기본값 안내와 서버 라벨만 빠진다)
+  useEffect(() => {
+    let alive = true
+    fetchAiReadyDefaults().then((d) => { if (alive) setAiDefaults(d) }).catch(() => {})
+    return () => { alive = false }
+  }, [])
 
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((f) => ({ ...f, [key]: value }))
@@ -256,13 +272,37 @@ export function DatasetMetadataTab({
         file_count: numOrNull(form.file_count),
         sensitivity: strOrNull(form.sensitivity),
         contains_pii: form.contains_pii,
-        pii_fields: strOrNull(form.pii_fields),
-        compliance_tags: strOrNull(form.compliance_tags),
+        pii_fields: form.pii_fields.length ? form.pii_fields : null,
+        compliance_tags: form.compliance_tags.length ? form.compliance_tags : null,
         tier: strOrNull(form.tier),
         certification: strOrNull(form.certification),
         quality_status: strOrNull(form.quality_status),
         note: form.note.trim() === "" ? null : form.note,
+        // AI-Ready — 빈 값은 null(지움). 기관 기본값은 데이터셋에 써 넣지 않는다.
+        legal_basis: strOrNull(form.legal_basis),
+        publisher: strOrNull(form.publisher),
+        landing_page: strOrNull(form.landing_page),
+        contact_email: strOrNull(form.contact_email),
+        data_language: strOrNull(form.data_language),
+        persistent_id: strOrNull(form.persistent_id),
+        temporal_start: strOrNull(form.temporal_start),
+        temporal_end: strOrNull(form.temporal_end),
+        spatial_coverage: strOrNull(form.spatial_coverage),
+        data_version: strOrNull(form.data_version),
+        version_notes: strOrNull(form.version_notes),
+        license: strOrNull(form.license),
+        license_url: strOrNull(form.license_url),
+        rights: strOrNull(form.rights),
+        allowed_uses: form.allowed_uses,
+        contains_synthetic: form.contains_synthetic === "" ? null : form.contains_synthetic === "true",
+        contains_machine_annotation: form.contains_machine_annotation === "" ? null : form.contains_machine_annotation === "true",
+        data_biases: strOrNull(form.data_biases),
+        known_limitations: strOrNull(form.known_limitations),
+        missing_data_info: strOrNull(form.missing_data_info),
+        missing_value_notation: strOrNull(form.missing_value_notation),
+        privacy_measures: strOrNull(form.privacy_measures),
       })
+      setForm(initForm(updated)) // 서버가 다듬은 값(언어 소문자·이용 유형 순서 등)으로 맞춘다
       onSaved(updated)
       toast.success("메타데이터를 저장했습니다.")
     } catch (e) {
@@ -368,7 +408,7 @@ export function DatasetMetadataTab({
         <div className="flex items-center gap-1.5">
           <Input inputMode="numeric" className="h-9 w-20 text-sm" placeholder="분(0~59)"
             value={form.ingestion_time} onChange={(e) => set("ingestion_time", e.target.value.replace(/[^0-9]/g, ""))} />
-          <span className="text-xs text-muted-foreground">분</span>
+          <span className="text-xs">분</span>
         </div>
       )}
       {/* 고급: cron 표현식 (선택). 입력 시 표시에 함께 노출. */}
@@ -378,6 +418,109 @@ export function DatasetMetadataTab({
         onChange={(e) => set("ingestion_cron", e.target.value)}
         placeholder="cron (고급, 선택) 예: 0 6 * * *"
       />
+    </div>
+  )
+
+  // --- AI-Ready 컨트롤 ---
+  const def = aiDefaults?.defaults
+  const licenses = aiDefaults?.licenses ?? FALLBACK_LICENSES
+  const useOptions = aiDefaults?.allowed_uses ?? FALLBACK_USES
+  const licenseLabel = (code?: string | null) => licenses.find((l) => l.code === code)?.label ?? code ?? ""
+  const defaultHint = (v?: string | null) => (v ? `비우면 기본값: ${v}` : "")
+  const areaInput = (key: keyof FormState, placeholder = "") => (
+    <Textarea className="min-h-[60px] w-full text-sm" rows={2} value={form[key] as string}
+      onChange={(e) => set(key, e.target.value as never)} placeholder={placeholder} />
+  )
+  // 최신 프로파일에서 시간범위·결측 정보를 채운다(저장은 사용자가 '저장'을 눌러야)
+  const fillFromProfile = async (what: "temporal" | "missing") => {
+    setSuggesting(true)
+    try {
+      const sug = await fetchAiReadySuggestions(dataset.id)
+      if (!sug.profile) {
+        toast.info("프로파일이 없습니다. 품질 탭에서 프로파일을 먼저 수집하세요.")
+      } else if (what === "temporal") {
+        if (!sug.temporal) toast.info("프로파일에 날짜·시각 컬럼의 최소·최대값이 없습니다.")
+        else {
+          setForm((f) => ({ ...f, temporal_start: sug.temporal!.temporal_start, temporal_end: sug.temporal!.temporal_end }))
+          toast.success(`'${sug.temporal.column}' 컬럼의 최소~최대값으로 채웠습니다. 확인 후 저장하세요.`)
+        }
+      } else if (sug.missing) {
+        set("missing_data_info", sug.missing.missing_data_info)
+        toast.success("프로파일의 결측률로 채웠습니다. 결측 사유·처리 방식을 덧붙여 저장하세요.")
+      }
+    } catch (e) {
+      notifyError(e, "프로파일에서 제안을 만들지 못했습니다.")
+    } finally {
+      setSuggesting(false)
+    }
+  }
+  const profileButton = (what: "temporal" | "missing") =>
+    canEdit ? (
+      <Button type="button" variant="outline" size="sm" className="h-7 w-fit text-xs" disabled={suggesting}
+        onClick={() => fillFromProfile(what)}>
+        {suggesting ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Wand2 className="mr-1 h-3 w-3" />}
+        프로파일에서 채우기
+      </Button>
+    ) : null
+  const temporalControl = (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-1">
+        <Input type="date" className="h-9 min-w-0 flex-1 text-sm" value={form.temporal_start}
+          onChange={(e) => set("temporal_start", e.target.value)} aria-label="시간범위 시작" />
+        <span className="text-sm">~</span>
+        <Input type="date" className="h-9 min-w-0 flex-1 text-sm" value={form.temporal_end}
+          onChange={(e) => set("temporal_end", e.target.value)} aria-label="시간범위 끝" />
+      </div>
+      {profileButton("temporal")}
+    </div>
+  )
+  const licenseControl = (
+    <div className="flex flex-col gap-1.5">
+      <Select value={form.license || NONE} onValueChange={(v) => set("license", v === NONE ? "" : v)}>
+        <SelectTrigger className="h-9 w-full text-sm">
+          <SelectValue placeholder="미지정" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={NONE} className="text-sm text-muted-foreground">
+            {def?.license ? `기본값 사용 (${licenseLabel(def.license)})` : "미지정"}
+          </SelectItem>
+          {licenses.map((l) => <SelectItem key={l.code} value={l.code} className="text-sm">{l.label}</SelectItem>)}
+        </SelectContent>
+      </Select>
+      <Input className="h-9 w-full text-sm" value={form.license_url} onChange={(e) => set("license_url", e.target.value)}
+        placeholder={defaultHint(def?.license_url) || "라이선스·이용약관 URL (https://…)"} />
+    </div>
+  )
+  const usesControl = (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex flex-wrap gap-x-3 gap-y-1">
+        {useOptions.map((u) => {
+          const checked = form.allowed_uses?.includes(u.code) ?? false
+          return (
+            <label key={u.code} className="flex items-center gap-1.5 text-sm">
+              <Checkbox checked={checked} onCheckedChange={(v) => {
+                const cur = form.allowed_uses ?? []
+                set("allowed_uses", v === true ? [...cur, u.code] : cur.filter((x) => x !== u.code))
+              }} />
+              {u.label}
+            </label>
+          )
+        })}
+      </div>
+      {form.allowed_uses === null ? (
+        <span className="text-xs">정하지 않음</span>
+      ) : (
+        <button type="button" className="w-fit text-xs text-muted-foreground underline-offset-2 hover:underline"
+          onClick={() => set("allowed_uses", null)}>
+          {form.allowed_uses.length === 0 ? "모두 허용하지 않음 · " : ""}정하지 않음으로 되돌리기
+        </button>
+      )}
+    </div>
+  )
+  const missingControl = (
+    <div className="flex flex-col gap-1.5">
+      {areaInput("missing_data_info", "예: 센서 점검(2.1%), 통신 오류(1.1%) — 결측 행은 제외하지 않음")}
+      {profileButton("missing")}
     </div>
   )
 
@@ -411,8 +554,8 @@ export function DatasetMetadataTab({
       rows: [
         { label: "민감도 등급", control: sel("sensitivity", SENSITIVITY), desc: "공개(PUBLIC): 외부 공개 가능, 제약 없음 · 대내한정(INTERNAL): 사내 구성원만 열람 · 대외비(CONFIDENTIAL): 인가된 일부만 열람, 외부 유출 금지 · 기밀(RESTRICTED): 최고 민감도, 통제된 소수만 접근" },
         { label: "개인정보(PII) 포함", control: <Switch checked={form.contains_pii} onCheckedChange={(v) => set("contains_pii", v)} />, desc: "개인정보 포함 여부" },
-        { label: "개인정보 항목", control: <TagsInput value={form.pii_fields} onChange={(v) => set("pii_fields", v as never)} placeholder="입력 후 Enter (예: 이름)" />, desc: "포함된 개인정보 항목. 입력 후 Enter 로 추가" },
-        { label: "규제 태그", control: <TagsInput value={form.compliance_tags} onChange={(v) => set("compliance_tags", v as never)} placeholder="입력 후 Enter (예: GDPR)" />, desc: "적용 규제(개인정보보호법/GDPR/PCI 등). 입력 후 Enter 로 추가" },
+        { label: "개인정보 항목", control: <TagInput value={form.pii_fields} onChange={(v) => set("pii_fields", v as never)} placeholder="입력 후 Enter (예: 이름)" />, desc: "포함된 개인정보 항목. 입력 후 Enter 로 추가" },
+        { label: "규제 태그", control: <TagInput value={form.compliance_tags} onChange={(v) => set("compliance_tags", v as never)} placeholder="입력 후 Enter (예: GDPR)" />, desc: "적용 규제(개인정보보호법/GDPR/PCI 등). 입력 후 Enter 로 추가" },
       ],
     },
     {
@@ -426,6 +569,41 @@ export function DatasetMetadataTab({
       name: "품질",
       rows: [
         { label: "품질 상태", control: sel("quality_status", QUALITY), desc: "품질 상태 — GOOD/WARN/BAD/UNKNOWN" },
+      ],
+    },
+    {
+      name: "AI 활용 (AI-Ready)",
+      rows: [
+        { label: "관련법령", control: areaInput("legal_basis", "예: 통계법 제3조"), desc: "데이터를 보유·제공하는 법적 근거 (dct:references). 가이드라인 필수 항목" },
+        { label: "제공기관", control: txtInput("publisher", defaultHint(def?.publisher) || "예: 서울특별시"), desc: "데이터셋을 대외적으로 배포하는 기관 (dct:publisher). 비우면 설정 › AI-Ready 의 기관 기본값" },
+        { label: "제공시스템 URL", control: txtInput("landing_page", "https://data.example.go.kr/dataset/…"), desc: "데이터를 내려받거나 자세히 볼 수 있는 페이지 (dcat:landingPage)" },
+        { label: "문의 연락처", control: txtInput("contact_email", defaultHint(def?.contact_email) || "data@example.go.kr"), desc: "오류 신고·문의를 받는 역할 기준 공용 이메일 (dcat:contactPoint). 개인 메일보다 부서 공용 주소 권장" },
+        { label: "언어", control: <TagInput commaSeparates mono value={splitCsv(form.data_language)} onChange={(v) => set("data_language", joinCsv(v) as never)} placeholder={defaultHint(def?.data_language) || "예: ko 입력 후 Enter"} />, desc: "데이터의 언어 — ISO 639-1 두 글자 코드를 하나씩 (예: ko · en)" },
+        { label: "영구 식별자", control: txtInput("persistent_id", `비우면 URN: ${dataset.urn}`), desc: "이름·위치가 바뀌어도 변하지 않는 식별자 (dct:identifier). DOI 등이 있으면 입력" },
+        { label: "시간범위", control: temporalControl, desc: "데이터가 다루는 기간 (dct:temporal). '프로파일에서 채우기'는 날짜·시각 컬럼 중 가장 넓은 최소~최대값을 넣습니다" },
+        { label: "공간범위", control: txtInput("spatial_coverage", "예: 서울특별시 25개 자치구"), desc: "데이터가 다루는 지역 (dct:spatial)" },
+        {
+          label: "버전",
+          control: txtInput("data_version", "예: 2025.01.v1"),
+          // 이력 단추는 읽기 전용(fieldset disabled) 밖인 설명 칸에 — 누구나 이력을 볼 수 있다
+          desc: (
+            <div className="flex items-center justify-between gap-2">
+              <span>현재 데이터 버전 (owl:versionInfo). 가이드라인 필수 항목. 버전·버전 노트를 저장할 때마다 이력에 남습니다</span>
+              <DatasetVersionHistoryButton datasetId={dataset.id} canEdit={canEdit} />
+            </div>
+          ),
+        },
+        { label: "버전 노트", control: areaInput("version_notes", "이전 버전 대비 변경 사항"), desc: "이전 버전 대비 변경 사항 (adms:versionNotes). 가이드라인 필수 항목" },
+        { label: "라이선스", control: licenseControl, desc: "이용허락 범위 (dct:license) — 공공누리 1~4유형, CC, 기관 이용약관(URL 지정). 비우면 기관 기본값" },
+        { label: "저작권·이용 조건", control: areaInput("rights", "예: 상업적·비상업적 이용 모두 허용"), desc: "저작자 표시, 상업적 이용·변경 허용 여부 등 (dct:rights)" },
+        { label: "허용 이용 유형", control: usesControl, desc: "이 데이터로 할 수 있는 일 — 열람·분석·결합·AI 학습. 가이드라인은 유형별 허용 여부를 메타데이터에 명시하도록 권고합니다" },
+        { label: "합성 데이터", control: sel("contains_synthetic", PRESENCE), desc: "인공적으로 생성한 합성 데이터가 들어 있는지. 들어 있으면 반드시 표시 (체크리스트 필수)" },
+        { label: "자동 주석", control: sel("contains_machine_annotation", PRESENCE), desc: "기계가 자동으로 단 주석·라벨이 들어 있는지 (체크리스트 필수)" },
+        { label: "알려진 편향", control: areaInput("data_biases", "예: 도시 지역 측정소 편중으로 농촌 대표성 낮음"), desc: "대표성 한계·불균형 (rai:dataBiases). AI 모델의 편향을 줄이기 위해 권장" },
+        { label: "한계·유의사항", control: areaInput("known_limitations", "예: 단기 체류 외국인은 포함하지 않음"), desc: "구조적·내용적 제한과 해석 시 주의할 점 (rai:knownLimitations)" },
+        { label: "결측 정보", control: missingControl, desc: "결측 비율·사유·처리 방식 (rai:dataCollectionMissingData). '프로파일에서 채우기'는 최신 프로파일의 컬럼별 결측률을 넣습니다" },
+        { label: "결측·특수값 표기", control: txtInput("missing_value_notation", "예: NULL, -9999=측정불가"), desc: "결측·특수값을 어떻게 적는지 — 표기 규칙 통일은 체크리스트 필수 항목" },
+        { label: "개인정보 보호조치", control: areaInput("privacy_measures", "예: 주민번호 삭제, 연령 5세 범주화, 적정성 검토 완료(2025-03)"), desc: "개인정보가 있으면 비식별·가명처리 방식과 적정성 검토 여부 (체크리스트 필수)" },
       ],
     },
     {
@@ -453,37 +631,40 @@ export function DatasetMetadataTab({
 
   return (
     <div className="space-y-4">
-      {/* 읽기 전용이면 fieldset disabled 로 입력·선택 상자를 모두 비활성화 (분류·소유 컨트롤은 page 에서 이미 숨김) */}
-      <fieldset disabled={!canEdit} className="contents">
+      {/* 읽기 전용이면 메타데이터 칸만 fieldset disabled 로 비활성화한다. extraGroup(분류·소유)은 칸마다 자기 권한으로
+          단추를 보이거나 숨기므로 감싸지 않는다 — 분류는 taxonomies.map 으로 붙이고 뗀다(DEF-077, TODO-138) */}
       <div className="overflow-hidden rounded-md border">
         <table className="w-full border-collapse text-sm">
           <thead>
-            <tr className="bg-muted/60 text-left">
-              <th className="w-36 border px-3 py-2 font-medium">영역</th>
-              <th className="w-44 border px-3 py-2 font-medium">항목</th>
-              <th className="w-64 border px-3 py-2 font-medium">설정값</th>
-              <th className="border px-3 py-2 font-medium">설명</th>
+            <tr className="bg-muted/40 text-left">
+              <th className="w-36 border-b px-3 py-2 font-medium">영역</th>
+              <th className="w-44 border-b px-3 py-2 font-medium">항목</th>
+              <th className="w-64 border-b px-3 py-2 font-medium">설정값</th>
+              <th className="border-b px-3 py-2 font-medium">설명</th>
             </tr>
           </thead>
-          <tbody>
+          {/* 박스는 바깥 테두리 하나 — 칸 사이 세로선 없이 줄 사이 가로선만, 영역 칸만 오른쪽 선으로 묶음을 나눈다 */}
+          <tbody className="[&>tr:last-child>td]:border-b-0">
             {groups.map((g) =>
               g.rows.map((r, ri) => (
                 <tr key={`${g.name}-${r.label}`}>
                   {ri === 0 && (
-                    <td rowSpan={g.rows.length} className="border bg-muted/30 px-3 py-2 align-top font-medium">
+                    <td rowSpan={g.rows.length}
+                      className={`border-r bg-muted/30 px-3 py-2 align-top font-medium ${g === groups[groups.length - 1] ? "" : "border-b"}`}>
                       {g.name}
                     </td>
                   )}
-                  <td className="border px-3 py-2 align-middle whitespace-nowrap">{r.label}</td>
-                  <td className="border px-3 py-2 align-middle">{r.control}</td>
-                  <td className="border px-3 py-2 align-middle">{r.desc}</td>
+                  <td className="border-b px-3 py-2 align-middle whitespace-nowrap">{r.label}</td>
+                  <td className="border-b px-3 py-2 align-middle">
+                    {g === extraGroup ? r.control : <fieldset disabled={!canEdit} className="contents">{r.control}</fieldset>}
+                  </td>
+                  <td className="border-b px-3 py-2 align-middle">{r.desc}</td>
                 </tr>
               )),
             )}
           </tbody>
         </table>
       </div>
-      </fieldset>
 
       {canEdit && (
         <Button onClick={handleSave} disabled={saving}>

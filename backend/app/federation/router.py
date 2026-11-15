@@ -13,6 +13,7 @@ peer 등록/변경 같은 관리 작업은 admin 전용. 조회·검색·드릴�
 """
 
 import logging
+from typing import Annotated
 from urllib.parse import urlparse
 
 import httpx
@@ -22,7 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import AdminUser, CurrentUser
+from app.core.auth import CurrentUser, TokenUser
 from app.core.config import settings
 from app.core.database import get_session
 from app.federation import capabilities, client, service
@@ -47,11 +48,15 @@ from app.federation.schemas import (
     InstanceHealth,
     ProbeCapabilitiesRequest,
 )
-from app.permissions.router import check_feature, require_feature
+from app.permissions.router import check_feature, require_feature, require_feature_granted
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/federation", tags=["federation"])
+
+# 인스턴스 관리 · 수집 · 노출 설정 · 관측성, 원격 데이터셋 가져오기 — 명시 허용형(미설정이면 관리자만, TODO-122)
+FederationManager = Annotated[TokenUser, Depends(require_feature_granted("federation.manage"))]
+FederationImporter = Annotated[TokenUser, Depends(require_feature_granted("federation.import"))]
 
 
 # ---------------------------------------------------------------------------
@@ -96,7 +101,7 @@ async def list_instances(
 @router.post("/instances", response_model=FederatedInstanceResponse, status_code=201)
 async def create_instance(
     req: FederatedInstanceCreate,
-    user: AdminUser,
+    user: FederationManager,
     session: AsyncSession = Depends(get_session),
 ):
     """연합 peer 등록 (admin).
@@ -128,7 +133,7 @@ async def create_instance(
 async def update_instance(
     instance_id: int,
     req: FederatedInstanceUpdate,
-    user: AdminUser,
+    user: FederationManager,
     session: AsyncSession = Depends(get_session),
 ):
     """연합 peer 수정 (admin)."""
@@ -142,7 +147,7 @@ async def update_instance(
 @router.delete("/instances/{instance_id}", status_code=204)
 async def delete_instance(
     instance_id: int,
-    user: AdminUser,
+    user: FederationManager,
     session: AsyncSession = Depends(get_session),
 ):
     """연합 peer 삭제 (admin)."""
@@ -168,7 +173,7 @@ async def federation_stats(
 
 @router.get("/export-policy", response_model=ExportPolicyResponse)
 async def get_export_policy(
-    user: AdminUser,
+    user: FederationManager,
     session: AsyncSession = Depends(get_session),
 ):
     """이 인스턴스가 외부에 노출하는 정보 항목 정책(전체 레지스트리 + 현재 노출)."""
@@ -183,7 +188,7 @@ async def get_export_policy(
 @router.put("/export-policy", response_model=ExportPolicyResponse)
 async def update_export_policy(
     req: ExportPolicyUpdate,
-    user: AdminUser,
+    user: FederationManager,
     session: AsyncSession = Depends(get_session),
 ):
     """노출 정보 항목 정책을 변경한다 (admin)."""
@@ -199,7 +204,7 @@ async def update_export_policy(
 @router.post("/probe-capabilities", response_model=CapabilitiesResponse)
 async def probe_capabilities(
     req: ProbeCapabilitiesRequest,
-    user: AdminUser,
+    user: FederationManager,
     session: AsyncSession = Depends(get_session),
 ):
     """등록 전 peer 의 노출 항목을 사전 조회한다 (admin).
@@ -217,7 +222,7 @@ async def probe_capabilities(
 @router.get("/instances/{instance_id}/capabilities", response_model=CapabilitiesResponse)
 async def instance_capabilities(
     instance_id: int,
-    user: AdminUser,
+    user: FederationManager,
     session: AsyncSession = Depends(get_session),
 ):
     """등록된 peer 의 노출 항목을 조회한다(수정 다이얼로그용)."""
@@ -234,7 +239,7 @@ async def instance_capabilities(
 @router.get("/instances/{instance_id}/health", response_model=InstanceHealth)
 async def instance_health(
     instance_id: int,
-    user: AdminUser,
+    user: FederationManager,
     session: AsyncSession = Depends(get_session),
 ):
     """peer 도달성/버전/지연 점검."""
@@ -251,7 +256,7 @@ async def instance_health(
 @router.post("/instances/{instance_id}/harvest", response_model=FederationSyncResult)
 async def harvest_one(
     instance_id: int,
-    user: AdminUser,
+    user: FederationManager,
     full: bool = Query(False, description="전체 동기화(prune 포함). 기본=증분"),
     session: AsyncSession = Depends(get_session),
 ):
@@ -294,7 +299,7 @@ async def harvest_one(
 
 @router.post("/harvest", response_model=list[FederationSyncResult])
 async def harvest_all_peers(
-    user: AdminUser,
+    user: FederationManager,
     full: bool = Query(False, description="전체 동기화(prune 포함). 기본=증분"),
     session: AsyncSession = Depends(get_session),
 ):
@@ -449,7 +454,7 @@ async def federated_dataset_sample(
 @router.post("/datasets/import", response_model=FederatedImportResponse, status_code=201)
 async def import_federated_dataset(
     req: FederatedImportRequest,
-    user: AdminUser,
+    user: FederationImporter,
     session: AsyncSession = Depends(get_session),
 ):
     """페더레이션(미러) 데이터셋을 로컬 카탈로그로 승격(import)한다 (admin).

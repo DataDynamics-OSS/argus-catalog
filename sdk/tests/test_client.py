@@ -209,6 +209,17 @@ def test_login_failure_raises_api_error(http):
     assert ModelClient(BASE, username="admin", password="admin", http_client=http).token == "tok"
 
 
+def test_api_key_precedence_and_env(http, monkeypatch):
+    """API 키는 로그인 없이 Bearer 로 — 인자 > 토큰 > 로그인 > 환경변수 ARGUS_CATALOG_API_KEY (TODO-056)."""
+    monkeypatch.setenv("ARGUS_CATALOG_API_KEY", "argus_sk_env")
+    assert ModelClient(BASE, api_key="argus_sk_arg", token="tok", http_client=http).token == "argus_sk_arg"
+    assert ModelClient(BASE, token="tok", http_client=http).token == "tok"
+    assert ModelClient(BASE, http_client=http).token == "argus_sk_env"
+    assert ModelClient(BASE, username="admin", password="admin", http_client=http).token == "tok"   # 로그인
+    monkeypatch.delenv("ARGUS_CATALOG_API_KEY")
+    assert ModelClient(BASE, http_client=http).token is None
+
+
 # ---------------------------------------------------------------------------
 # 연결 재사용 · 닫기
 # ---------------------------------------------------------------------------
@@ -432,7 +443,8 @@ def test_pull_falls_back_to_server_disk_with_auth(client, server, tmp_path):
     assert server.auth_seen["/api/v1/filesystem/download"] == "Bearer tok"
 
 
-def test_pull_server_disk_needs_login(http, server, tmp_path):
+def test_pull_server_disk_needs_login(http, server, tmp_path, monkeypatch):
+    monkeypatch.delenv("ARGUS_CATALOG_API_KEY", raising=False)
     server.disk[("ml", 2)] = {"MLmodel": b"m"}
     anon = ModelClient(BASE, http_client=http)
     with pytest.raises(ApiError, match="로그인") as ei:

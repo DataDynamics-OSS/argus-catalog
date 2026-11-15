@@ -629,11 +629,12 @@ async def get_model_detail(
 
 
 async def get_model_download_stats(
-    session: AsyncSession, name: str,
+    session: AsyncSession, name: str, *, include_client: bool = True,
 ) -> ModelDownloadStats:
     """모델 단위 다운로드 통계(총합 + 최근 30일 차트 + 최근 50건 로그).
 
-    모델 존재 여부는 확인하지 않는다(라우터에서 확인). 로그는 모델 이름 기준으로 모은다."""
+    모델 존재 여부는 확인하지 않는다(라우터에서 확인). 로그는 모델 이름 기준으로 모은다.
+    ``include_client=False`` 면 로그의 접속 IP · User-Agent 를 비운다(소유자 · 관리자가 아닌 조회)."""
     from app.models.models import ModelDownloadLog
 
     # 이 모델의 총 다운로드 수
@@ -667,8 +668,8 @@ async def get_model_download_stats(
             downloaded_at=r.downloaded_at,
             version=r.version,
             download_type=r.download_type,
-            client_ip=r.client_ip,
-            user_agent=r.user_agent,
+            client_ip=r.client_ip if include_client else None,
+            user_agent=r.user_agent if include_client else None,
         )
         for r in recent_result.scalars().all()
     ]

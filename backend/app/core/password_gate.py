@@ -12,11 +12,10 @@
 
 import logging
 
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from app.core.auth import _extract_bearer_token, _verify_token_local
+from app.core.auth import API_KEY_PREFIX, _extract_bearer_token, verify_local_token_cached
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -39,11 +38,20 @@ _WHITELIST: frozenset[str] = frozenset({
 PASSWORD_CHANGE_REQUIRED = "PASSWORD_CHANGE_REQUIRED"
 
 
-class PasswordChangeGateMiddleware(BaseHTTPMiddleware):
-    """로컬 모드에서 ``must_change_password`` 토큰의 API 호출을 403(PASSWORD_CHANGE_REQUIRED)으로 막는다."""
+class PasswordChangeGateMiddleware:
+    """로컬 모드에서 ``must_change_password`` 토큰의 API 호출을 403(PASSWORD_CHANGE_REQUIRED)으로 막는다.
 
-    async def dispatch(self, request: Request, call_next):
-        path = request.url.path
+    순수 ASGI 미들웨어(TODO-086) — 토큰 검증 결과는 요청 범위에 기억되어 인증 의존성이 다시 쓴다.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path", "")
 
         # 로컬 모드의 API 경로만 게이트 대상. 화이트리스트/비-API 는 통과.
         if (
@@ -51,28 +59,34 @@ class PasswordChangeGateMiddleware(BaseHTTPMiddleware):
             or path in _WHITELIST
             or not path.startswith("/api/")
         ):
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
+        request = Request(scope, receive)
         token = _extract_bearer_token(request)
-        if not token:
-            # 토큰 없음 → 라우터의 일반 인증(401)에 맡긴다
-            return await call_next(request)
+        if not token or token.startswith(API_KEY_PREFIX):
+            # 토큰 없음 → 라우터의 일반 인증(401)에 맡긴다. API 키는 사람 계정이 아니라 강제 변경 대상이 아니다
+            await self.app(scope, receive, send)
+            return
 
         try:
-            payload = _verify_token_local(token)
+            payload = verify_local_token_cached(request, token)
         except Exception:
             # 디코딩/검증 실패 → 게이트가 막지 않고 라우터로 넘긴다(401 처리)
             logger.debug("강제 변경 게이트: 토큰 검증 실패 — 통과시켜 일반 인증에 맡김 path=%s", path)
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
         if payload.get("must_change_password"):
             logger.info("강제 변경 게이트 차단: sub=%s path=%s", payload.get("sub"), path)
-            return JSONResponse(
+            response = JSONResponse(
                 status_code=403,
                 content={
                     "detail": "비밀번호를 변경해야 계속 이용할 수 있습니다.",
                     "code": PASSWORD_CHANGE_REQUIRED,
                 },
             )
+            await response(scope, receive, send)
+            return
 
-        return await call_next(request)
+        await self.app(scope, receive, send)

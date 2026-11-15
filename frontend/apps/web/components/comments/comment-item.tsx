@@ -1,13 +1,16 @@
 "use client"
 
+import { Tip } from "@/components/tip"
 import { useState } from "react"
-import { Bug, Lightbulb, MessageSquare, MoreHorizontal, Pencil, Sparkles, Trash2 } from "lucide-react"
+import { Bug, ClipboardCheck, Lightbulb, MessageSquare, MoreHorizontal, Pencil, Sparkles, Trash2 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
+import { StatusBadge } from "@workspace/ui/components/status-badge"
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
 
@@ -15,7 +18,15 @@ import type { CommentData } from "@/features/comments/api"
 import { isCommentEdited } from "@/features/comments/edited"
 import { notifyError } from "@/lib/notify"
 import { CommentEditor } from "./comment-editor"
+import { DueText, ReportStatusBadge, ReportStatusDialog } from "./report-status"
 import { RichTextViewer } from "./rich-text-viewer"
+
+/** 댓글 분류 — 일반 댓글(general)은 표시하지 않는다 */
+const COMMENT_CATEGORY: Record<string, { label: string; icon: typeof Bug }> = {
+  suggestion: { label: "개선 요청", icon: Lightbulb },
+  feature: { label: "기능 요청", icon: Sparkles },
+  bug: { label: "오류 신고", icon: Bug },
+}
 
 type CommentItemProps = {
   comment: CommentData
@@ -28,6 +39,12 @@ type CommentItemProps = {
   onDelete: (commentId: number) => Promise<void>
   /** 본문·분류 수정 — 작성자 또는 관리자(서버 `PUT /comments/{id}` 와 같은 기준). */
   onEdit: (commentId: number, content: string, contentPlain: string, category: string) => Promise<void>
+  /** 오류 신고·개선 요청의 처리 상태를 바꿀 수 있는지 — 데이터셋 소유자(생성자)·관리자(TODO-096 4단계). */
+  canHandleReports?: boolean
+  /** 댓글 쓰기 · 답글 · 편집 가능 여부 — 역할의 기능 권한 comments.write(서버와 같은 기준, TODO-122). 삭제는 그대로. */
+  canWrite?: boolean
+  /** 처리 상태를 바꾼 뒤 목록을 다시 읽는다. */
+  onReportChanged?: () => void
 }
 
 
@@ -53,9 +70,13 @@ export function CommentItem({
   onReply,
   onDelete,
   onEdit,
+  canHandleReports = false,
+  canWrite = true,
+  onReportChanged,
 }: CommentItemProps) {
   const [showReplyEditor, setShowReplyEditor] = useState(false)
   const [editing, setEditing] = useState(false)
+  const [handling, setHandling] = useState(false)
 
   // 댓글의 author_name 은 새 형식 "성이름(username)" 또는 구 형식 "username".
   // 표시명(괄호 앞)과 username(괄호 안)을 분리해 두면 placeholder·ownership 비교가 깔끔하다.
@@ -87,7 +108,7 @@ export function CommentItem({
       {comment.is_deleted ? (
         /* Deleted comment placeholder — still shows so child replies remain visible */
         <div className="border border-dashed rounded-lg p-3 mb-2 opacity-50">
-          <p className="text-sm text-muted-foreground italic">삭제된 댓글입니다.</p>
+          <p className="text-sm italic">삭제된 댓글입니다.</p>
         </div>
       ) : (
       <div className="border rounded-lg p-3 mb-2">
@@ -99,58 +120,65 @@ export function CommentItem({
               {authorDisplayName.charAt(0).toUpperCase()}
             </div>
             <span className="text-sm font-medium">{comment.author_name}</span>
-            <span className="text-xs text-muted-foreground">{timeAgo(comment.created_at)}</span>
+            <span className="text-xs">{timeAgo(comment.created_at)}</span>
             {isCommentEdited(comment) && (
-              <span className="text-xs text-muted-foreground" title={new Date(comment.updated_at).toLocaleString()}>
+              <span className="text-xs" title={new Date(comment.updated_at).toLocaleString()}>
                 (수정됨)
               </span>
             )}
-            {comment.category === "suggestion" && (
-              <span className="inline-flex items-center gap-1 text-xs text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">
-                <Lightbulb className="h-3 w-3" />
-                제안
-              </span>
+            {/* 분류는 무채색 테두리 + 아이콘(TODO-107) — 처리 상태는 옆의 ReportStatusBadge 가 색으로 */}
+            {COMMENT_CATEGORY[comment.category] && (
+              <StatusBadge
+                tone="neutral"
+                icon={COMMENT_CATEGORY[comment.category]!.icon}
+                label={COMMENT_CATEGORY[comment.category]!.label}
+              />
             )}
-            {comment.category === "feature" && (
-              <span className="inline-flex items-center gap-1 text-xs text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded-full">
-                <Sparkles className="h-3 w-3" />
-                기능 요청
-              </span>
-            )}
-            {comment.category === "bug" && (
-              <span className="inline-flex items-center gap-1 text-xs text-red-600 bg-red-50 px-1.5 py-0.5 rounded-full">
-                <Bug className="h-3 w-3" />
-                버그
-              </span>
+            {comment.status && (
+              <>
+                <ReportStatusBadge status={comment.status} />
+                <DueText status={comment.status} dueAt={comment.due_at} resolvedAt={comment.resolved_at} overdue={comment.overdue} />
+              </>
             )}
           </div>
           <div className="flex items-center gap-1">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 text-xs text-muted-foreground"
-              onClick={() => setShowReplyEditor(!showReplyEditor)}
-            >
-              <MessageSquare className="h-3.5 w-3.5 mr-1" />
-              댓글
-            </Button>
+            {comment.status && canHandleReports && (
+              <Button variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground" onClick={() => setHandling(true)}>
+                <ClipboardCheck className="h-3.5 w-3.5 mr-1" />
+                처리
+              </Button>
+            )}
+            {canWrite && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs text-muted-foreground"
+                onClick={() => setShowReplyEditor(!showReplyEditor)}
+              >
+                <MessageSquare className="h-3.5 w-3.5 mr-1" />
+                댓글
+              </Button>
+            )}
             {isOwner && (
               <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
+                <Tip label="댓글 메뉴"><DropdownMenuTrigger asChild>
+                  <Button aria-label="댓글 메뉴" variant="ghost" size="sm" className="h-7 w-7 p-0">
                     <MoreHorizontal className="h-3.5 w-3.5" />
                   </Button>
-                </DropdownMenuTrigger>
+                </DropdownMenuTrigger></Tip>
                 <DropdownMenuContent align="end">
+                  {canWrite && (<>
                   <DropdownMenuItem onClick={() => setEditing(true)}>
-                    <Pencil className="h-3.5 w-3.5 mr-1.5" />
-                    수정
+                    <Pencil />
+                    편집
                   </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  </>)}
                   <DropdownMenuItem
-                    className="text-destructive"
+                    variant="destructive"
                     onClick={() => onDelete(comment.id)}
                   >
-                    <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+                    <Trash2 />
                     삭제
                   </DropdownMenuItem>
                 </DropdownMenuContent>
@@ -172,15 +200,32 @@ export function CommentItem({
         ) : (
           <RichTextViewer html={comment.content} />
         )}
+        {comment.status && comment.resolution && (
+          <div className="mt-2 rounded-md border-l-2 border-primary/40 bg-muted/40 px-3 py-2 text-sm">
+            <div className="mb-0.5 text-xs">
+              {comment.status === "REJECTED" ? "소명" : "처리 결과"}
+              {comment.handled_by ? ` · ${comment.handled_by}` : ""}
+            </div>
+            <div className="whitespace-pre-wrap break-words">{comment.resolution}</div>
+          </div>
+        )}
       </div>
       )}
 
+      {canHandleReports && (
+        <ReportStatusDialog
+          report={handling ? comment : null}
+          onClose={() => setHandling(false)}
+          onSaved={() => { setHandling(false); onReportChanged?.() }}
+        />
+      )}
+
       {/* Reply editor */}
-      {showReplyEditor && (
+      {canWrite && showReplyEditor && (
         <div className="mb-2 ml-6">
           <CommentEditor
             onSubmit={handleReply}
-            placeholder={`${authorDisplayName} 님에게 댓글...`}
+            placeholder={`${authorDisplayName} 님에게 댓글…`}
             submitLabel="댓글"
             autoFocus
             onCancel={() => setShowReplyEditor(false)}
@@ -200,6 +245,9 @@ export function CommentItem({
           onReply={onReply}
           onDelete={onDelete}
           onEdit={onEdit}
+          canHandleReports={canHandleReports}
+          canWrite={canWrite}
+          onReportChanged={onReportChanged}
         />
       ))}
     </div>

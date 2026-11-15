@@ -16,6 +16,7 @@ import { Label } from "@workspace/ui/components/label"
 import { notifyError, toast } from "@/lib/notify"
 
 import { deleteDataset } from "../api"
+import { DATASET_DELETE_DESCRIPTION, DatasetDeleteImpact } from "./dataset-delete-impact"
 import { useDatasets } from "./datasets-provider"
 
 const CONFIRM_KEYWORD = "삭제"
@@ -65,19 +66,20 @@ export function DatasetsDeleteDialog() {
             데이터셋 삭제
           </DialogTitle>
           <DialogDescription>
-            이 작업은 되돌릴 수 없습니다. 데이터셋과 관련된 스키마/속성/태그/소유자/
-            리니지 정보가 모두 함께 삭제됩니다.
+            {DATASET_DELETE_DESCRIPTION}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3 py-1">
           {currentRow && (
             <div className="rounded-md border bg-muted/40 p-3 text-sm">
               <p className="font-medium">{currentRow.name}</p>
-              <p className="mt-0.5 text-xs text-muted-foreground font-mono break-all">
+              <p className="mt-0.5 text-xs font-mono break-all">
                 {currentRow.urn}
               </p>
             </div>
           )}
+          {/* 함께 삭제되는 변경 요청·취소되는 결재 건수 (DEF-059) */}
+          {open === "delete" && currentRow && <DatasetDeleteImpact datasetId={currentRow.id} />}
           <div className="space-y-1.5">
             <Label htmlFor="confirm-delete" className="text-sm">
               계속하려면 <span className="font-mono font-semibold text-destructive">{CONFIRM_KEYWORD}</span> 를 입력하세요.
@@ -100,7 +102,7 @@ export function DatasetsDeleteDialog() {
               onClick={handleDelete}
               disabled={!canDelete}
             >
-              {deleting ? "삭제 중..." : "삭제"}
+              {deleting ? "삭제 중…" : "삭제"}
             </Button>
           </div>
         </div>

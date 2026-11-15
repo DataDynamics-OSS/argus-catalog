@@ -3,6 +3,7 @@
 
 import { useEffect, type ReactNode } from "react"
 import { useRouter } from "next/navigation"
+import { loginPath } from "@/lib/navigation"
 import { useAuth } from "./auth-context"
 
 export function AuthGuard({ children }: { children: ReactNode }) {
@@ -12,7 +13,9 @@ export function AuthGuard({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (isLoading) return
     if (!isAuthenticated) {
-      router.replace("/login")
+      // 로그인 뒤 원래 화면으로 돌아오도록 현재 경로를 next 로 넘긴다(DEF-063)
+      const { pathname, search } = window.location
+      router.replace(loginPath(pathname + search))
     } else if (user?.must_change_password) {
       // 강제 변경 대상은 비밀번호를 바꾸기 전까지 보호 화면 밖으로 나갈 수 없다
       router.replace("/change-password-required")

@@ -9,6 +9,11 @@
  *   - argus         : Argus Catalog 에서만 관리하는 정보 → UI 에서 "Argus" 배지로 표시
  */
 
+import type { StatusTone } from "@workspace/ui/components/status-badge"
+
+import { LIFECYCLE_LABEL } from "@/lib/lifecycle"
+import { RISK_LABEL, RISK_LEVELS } from "@/lib/risk"
+
 export type Origin = "mcp" | "registry" | "server_config" | "argus"
 
 export const ORIGIN_LABELS: Record<Origin, string> = {
@@ -55,29 +60,11 @@ export const ROW_SOURCE_LABELS: Record<string, string> = {
 // ---------------------------------------------------------------------------
 
 export const STATUS_OPTIONS = ["draft", "staging", "active", "blocked", "deprecated", "retired"] as const
-export const STATUS_LABEL: Record<string, string> = {
-  draft: "초안", staging: "스테이징", active: "활성",
-  blocked: "차단", deprecated: "사용 중단", retired: "폐기",
-}
-export const STATUS_VARIANTS: Record<string, string> = {
-  draft: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
-  staging: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
-  active: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
-  blocked: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300",
-  deprecated: "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300",
-  retired: "bg-zinc-200 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
-}
+// 상태 · 위험도 이름과 톤은 AI 에이전트와 공용(`lib/lifecycle.ts` · `lib/risk.ts`, TODO-107)
+export const STATUS_LABEL: Record<string, string> = LIFECYCLE_LABEL
 
-export const RISK_OPTIONS = ["low", "medium", "high", "critical"] as const
-export const RISK_LABEL: Record<string, string> = {
-  low: "낮음", medium: "중간", high: "높음", critical: "치명",
-}
-export const RISK_VARIANTS: Record<string, string> = {
-  low: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
-  medium: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
-  high: "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300",
-  critical: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300",
-}
+export const RISK_OPTIONS = RISK_LEVELS
+export { RISK_LABEL }
 
 export const HEALTH_VARIANTS: Record<string, string> = {
   healthy: "bg-emerald-500",
@@ -92,6 +79,15 @@ export const HEALTH_LABEL: Record<string, string> = {
 export const ENVIRONMENTS = ["DEV", "STG", "PROD"] as const
 export const TRANSPORTS = ["streamable_http", "sse", "stdio"] as const
 export const AUTH_METHODS = ["none", "bearer", "api_key", "basic", "oauth2"] as const
+/** 인증 방식 · 자격 종류 이름(TODO-113) — 예전엔 코드 그대로 보였다 */
+export const AUTH_METHOD_LABEL: Record<string, string> = {
+  none: "없음",
+  bearer: "Bearer 토큰",
+  api_key: "API 키",
+  basic: "Basic 인증",
+  oauth2: "OAuth2",
+}
+export const authMethodLabel = (m: string | null | undefined) => (m ? (AUTH_METHOD_LABEL[m] ?? m) : "-")
 export const PROVIDER_TYPES = ["internal", "vendor", "community"] as const
 export const PROVIDER_LABEL: Record<string, string> = {
   internal: "사내", vendor: "벤더", community: "커뮤니티",
@@ -100,11 +96,9 @@ export const FRAMEWORK_LABEL: Record<string, string> = {
   "argus-forge": "Argus Forge", generic: "일반 MCP",
 }
 
-export const SCOPE_EFFECT_VARIANTS: Record<string, string> = {
-  allow: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
-  deny: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300",
-  protect: "bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300",
-  mask: "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300",
+/** 리소스 범위 효과 톤 — 값(allow · deny …)은 정책 파일 용어라 그대로 보인다. */
+export const SCOPE_EFFECT_TONE: Record<string, StatusTone> = {
+  allow: "success", deny: "danger", protect: "info", mask: "info",
 }
 
 // ---------------------------------------------------------------------------
@@ -572,6 +566,10 @@ export const FINDING_KIND_LABEL: Record<string, string> = {
 export const FINDING_STATUS_LABEL: Record<string, string> = {
   open: "열림", acknowledged: "확인됨", resolved: "해소",
 }
+/** 처리 상태 톤 — 알림 · 데이터 신고와 같은 기준(열림 주의 · 확인 진행 · 해소 초록). 심각도는 위험도 배지. */
+export const FINDING_STATUS_TONE: Record<string, StatusTone> = {
+  open: "warning", acknowledged: "info", resolved: "success",
+}
 
 export type McpFinding = {
   id: number
@@ -597,11 +595,9 @@ export const DECISION_LABEL: Record<string, string> = {
   allow: "허용", deny: "범위 밖", blocked: "차단 도구", unknown: "판정 불가",
   violation: "위반(서버 거부 제외)", enforced: "서버가 거부",
 }
-export const DECISION_VARIANTS: Record<string, string> = {
-  allow: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
-  deny: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300",
-  blocked: "bg-red-200 text-red-900 dark:bg-red-900/60 dark:text-red-200",
-  unknown: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
+export const DECISION_TONE: Record<string, StatusTone> = {
+  allow: "success", deny: "danger", blocked: "danger", unknown: "neutral",
+  violation: "danger", enforced: "warning",
 }
 
 export type McpAuditEvent = {
@@ -689,4 +685,90 @@ export type McpControlOverview = {
   trend: { date: string; opened: number; resolved: number }[]
   recent_calls: McpAuditEvent[]
   coverage: { deployments: number; with_policy: number; enforce: number; enforce_applied: number; with_ingest_token: number }
+}
+
+/**
+ * MCP 서버 상세의 항목 설명 — 항목 이름에 마우스를 올리면 툴팁으로 보인다(데이터셋 상세의 항목 설명과 같은 방식).
+ * 키는 화면의 항목 이름. 출처(Argus · Registry · MCP)는 이름 옆 배지가 따로 알려 준다.
+ */
+export const SERVER_FIELD_HELP: Record<string, string> = {
+  // 카탈로그 관리 정보 (Argus 전용 — MCP 표준에 없음)
+  "이름": "카탈로그 안에서 서버 정의를 가리키는 고유 이름(영문 소문자·숫자·하이픈). 배포 · 정책 · 감사 기록이 이 이름으로 서버를 찾는다.",
+  "표시명": "목록과 화면 제목에 보이는 사람이 읽는 이름. 비우면 Registry 제목이나 이름을 쓴다.",
+  "상태": "카탈로그에서의 수명 주기 — 초안 · 검토 · 운영 · 사용 중단 · 퇴역. 퇴역한 서버 정의에는 새 배포를 등록할 수 없다.",
+  "버전": "카탈로그가 관리하는 서버 정의의 버전. 실제로 떠 있는 서버가 보고한 버전은 배포 상세의 serverInfo · 배포 버전에 있다.",
+  "제공자 유형": "서버를 누가 만들었는지 — 사내(직접 개발) · 벤더(상용 제품) · 커뮤니티(오픈 소스).",
+  "벤더": "서버를 만든 회사나 단체.",
+  "프레임워크": "서버를 만든 기반. Argus Forge 서버는 설정 파일 · 매니페스트로 도구 그룹과 설정을 수집하고, 일반 MCP 서버는 MCP 프로토콜(tools/list 등)로만 수집한다.",
+  "대상 플랫폼": "이 MCP 서버가 다루는 데이터 플랫폼(예: Hive, Trino, Kafka).",
+  "소유자": "서버 정의를 책임지는 담당자의 이메일.",
+  "부서": "소유자가 속한 부서.",
+  "카테고리": "목록에서 서버를 묶어 보는 분류.",
+  "태그": "검색 · 필터에 쓰는 자유 키워드.",
+  "지원 전송": "서버가 지원하는 MCP 전송 방식 — streamable_http(HTTP), sse(Server-Sent Events, 이전 방식), stdio(로컬 프로세스 표준 입출력).",
+  "소스 저장소": "서버 소스 코드가 있는 저장소와 그 안의 경로.",
+  "패키지 체크섬": "배포 산출물(패키지)의 해시. 실제로 배포된 파일이 등록한 것과 같은지 확인할 때 쓴다.",
+  "OCI 아티팩트": "서버 이미지나 패키지가 올라간 OCI 레지스트리 주소(이미지 참조).",
+  "최근 수집": "배포에서 도구 · 리소스 · 프롬프트 목록을 마지막으로 수집한 시각.",
+  "등록": "서버 정의를 등록한 사용자와 시각.",
+  "수정": "서버 정의를 마지막으로 수정한 사용자와 시각.",
+  // MCP Registry 메타데이터 (server.json 표준)
+  "Registry 이름": "MCP Registry 에서 서버를 가리키는 이름(역도메인 형식, 예: io.github.org/server). server.json 의 name.",
+  "제목": "server.json 의 title — 사람이 읽는 서버 이름.",
+  "설명": "server.json 의 description — 서버가 하는 일에 대한 설명.",
+  "웹사이트": "서버 소개 · 문서 페이지 주소(websiteUrl).",
+  "저장소": "server.json 의 repository — 소스 저장소 주소.",
+  "라이선스": "서버 소프트웨어의 라이선스.",
+  "packages": "로컬에서 설치 · 실행하는 방법 목록(npm · PyPI · OCI 등 패키지 레지스트리, 패키지 이름 · 버전, 실행 인자 · 환경 변수, 전송 방식).",
+  "remotes": "이미 원격으로 떠 있는 서버에 붙는 방법 목록(전송 방식과 URL, 필요한 헤더).",
+  // MCP 서버 보고값 (initialize 응답)
+  "serverInfo": "MCP initialize 응답에서 서버가 스스로 밝힌 이름과 버전.",
+  "프로토콜 버전": "서버와 합의한 MCP 프로토콜 버전(예: 2025-06-18).",
+  "capabilities": "서버가 제공한다고 밝힌 기능 — tools · resources · prompts · logging 등과 그 세부 옵션(listChanged · subscribe 등).",
+  "instructions": "서버가 클라이언트(AI 에이전트)에게 주는 사용 안내. 에이전트의 시스템 프롬프트에 들어가는 내용이다.",
+  "capability 해시": "수집한 도구 · 리소스 · 프롬프트 정의를 정규화해 만든 지문. 값이 바뀌면 서버 기능이 바뀐 것이므로 새 버전 이력이 생긴다.",
+  // 도구 (tools/list)
+  "title": "도구의 사람이 읽는 이름(MCP 도구 정의의 title).",
+  "description": "도구가 하는 일 — AI 에이전트가 도구를 고를 때 읽는 설명.",
+  "annotations": "도구의 성격 힌트 — readOnlyHint(읽기만), destructiveHint(파괴적 변경), idempotentHint(반복해도 같음), openWorldHint(외부 세계와 상호작용) 등.",
+  "inputSchema": "도구를 부를 때 넘기는 인자의 JSON Schema.",
+  "outputSchema": "도구가 돌려주는 구조화된 결과의 JSON Schema(선언한 도구만).",
+  "리소스 유형": "도구가 다루는 데이터 리소스 종류(예: table, topic). 정책의 리소스 범위 규칙과 연결된다.",
+  "메모": "카탈로그 관리자가 남기는 도구 메모.",
+  "사라진 시각": "마지막 수집에서 서버가 더 이상 이 도구를 보고하지 않은 시각.",
+}
+
+/** MCP 배포 상세의 항목 설명 — `SERVER_FIELD_HELP` 와 같은 방식(이름에 마우스를 올리면 툴팁). */
+export const DEPLOYMENT_FIELD_HELP: Record<string, string> = {
+  // 배포 관리 정보 (Argus 전용)
+  "이름": "카탈로그 안에서 이 배포(실제로 떠 있는 서버 인스턴스)를 가리키는 고유 이름. 한 서버 정의에 환경별로 여러 배포가 있을 수 있다.",
+  "표시명": "목록과 화면 제목에 보이는 사람이 읽는 이름.",
+  "설명": "이 배포의 용도 · 운영 메모.",
+  "환경": "배포가 속한 환경 — DEV(개발) · STG(검증) · PROD(운영).",
+  "상태": "카탈로그에서의 수명 주기 — 초안 · 검토 · 운영 · 사용 중단 · 퇴역. 차단(blocked)된 배포는 정책 번들에서 빠진다.",
+  "전송": "클라이언트가 이 배포에 붙는 MCP 전송 방식 — streamable_http(HTTP) · sse(이전 방식) · stdio(로컬 프로세스).",
+  "MCP 엔드포인트": "AI 에이전트가 접속하는 MCP 주소(예: https://mcp.example.com:8792/mcp). streamable_http · sse 배포에 필요하다.",
+  "도구 REST API": "Argus Forge 서버의 도구 REST · manifest 기준 경로(기본은 엔드포인트 호스트의 /api/v1). 도구 · 설정 수집에 쓴다.",
+  "인증 방식": "에이전트가 MCP 엔드포인트에 붙을 때의 인증 — 없음 · Bearer 토큰 · API 키 · Basic · OAuth2. 비밀 값은 자격증명 탭에서 관리한다.",
+  "배포 범위": "누가 운영하는 배포인지 — shared(사내 공용 서버) · external(외부 SaaS) · local(사용자 PC 에서 stdio 로 실행).",
+  "호스트": "서버가 실행되는 호스트(운영 책임 확인용).",
+  "연결 데이터 소스": "이 서버가 접속하는 대상 시스템이 카탈로그에 데이터 소스로 등록돼 있으면 그 연결.",
+  "정책 모드": "관측(observe): 승인 정책과 실제 설정을 비교해 차이(finding)만 알린다 · 강제(enforce): 서버가 카탈로그의 정책 번들을 받아 도구 호출 직전에 집행한다.",
+  "정책 버전": "승인 정책을 바꿀 때마다 새로 매기는 버전(바꾼 사람과 함께). enforce 서버는 이 값으로 새 정책 번들이 있는지 안다.",
+  "승인 버전": "운영을 승인한 서버 버전. 서버가 보고한 배포 버전과 다르면 버전 불일치 finding 이 열린다.",
+  "감사 이벤트 보존": "이 배포에서 받은 도구 호출 감사 이벤트를 보관하는 기간. 지나면 지운다.",
+  "자동 수집 주기": "도구 · 리소스 · 프롬프트 목록과 설정을 자동으로 다시 수집하는 간격. 비어 있으면 수동 수집만 한다.",
+  "헬스": "마지막 상태 점검 결과 — 응답 시간, 연속 실패 횟수, 점검 시각. 연속 실패가 기준을 넘으면 finding 이 열린다.",
+  "최근 관측": "도구 목록 · 설정을 마지막으로 수집한 시각과 수집 경로(mcp: MCP 프로토콜, forge_rest: Forge 도구 REST, manifest: 매니페스트 가져오기).",
+  "소유자 / 부서": "이 배포의 운영을 책임지는 담당자 이메일과 부서.",
+  // 서버 설정 수집값 (MCP 표준 밖)
+  "대상 시스템": "이 MCP 서버가 접속하는 데이터 시스템 주소(예: thrift://hms.example.com:9083).",
+  "실행 계정": "서버가 대상 시스템에 접속할 때 쓰는 계정 — 예: Hive username, Impala doas_user, Kafka SASL 사용자, Kerberos principal. 에이전트가 할 수 있는 일은 이 계정의 권한을 넘지 못한다.",
+  "대상 인증": "서버가 대상 시스템에 붙는 인증 방식(none · ldap · kerberos · sasl_scram 등).",
+  "인스턴스 ID": "서버 프로세스가 /readyz 로 보고하는 실행 식별자. 값이 바뀌면 서버가 다시 시작된 것이다.",
+  "제한(limits)": "서버 설정에서 수집한 실행 제한(예: hive.limits.max_rows — 한 번에 돌려주는 최대 행 수). 승인 정책의 제한과 비교된다.",
+  // MCP 서버 보고값
+  "배포 버전": "실제로 떠 있는 서버가 보고한 버전(serverInfo.version 또는 매니페스트의 서버 버전).",
+  "프로토콜 버전": "서버와 합의한 MCP 프로토콜 버전(예: 2025-06-18).",
+  "serverInfo": "MCP initialize 응답에서 서버가 스스로 밝힌 이름과 버전.",
 }

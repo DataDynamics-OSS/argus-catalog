@@ -1,22 +1,26 @@
 "use client"
 
+import { DetailSection } from "@/components/detail-section"
+import { InfoTip } from "@/components/tip"
 import { Fragment, useEffect, useState } from "react"
 import { Loader2, Pencil, Save } from "lucide-react"
 import { notifyError, toast } from "@/lib/notify"
 import { useConfirm } from "@/components/confirm-provider"
+import { FieldError } from "@/components/field-error"
 
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@workspace/ui/components/select"
 import { Textarea } from "@workspace/ui/components/textarea"
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@workspace/ui/components/tooltip"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { type ApiDetail, type ApiUpdatePayload, updateApi } from "../api"
 import { OwnerPicker, OwnerValue, ownerInfoName } from "./api-owner"
 import { API_STATUS_LABEL, CERT_LABEL, SPEC_FORMAT_LABEL, TIER_LABEL, protocolLabel } from "./apis-constants"
-import { ComboInput, OPT_API_CATEGORY, TagsInput, fmtDateTime } from "./apis-detail-shared"
+import { ComboInput, OPT_API_CATEGORY, fmtDateTime } from "./apis-detail-shared"
 import { urlError } from "./apis-form-utils"
+import { TagInput } from "@/components/tag-input"
+import { decodeList, encodeList } from "@/lib/text-list"
 
 
 // 개요 표 key 별 설명 — 점선 밑줄 + hover 툴팁으로 노출.
@@ -46,12 +50,7 @@ function KeyLabel({ label }: { label: string }) {
   const desc = KEY_DESC[label]
   if (!desc) return <>{label}</>
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span className="cursor-help underline decoration-dotted decoration-muted-foreground/50 underline-offset-2">{label}</span>
-      </TooltipTrigger>
-      <TooltipContent side="right" className="max-w-sm whitespace-pre-wrap">{desc}</TooltipContent>
-    </Tooltip>
+    <InfoTip tip={desc} side="right">{label}</InfoTip>
   )
 }
 
@@ -113,14 +112,15 @@ function formFromApi(api: ApiDetail): OvForm {
     category: api.category ?? "", owner_email: api.owner_email ?? "", department: api.department ?? "",
     certification: api.certification ?? "", tier: api.tier ?? "", base_url: api.base_url ?? "",
     version: api.version ?? "", contract_url: api.contract_url ?? "",
-    tags: (api.tags ?? []).join(", "), note: api.note ?? "",
+    tags: encodeList(api.tags ?? []) ?? "", note: api.note ?? "",
   }
 }
 
 // 주소 형식을 검사하는 항목(등록 다이얼로그와 같은 규칙)
 const URL_FIELDS = ["base_url", "contract_url"] as const
 
-const tagList = (s: string) => s.split(",").map((t) => t.trim()).filter(Boolean)
+// 태그는 폼에 JSON 배열 문자열로 둔다(값 안의 쉼표 보존, TODO-143)
+const tagList = (s: string) => decodeList(s)
 const TEXT_FIELDS = ["display_name", "description", "category", "owner_email", "department", "base_url", "note"] as const
 
 /**
@@ -133,7 +133,7 @@ function changedPayload(api: ApiDetail, base: OvForm, form: OvForm): ApiUpdatePa
   const p: Record<string, unknown> = {}
   for (const k of TEXT_FIELDS) if (changed(k)) p[k] = val(k) || null
   for (const k of ["certification", "tier"]) if (changed(k)) p[k] = val(k) || null
-  if (tagList(form.tags ?? "").join(",") !== tagList(base.tags ?? "").join(",")) p.tags = tagList(form.tags ?? "")
+  if (JSON.stringify(tagList(form.tags ?? "")) !== JSON.stringify(tagList(base.tags ?? ""))) p.tags = tagList(form.tags ?? "")
   if (api.source === "manual") {
     if (changed("version") && val("version")) p.version = val("version")
     if (changed("contract_url")) p.contract_url = val("contract_url") || null
@@ -190,7 +190,8 @@ export function OverviewTab({ api, canEdit, onSaved, onDirtyChange }: {
     setEditingOv(false)
   }
   const handleSaveOv = async () => {
-    if (hasUrlError) { toast.error("주소 형식이 올바르지 않은 항목이 있습니다."); return }
+    // 항목별 오류는 각 입력란 아래, 요약은 저장 버튼 아래에 이미 보인다
+    if (hasUrlError) return
     const payload = changedPayload(api, ovBase, ov)
     if (Object.keys(payload).length === 0) {
       setEditingOv(false)
@@ -233,12 +234,12 @@ export function OverviewTab({ api, canEdit, onSaved, onDirtyChange }: {
               }}
             />
             {ov.owner_email && ov.owner_email === api.owner_email && !api.owner && (
-              <span className="text-xs text-muted-foreground">사용자 관리에 없는 이메일입니다. 등록된 사용자로 변경하는 것을 권장합니다.</span>
+              <span className="text-xs">사용자 관리에 없는 이메일입니다. 등록된 사용자로 변경하는 것을 권장합니다.</span>
             )}
           </div>
         )
       case "tags":
-        return <TagsInput value={ov[r.field] ?? ""} onChange={(v) => setOvF(r.field, v)} />
+        return <TagInput value={decodeList(ov[r.field])} onChange={(v) => setOvF(r.field, encodeList(v) ?? "")} />
       case "combo":
         return <ComboInput value={ov[r.field] ?? ""} onChange={(v) => setOvF(r.field, v)} options={OPT_API_CATEGORY} />
       case "cert":
@@ -260,7 +261,7 @@ export function OverviewTab({ api, canEdit, onSaved, onDirtyChange }: {
         return (
           <div className="flex w-full flex-col gap-1">
             <Input className="h-8 w-full text-sm" aria-invalid={err ? true : undefined} value={ov[r.field] ?? ""} onChange={(e) => setOvF(r.field, e.target.value)} />
-            {err && <span className="text-[11px] text-destructive">{err}</span>}
+            <FieldError>{err}</FieldError>
           </div>
         )
       }
@@ -278,19 +279,12 @@ export function OverviewTab({ api, canEdit, onSaved, onDirtyChange }: {
   for (let i = 0; i < rows.length; i += 2) pairs.push([rows[i], rows[i + 1]])
 
   return (
-    <>
-      <div className="mb-4 flex items-start justify-between gap-2">
-        <div className="space-y-4">
-          <div className="flex items-center gap-3 text-xs text-muted-foreground">
-            <span className="inline-flex items-center gap-1"><span className="inline-block h-2.5 w-2.5 rounded-full bg-sky-500" /> 사용자 입력</span>
-            <span className="inline-flex items-center gap-1"><span className="inline-block h-2.5 w-2.5 rounded-full bg-emerald-500" /> 자동 수집</span>
-          </div>
-          <p className="text-sm text-muted-foreground">
-            API 의 식별·소유, 분류, 버전·상태, 인증 등급 등 기본 메타데이터를 정리한 화면입니다.
-          </p>
-        </div>
-        {canEdit && (
-          <div className="flex shrink-0 gap-2">
+    <DetailSection
+      title="기본 정보"
+      description="API 의 식별·소유, 분류, 버전·상태, 인증 등급 등 기본 메타데이터입니다."
+      actions={canEdit ? (
+        <div className="flex flex-col items-end gap-1">
+          <div className="flex gap-2">
             {editingOv ? (
               <>
                 <Button size="sm" variant="outline" disabled={savingOv} onClick={() => { void cancelEditOv() }}>취소</Button>
@@ -300,33 +294,37 @@ export function OverviewTab({ api, canEdit, onSaved, onDirtyChange }: {
               <Button size="sm" variant="outline" onClick={startEditOv}><Pencil className="mr-1 h-4 w-4" /> 편집</Button>
             )}
           </div>
-        )}
-      </div>
-      <TooltipProvider delayDuration={150}>
-        <div className="overflow-hidden rounded-md border">
-          <table className="w-full table-fixed border-collapse text-sm">
-            <colgroup><col className="w-[140px]" /><col /><col className="w-[140px]" /><col /></colgroup>
-            <tbody>
-              {pairs.map((pair, idx) => (
-                <tr key={idx}>
-                  {[0, 1].map((j) => {
-                    const r = pair[j]
-                    if (!r) return <Fragment key={j}><th className="border bg-muted/50" /><td className="border" /></Fragment>
-                    return (
-                      <Fragment key={r.label}>
-                        <th className="border bg-muted/50 px-3 py-2 text-left align-middle font-medium text-black">
-                          <span className="inline-flex flex-wrap items-center gap-1"><KeyLabel label={r.label} /><SourceBadge source={r.source} /></span>
-                        </th>
-                        <td className="border px-3 py-2 align-middle break-words">{renderVal(r)}</td>
-                      </Fragment>
-                    )
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <FieldError>{hasUrlError ? "주소 형식이 올바르지 않은 항목이 있습니다." : null}</FieldError>
         </div>
-      </TooltipProvider>
-    </>
+      ) : undefined}
+    >
+      <div className="flex items-center gap-3 text-xs">
+        <span className="inline-flex items-center gap-1"><span className="inline-block h-2.5 w-2.5 rounded-full bg-sky-500" /> 사용자 입력</span>
+        <span className="inline-flex items-center gap-1"><span className="inline-block h-2.5 w-2.5 rounded-full bg-emerald-500" /> 자동 수집</span>
+      </div>
+      <div className="overflow-hidden rounded-md border">
+        <table className="w-full table-fixed border-collapse text-sm">
+          <colgroup><col className="w-[140px]" /><col /><col className="w-[140px]" /><col /></colgroup>
+          <tbody className="divide-y">
+            {pairs.map((pair, idx) => (
+              <tr key={idx} className="[&>*:last-child]:border-r-0">
+                {[0, 1].map((j) => {
+                  const r = pair[j]
+                  if (!r) return <Fragment key={j}><th className="border-r bg-muted/40" /><td className="border-r" /></Fragment>
+                  return (
+                    <Fragment key={r.label}>
+                      <th className="border-r bg-muted/40 px-3 py-2 text-left align-middle font-medium">
+                        <span className="inline-flex flex-wrap items-center gap-1"><KeyLabel label={r.label} /><SourceBadge source={r.source} /></span>
+                      </th>
+                      <td className="border-r px-3 py-2 align-middle break-words">{renderVal(r)}</td>
+                    </Fragment>
+                  )
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </DetailSection>
   )
 }

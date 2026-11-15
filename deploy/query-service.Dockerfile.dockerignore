@@ -1,0 +1,13 @@
+# query-service.Dockerfile 전용(BuildKit 이 루트 .dockerignore 대신 사용) — 필요한 패키지만 컨텍스트에 넣는다
+*
+!extensions/argus-catalog-sqlglot-impala
+!extensions/argus-sql-parse
+!extensions/argus-relationship-analyzer
+!extensions/argus-catalog-query-service
+**/.venv
+**/__pycache__
+**/*.pyc
+**/*.egg-info
+**/.pytest_cache
+**/build
+extensions/argus-catalog-query-service/logs

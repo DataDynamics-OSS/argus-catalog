@@ -91,6 +91,14 @@ def test_group_by_id_not_name():
         assert sorted(x["count"] for x in st.datasets_by_datasource if x["datasource"] == "dup") == [1, 1]
         assert [x["count"] for x in st.schema_fields_by_datasource if x["datasource"] == "dup"] == [1, 1]
         assert [x["count"] for x in st.top_tagged_datasets if x["name"] == "t.dup"] == [3, 3]
+        # 대시보드 막대를 누르면 목록 · 상세로 가도록 id 를 함께 준다 — 이름이 같아도 id 는 서로 다름
+        for rows in (st.datasets_by_datasource, st.schema_fields_by_datasource, st.top_tagged_datasets):
+            dup = [x["id"] for x in rows if x.get("datasource", x.get("name")) in ("dup", "t.dup")]
+            assert len(dup) == 2 and len(set(dup)) == 2 and all(isinstance(i, int) for i in dup)
+        # 데이터셋 목록 필터는 외부 식별자(문자열 datasource_id)를 받는다 — 막대 링크용 key (DEF-106)
+        for rows in (st.datasets_by_datasource, st.schema_fields_by_datasource):
+            assert all(isinstance(x["key"], str) and x["key"] for x in rows)
+            assert len({x["key"] for x in rows if x["datasource"] == "dup"}) == 2
     asyncio.run(run())
 
 

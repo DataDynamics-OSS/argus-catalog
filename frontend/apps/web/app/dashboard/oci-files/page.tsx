@@ -12,7 +12,7 @@ import { createS3DataSource } from "@/features/filesystem/api"
 
 function EmptyHint() {
   return (
-    <div className="mx-auto max-w-lg space-y-3 text-center text-sm text-muted-foreground">
+    <div className="mx-auto max-w-lg space-y-3 text-center text-sm">
       <Package className="mx-auto h-10 w-10 text-muted-foreground/40" />
       <p className="font-medium text-foreground">아직 저장된 OCI 모델 파일이 없습니다.</p>
       <p>

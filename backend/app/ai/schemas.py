@@ -2,11 +2,42 @@
 """AI 메타데이터 생성 API 용 Pydantic 스키마."""
 
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 # ---------------------------------------------------------------------------
 # 요청 스키마
 # ---------------------------------------------------------------------------
+
+class AiReadyDraftRequest(BaseModel):
+    """AI-Ready 초안 요청 — 항목을 비우면 편향 · 한계 · 관련법령 셋 다. ``force`` 면 값이 있는 항목도 다시 쓴다."""
+    fields: list[str] | None = Field(None, description="data_biases, known_limitations, legal_basis")
+    force: bool = False
+    language: str | None = None
+
+
+class AiReadyDraft(BaseModel):
+    field: str
+    label: str
+    text: str
+    log_id: int
+
+
+class AiReadySkipped(BaseModel):
+    field: str
+    label: str
+    reason: str
+
+
+class AiReadyDraftResponse(BaseModel):
+    """만든 초안(적용 대기 제안)과 만들지 않은 항목 · 사유. ``legal_reason`` 은 관련법령을 고른 근거."""
+    dataset_id: int
+    drafts: list[AiReadyDraft] = Field(default_factory=list)
+    skipped: list[AiReadySkipped] = Field(default_factory=list)
+    legal_reason: str | None = None
+    confidence: float | None = None
+
 
 class GenerateRequest(BaseModel):
     """생성 엔드포인트 공통 요청 바디."""
@@ -16,10 +47,13 @@ class GenerateRequest(BaseModel):
 
 
 class BulkGenerateRequest(BaseModel):
-    """일괄 생성 요청 바디 — generation_types 는 description / columns / tags / pii 중 선택."""
+    """일괄 생성 요청 바디 — generation_types 는 description / columns / tags / pii / ai_ready 중 선택.
+
+    ``ai_ready`` 는 편향 · 한계 · 관련법령 초안(TODO-096 6단계) — ``apply`` 와 관계없이 제안으로만 남고, ``empty_only`` 면
+    세 항목 중 하나라도 빈 데이터셋이 대상이다(다른 유형과 함께 고르면 설명이 빈 데이터셋)."""
     generation_types: list[str] = Field(
         default=["description"],
-        description="Types to generate: description, columns, tags, pii",
+        description="Types to generate: description, columns, tags, pii, ai_ready",
     )
     apply: bool = False
     language: str | None = None
@@ -155,3 +189,22 @@ class AIStatsResponse(BaseModel):
     by_type: dict
     provider: str | None = None
     model: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# AI 어시스턴트 답변 평가 (TODO-068)
+# ---------------------------------------------------------------------------
+
+class AssistantFeedbackRequest(BaseModel):
+    """답변 평가 — ``rating`` 이 null 이면 평가를 지운다."""
+    answer_id: str = Field(min_length=1, max_length=64)
+    conversation_id: str | None = Field(None, max_length=100)
+    rating: Literal["up", "down"] | None
+    comment: str | None = Field(None, max_length=2000)
+    question: str | None = None
+    answer: str | None = None
+
+
+class AssistantFeedbackResponse(BaseModel):
+    answer_id: str
+    rating: Literal["up", "down"] | None

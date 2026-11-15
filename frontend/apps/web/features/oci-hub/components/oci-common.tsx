@@ -1,6 +1,8 @@
 "use client"
 
+import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
+import { StatusBadge as ToneBadge, type StatusTone } from "@workspace/ui/components/status-badge"
 
 import { OCI_STATUS_LABELS } from "@/features/oci-hub/api"
 import { SOURCE_LABELS } from "@/features/oci-hub/oci-hub-dashboard"
@@ -13,39 +15,21 @@ export function versionLabel(v: number): string {
   return v > 0 ? `v${v}` : "-"
 }
 
-const STATUS_COLORS: Record<string, string> = {
-  draft: "bg-zinc-400", review: "bg-amber-500", approved: "bg-blue-500",
-  production: "bg-green-600", deprecated: "bg-zinc-600", archived: "bg-zinc-800",
-  ready: "bg-green-600", importing: "bg-sky-500", failed: "bg-red-600",
+// 모델 · 버전 상태 톤(TODO-107) — 진한 단색 대신 의미 톤의 옅은 칠
+const STATUS_TONE: Record<string, StatusTone> = {
+  draft: "neutral", review: "info", approved: "success", production: "success",
+  deprecated: "warning", archived: "muted",
+  ready: "success", importing: "info", failed: "danger",
 }
 
 export function StatusBadge({ status }: { status: string }) {
-  return (
-    <span
-      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold text-white ${STATUS_COLORS[status] || "bg-zinc-400"}`}
-      title={status}
-    >
-      {OCI_STATUS_LABELS[status] ?? status}
-    </span>
-  )
-}
-
-const SOURCE_BADGE_COLORS: Record<string, string> = {
-  huggingface: "text-blue-600 bg-blue-50 border-blue-200",
-  my: "text-orange-600 bg-orange-50 border-orange-200",
-  mlflow: "text-violet-600 bg-violet-50 border-violet-200",
-  file: "text-green-600 bg-green-50 border-green-200",
-  local: "text-green-600 bg-green-50 border-green-200",
+  return <ToneBadge tone={STATUS_TONE[status] ?? "neutral"} label={OCI_STATUS_LABELS[status] ?? status} />
 }
 
 export function SourceBadge({ sourceType }: { sourceType: string | null }) {
   if (!sourceType) return null
-  const color = SOURCE_BADGE_COLORS[sourceType] || "text-zinc-600 bg-zinc-50 border-zinc-200"
-  return (
-    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold ${color}`}>
-      {SOURCE_LABELS[sourceType] ?? sourceType}
-    </span>
-  )
+  // 출처는 분류라 무채색 테두리(TODO-107)
+  return <Badge variant="outline">{SOURCE_LABELS[sourceType] ?? sourceType}</Badge>
 }
 
 /** 가이드·사용법 예시에 넣을 서버 주소 — 사용자가 지금 접속한 주소(프록시 경유)를 그대로 쓴다. */

@@ -14,6 +14,7 @@ import {
   type PaginatedComments,
 } from "@/features/comments/api"
 import { useAuth } from "@/features/auth"
+import { usePermissions } from "@/features/permissions/use-permissions"
 import { errorMessage, notifyError } from "@/lib/notify"
 import { CommentEditor } from "./comment-editor"
 import { CommentItem } from "./comment-item"
@@ -25,14 +26,19 @@ type CommentSectionProps = {
   entityId: string
   /** Number of top-level comments per page (default: 10). */
   pageSize?: number
+  /** 오류 신고·개선 요청의 처리 상태를 바꿀 수 있는지 — 데이터셋 소유자(생성자)·관리자(TODO-096 4단계). */
+  canHandleReports?: boolean
 }
 
 export function CommentSection({
   entityType,
   entityId,
   pageSize = 5,
+  canHandleReports = false,
 }: CommentSectionProps) {
   const { user } = useAuth()
+  // 댓글 쓰기 · 답글 · 편집은 역할의 기능 권한 comments.write(기본 허용형, 서버와 같은 기준 — TODO-122)
+  const canWrite = usePermissions().canUseFeature("comments.write")
   const currentUser = user?.username ?? "anonymous"
   // 새 댓글에는 "성이름(username)" 형식으로 저장해 표시도 자연스럽고 (서버가 인증 사용자로 같은 형식을
   // 다시 만들어 저장한다 — 본문의 author_name 은 하위 호환용으로만 보낸다)
@@ -126,20 +132,27 @@ export function CommentSection({
       <div className="flex items-center gap-2">
         <MessageSquare className="h-5 w-5 text-muted-foreground" />
         <h3 className="text-base font-medium">
-          댓글 {total > 0 && <span className="text-muted-foreground">({total})</span>}
+          댓글 {total > 0 && <span >({total})</span>}
         </h3>
       </div>
 
+      {entityType === "dataset" && (
+        <p className="text-xs">
+          데이터에 잘못된 값이 있거나 고쳐야 할 점이 있으면 아래 분류를 <b>오류 신고</b>·<b>개선 요청</b>으로 골라 남겨 주세요.
+          접수되어 처리 기한이 붙고, 담당자가 처리 결과나 소명을 댓글 아래에 적습니다.
+        </p>
+      )}
+
       {/* Editor */}
-      <CommentEditor onSubmit={handlePost} />
+      {canWrite && <CommentEditor onSubmit={handlePost} />}
 
       {/* Comment list */}
       {loading ? (
-        <p className="text-sm text-muted-foreground text-center py-8">댓글을 불러오는 중...</p>
+        <p className="text-sm text-muted-foreground text-center py-8">댓글을 불러오는 중…</p>
       ) : loadError !== null ? (
         <div className="py-8 text-center text-sm">
           <p className="text-destructive">댓글을 불러오지 못했습니다.</p>
-          {loadError && <p className="mt-1 text-xs text-muted-foreground">{loadError}</p>}
+          {loadError && <p className="mt-1 text-xs">{loadError}</p>}
         </div>
       ) : comments.length === 0 ? (
         <p className="text-sm text-muted-foreground text-center py-8">아직 댓글이 없습니다. 첫 댓글을 남겨보세요!</p>
@@ -156,6 +169,9 @@ export function CommentSection({
               onReply={handleReply}
               onDelete={handleDelete}
               onEdit={handleEdit}
+              canHandleReports={canHandleReports}
+              canWrite={canWrite}
+              onReportChanged={() => load(page)}
             />
           ))}
         </div>

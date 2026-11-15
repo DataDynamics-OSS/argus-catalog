@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
-import { Card, CardContent, CardHeader, CardTitle } from "@workspace/ui/components/card"
+import { DetailSection } from "@/components/detail-section"
 import { Badge } from "@workspace/ui/components/badge"
 import {
   Table,
@@ -21,6 +21,7 @@ import { Database, ArrowRight, Link2, Network } from "lucide-react"
 import { authFetch, throwOnError } from "@/features/auth/auth-fetch"
 import { RelationshipGraph } from "./relationship-graph"
 import { errorMessage } from "@/lib/notify"
+import { datasetHref } from "@/features/datasets/links"
 
 const BASE = "/api/v1/catalog"
 
@@ -74,15 +75,16 @@ function relationTypeBadge(type: string) {
   if (type === "JOIN_KEY") {
     return (
       <Badge
+        size="sm"
         variant="secondary"
-        className="text-[10px] px-1.5 py-0 font-normal bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200"
+        className="font-normal bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200"
       >
         {type}
       </Badge>
     )
   }
   return (
-    <Badge variant="outline" className="text-[10px] px-1.5 py-0 font-normal">
+    <Badge size="sm" variant="outline" className="font-normal">
       {type}
     </Badge>
   )
@@ -119,21 +121,13 @@ export function RelationshipsTab({ datasetId }: { datasetId: number }) {
 
   if (loading) {
     return (
-      <Card>
-        <CardContent className="flex items-center justify-center py-12">
-          <p className="text-sm text-muted-foreground">관계 정보를 불러오는 중...</p>
-        </CardContent>
-      </Card>
+      <p className="py-12 text-center text-sm text-muted-foreground">관계 정보를 불러오는 중…</p>
     )
   }
 
   if (error) {
     return (
-      <Card>
-        <CardContent className="flex items-center justify-center py-12">
-          <p className="text-sm text-destructive">오류: {error}</p>
-        </CardContent>
-      </Card>
+      <p className="py-12 text-center text-sm text-destructive">오류: {error}</p>
     )
   }
 
@@ -143,8 +137,7 @@ export function RelationshipsTab({ datasetId }: { datasetId: number }) {
   // 빈 상태 — 수집된 쿼리에서 발견된 JOIN 패턴이 전혀 없을 때.
   if (tableRels.length === 0 && columnRels.length === 0) {
     return (
-      <Card>
-        <CardContent className="flex flex-col items-center justify-center py-12 gap-4">
+      <div className="flex flex-col items-center justify-center py-12 gap-4">
           <Network className="h-10 w-10 text-muted-foreground/50" />
           <div className="text-center space-y-1">
             <p className="text-sm text-muted-foreground">
@@ -154,8 +147,7 @@ export function RelationshipsTab({ datasetId }: { datasetId: number }) {
               쿼리 수집이 활성화되면 JOIN 패턴으로 자동 발견됩니다.
             </p>
           </div>
-        </CardContent>
-      </Card>
+      </div>
     )
   }
 
@@ -164,35 +156,24 @@ export function RelationshipsTab({ datasetId }: { datasetId: number }) {
   const sortedColumnRels = [...columnRels].sort((a, b) => b.joinCount - a.joinCount)
 
   return (
-    <div className="space-y-4">
-      {/* 관계 그래프 — 리니지처럼 무방향 네트워크로 시각화 */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Network className="h-4 w-4 text-muted-foreground" />
-            관계 그래프
-          </CardTitle>
-          <p className="text-xs text-muted-foreground">
-            이 데이터셋을 중심으로 함께 조인되는 데이터셋의 관계망입니다. 왼쪽 위에서 1~3홉 범위를 고를 수 있습니다(기본 1홉).
-          </p>
-        </CardHeader>
-        <CardContent className="p-0">
+    <div className="space-y-8">
+      {/* 관계 그래프 — 리니지처럼 무방향 네트워크로 시각화. 박스는 그래프 캔버스 하나 */}
+      <DetailSection
+        title="관계 그래프"
+        icon={<Network />}
+        description="이 데이터셋을 중심으로 함께 조인되는 데이터셋의 관계망입니다. 왼쪽 위에서 1~3홉 범위를 고를 수 있습니다(기본 1홉)."
+      >
+        <div className="overflow-hidden rounded-md border">
           <RelationshipGraph datasetId={datasetId} />
-        </CardContent>
-      </Card>
+        </div>
+      </DetailSection>
 
       {/* 함께 쓰인 데이터셋 (테이블 단위 빈도) */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Database className="h-4 w-4 text-muted-foreground" />
-            함께 쓰인 데이터셋
-          </CardTitle>
-          <p className="text-xs text-muted-foreground">
-            실제 쿼리에서 이 데이터셋과 자주 함께 조인된 데이터셋입니다.
-          </p>
-        </CardHeader>
-        <CardContent>
+      <DetailSection
+        title="함께 쓰인 데이터셋"
+        icon={<Database />}
+        description="실제 쿼리에서 이 데이터셋과 자주 함께 조인된 데이터셋입니다."
+      >
           {sortedTableRels.length === 0 ? (
             <p className="text-sm text-muted-foreground">함께 쓰인 데이터셋이 없습니다.</p>
           ) : (
@@ -200,7 +181,7 @@ export function RelationshipsTab({ datasetId }: { datasetId: number }) {
               {sortedTableRels.map((t) => (
                 <Link
                   key={t.datasetId}
-                  href={`/dashboard/datasets/${t.datasetId}`}
+                  href={datasetHref(t.datasetId, "relationships")}
                   className="group inline-flex items-center gap-2 rounded-lg border bg-card px-3 py-2 transition-colors hover:border-primary hover:bg-muted"
                 >
                   <Database className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
@@ -208,7 +189,7 @@ export function RelationshipsTab({ datasetId }: { datasetId: number }) {
                     <span className="text-sm font-medium text-foreground group-hover:underline truncate">
                       {t.name}
                     </span>
-                    <span className="text-xs text-muted-foreground truncate">
+                    <span className="text-xs truncate">
                       {t.datasourceName}
                     </span>
                   </span>
@@ -222,24 +203,18 @@ export function RelationshipsTab({ datasetId }: { datasetId: number }) {
               ))}
             </div>
           )}
-        </CardContent>
-      </Card>
+      </DetailSection>
 
-      {/* 본문: 컬럼 관계 (컬럼 단위 JOIN 빈도) */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Link2 className="h-4 w-4 text-muted-foreground" />
-            컬럼 관계
-          </CardTitle>
-          <p className="text-xs text-muted-foreground">
-            이 데이터셋의 컬럼이 다른 데이터셋의 컬럼과 JOIN 키로 함께 쓰인 빈도입니다.
-          </p>
-        </CardHeader>
-        <CardContent className="px-0">
+      {/* 본문: 컬럼 관계 (컬럼 단위 JOIN 빈도) — 박스는 표 하나 */}
+      <DetailSection
+        title="컬럼 관계"
+        icon={<Link2 />}
+        description="이 데이터셋의 컬럼이 다른 데이터셋의 컬럼과 JOIN 키로 함께 쓰인 빈도입니다."
+      >
           {sortedColumnRels.length === 0 ? (
-            <p className="px-6 text-sm text-muted-foreground">컬럼 관계가 없습니다.</p>
+            <p className="text-sm text-muted-foreground">컬럼 관계가 없습니다.</p>
           ) : (
+            <div className="overflow-hidden rounded-md border">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -259,12 +234,12 @@ export function RelationshipsTab({ datasetId }: { datasetId: number }) {
                     <TableCell>
                       <div className="flex items-center gap-1.5 min-w-0">
                         <Link
-                          href={`/dashboard/datasets/${c.relatedDatasetId}`}
+                          href={datasetHref(c.relatedDatasetId, "relationships")}
                           className="text-sm font-medium text-foreground hover:underline truncate"
                         >
                           {c.relatedDatasetName}
                         </Link>
-                        <span className="text-muted-foreground">.</span>
+                        <span >.</span>
                         <code className="font-mono text-sm text-foreground truncate">
                           {c.relatedField}
                         </code>
@@ -275,21 +250,21 @@ export function RelationshipsTab({ datasetId }: { datasetId: number }) {
                     <TableCell className="text-right">
                       <span className="text-sm tabular-nums">{c.joinCount}회</span>
                       {(c.explicitCount > 0 || c.implicitCount > 0) && (
-                        <span className="block text-xs text-muted-foreground tabular-nums">
+                        <span className="block text-xs tabular-nums">
                           명시 {c.explicitCount} · 암묵 {c.implicitCount}
                         </span>
                       )}
                     </TableCell>
-                    <TableCell className="text-right text-sm text-muted-foreground tabular-nums">
+                    <TableCell className="text-right text-sm tabular-nums">
                       {formatDateOnly(c.lastSeen)}
                     </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
+            </div>
           )}
-        </CardContent>
-      </Card>
+      </DetailSection>
     </div>
   )
 }

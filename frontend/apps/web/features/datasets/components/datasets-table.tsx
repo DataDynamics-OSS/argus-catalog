@@ -1,7 +1,10 @@
 "use client"
 
+import { Tip } from "@/components/tip"
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { X } from "lucide-react"
 import {
+  type ColumnDef,
   type ColumnFiltersState,
   type SortingState,
   type VisibilityState,
@@ -27,9 +30,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@workspace/ui/components/select"
+import { Badge } from "@workspace/ui/components/badge"
 import { DataTablePagination, DataTableToolbar } from "@/components/data-table"
 import { fetchDatasources } from "../api"
-import { type DatasetSummary, type Datasource } from "../data/schema"
+import { type DatasetSummary, type Datasource, type GlossaryTerm, type Tag } from "../data/schema"
+import { EMPTY_LIST_STATE } from "../links"
+import { fetchTags } from "@/features/tags/api"
+import { fetchGlossaryTerms } from "@/features/glossary/api"
+import { fetchTaxonomyTree, type TreeCategory } from "@/features/taxonomy/api"
 import {
   fetchTopology,
   type Topology,
@@ -37,10 +45,43 @@ import {
 } from "@/features/topology/api"
 import { isDatasourceTypeImplemented } from "@/features/datasources/datasource-configs"
 import { DatasetsCardView } from "./datasets-card-view"
+import { useCanDeleteDataset } from "../use-can-delete-dataset"
 import { ViewModeToggle } from "./view-mode-toggle"
 import { datasetsColumns as columns } from "./datasets-columns"
 import { DatasetsPrimaryButtons } from "./datasets-primary-buttons"
-import { useDatasets } from "./datasets-provider"
+import { type DatasetsFilters, useDatasets } from "./datasets-provider"
+
+// 태그 필터용 숨은 열 — 툴바의 다중 선택 필터가 열 단위로 값을 들고 있어서 둔다(표에는 보이지 않음).
+const TAG_FILTER_COLUMN: ColumnDef<DatasetSummary> = {
+  id: "tags",
+  enableHiding: false,
+  enableSorting: false,
+  header: () => null,
+  cell: () => null,
+}
+const tableColumns = [...columns, TAG_FILTER_COLUMN]
+
+/** 주소의 조건 → 툴바 입력값(검색어·다중 선택 필터). */
+function toColumnFilters(f: DatasetsFilters): ColumnFiltersState {
+  const out: ColumnFiltersState = []
+  if (f.q) out.push({ id: "name", value: f.q })
+  if (f.datasource.length) out.push({ id: "datasource_name", value: f.datasource })
+  if (f.origin.length) out.push({ id: "origin", value: f.origin })
+  if (f.status.length) out.push({ id: "status", value: f.status })
+  if (f.tag.length) out.push({ id: "tags", value: f.tag })
+  return out
+}
+
+/** 분류 트리에서 id 로 "체계 > 상위 > 분류" 경로를 찾는다. */
+function findCategoryPath(nodes: TreeCategory[], id: number, prefix: string[]): string[] | null {
+  for (const n of nodes) {
+    const path = [...prefix, n.name]
+    if (n.id === id) return path
+    const found = findCategoryPath(n.children ?? [], id, path)
+    if (found) return found
+  }
+  return null
+}
 
 type DatasetsTableProps = {
   data: DatasetSummary[]
@@ -48,18 +89,62 @@ type DatasetsTableProps = {
 }
 
 export function DatasetsTable({ data, isLoading }: DatasetsTableProps) {
-  const { total, page, pageSize, setPage, setPageSize, searchDatasets, viewMode, setOpen, setCurrentRow } =
+  const { total, page, pageSize, setPage, setPageSize, filters, searchDatasets, viewMode, setOpen, setCurrentRow } =
     useDatasets()
+  const canDeleteDataset = useCanDeleteDataset()
 
   const [sorting, setSorting] = useState<SortingState>([])
-  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
-  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({ tags: false })
+  // 툴바 입력값 — 주소의 조건으로 시작하고, 주소가 바뀌면(링크·뒤로 가기) 다시 맞춘다. 검색 버튼·Enter 로 주소에 반영.
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>(() => toColumnFilters(filters))
+  useEffect(() => {
+    setColumnFilters(toColumnFilters(filters))
+  }, [filters])
   const [datasources, setDatasources] = useState<Datasource[]>([])
+  const [tags, setTags] = useState<Tag[]>([])
 
-  // Fetch datasources for filter options
+  // 필터 선택지 — 데이터 소스·태그
   useEffect(() => {
     fetchDatasources().then(setDatasources).catch(() => {})
+    fetchTags().then(setTags).catch(() => {})
   }, [])
+
+  const tagOptions = useMemo(
+    () => tags.map((t) => ({ label: t.name, value: String(t.id) })),
+    [tags]
+  )
+
+  // 용어·분류 조건은 툴바 필터가 아니라 링크(용어집·분류·데이터셋 상세)로 걸린다 — 이름을 찾아 칩으로 보여 준다.
+  const [termName, setTermName] = useState<string | null>(null)
+  useEffect(() => {
+    if (!filters.term) return setTermName(null)
+    let alive = true
+    fetchGlossaryTerms()
+      .then((terms: GlossaryTerm[]) => {
+        if (alive) setTermName(terms.find((t) => String(t.id) === filters.term)?.name ?? `#${filters.term}`)
+      })
+      .catch(() => alive && setTermName(`#${filters.term}`))
+    return () => {
+      alive = false
+    }
+  }, [filters.term])
+
+  const [categoryLabel, setCategoryLabel] = useState<string | null>(null)
+  useEffect(() => {
+    if (!filters.category) return setCategoryLabel(null)
+    const fallback = `#${filters.category}`
+    if (!filters.taxonomy) return setCategoryLabel(fallback)
+    let alive = true
+    fetchTaxonomyTree(Number(filters.taxonomy))
+      .then((tree) => {
+        const path = findCategoryPath(tree.categories ?? [], Number(filters.category), [tree.taxonomy.name])
+        if (alive) setCategoryLabel(path ? path.join(" > ") : fallback)
+      })
+      .catch(() => alive && setCategoryLabel(fallback))
+    return () => {
+      alive = false
+    }
+  }, [filters.category, filters.taxonomy])
 
   // 필터 옵션은 "지원되는" 데이터 소스 type 만 노출. 등록은 되어 있지만 sync 어댑터가
   // 없는 종류(kafka/s3/snowflake 등) 까지 보여주면 사용자가 선택해도 데이터셋이
@@ -81,9 +166,9 @@ export function DatasetsTable({ data, isLoading }: DatasetsTableProps) {
     { label: "사용 중단", value: "deprecated" },
   ]
 
-  // 조직/시스템 필터 (토폴로지 기반)
-  const [orgId, setOrgId] = useState("")
-  const [systemId, setSystemId] = useState("")
+  // 조직/시스템 필터 (토폴로지 기반) — 고르면 바로 주소에 반영된다
+  const orgId = filters.org
+  const systemId = filters.system
   const [topology, setTopology] = useState<Topology | null>(null)
   useEffect(() => {
     fetchTopology().then(setTopology).catch(() => {})
@@ -125,7 +210,7 @@ export function DatasetsTable({ data, isLoading }: DatasetsTableProps) {
 
   const table = useReactTable({
     data,
-    columns,
+    columns: tableColumns,
     pageCount,
     state: {
       sorting,
@@ -153,29 +238,24 @@ export function DatasetsTable({ data, isLoading }: DatasetsTableProps) {
     getSortedRowModel: getSortedRowModel(),
   })
 
-  // columnFilters + 조직/시스템 상태를 합쳐 검색 실행. org/system 은 셀렉트 변경 시
-  // 비동기 state 갱신 전이므로 override 인자로 즉시 값을 받는다.
+  // 툴바 입력값 + 조직/시스템을 합쳐 주소에 반영(→ 다시 조회). 용어·분류 조건은 칩을 닫기 전까지 유지한다.
+  // org/system 은 셀렉트 변경 직후 값을 인자로 받는다.
   const runSearch = useCallback(
-    (nextOrg = orgId, nextSystem = systemId) => {
-      const searchVal = columnFilters.find((f) => f.id === "name")?.value
-      const datasourceVal = columnFilters.find((f) => f.id === "datasource_name")?.value
-      const originVal = columnFilters.find((f) => f.id === "origin")?.value
-      const statusVal = columnFilters.find((f) => f.id === "status")?.value
-
-      const search = typeof searchVal === "string" ? searchVal : ""
-      let datasource = ""
-      if (Array.isArray(datasourceVal) && datasourceVal.length === 1) datasource = datasourceVal[0]
-      let origin = ""
-      if (Array.isArray(originVal) && originVal.length === 1) origin = originVal[0]
-      let status = ""
-      if (Array.isArray(statusVal) && statusVal.length === 1) status = statusVal[0]
-
+    (overrides: Partial<DatasetsFilters> = {}) => {
+      const value = (id: string) => columnFilters.find((f) => f.id === id)?.value
+      const list = (v: unknown) => (Array.isArray(v) ? v.map(String) : [])
+      const q = value("name")
       searchDatasets({
-        search, datasource, origin, status, tag: "",
-        orgId: nextOrg, systemId: nextSystem,
+        ...filters,
+        q: typeof q === "string" ? q.trim() : "",
+        datasource: list(value("datasource_name")),
+        origin: list(value("origin")),
+        status: list(value("status")),
+        tag: list(value("tags")),
+        ...overrides,
       })
     },
-    [columnFilters, searchDatasets, orgId, systemId]
+    [columnFilters, filters, searchDatasets]
   )
 
   const handleSearch = useCallback(() => runSearch(), [runSearch])
@@ -183,12 +263,8 @@ export function DatasetsTable({ data, isLoading }: DatasetsTableProps) {
   const handleClear = useCallback(() => {
     table.resetColumnFilters()
     table.setGlobalFilter("")
-    setOrgId("")
-    setSystemId("")
-    searchDatasets({
-      search: "", datasource: "", origin: "", status: "", tag: "",
-      orgId: "", systemId: "",
-    })
+    const { page: _p, size: _s, ...empty } = EMPTY_LIST_STATE
+    searchDatasets(empty)
   }, [table, searchDatasets])
 
   return (
@@ -198,9 +274,7 @@ export function DatasetsTable({ data, isLoading }: DatasetsTableProps) {
         <Select
           value={orgId || "all"}
           onValueChange={(v) => {
-            const nv = v === "all" ? "" : v
-            setOrgId(nv)
-            runSearch(nv, systemId)
+            runSearch({ org: v === "all" ? "" : v })
           }}
         >
           <SelectTrigger className="h-9 w-44 text-sm">
@@ -218,9 +292,7 @@ export function DatasetsTable({ data, isLoading }: DatasetsTableProps) {
         <Select
           value={systemId || "all"}
           onValueChange={(v) => {
-            const nv = v === "all" ? "" : v
-            setSystemId(nv)
-            runSearch(orgId, nv)
+            runSearch({ system: v === "all" ? "" : v })
           }}
         >
           <SelectTrigger className="h-9 w-52 text-sm">
@@ -237,9 +309,41 @@ export function DatasetsTable({ data, isLoading }: DatasetsTableProps) {
         </Select>
       </div>
 
+      {(filters.term || filters.category) && (
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <span >조건</span>
+          {filters.term && (
+            <Badge variant="secondary" className="gap-1 pr-1">
+              용어: {termName ?? "…"}
+              <Tip label="용어 조건 지우기"><button
+                type="button"
+                aria-label="용어 조건 지우기"
+                className="rounded-sm p-0.5 hover:bg-muted-foreground/20"
+                onClick={() => runSearch({ term: "" })}
+              >
+                <X className="h-3 w-3" />
+              </button></Tip>
+            </Badge>
+          )}
+          {filters.category && (
+            <Badge variant="secondary" className="gap-1 pr-1">
+              분류: {categoryLabel ?? "…"}
+              <Tip label="분류 조건 지우기"><button
+                type="button"
+                aria-label="분류 조건 지우기"
+                className="rounded-sm p-0.5 hover:bg-muted-foreground/20"
+                onClick={() => runSearch({ category: "", taxonomy: "" })}
+              >
+                <X className="h-3 w-3" />
+              </button></Tip>
+            </Badge>
+          )}
+        </div>
+      )}
+
       <DataTableToolbar
         table={table}
-        searchPlaceholder="데이터셋 검색..."
+        searchPlaceholder="데이터셋 검색…"
         searchKey="name"
         filters={[
           {
@@ -261,6 +365,11 @@ export function DatasetsTable({ data, isLoading }: DatasetsTableProps) {
             title: "상태",
             options: statusOptions,
           },
+          {
+            columnId: "tags",
+            title: "태그",
+            options: tagOptions,
+          },
         ]}
         onSearch={handleSearch}
         onClear={handleClear}
@@ -275,11 +384,12 @@ export function DatasetsTable({ data, isLoading }: DatasetsTableProps) {
       {viewMode === "card" ? (
         isLoading ? (
           <div className="rounded-md border py-12 text-center text-sm text-muted-foreground">
-            데이터셋을 불러오는 중...
+            데이터셋을 불러오는 중…
           </div>
         ) : (
           <DatasetsCardView
             rows={data}
+            canDelete={canDeleteDataset}
             onDelete={(row) => {
               setCurrentRow(row)
               setOpen("delete")
@@ -320,7 +430,7 @@ export function DatasetsTable({ data, isLoading }: DatasetsTableProps) {
                   colSpan={columns.length}
                   className="h-24 text-center"
                 >
-                  <p className="text-muted-foreground">데이터셋을 불러오는 중...</p>
+                  <p className="text-muted-foreground">데이터셋을 불러오는 중…</p>
                 </TableCell>
               </TableRow>
             ) : table.getRowModel().rows?.length ? (

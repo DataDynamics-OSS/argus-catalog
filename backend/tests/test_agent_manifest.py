@@ -102,7 +102,8 @@ async def _make_factory():
              if name.startswith(("catalog_ai_agent", "catalog_mcp_"))]
     import app.permissions.models  # noqa: F401  — 기능 권한(require_feature) 조회용 테이블 등록
     seeds += [mm.RegisteredModel.__table__, Base.metadata.tables["catalog_entity_embeddings"], um.ArgusUser.__table__,
-              Base.metadata.tables["argus_permissions"]]
+              Base.metadata.tables["argus_permissions"],
+              Base.metadata.tables["catalog_dataset_schemas"]]  # 데이터 접근의 개인정보 포함 여부
     tables, pending, seen = [], list(seeds), set()
     while pending:
         t = pending.pop()

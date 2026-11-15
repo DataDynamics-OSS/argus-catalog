@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
+from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,6 +38,12 @@ async def _dataset_schema_json(session: AsyncSession, dataset_id: int) -> str | 
             "type": r.field_type,
             "nullable": (r.nullable or "true") == "true",
             "primary_key": (r.is_primary_key or "false") == "true",
+            # 되돌리기 · 변경 전 표시에 쓰는 나머지 속성(TODO-132) — 예전 기록은 위 네 가지뿐
+            **({"native_type": r.native_type} if r.native_type else {}),
+            "is_unique": r.is_unique or "false",
+            "is_indexed": r.is_indexed or "false",
+            "is_partition_key": r.is_partition_key or "false",
+            "is_distribution_key": r.is_distribution_key or "false",
             **({"description": r.description} if r.description else {}),
         }
         for r in rows
@@ -159,6 +166,96 @@ async def create_cr(
     logger.debug("CR 생성(flush): cr=%s steps=%d referrers=%d",
                  cr.cr_code, len(data.approval_chain), len(data.referrers))
     return cr
+
+
+async def replace_draft_cr(
+    session: AsyncSession, cr: models.ChangeRequest, data: schemas.ChangeRequestCreate
+) -> None:
+    """상신 전 초안(DRAFT) 내용을 통째로 바꾼다 — 결재선·참조자도 새 목록으로. flush 만, 커밋은 호출 측.
+
+    schema_before 를 비워 보내면 생성 때처럼 대상 데이터셋의 지금 스키마로 다시 채운다(편집기도 지금 스키마 기준으로 만든다).
+    """
+    schema_before = data.schema_before
+    if not (schema_before and schema_before.strip()):
+        schema_before = await _dataset_schema_json(session, data.dataset_id)
+    cr.title = data.title
+    cr.description = data.description
+    cr.dataset_id = data.dataset_id
+    cr.change_type = data.change_type.value
+    cr.priority = data.priority.value
+    cr.schema_before = schema_before
+    cr.schema_after = data.schema_after
+    cr.rollback_plan = data.rollback_plan
+    cr.business_justification = data.business_justification
+    cr.scheduled_at = data.scheduled_at
+    await session.execute(sa_delete(models.ApprovalStep).where(models.ApprovalStep.cr_id == cr.id))
+    for step in data.approval_chain:
+        session.add(models.ApprovalStep(
+            cr_id=cr.id, step_order=step.step_order, approver=step.approver, role=step.role,
+            due_at=step.due_at, decision=schemas.Decision.PENDING.value,
+        ))
+    # 참조자는 바뀐 경우에만 다시 만든다 — 생성 때 보낸 참조자 통지 이력(referrer_id CASCADE)을 지키기 위해
+    new_refs = [
+        ((ref.name or "").strip() or None, (ref.email or "").strip() or None,
+         (ref.channel or "EMAIL").upper(), (ref.slack_target or "").strip() or None)
+        for ref in data.referrers
+        if (ref.email and ref.email.strip()) or (ref.slack_target and ref.slack_target.strip())
+    ]
+    old_refs = [(r.name, r.email, r.channel, r.slack_target) for r in await list_referrers(session, cr.id)]
+    if sorted(new_refs, key=str) != sorted(old_refs, key=str):
+        await session.execute(sa_delete(models.ChangeReferrer).where(models.ChangeReferrer.cr_id == cr.id))
+        for name, email, channel, slack in new_refs:
+            session.add(models.ChangeReferrer(cr_id=cr.id, name=name, email=email, channel=channel, slack_target=slack))
+    await session.flush()
+
+
+async def delete_unsubmitted_cr(session: AsyncSession, cr: models.ChangeRequest) -> None:
+    """상신한 적 없는 CR(워크플로우 없음)을 결재 단계·참조자와 함께 지운다. 커밋은 호출 측."""
+    await session.execute(sa_delete(models.ApprovalStep).where(models.ApprovalStep.cr_id == cr.id))
+    await session.execute(sa_delete(models.ChangeReferrer).where(models.ChangeReferrer.cr_id == cr.id))
+    await session.delete(cr)
+    await session.flush()
+
+
+async def close_cr(session: AsyncSession, cr_id: int) -> bool:
+    """적용 완료(APPLIED) CR 을 종료(CLOSED)한다 — 조건부 UPDATE, 그 사이 상태가 바뀌었으면 False."""
+    result = await session.execute(
+        update(models.ChangeRequest)
+        .where(models.ChangeRequest.id == cr_id,
+               models.ChangeRequest.status == schemas.CRStatus.APPLIED.value)
+        .values(status=schemas.CRStatus.CLOSED.value, updated_at=func.now())
+    )
+    return (result.rowcount or 0) > 0
+
+
+async def rollback_cr(session: AsyncSession, cr: models.ChangeRequest) -> tuple[int, int]:
+    """적용한 스키마 변경을 되돌리고 CR 을 ROLLED_BACK 으로 — CR 이 건드린 컬럼만 적용 전 상태로.
+
+    ``activities.reverse_schema_spec`` 으로 역변경을 만들어 적용과 같은 경로(``apply_schema_spec``)로 반영한다
+    (스키마 변경 이력·알림 규칙 평가 포함). 되돌릴 정보가 없으면 ``ValueError``. 반환: (upsert 수, drop 수).
+    flush 만, 커밋은 호출 측.
+    """
+    from app.change_mgmt.activities import apply_schema_spec, reverse_schema_spec
+
+    upserts, drops = reverse_schema_spec(cr.schema_before, cr.schema_after)
+    if upserts or drops:
+        await apply_schema_spec(session, cr.dataset_id, upserts, drops, f"rollback cr={cr.cr_code}")
+    cr.status = schemas.CRStatus.ROLLED_BACK.value
+    await session.flush()
+    return len(upserts), len(drops)
+
+
+async def dataset_names(session: AsyncSession, dataset_ids: list[int]) -> dict[int, str]:
+    """데이터셋 id → 표시 이름(qualified_name, 없으면 name) — 목록·결재함 카드용 일괄 조회."""
+    from app.catalog.models import Dataset
+
+    ids = sorted(set(dataset_ids))
+    if not ids:
+        return {}
+    rows = (await session.execute(
+        select(Dataset.id, Dataset.qualified_name, Dataset.name).where(Dataset.id.in_(ids))
+    )).all()
+    return {i: (qn or n) for i, qn, n in rows}
 
 
 async def list_referrers(session: AsyncSession, cr_id: int) -> list[models.ChangeReferrer]:
@@ -490,6 +587,43 @@ async def list_consumers(
             select(models.Consumer).where(models.Consumer.dataset_id == dataset_id)
         )
     ).scalars().all()
+
+
+async def dataset_creator(session: AsyncSession, dataset_id: int) -> tuple[bool, str | None]:
+    """(데이터셋이 있는지, 생성자(소유자) 사용자 이름)."""
+    from app.catalog.models import Dataset
+
+    row = (await session.execute(select(Dataset.created_by).where(Dataset.id == dataset_id))).first()
+    return (row is not None, row[0] if row else None)
+
+
+async def can_ack_notification(session: AsyncSession, log: models.NotificationLog, user) -> bool:
+    """통지 ACK 를 할 수 있는 사람인지 — 관리자, 변경 요청자, 대상 데이터셋 소유자, 그 통지의 수신자 본인(DEF-122).
+
+    수신자 본인은 로그의 ``recipient`` · 참조자 이메일 · 소비자 연락 이메일 중 하나가 내 이메일 또는 사용자 이름과
+    같을 때다(이메일 대소문자 무시).
+    """
+    if user.is_admin:
+        return True
+    me = {v.strip().lower() for v in (user.username, getattr(user, "email", "")) if v and v.strip()}
+    if not me:
+        return False
+    cr = await session.get(models.ChangeRequest, log.cr_id)
+    if cr is not None:
+        if (cr.requested_by or "").lower() in me:
+            return True
+        if ((await dataset_creator(session, cr.dataset_id))[1] or "").lower() in me:
+            return True
+    targets = [log.recipient]
+    if log.referrer_id:
+        ref = await session.get(models.ChangeReferrer, log.referrer_id)
+        if ref is not None:
+            targets.append(ref.email)
+    if log.consumer_id:
+        consumer = await session.get(models.Consumer, log.consumer_id)
+        if consumer is not None and consumer.contact_emails:
+            targets.extend(consumer.contact_emails.split(","))
+    return any((t or "").strip().lower() in me for t in targets)
 
 
 async def ack_notification(

@@ -5,17 +5,24 @@
  *
  * - editor 와 동일한 prose 스타일 + 추가 노드 보조 utility (코드블록·표·
  *   체크리스트·이미지·인라인 코드의 백틱/bold 제거, 리스트 marker 색 등).
- * - 마운트/업데이트 시 ``<pre><code>`` 들에 ``hljs.highlightElement`` 를
- *   적용해 토큰 span 을 생성한다. TipTap 의 lowlight 출력이 ProseMirror
- *   decoration 으로만 그려지므로 직렬화된 HTML 에는 토큰이 빠져 있어
- *   viewer 측에서 다시 highlight 해 줘야 색이 입혀진다.
+ * - ``<pre><code class="language-xx">`` 를 highlight.js 로 강조해 토큰 span 을 만든다. TipTap 의
+ *   lowlight 출력은 ProseMirror decoration 으로만 그려져 직렬화된 HTML 에는 토큰이 없으므로
+ *   viewer 가 다시 강조해야 색이 입혀진다. 렌더 후 DOM 을 고치면 재렌더 때 덮어써질 수 있어
+ *   (실제로 강조가 붙지 않았다) 문자열 단계에서 강조까지 끝낸 결과를 주입한다.
+ *   언어가 지정되고 등록된 경우에만 강조한다(편집기와 동일 — 언어 없음은 자동 감지하지 않음).
+ * - 저장 HTML 을 그대로 주입하지 않고 DOMPurify 로 정화한다 — ``<script>``·``on*`` 핸들러·
+ *   ``javascript:`` URL 제거. TipTap 출력(style·data-*·data: 이미지·체크박스)은 유지.
+ * - 코드 블록에 편집기와 같은 줄 번호 gutter 를 붙인다(code-block.tsx 의 ``decorateCodeBlock``).
  */
 
-import { useEffect, useRef } from "react"
+import { useMemo } from "react"
+import DOMPurify from "dompurify"
 import hljs from "highlight.js/lib/core"
 import { common } from "lowlight"
 
 import { cn } from "@workspace/ui/lib/utils"
+
+import { decorateCodeBlock } from "./code-block"
 
 // editor 의 lowlight 와 동일한 ``common`` 언어 셋을 highlight.js core 인스턴스에도
 // 한 번만 등록. 같은 모듈을 import 한 다른 viewer 들과 공유된다.
@@ -45,7 +52,7 @@ const VIEWER_PROSE_CLASS =
   "[&_ul]:my-2 [&_ol]:my-2 [&_blockquote]:my-2 [&_pre]:my-2 " +
   // 코드블록
   "[&_pre]:bg-muted [&_pre]:p-3 [&_pre]:rounded [&_pre]:text-sm " +
-  "[&_pre]:overflow-x-auto [&_pre]:whitespace-pre [&_pre]:font-[D2Coding,monospace] " +
+  "[&_pre]:whitespace-pre [&_pre]:font-[D2Coding,monospace] " +
   "[&_pre_code]:bg-transparent [&_pre_code]:p-0 " +
   // 인라인 코드 — ``py-0.5`` 가 인라인 line-box 를 키워 그 줄만 들뜨던 문제 보정.
   // padding-y 는 0 으로 두고 padding-x 만 살짝 부여, 박스 시각화는 background+rounded 로.
@@ -78,30 +85,32 @@ type RichTextViewerProps = {
 }
 
 export function RichTextViewer({ html, className, onClick, title }: RichTextViewerProps) {
-  const ref = useRef<HTMLDivElement>(null)
-
-  // 본문이 바뀔 때마다(또는 처음 마운트될 때) <pre><code> 들에 highlight 적용.
-  // highlight.js 가 ``data-highlighted="yes"`` 를 붙여 더블 토큰화를 방지한다.
-  useEffect(() => {
-    if (!ref.current) return
-    const codes = ref.current.querySelectorAll<HTMLElement>("pre code")
-    codes.forEach((el) => {
-      if (el.dataset.highlighted === "yes") return
+  // 정화·강조·줄 번호 장식은 문자열 단계에서 끝낸 결과를 주입한다(렌더 후 DOM 을 고치면 재렌더 때 덮어써짐).
+  const safeHtml = useMemo(() => {
+    if (typeof document === "undefined") return "" // SSR — 본문은 클라이언트에서 그린다
+    const tpl = document.createElement("template")
+    tpl.innerHTML = DOMPurify.sanitize(html ?? "")
+    tpl.content.querySelectorAll<HTMLElement>("pre > code").forEach((code) => {
+      decorateCodeBlock(code)
+      const lang = code.className.match(/(?:language|lang)-([\w-]+)/i)?.[1]
+      if (!lang || !hljs.getLanguage(lang)) return
       try {
-        hljs.highlightElement(el)
+        // highlight 결과는 원문을 escape 한 토큰 span 이라 정화 이후에 넣어도 안전하다.
+        code.innerHTML = hljs.highlight(code.textContent ?? "", { language: lang, ignoreIllegals: true }).value
+        code.classList.add("hljs")
       } catch {
-        // 미등록 언어 등 — 그대로 둠.
+        // 강조 실패 — 원문 그대로 둔다.
       }
     })
+    return tpl.innerHTML
   }, [html])
 
   return (
     <div
-      ref={ref}
       className={cn(VIEWER_PROSE_CLASS, className)}
       onClick={onClick}
       title={title}
-      dangerouslySetInnerHTML={{ __html: html }}
+      dangerouslySetInnerHTML={{ __html: safeHtml }}
     />
   )
 }

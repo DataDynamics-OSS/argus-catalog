@@ -20,6 +20,10 @@ logger = logging.getLogger(__name__)
 # 도구 호출 무한 루프 방지 — 일반 질문은 2~3회면 충분하다
 MAX_TOOL_ROUNDS = 6
 
+# 라운드를 다 쓰면 도구 없이 이 지시로 한 번 더 불러 부분 답변이라도 만든다 (TODO-037)
+ROUND_LIMIT_PROMPT = ("도구 호출 한도에 도달해 더는 조회할 수 없습니다. 지금까지 도구로 확인한 결과만으로 답하세요. "
+                      "확인하지 못한 부분은 확인하지 못했다고 분명히 밝히고, 지어내지 마세요.")
+
 SYSTEM_PROMPT = """당신은 Argus Catalog(데이터 카탈로그)의 AI 어시스턴트입니다. 항상 한국어로만 답합니다 — 중국어(한자 단어)·일본어·영어 문장을 섞지 않습니다 (테이블·컬럼명, SQL 키워드 등 식별자는 원문 유지).
 
 원칙:
@@ -45,13 +49,50 @@ SYSTEM_PROMPT = """당신은 Argus Catalog(데이터 카탈로그)의 AI 어시�
 5. 답변은 간결하게 — 표/코드블록을 적극 사용합니다."""
 
 
+# 이어지는 질문의 맥락으로 모델에 알려 줄 이전 데이터셋 수 상한 (TODO-036)
+MAX_CONTEXT_DATASETS = 10
+
+
+def _history_datasets(history: list[dict]) -> list[dict]:
+    """이전 답변들에서 확인한 데이터셋 — 최근 것 우선, id 중복 제거, 상한까지."""
+    seen: dict[int, dict] = {}
+    for turn in reversed(history):
+        for d in turn.get("datasets") or []:
+            if isinstance(d, dict) and isinstance(d.get("id"), int) and d["id"] not in seen:
+                seen[d["id"]] = d
+            if len(seen) >= MAX_CONTEXT_DATASETS:
+                return list(seen.values())
+    return list(seen.values())
+
+
 def _conversation_messages(history: list[dict], message: str) -> list[dict]:
-    """이전 대화 + 새 질문으로 OpenAI messages 를 구성한다."""
+    """이전 대화 + 새 질문으로 OpenAI messages 를 구성한다.
+
+    이력에는 답변 문장만 남으므로, 앞서 도구로 확인한 데이터셋(id·이름)을 시스템 메시지로 알려 준다 —
+    "그 테이블 품질은?" 같은 이어지는 질문에서 다시 검색하지 않고 id 를 바로 쓰게 (TODO-036).
+    """
     messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
     for turn in history:
         messages.append({"role": turn["role"], "content": turn["text"]})
+    datasets = _history_datasets(history)
+    if datasets:
+        listed = ", ".join(f"{d.get('name') or '이름 미확인'}(id={d['id']})" for d in datasets)
+        messages.append({"role": "system", "content":
+                         f"이전 대화에서 도구로 확인한 데이터셋: {listed}. 새 질문이 이 데이터셋을 가리키면"
+                         " 다시 검색하지 말고 이 id 를 그대로 쓰세요. 다른 대상이면 평소처럼 검색합니다."})
     messages.append({"role": "user", "content": message})
     return messages
+
+
+def _track_datasets(refs: dict[int, str | None], name: str, args: dict, result) -> None:
+    """도구 호출에서 확인한 데이터셋을 모은다 — 데이터셋 id 를 받은 도구가 성공했을 때만."""
+    ds_id = args.get("dataset_id")
+    if isinstance(ds_id, str) and ds_id.isdigit():
+        ds_id = int(ds_id)
+    if not isinstance(ds_id, int) or not isinstance(result, dict) or result.get("error"):
+        return
+    ds_name = result.get("name") if name == "get_dataset_detail" else None
+    refs[ds_id] = ds_name or refs.get(ds_id)
 
 
 def _clean_answer(text: str) -> str:
@@ -137,15 +178,49 @@ def run_assistant(
 ) -> Iterator[dict]:
     """tool-use 루프 실행 — SSE 이벤트 dict 를 순서대로 yield 한다.
 
-    마지막에 history 갱신용으로 {"type": "_final", "data": {"text": ...}} 를
-    내보낸다 (서버 내부용 — 클라이언트로는 전송하지 않음).
+    마지막에 history 갱신용으로 {"type": "_final", "data": {"text": ..., "datasets": [...]}} 를
+    내보낸다 (서버 내부용 — 클라이언트로는 전송하지 않음). datasets 는 이번 답변에서 도구로
+    확인한 데이터셋 [{"id", "name"}] 이다.
     """
     messages = _conversation_messages(history, message)
     tools = tool_schemas()
     valid_tool_names = {t["function"]["name"] for t in tools}
-    total_in = total_out = 0
+    usage_total = {"in": 0, "out": 0}
+    refs: dict[int, str | None] = {}
     logger.debug("어시스턴트 루프 시작: history_turns=%d message_len=%d tools=%d",
                  len(history), len(message), len(tools))
+
+    def add_usage(usage: dict) -> None:
+        usage_total["in"] += usage.get("prompt_tokens") or 0
+        usage_total["out"] += usage.get("completion_tokens") or 0
+
+    def finish(text: str, base_messages: list[dict]) -> Iterator[dict]:
+        """최종 답변 내보내기 — 한자 섞임 재작성 → 조각 표시 → usage·done·_final."""
+        # 한국어 최우선 — 중국어 등이 섞였으면 한국어로 1회 재작성한다
+        # (qwen2.5 다국어 누수 방어, 프롬프트만으로는 간헐 누수를 100% 못 막음).
+        if _has_cjk(text):
+            retry_msgs = base_messages + [
+                {"role": "assistant", "content": text},
+                {"role": "user", "content": "방금 답변에 한국어가 아닌 글자가 섞였습니다. "
+                 "같은 내용을 100% 한국어로만 다시 작성해 주세요. 중국어·일본어 금지 "
+                 "(테이블·컬럼명, SQL 키워드 등 식별자만 원문 유지)."},
+            ]
+            try:
+                retry = llm.chat(retry_msgs, tools=None)
+                retry_text = _clean_answer(retry["message"].get("content") or "")
+                add_usage(retry["usage"])
+                if retry_text and not _has_cjk(retry_text):
+                    text = retry_text
+                logger.info("한국어 재작성 수행 — 중국어 누수 감지")
+            except RuntimeError as e:
+                # 재작성 실패 시 원문 유지(베스트에포트)
+                logger.warning("한국어 재작성 실패 — 원문 답변 유지: %s", e)
+        for piece in _chunk(text):
+            yield {"type": "text_delta", "data": {"text": piece}}
+        yield {"type": "usage", "data": {"tokens_in": usage_total["in"], "tokens_out": usage_total["out"]}}
+        yield {"type": "done", "data": {}}
+        yield {"type": "_final", "data": {
+            "text": text, "datasets": [{"id": k, "name": v} for k, v in refs.items()]}}
 
     for round_no in range(MAX_TOOL_ROUNDS):
         # 도구 판단은 '비스트리밍'으로 한다 — ollama 는 스트리밍에서 도구 호출을
@@ -160,10 +235,7 @@ def run_assistant(
             yield {"type": "error", "data": {"reason": str(e)}}
             return
         msg = result["message"]
-        usage = result["usage"]
-
-        total_in += usage.get("prompt_tokens") or 0
-        total_out += usage.get("completion_tokens") or 0
+        add_usage(result["usage"])
 
         tool_calls = msg.get("tool_calls") or []
         if not tool_calls:
@@ -177,33 +249,7 @@ def run_assistant(
 
         if not tool_calls:
             # 도구 호출 없음 = 최종 답변. 본문을 정리해 조각으로 흘려 점진 표시한다.
-            text = _clean_answer(msg.get("content") or "")
-            # 한국어 최우선 — 중국어 등이 섞였으면 한국어로 1회 재작성한다
-            # (qwen2.5 다국어 누수 방어, 프롬프트만으로는 간헐 누수를 100% 못 막음).
-            if _has_cjk(text):
-                retry_msgs = messages + [
-                    {"role": "assistant", "content": text},
-                    {"role": "user", "content": "방금 답변에 한국어가 아닌 글자가 섞였습니다. "
-                     "같은 내용을 100% 한국어로만 다시 작성해 주세요. 중국어·일본어 금지 "
-                     "(테이블·컬럼명, SQL 키워드 등 식별자만 원문 유지)."},
-                ]
-                try:
-                    retry = llm.chat(retry_msgs, tools=None)
-                    retry_text = _clean_answer(retry["message"].get("content") or "")
-                    ru = retry["usage"]
-                    total_in += ru.get("prompt_tokens") or 0
-                    total_out += ru.get("completion_tokens") or 0
-                    if retry_text and not _has_cjk(retry_text):
-                        text = retry_text
-                    logger.info("한국어 재작성 수행 — 중국어 누수 감지")
-                except RuntimeError as e:
-                    # 재작성 실패 시 원문 유지(베스트에포트)
-                    logger.warning("한국어 재작성 실패 — 원문 답변 유지: %s", e)
-            for piece in _chunk(text):
-                yield {"type": "text_delta", "data": {"text": piece}}
-            yield {"type": "usage", "data": {"tokens_in": total_in, "tokens_out": total_out}}
-            yield {"type": "done", "data": {}}
-            yield {"type": "_final", "data": {"text": text}}
+            yield from finish(_clean_answer(msg.get("content") or ""), messages)
             return
 
         # 도구 실행 라운드 — assistant 메시지(tool_calls 포함)를 대화에 추가
@@ -214,10 +260,13 @@ def run_assistant(
                 args = json.loads(tc.get("function", {}).get("arguments") or "{}")
             except json.JSONDecodeError:
                 args = {}
+            if not isinstance(args, dict):
+                args = {}
             call_id = tc.get("id") or f"call_{round_no}_{name}"
 
             yield {"type": "tool_call", "data": {"id": call_id, "name": name, "args": args}}
             tool_result = run_tool(tool_ctx, name, args)
+            _track_datasets(refs, name, args, tool_result)
             yield {"type": "tool_result", "data": {"id": call_id, "name": name, "result": tool_result}}
 
             messages.append({
@@ -228,7 +277,18 @@ def run_assistant(
         logger.info("도구 라운드 %d — %s", round_no + 1,
                     ", ".join(tc.get("function", {}).get("name", "?") for tc in tool_calls))
 
-    # 라운드 초과 — 도구만 반복하고 답을 못 만든 경우
-    logger.warning("도구 호출 라운드 초과 — 답변 생성 실패: max_rounds=%d", MAX_TOOL_ROUNDS)
+    # 라운드 초과 — 도구 없이 한 번 더 불러 지금까지 모은 근거로 답하게 한다 (TODO-037)
+    logger.warning("도구 호출 라운드 초과 — 모은 근거로 답변 시도: max_rounds=%d", MAX_TOOL_ROUNDS)
+    wrap_msgs = messages + [{"role": "user", "content": ROUND_LIMIT_PROMPT}]
+    try:
+        result = llm.chat(wrap_msgs, tools=None)
+        add_usage(result["usage"])
+        text = _clean_answer(result["message"].get("content") or "")
+    except RuntimeError as e:
+        logger.warning("라운드 초과 후 답변 생성 실패: %s", e)
+        text = ""
+    if text:
+        yield from finish(text, wrap_msgs)
+        return
     yield {"type": "error", "data": {
         "reason": f"도구 호출이 {MAX_TOOL_ROUNDS}회를 초과했습니다 — 질문을 좁혀서 다시 시도해 주세요."}}

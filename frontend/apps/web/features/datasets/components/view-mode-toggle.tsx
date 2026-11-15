@@ -1,5 +1,6 @@
 "use client"
 
+import { Tip } from "@/components/tip"
 import { LayoutGrid, Table2 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
@@ -13,28 +14,28 @@ export function ViewModeToggle() {
   const { viewMode, setViewMode } = useDatasets()
   return (
     <div className="inline-flex items-center rounded-md border bg-background p-0.5">
-      <Button
+      <Tip label="테이블 뷰"><Button
         type="button"
         variant={viewMode === "table" ? "secondary" : "ghost"}
         size="sm"
         aria-label="테이블 뷰"
-        title="테이블 뷰"
+       
         className="h-7 w-7 p-0"
         onClick={() => setViewMode("table")}
       >
         <Table2 className="h-4 w-4" />
-      </Button>
-      <Button
+      </Button></Tip>
+      <Tip label="카드 뷰"><Button
         type="button"
         variant={viewMode === "card" ? "secondary" : "ghost"}
         size="sm"
         aria-label="카드 뷰"
-        title="카드 뷰"
+       
         className="h-7 w-7 p-0"
         onClick={() => setViewMode("card")}
       >
         <LayoutGrid className="h-4 w-4" />
-      </Button>
+      </Button></Tip>
     </div>
   )
 }

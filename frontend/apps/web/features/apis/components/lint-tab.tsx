@@ -3,9 +3,9 @@
 import { useCallback, useEffect, useState } from "react"
 import { Loader2 } from "lucide-react"
 
-import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@workspace/ui/components/select"
+import { StatusBadge, type StatusMeta } from "@workspace/ui/components/status-badge"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { type ApiLint, type ApiSpec, fetchApiLint } from "../api"
@@ -16,10 +16,10 @@ import { errorMessage } from "@/lib/notify"
 // 린팅 (스펙 품질 검사 — Spectral 스타일)
 // ---------------------------------------------------------------------------
 
-const LINT_SEVERITY: Record<string, { label: string; cls: string }> = {
-  error: { label: "오류", cls: "bg-red-600 text-white" },
-  warn: { label: "경고", cls: "bg-amber-500 text-white" },
-  info: { label: "정보", cls: "bg-slate-400 text-white" },
+const LINT_SEVERITY: Record<string, StatusMeta> = {
+  error: { label: "오류", tone: "danger" },
+  warn: { label: "경고", tone: "warning" },
+  info: { label: "정보", tone: "neutral" },
 }
 
 export function LintTab({ apiName, specs }: { apiName: string; specs: ApiSpec[] }) {
@@ -46,7 +46,7 @@ export function LintTab({ apiName, specs }: { apiName: string; specs: ApiSpec[] 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-sm text-muted-foreground">현재 스펙의 품질을 Spectral(oas 룰셋) 스타일 규칙으로 검사해 오류·경고·정보와 품질 점수(0~100)를 보여주는 화면입니다. info·서버·태그·operationId·응답·경로 파라미터·보안 등 모범사례 위반을 찾아 개선점을 제시합니다.</p>
+        <p className="text-sm">현재 스펙의 품질을 Spectral(oas 룰셋) 스타일 규칙으로 검사해 오류·경고·정보와 품질 점수(0~100)를 보여주는 화면입니다. info·서버·태그·operationId·응답·경로 파라미터·보안 등 모범사례 위반을 찾아 개선점을 제시합니다.</p>
         {!noSpec && (
           <div className="flex shrink-0 items-center gap-2">
             {specs.length > 1 && (
@@ -76,12 +76,12 @@ export function LintTab({ apiName, specs }: { apiName: string; specs: ApiSpec[] 
         <>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <div className="rounded-md border px-4 py-3">
-              <p className="text-xs text-muted-foreground">품질 점수</p>
-              <p className={cn("mt-1 text-2xl font-bold", scoreCls(lint.score))}>{lint.score}<span className="text-sm font-normal text-muted-foreground"> / 100</span></p>
+              <p className="text-xs">품질 점수</p>
+              <p className={cn("mt-1 text-2xl font-bold", scoreCls(lint.score))}>{lint.score}<span className="text-sm font-normal"> / 100</span></p>
             </div>
-            <div className="rounded-md border px-4 py-3"><p className="text-xs text-muted-foreground">오류</p><p className="mt-1 text-xl font-semibold text-red-600">{lint.error_count}</p></div>
-            <div className="rounded-md border px-4 py-3"><p className="text-xs text-muted-foreground">경고</p><p className="mt-1 text-xl font-semibold text-amber-500">{lint.warning_count}</p></div>
-            <div className="rounded-md border px-4 py-3"><p className="text-xs text-muted-foreground">정보</p><p className="mt-1 text-xl font-semibold text-slate-500">{lint.info_count}</p></div>
+            <div className="rounded-md border px-4 py-3"><p className="text-xs">오류</p><p className="mt-1 text-xl font-semibold text-red-600">{lint.error_count}</p></div>
+            <div className="rounded-md border px-4 py-3"><p className="text-xs">경고</p><p className="mt-1 text-xl font-semibold text-amber-500">{lint.warning_count}</p></div>
+            <div className="rounded-md border px-4 py-3"><p className="text-xs">정보</p><p className="mt-1 text-xl font-semibold text-slate-500">{lint.info_count}</p></div>
           </div>
 
           {lint.findings.length === 0 ? (
@@ -100,10 +100,10 @@ export function LintTab({ apiName, specs }: { apiName: string; specs: ApiSpec[] 
                     const sev = LINT_SEVERITY[f.severity] ?? LINT_SEVERITY.info!
                     return (
                       <tr key={i} className="border-t align-top">
-                        <td className="px-3 py-2"><Badge className={cn("text-[10px]", sev.cls)}>{sev.label}</Badge></td>
+                        <td className="px-3 py-2"><StatusBadge {...sev} /></td>
                         <td className="px-3 py-2">{f.rule}</td>
                         <td className="px-3 py-2">{f.message}</td>
-                        <td className="px-3 py-2 text-muted-foreground break-all">{f.location || "-"}</td>
+                        <td className="px-3 py-2 break-all">{f.location || "-"}</td>
                       </tr>
                     )
                   })}

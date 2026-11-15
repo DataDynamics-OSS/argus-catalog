@@ -19,15 +19,14 @@
     # worker — 설명 없는 데이터셋을 주기 폴링해 자동 생성
     argus-catalog-ai enrich worker --datasource-id sakila-mysql --poll-interval 600 ...
 
-이전 이름(``argus-agent``)과 이전 명령(``serve``, ``describe`` …, ``generate-all``, ``worker``)도 한 버전 동안
-동작하며 경고를 남긴다.
+이전 이름(``argus-agent``)과 이전 최상위 명령(``serve``, ``describe`` …, ``generate-all``, ``worker``)은
+0.7.0 에서 제거했다.
 """
 
 from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sys
 import time
 
@@ -39,8 +38,18 @@ from argus_catalog_ai.tasks import TASK_NAMES, run_for_dataset
 logger = logging.getLogger("argus_catalog_ai")
 
 PROG = "argus-catalog-ai"
-LEGACY_PROG = "argus-agent"
-# 작업별 도움말 — enrich 하위 명령과 (deprecated) 최상위 명령이 같이 쓴다
+# 0.7.0 에서 제거한 이전 최상위 명령 → 지금 명령 (실행하면 안내 후 종료 코드 2)
+REMOVED_COMMANDS = {
+    "serve": "assistant",
+    "describe": "enrich describe",
+    "summarize": "enrich summarize",
+    "columns": "enrich columns",
+    "tags": "enrich tags",
+    "pii": "enrich pii",
+    "generate-all": "enrich all",
+    "worker": "enrich worker",
+}
+# enrich 하위 명령과 도움말
 ENRICH_TASKS = (
     ("describe", "데이터셋 상세 설명 생성"),
     ("summarize", "한 줄 요약 생성"),
@@ -56,7 +65,9 @@ def _add_common_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--urn", help="대상 데이터셋 URN (단일)")
     p.add_argument("--datasource-id", help="데이터 소스 ID (등록된 전체 데이터셋 일괄)")
     p.add_argument("--api-url", default=None, help="카탈로그 API (env: ARGUS_API_URL)")
-    p.add_argument("--username", default=None, help="관리자 계정 (env: ARGUS_USERNAME)")
+    p.add_argument("--api-key", default=None,
+                   help="카탈로그 API 키 — 권장, 범위 catalog:write (env: ARGUS_CATALOG_API_KEY)")
+    p.add_argument("--username", default=None, help="(이전 방식) 관리자 계정 (env: ARGUS_USERNAME)")
     p.add_argument("--password", default=None, help="비밀번호 (env: ARGUS_PASSWORD)")
     p.add_argument("--llm-url", default=None, help="OpenAI 호환 LLM URL (env: ARGUS_AI_LLM_URL, 기본 ollama)")
     p.add_argument("--model", default=None, help="모델 (env: ARGUS_AI_MODEL, 기본 qwen2.5:7b)")
@@ -68,7 +79,7 @@ def _add_common_args(p: argparse.ArgumentParser) -> None:
 
 
 def _add_assistant_args(p: argparse.ArgumentParser) -> None:
-    """assistant(구 serve) 명령 인자 — 공통 인자 + 바인드 주소·포트·텔레메트리."""
+    """assistant 명령 인자 — 공통 인자 + 바인드 주소·포트·텔레메트리."""
     _add_common_args(p)
     p.add_argument("--host", default="0.0.0.0", help="바인드 주소 (기본 0.0.0.0)")
     p.add_argument("--port", default=8930, type=int, help="포트 (기본 8930)")
@@ -77,6 +88,10 @@ def _add_assistant_args(p: argparse.ArgumentParser) -> None:
                    help="AI Agent 레지스트리 이름 (env: ARGUS_AI_AGENT_NAME, 기본 argus-catalog-assistant)")
     p.add_argument("--telemetry", default=None, choices=["on", "off"],
                    help="셀프-텔레메트리 등록/적재 on/off (env: ARGUS_AI_TELEMETRY, 기본 on)")
+    p.add_argument("--agent-owner-email", default=None,
+                   help="레지스트리 등록 소유자 이메일 (env: ARGUS_AI_AGENT_OWNER_EMAIL, 없으면 셀프 등록 생략)")
+    p.add_argument("--agent-department", default=None,
+                   help="레지스트리 등록 부서 (env: ARGUS_AI_AGENT_DEPARTMENT, 없으면 셀프 등록 생략)")
 
 
 def _add_worker_args(p: argparse.ArgumentParser) -> None:
@@ -90,12 +105,12 @@ def _add_worker_args(p: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """CLI 파서 구성 — assistant / enrich {작업|worker} 와 숨김 처리된 이전 최상위 명령."""
+    """CLI 파서 구성 — assistant / enrich {작업|worker}."""
     parser = argparse.ArgumentParser(
         prog=PROG,
         description="Argus Catalog AI 서비스 — AI 어시스턴트 서버와 LLM 메타데이터 생성",
     )
-    sub = parser.add_subparsers(dest="command", required=True, metavar="{assistant,enrich}")
+    sub = parser.add_subparsers(dest="command", required=True)
 
     # assistant — 어시스턴트 HTTP 서버 (백엔드가 채팅을 프록시)
     _add_assistant_args(sub.add_parser("assistant", help="AI 어시스턴트 서버 — tool-use 채팅 (SSE)"))
@@ -107,28 +122,14 @@ def build_parser() -> argparse.ArgumentParser:
         _add_common_args(en_sub.add_parser(name, help=help_text))
     _add_worker_args(en_sub.add_parser(
         "worker", help="폴링 데몬 — 설명 없는 데이터셋을 주기적으로 자동 생성"))
-
-    # (deprecated) 이전 최상위 명령 — 도움말에는 숨긴다
-    _add_assistant_args(sub.add_parser("serve"))
-    for name, _ in ENRICH_TASKS[:-1]:
-        _add_common_args(sub.add_parser(name))
-    _add_common_args(sub.add_parser("generate-all"))
-    _add_worker_args(sub.add_parser("worker"))
     return parser
 
 
 def _normalize(args) -> tuple[str, str | None]:
-    """(역할, 작업) 으로 정규화 — 이전 명령이면 경고를 남긴다."""
+    """(역할, 작업) 으로 정규화."""
     if args.command == "assistant":
         return "assistant", None
-    if args.command == "enrich":
-        return "enrich", args.task
-    new = "assistant" if args.command == "serve" else \
-        "enrich all" if args.command == "generate-all" else f"enrich {args.command}"
-    logger.warning("'%s' 명령은 곧 없어집니다 — '%s %s' 를 쓰세요.", args.command, PROG, new)
-    if args.command == "serve":
-        return "assistant", None
-    return "enrich", "all" if args.command == "generate-all" else args.command
+    return "enrich", args.task
 
 
 def _resolve_targets(catalog: CatalogClient, args) -> list[dict]:
@@ -156,12 +157,25 @@ def _run_once(catalog: CatalogClient, llm: LLMClient, cfg: AgentConfig,
     return failures
 
 
+def _has_pending_suggestions(catalog: CatalogClient, dataset_id: int) -> bool:
+    """미적용 AI 제안이 이미 있는지 — 있으면 사람이 처리할 때까지 다시 만들지 않는다.
+
+    조회가 실패하면 False(생성 진행)로 본다 — 중복 위험보다 처리 누락을 피한다.
+    """
+    try:
+        return bool(catalog.list_pending_suggestions(dataset_id))
+    except RuntimeError as e:
+        logger.warning("worker: 제안 목록 조회 실패 — 생성 진행: dataset_id=%s %s", dataset_id, e)
+        return False
+
+
 def _worker_loop(catalog: CatalogClient, llm: LLMClient, cfg: AgentConfig, args) -> None:
     """worker 모드 — 설명 없는 데이터셋을 폴링해 전체 작업(enrich all) 수행.
 
-    이미 제안이 반입된 데이터셋도 description 이 채워지기 전까지 대상에
-    남지만, 같은 내용의 제안이 중복 적재되는 것을 막기 위해 한 번 처리한
-    데이터셋 id 는 프로세스 생존 동안 건너뛴다.
+    이미 제안이 반입된 데이터셋도 description 이 채워지기 전까지 대상에 남는다. 같은 제안이
+    중복 적재되지 않도록 (1) 미적용 AI 제안이 있는 데이터셋은 건너뛰고(재시작해도 유지),
+    (2) 한 번 처리한 데이터셋 id 는 프로세스 생존 동안 건너뛴다. 모든 작업이 실패한
+    데이터셋은 처리됨으로 표시하지 않아 다음 주기에 다시 시도한다 (DEF-037).
     """
     processed: set[int] = set()
     logger.info("worker 시작 — 주기 %ds, 대상 기준: %s", cfg.poll_interval, cfg.worker_target)
@@ -176,9 +190,16 @@ def _worker_loop(catalog: CatalogClient, llm: LLMClient, cfg: AgentConfig, args)
             else:
                 logger.debug("worker: 대상 없음 — 전체 %d건, 처리됨 %d건", len(summaries), len(processed))
             for s in targets:
+                if _has_pending_suggestions(catalog, s["id"]):
+                    logger.info("worker: 미적용 제안이 있어 건너뜀 — %s", s.get("name"))
+                    processed.add(s["id"])
+                    continue
                 ds = catalog.get_dataset(s["id"])
-                run_for_dataset(catalog, llm, cfg, ds, list(TASK_NAMES))
-                processed.add(s["id"])
+                outcomes = run_for_dataset(catalog, llm, cfg, ds, list(TASK_NAMES))
+                if any(not str(v).startswith("실패") for v in outcomes.values()):
+                    processed.add(s["id"])
+                else:
+                    logger.warning("worker: 모든 작업 실패 — 다음 주기에 재시도: %s", s.get("name"))
         except Exception as e:  # noqa: BLE001 — 루프 보호
             logger.warning("worker tick 실패: %s", e)
         if args.once:
@@ -190,8 +211,11 @@ def _worker_loop(catalog: CatalogClient, llm: LLMClient, cfg: AgentConfig, args)
 def main(argv: list[str] | None = None) -> int:
     """CLI 진입점 — 종료 코드 반환 (0 성공, 1 일부 데이터셋 실패, 2 필수 인자 누락)."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    if os.path.basename(sys.argv[0]) == LEGACY_PROG:
-        logger.warning("'%s' 명령 이름은 곧 없어집니다 — '%s' 를 쓰세요.", LEGACY_PROG, PROG)
+    argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] in REMOVED_COMMANDS:
+        print(f"'{argv[0]}' 명령은 0.7.0 에서 없어졌습니다 — '{PROG} {REMOVED_COMMANDS[argv[0]]}' 를 쓰세요.",
+              file=sys.stderr)
+        return 2
     args = build_parser().parse_args(argv)
     role, task = _normalize(args)
     cfg = load_config(args)
@@ -202,11 +226,15 @@ def main(argv: list[str] | None = None) -> int:
         serve(cfg, host=args.host, port=args.port)
         return 0
 
-    if not cfg.password:
-        print("비밀번호가 필요합니다 — --password 또는 ARGUS_PASSWORD", file=sys.stderr)
+    if not cfg.api_key and not cfg.password:
+        print("카탈로그 API 키가 필요합니다 — --api-key 또는 ARGUS_CATALOG_API_KEY "
+              "(이전 방식: --password 또는 ARGUS_PASSWORD)", file=sys.stderr)
         return 2
+    if not cfg.api_key:
+        logger.warning("카탈로그에 사용자 이름·비밀번호로 접속합니다(이전 방식, 다음 릴리스에서 제거) — "
+                       "카탈로그 설정 > API 키에서 발급해 ARGUS_CATALOG_API_KEY 로 지정하세요.")
 
-    catalog = CatalogClient(cfg.api_url, cfg.username, cfg.password)
+    catalog = CatalogClient(cfg.api_url, cfg.username, cfg.password, api_key=cfg.api_key)
     llm = LLMClient(cfg.llm_url, cfg.model, cfg.llm_api_key,
                     temperature=cfg.temperature, max_tokens=cfg.max_tokens)
     logger.info("LLM: %s @ %s / 모드: %s", cfg.model, cfg.llm_url, cfg.mode)

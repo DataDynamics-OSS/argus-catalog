@@ -6,7 +6,7 @@ import { Check, ChevronsUpDown, Loader2 } from "lucide-react"
 import { Button } from "@workspace/ui/components/button"
 import { Command, CommandGroup, CommandInput, CommandItem, CommandList } from "@workspace/ui/components/command"
 import { Popover, PopoverContent, PopoverTrigger } from "@workspace/ui/components/popover"
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@workspace/ui/components/tooltip"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@workspace/ui/components/tooltip"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { fetchUsers } from "@/features/users/api"
@@ -39,7 +39,7 @@ function OwnerTooltipBody({ organization, department, username, email, unregiste
       <div>소속부서: {department || "—"}</div>
       <div>Username: {username || "—"}</div>
       <div>Email: {email}</div>
-      {unregistered && <div className="text-muted-foreground">※ 사용자 관리에 등록되지 않은 이메일</div>}
+      {unregistered && <div >※ 사용자 관리에 등록되지 않은 이메일</div>}
     </div>
   )
 }
@@ -109,7 +109,6 @@ export function OwnerPicker({ id, value, label, onChange, size = "default" }: {
       </PopoverTrigger>
       {/* 항목을 자르지 않도록 내용 폭만큼 넓어짐(최소: 트리거 폭·300px) */}
       <PopoverContent className="w-auto min-w-[max(300px,var(--radix-popover-trigger-width))] max-w-[calc(100vw-2rem)] p-0" align="start">
-        <TooltipProvider delayDuration={150}>
           <Command shouldFilter={false}>
             <CommandInput placeholder="이름·username·이메일로 검색" value={query} onValueChange={setQuery} />
             <CommandList>
@@ -126,7 +125,7 @@ export function OwnerPicker({ id, value, label, onChange, size = "default" }: {
                       <TooltipTrigger asChild>
                         <span className="flex-1 whitespace-nowrap">
                           {ownerDisplayName(u)}
-                          {u.department && <span className="ml-2 text-xs text-muted-foreground">{u.department}</span>}
+                          {u.department && <span className="ml-2 text-xs">{u.department}</span>}
                         </span>
                       </TooltipTrigger>
                       <TooltipContent side="right" className="max-w-sm whitespace-pre-wrap">
@@ -137,16 +136,15 @@ export function OwnerPicker({ id, value, label, onChange, size = "default" }: {
                 ))}
               </CommandGroup>
               {(status === "idle" || status === "loading") && (
-                <div className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> 검색 중...</div>
+                <div className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> 검색 중…</div>
               )}
               {status === "error" && <div className="px-3 py-2 text-sm text-destructive">사용자 검색에 실패했습니다. 다시 시도해 주세요.</div>}
               {status === "loaded" && results.length === 0 && <div className="px-3 py-2 text-sm text-muted-foreground">일치하는 사용자가 없습니다.</div>}
               {status === "loaded" && results.length >= OWNER_SEARCH_LIMIT && (
-                <div className="px-3 py-1.5 text-[11px] text-muted-foreground">상위 {OWNER_SEARCH_LIMIT}명만 표시합니다. 검색어를 더 입력해 범위를 좁히세요.</div>
+                <div className="px-3 py-1.5 text-[11px]">상위 {OWNER_SEARCH_LIMIT}명만 표시합니다. 검색어를 더 입력해 범위를 좁히세요.</div>
               )}
             </CommandList>
           </Command>
-        </TooltipProvider>
       </PopoverContent>
     </Popover>
   )
@@ -162,7 +160,6 @@ export function OwnerValue({ email, owner, className }: {
 }) {
   if (!email) return <span className="text-muted-foreground">-</span>
   return (
-    <TooltipProvider delayDuration={150}>
       <Tooltip>
         <TooltipTrigger asChild>
           <span className={cn("cursor-help underline decoration-dotted decoration-muted-foreground/50 underline-offset-2", className)}>
@@ -179,6 +176,5 @@ export function OwnerValue({ email, owner, className }: {
           />
         </TooltipContent>
       </Tooltip>
-    </TooltipProvider>
   )
 }

@@ -29,16 +29,16 @@ def _get_nested(section: str, subsection: str, key: str, default=None):
 
 
 def _assistant_service_url() -> str:
-    """AI 어시스턴트 서비스 URL — assistant.service.url 우선, 없으면 예전 키 assistant.agent.url(경고)."""
+    """AI 어시스턴트 서비스 URL — ``assistant.service.url``.
+
+    0.5.0 이전 키 ``assistant.agent.url`` 은 0.7.0 에서 읽지 않는다. 남아 있으면 무시한다고 경고한다.
+    """
     url = str(_get("assistant", "service.url", "") or "").strip()
-    if url:
-        return url
-    legacy = str(_get("assistant", "agent.url", "") or "").strip()
-    if legacy:
+    if str(_get("assistant", "agent.url", "") or "").strip():
         import logging
         logging.getLogger(__name__).warning(
-            "설정 키 assistant.agent.url 은 곧 없어집니다 — assistant.service.url 로 바꾸세요")
-    return legacy
+            "설정 키 assistant.agent.url 은 0.7.0 부터 읽지 않습니다 — assistant.service.url 로 바꾸세요")
+    return url
 
 
 def _to_bool(value) -> bool:
@@ -131,6 +131,8 @@ class Settings:
         )
         # metadata-sync API 토큰 — 확장에 server.api_token 을 설정했으면 같은 값을 넣는다(프록시 호출용)
         self.metadata_sync_api_token: str = _get("metadata_sync", "api_token", "") or ""
+        # 데이터 소스 수집 실행 이력 보관 기간(일) — 지난 실행·실패 항목은 주기적으로 지운다
+        self.sync_run_retention_days: int = int(_get("metadata_sync", "run_retention_days", 90) or 90)
 
         # 사용자 지정 URL 로의 서버측 호출(API 스펙 URL·Try-it) SSRF 정책 — app.core.outbound
         # 루프백·링크로컬(메타데이터)·카탈로그 인프라는 항상 차단. 사설망은 기본 허용(사내 API).
@@ -147,8 +149,33 @@ class Settings:
         self.cache_ttl_seconds: int = int(_get_nested("external", "cache", "ttl_seconds", 300))
         self.cache_enabled: bool = _to_bool(_get_nested("external", "cache", "enabled", True))
 
+        # Confluent 호환 스키마 레지스트리 (/api/v1/schema-registry, 읽기 전용)
+        self.schema_registry_enabled: bool = _to_bool(_get("schema_registry", "enabled", True))
+        # Basic 인증(사용자 이름·비밀번호) 허용 — NiFi 등 레지스트리 클라이언트는 Bearer 대신 Basic 만 지원
+        self.schema_registry_basic_auth: bool = _to_bool(_get("schema_registry", "basic_auth", True))
+        # 성공한 Basic 자격 검증 결과를 기억하는 시간(초) — PBKDF2 검증(수백 ms)을 요청마다 하지 않도록
+        self.schema_registry_basic_auth_cache_seconds: int = int(
+            _get("schema_registry", "basic_auth_cache_seconds", 300))
+        # 바뀌지 않는 응답(id·버전 번호 조회)을 담는 캐시 크기·보관 시간
+        self.schema_registry_immutable_cache_size: int = int(
+            _get("schema_registry", "immutable_cache_size", 10000))
+        self.schema_registry_immutable_cache_seconds: int = int(
+            _get("schema_registry", "immutable_cache_seconds", 86400))
+        # 스키마가 바뀐 커밋 뒤 새 버전을 백그라운드로 미리 등록(요청 전에 id 를 만들어 둠)
+        self.schema_registry_register_on_change: bool = _to_bool(
+            _get("schema_registry", "register_on_change", True))
+
+        # API 키 (TODO-056) — 백엔드를 부르는 프로그램용 장기 자격. 검증 결과를 cache_seconds 동안 기억하고
+        # (같은 서버의 중지·폐기는 바로 반영, 다른 서버는 최대 이 시간 늦게), 마지막 사용 시각은 last_used_interval_seconds 마다 한 번 쓴다.
+        self.api_keys_enabled: bool = _to_bool(_get("api_keys", "enabled", True))
+        self.api_keys_cache_seconds: int = int(_get("api_keys", "cache_seconds", 30))
+        self.api_keys_last_used_interval_seconds: int = int(_get("api_keys", "last_used_interval_seconds", 300))
+        # 발급 때 만료를 정하지 않으면 쓰는 기본 일수(0 이면 무기한), 허용하는 최대 일수(0 이면 제한 없음·무기한 허용)
+        self.api_keys_default_expire_days: int = int(_get("api_keys", "default_expire_days", 365))
+        self.api_keys_max_expire_days: int = int(_get("api_keys", "max_expire_days", 0))
+
         # AI 어시스턴트 (argus-catalog-ai-service 의 assistant 서버) — 설정 시 채팅을 프록시.
-        # 키는 assistant.service.url. 이전 이름 assistant.agent.url 은 한 버전 동안 읽는다.
+        # 키는 assistant.service.url (이전 이름 assistant.agent.url 은 0.7.0 에서 제거).
         self.assistant_agent_url: str = _assistant_service_url()
 
         # Temporal (변경 관리 결재/통지 워크플로우 엔진)
@@ -171,6 +198,13 @@ class Settings:
         self.federation_export_allow_anonymous_sample: bool = _to_bool(
             _get("federation", "export_allow_anonymous_sample", False)
         )
+        # 품질 진단 — 쿼리는 품질 워커(extensions/argus-catalog-quality-worker)가 낸다. 아래 값은 실행 계획에 실어 보낸다.
+        # Trino 쿼리 하나의 실행 시간 상한(분) — 세션 속성 query_max_execution_time 으로 건다.
+        self.quality_trino_query_timeout_minutes: int = int(
+            _get("quality", "trino_query_timeout_minutes", 30)
+        )
+        # Trino 리소스 그룹 선택자가 볼 식별값 — X-Trino-Source 와 클라이언트 태그에 붙인다.
+        self.quality_trino_source: str = str(_get("quality", "trino_source", "argus-dq"))
         # HARVEST 스케줄러 — HARVEST/HYBRID peer 의 메타데이터를 주기적으로 pull.
         self.federation_harvest_enabled: bool = _to_bool(
             _get("federation", "harvest_enabled", True)

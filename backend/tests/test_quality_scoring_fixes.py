@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """데이터 품질 점수 산출 결함 회귀 테스트 (자기완결형, SQLite).
 
-- A: 서버가 평가할 수 없는 유형(ACCEPTED_VALUES·REGEX·CUSTOM_SQL·CUSTOM_PYTHON)은 새 결과를 남기지 않고
-     직전(배치) 결과를 이어받는다 — 배치 FAIL 을 서버 검증이 통과로 덮어쓰지 않음. 이전 결과 없으면 점수 제외.
-- B: threshold 0 이 100 으로 바뀌지 않음
-- C: NOT_NULL/UNIQUE 판정은 반올림된 비율이 아니라 정확한 건수로 (30만 행 중 NULL 1건 → 임계값 100 실패)
-- D: 결과 반입 — 빈 목록·rule_id 중복 422, 비활성 규칙 400, 점수는 활성 규칙 전체 기준(이어받기/제외)
+- A: 예전 간이 진단이 남긴 "평가 제외" 자리표시 통과 행은 최신 결과로 보지 않는다(간이 진단은 없앴다 — TODO-095)
+- D: 진단 결과 저장(``service.import_results`` — 품질 워커의 정밀 진단) — 빈 목록·rule_id 중복은 스키마 오류,
+     비활성 규칙은 거절, 점수는 활성 규칙 전체 기준(이어받기/제외)
+
+임계값 0 · 정확한 건수 판정은 정밀 진단의 판정(rule_sql) 테스트가 본다.
 
 실행:
     cd backend
@@ -16,13 +16,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone
-from decimal import Decimal
-from types import SimpleNamespace
 
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -30,15 +25,19 @@ from sqlalchemy.pool import NullPool
 
 import app.alert.service as alert_service
 import app.catalog.models as cm
-from app.core.auth import TokenUser, get_current_user
-from app.core.database import get_session
-from app.permissions import router as perm
-from app.quality import router as quality_router
 from app.quality import service
-from app.quality.models import DataProfile, QualityResult, QualityRule, QualityScore
+from app.quality.models import (
+    DataProfile,
+    QualityDefinition,
+    QualityJob,
+    QualityJobRun,
+    QualityResult,
+    QualityRule,
+    QualityRun,
+    QualityScore,
+)
 from app.quality.schemas import (
     ColumnProfile,
-    ProfileResponse,
     ResultImportItem,
     ResultsImportRequest,
 )
@@ -46,7 +45,9 @@ from app.quality.schemas import (
 _TABLES = (
     cm.Organization, cm.System, cm.Datasource, cm.Catalog, cm.CatalogConnection,
     cm.DatasourceConfiguration, cm.Dataset,
-    cm.DatasetSchema, cm.DatasetProperty, QualityRule, QualityResult, QualityScore, DataProfile,
+    cm.DatasetSchema, cm.DatasetProperty, QualityDefinition, QualityRule, QualityResult, QualityScore, DataProfile,
+    # 결과 행의 run_id 외래키가 가리키는 표 — SQLite 는 외래키 검사를 켜면 대상 표가 있어야 INSERT 된다
+    QualityJob, QualityJobRun, QualityRun,
 )
 
 
@@ -119,66 +120,13 @@ def _imp(*items) -> ResultsImportRequest:
 
 
 # ---------------------------------------------------------------------------
-# A — 서버 검증이 배치 결과를 덮어쓰지 않음
+# A — 예전 간이 진단의 자리표시 결과
 # ---------------------------------------------------------------------------
 
-def test_server_check_keeps_batch_failure(tmp_path) -> None:
-    sm = _make_sessionmaker(str(tmp_path / "q.db"))
-    ds_id, (r_nn, r_sql) = asyncio.run(_seed(sm, [
-        {"check_type": "NOT_NULL"}, {"check_type": "CUSTOM_SQL", "column": None, "severity": "BREAKING"},
-    ]))
-
-    # 배치 반입: NOT_NULL 통과, CUSTOM_SQL 실패 → 50점
-    resp = _run(sm, lambda s: service.import_results(s, ds_id, _imp((r_nn, True), (r_sql, False))))
-    assert resp.score == 50.0 and resp.failed == 1
-
-    # 서버 검증(수동/주기) — CUSTOM_SQL 은 새로 평가하지 않고 배치 FAIL 을 이어받는다
-    resp = _run(sm, lambda s: service.run_quality_check(s, ds_id))
-    assert resp.score == 50.0 and resp.total_rules == 2 and resp.passed == 1 and resp.failed == 1
-    sql_res = next(r for r in resp.results if r.rule_id == r_sql)
-    assert sql_res.passed == "false" and sql_res.carried_forward is True and sql_res.detail == "batch"
-    assert sql_res.checked_at is not None and sql_res.id is not None
-    nn_res = next(r for r in resp.results if r.rule_id == r_nn)
-    assert nn_res.carried_forward is False and nn_res.passed == "true"
-
-    async def check(s):
-        rows = (await s.execute(select(QualityResult).where(QualityResult.rule_id == r_sql))).scalars().all()
-        assert len(rows) == 1  # 서버 검증은 CUSTOM_SQL 결과 행을 새로 남기지 않음
-        latest = await service.get_latest_results(s, ds_id)
-        assert next(r for r in latest if r.rule_id == r_sql).passed == "false"
-        d = (await s.execute(select(cm.Dataset).where(cm.Dataset.id == ds_id))).scalar_one()
-        assert float(d.quality_score) == 50.0 and d.quality_status == "BAD"  # BREAKING 실패 유지
-    _run(sm, check)
-
-
-def test_server_check_without_prior_result_excludes_rule(tmp_path) -> None:
-    sm = _make_sessionmaker(str(tmp_path / "q.db"))
-    ds_id, (r_nn, r_re, r_av) = asyncio.run(_seed(sm, [
-        {"check_type": "NOT_NULL"}, {"check_type": "REGEX", "expected": "^a"},
-        {"check_type": "ACCEPTED_VALUES", "expected": '["a"]'},
-    ]))
-    resp = _run(sm, lambda s: service.run_quality_check(s, ds_id))
-    # 평가 가능한 규칙(NOT_NULL)만 분모 — 100점, 1/1
-    assert resp.score == 100.0 and resp.total_rules == 1 and resp.passed == 1 and resp.failed == 0
-    skipped = [r for r in resp.results if r.rule_id in (r_re, r_av)]
-    assert len(skipped) == 2
-    assert all(r.passed is None and r.id is None and r.checked_at is None for r in skipped)
-    assert all("점수에서 제외" in r.detail for r in skipped)
-
-    async def check(s):
-        rows = (await s.execute(select(QualityResult).where(QualityResult.rule_id != r_nn))).scalars().all()
-        assert rows == []  # 미평가 규칙은 결과 행을 남기지 않음
-        latest = {r.rule_id: r for r in await service.get_latest_results(s, ds_id)}
-        assert latest[r_nn].passed == "true"
-        # 조회에서도 미평가 항목으로 보인다 (UI 상태 아이콘 "미평가")
-        assert latest[r_re].passed is None and latest[r_av].passed is None and latest[r_re].id is None
-    _run(sm, check)
-
-
 def test_legacy_skip_rows_are_not_carried_forward(tmp_path) -> None:
-    """예전 서버 검증이 남긴 "평가 제외" 통과 행은 이어받지 않는다."""
+    """예전 간이 진단이 남긴 "평가 제외" 통과 행은 이어받지도, 최신 결과로 보이지도 않는다."""
     sm = _make_sessionmaker(str(tmp_path / "q.db"))
-    ds_id, (r_sql,) = asyncio.run(_seed(sm, [{"check_type": "CUSTOM_SQL", "column": None}]))
+    ds_id, (r_nn, r_sql) = asyncio.run(_seed(sm, [{"check_type": "NOT_NULL"}, {"check_type": "CUSTOM_SQL", "column": None}]))
 
     async def legacy(s):
         s.add(QualityResult(rule_id=r_sql, dataset_id=ds_id, passed="false", actual_value="3", detail="batch"))
@@ -186,73 +134,25 @@ def test_legacy_skip_rows_are_not_carried_forward(tmp_path) -> None:
         s.add(QualityResult(rule_id=r_sql, dataset_id=ds_id, passed="true", actual_value="평가 제외",
                             detail="old server"))
     _run(sm, legacy)
-    resp = _run(sm, lambda s: service.run_quality_check(s, ds_id))
-    assert resp.score == 0.0 and resp.results[0].passed == "false" and resp.results[0].carried_forward
+    resp = _run(sm, lambda s: service.import_results(s, ds_id, _imp((r_nn, True))))
+    sql_res = next(r for r in resp.results if r.rule_id == r_sql)
+    assert resp.score == 50.0 and sql_res.passed == "false" and sql_res.carried_forward
 
     async def check(s):
-        latest = await service.get_latest_results(s, ds_id)
-        assert latest[0].passed == "false" and latest[0].detail == "batch"
+        latest = {r.rule_id: r for r in await service.get_latest_results(s, ds_id)}
+        assert latest[r_sql].passed == "false" and latest[r_sql].detail == "batch"
     _run(sm, check)
 
 
-def test_nothing_evaluable_keeps_100(tmp_path) -> None:
+def test_latest_results_skip_rules_never_checked(tmp_path) -> None:
+    """아직 진단하지 않은 규칙은 최신 결과에 나오지 않는다(예전에는 간이 진단 미지원 유형만 "미평가" 로 보였다)."""
     sm = _make_sessionmaker(str(tmp_path / "q.db"))
-    ds_id, _ = asyncio.run(_seed(sm, [{"check_type": "CUSTOM_PYTHON", "column": None}]))
-    resp = _run(sm, lambda s: service.run_quality_check(s, ds_id))
-    assert resp.score == 100.0 and resp.total_rules == 0 and resp.results[0].passed is None
+    ds_id, (r_nn, r_re) = asyncio.run(_seed(sm, [{"check_type": "NOT_NULL"}, {"check_type": "REGEX", "expected": "^a"}]))
+    _run(sm, lambda s: service.import_results(s, ds_id, _imp((r_nn, True))))
 
-
-# ---------------------------------------------------------------------------
-# B·C — 임계값 0, 정확한 건수 판정
-# ---------------------------------------------------------------------------
-
-def _profile(cols: list[ColumnProfile], rows: int) -> tuple[ProfileResponse, dict]:
-    p = ProfileResponse(id=1, dataset_id=1, row_count=rows, profiled_at=datetime.now(timezone.utc), columns=cols)
-    return p, {c.column_name: c for c in cols}
-
-
-def _rule(check_type, threshold):
-    return SimpleNamespace(check_type=check_type, column_name="c", expected_value=None, threshold=threshold)
-
-
-def test_threshold_zero_is_not_100() -> None:
-    # 전부 NULL·고유값 0 — 임계값 0 이면 통과해야 한다 (예전: 0 → 100 으로 바뀌어 실패)
-    p, cm_ = _profile([ColumnProfile(column_name="c", column_type="INT", total_count=5, null_count=5,
-                                     null_percent=100.0, unique_count=0, unique_percent=0.0)], 5)
-    assert service._evaluate_rule(_rule("NOT_NULL", Decimal("0.00")), p, cm_)[0] is True
-    assert service._evaluate_rule(_rule("UNIQUE", Decimal("0")), p, cm_)[0] is True
-    assert service._evaluate_rule(_rule("NOT_NULL", 0), p, cm_)[0] is True
-    # None 은 기본 100
-    assert service._evaluate_rule(_rule("NOT_NULL", None), p, cm_)[0] is False
-
-
-def test_exact_counts_decide_not_null_and_unique() -> None:
-    n = 300_000
-    p, cm_ = _profile([ColumnProfile(column_name="c", column_type="INT", total_count=n, null_count=1,
-                                     null_percent=0.0, unique_count=n - 1, unique_percent=100.0)], n)
-    passed, actual, detail = service._evaluate_rule(_rule("NOT_NULL", Decimal("100.00")), p, cm_)
-    assert passed is False and actual == "100.0%" and "NULL 1건" in detail
-    passed, _, detail = service._evaluate_rule(_rule("UNIQUE", Decimal("100.00")), p, cm_)
-    assert passed is False and "고유 299,999개" in detail
-    # 임계값 99.99 는 통과 (정확 비교 — 299999/300000 = 99.99967%)
-    assert service._evaluate_rule(_rule("NOT_NULL", Decimal("99.99")), p, cm_)[0] is True
-    # 경계값 정확히 같으면 통과 (199/200 = 99.5%)
-    p2, cm2 = _profile([ColumnProfile(column_name="c", column_type="INT", total_count=200, null_count=1,
-                                      unique_count=199)], 200)
-    assert service._evaluate_rule(_rule("NOT_NULL", Decimal("99.50")), p2, cm2)[0] is True
-    assert service._evaluate_rule(_rule("UNIQUE", Decimal("99.50")), p2, cm2)[0] is True
-    assert service._evaluate_rule(_rule("UNIQUE", Decimal("99.51")), p2, cm2)[0] is False
-
-
-def test_empty_table_semantics_unchanged() -> None:
-    p, cm_ = _profile([ColumnProfile(column_name="c", column_type="INT", total_count=0)], 0)
-    assert service._evaluate_rule(_rule("NOT_NULL", Decimal("100")), p, cm_)[0] is True
-    assert service._evaluate_rule(_rule("UNIQUE", Decimal("100")), p, cm_)[0] is False
-    # 건수 없이 비율만 있는 반입 프로파일 — 비율로 판정
-    p, cm_ = _profile([ColumnProfile(column_name="c", column_type="INT", null_percent=10.0,
-                                     unique_percent=95.0)], 10)
-    assert service._evaluate_rule(_rule("NOT_NULL", Decimal("90")), p, cm_)[0] is True
-    assert service._evaluate_rule(_rule("UNIQUE", Decimal("96")), p, cm_)[0] is False
+    async def check(s):
+        assert [r.rule_id for r in await service.get_latest_results(s, ds_id)] == [r_nn]
+    _run(sm, check)
 
 
 # ---------------------------------------------------------------------------
@@ -296,34 +196,3 @@ def test_import_scores_over_active_rules(tmp_path) -> None:
         scores = (await s.execute(select(QualityScore).where(QualityScore.dataset_id == ds_id))).scalars().all()
         assert len(scores) == 2
     _run(sm, check)
-
-
-def test_import_api_status_codes(tmp_path, monkeypatch) -> None:
-    sm = _make_sessionmaker(str(tmp_path / "q.db"))
-    ds_id, (r1, r_off) = asyncio.run(_seed(sm, [{"check_type": "NOT_NULL"},
-                                                {"check_type": "NOT_NULL", "active": "false"}]))
-
-    async def allow(*_a, **_k):
-        return True
-
-    async def _session():
-        async with sm() as s:
-            yield s
-
-    monkeypatch.setattr(perm, "check_feature", allow)
-    app = FastAPI()
-    app.include_router(quality_router.router, prefix="/api/v1")
-    app.dependency_overrides[get_session] = _session
-    app.dependency_overrides[get_current_user] = lambda: TokenUser(
-        sub="u", username="u", roles=["argus-admin", "argus-user"])
-    c = TestClient(app)
-    url = f"/api/v1/quality/datasets/{ds_id}/results/import"
-
-    assert c.post(url, json={"results": []}).status_code == 422
-    assert c.post(url, json={}).status_code == 422
-    dup = {"results": [{"rule_id": r1, "passed": True}, {"rule_id": r1, "passed": False}]}
-    assert c.post(url, json=dup).status_code == 422
-    assert c.post(url, json={"results": [{"rule_id": r_off, "passed": True}]}).status_code == 400
-    r = c.post(url, json={"results": [{"rule_id": r1, "passed": False}]})
-    assert r.status_code == 200, r.text
-    assert r.json()["score"] == 0.0 and r.json()["total_rules"] == 1

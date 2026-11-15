@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import logging
 import os
+import secrets as _stdlib_secrets
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -83,3 +85,50 @@ def resolve_secret(name: str) -> str:
         check_required_secrets()
     # 값은 가공하지 않는다(공백을 지우면 기존에 저장된 암호문의 키가 달라짐)
     return os.environ.get(name) or _SECRETS[name]
+
+
+# 자동 생성 서명키 파일 이름 — 데이터 디렉터리 아래, 소유자만 읽기(0600)
+JWT_SECRET_FILE = ".jwt-secret"
+
+
+def resolve_jwt_secret(data_dir: Path | str | None) -> tuple[str, str]:
+    """로컬 JWT 서명키와 출처(``env``·``file``·``generated``·``dev``)를 돌려준다.
+
+    우선순위: 환경변수 ``ARGUS_JWT_SECRET`` → 데이터 디렉터리의 ``.jwt-secret`` →
+    (없으면) 임의 키를 만들어 그 파일에 저장 → 저장할 수 없을 때만 개발용 기본값.
+    공개된 개발용 키로 서명하면 누구나 관리자 토큰을 만들 수 있으므로(DEF-001), 설정을 빠뜨린
+    설치도 설치마다 다른 키를 쓰게 한다. 여러 서버가 같은 토큰을 받아야 하면 환경변수로 같은 값을 준다.
+    """
+    if secrets_required():
+        check_required_secrets()
+    env = os.environ.get("ARGUS_JWT_SECRET")
+    if env:
+        return env, "env"
+    if data_dir:
+        path = Path(data_dir) / JWT_SECRET_FILE
+        try:
+            value = path.read_text(encoding="utf-8").strip()
+            if len(value) >= MIN_SECRET_LENGTH:
+                return value, "file"
+            logger.warning("JWT 서명키 파일이 비었거나 짧아 새로 만듭니다: path=%s", path)
+            path.unlink(missing_ok=True)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            logger.warning("JWT 서명키 파일을 읽지 못했습니다: path=%s err=%s", path, type(e).__name__)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            value = _stdlib_secrets.token_urlsafe(48)
+            # 다른 프로세스가 먼저 만들었으면 그 값을 쓴다(O_EXCL)
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(value)
+            logger.warning("ARGUS_JWT_SECRET 미설정 — 임의 서명키를 만들어 저장했습니다: path=%s", path)
+            return value, "generated"
+        except FileExistsError:
+            value = path.read_text(encoding="utf-8").strip()
+            if len(value) >= MIN_SECRET_LENGTH:
+                return value, "file"
+        except OSError as e:
+            logger.warning("JWT 서명키 파일을 만들지 못했습니다: path=%s err=%s", path, type(e).__name__)
+    return DEV_JWT_SECRET, "dev"

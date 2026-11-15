@@ -1,11 +1,12 @@
 "use client"
 
+import { DetailSection } from "@/components/detail-section"
 import { useEffect, useState } from "react"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
-import { Loader2, RefreshCcw } from "lucide-react"
+import { Loader2, RefreshCw } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
-import { Card, CardContent } from "@workspace/ui/components/card"
+import { DisabledReason } from "@/components/tip"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@workspace/ui/components/select"
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -57,19 +58,19 @@ function DailyChart({ days, daily }: { days: number; daily: ApiUsage["daily"] })
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-        <div className="flex items-center gap-3 text-muted-foreground">
+        <div className="flex items-center gap-3">
           <span className="inline-flex items-center gap-1"><span className={cn("h-2.5 w-2.5 rounded-sm", OK_BAR)} /> 성공</span>
           <span className="inline-flex items-center gap-1"><span className={cn("h-2.5 w-2.5 rounded-sm", ERR_BAR)} /> 오류</span>
         </div>
         <span className="min-h-4 text-foreground" aria-live="polite">
-          {h ? <>{h.date} · 호출 <b>{h.count}</b>건 · 오류 <b>{h.errors}</b>건</> : <span className="text-muted-foreground">막대에 마우스를 올리면 날짜별 수치가 표시됩니다.</span>}
+          {h ? <>{h.date} · 호출 <b>{h.count}</b>건 · 오류 <b>{h.errors}</b>건</> : <span >막대에 마우스를 올리면 날짜별 수치가 표시됩니다.</span>}
         </span>
       </div>
       <div className="relative" style={{ height: H }} onMouseLeave={() => setHover(null)}>
         {/* 기준선·최댓값 눈금 */}
         <div className="absolute inset-x-0 bottom-0 border-t border-border" />
-        <div className="absolute inset-x-0 top-0 border-t border-dashed border-border/60" />
-        <span className="absolute top-0 left-0 -translate-y-full pb-0.5 text-[10px] text-muted-foreground">{max}</span>
+        <div className="absolute inset-x-0 top-0 border-t border-border/60" />
+        <span className="absolute top-0 left-0 -translate-y-full pb-0.5 text-[11px]">{max}</span>
         <div className="absolute inset-0 flex items-end gap-px">
           {data.map((d, i) => {
             const okH = ((d.count - d.errors) / max) * H
@@ -93,7 +94,7 @@ function DailyChart({ days, daily }: { days: number; daily: ApiUsage["daily"] })
           })}
         </div>
       </div>
-      <div className="flex justify-between text-[10px] text-muted-foreground">
+      <div className="flex justify-between text-[11px]">
         <span>{data[0]?.date}</span>
         <span>{data[data.length - 1]?.date}</span>
       </div>
@@ -121,7 +122,7 @@ export function UsageTab({ api, onOpenEndpoint }: {
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
   }
   // 전체 호출(다른 사람의 호출 URL·호출자 포함)은 API 생성자 본인·관리자만 — 서버도 같은 기준(mine=false 는 403)
-  const canSeeAll = api.permissions?.can_edit ?? false
+  const canSeeAll = api.permissions?.can_view_usage ?? false
   const [mineChoice, setMine] = useState(false)
   const mine = !canSeeAll || mineChoice
   const [endpoint, setEndpoint] = useState(ALL)
@@ -166,7 +167,7 @@ export function UsageTab({ api, onOpenEndpoint }: {
 
   return (
     <div className="space-y-4">
-      <p className="text-sm text-muted-foreground">
+      <p className="text-sm">
         이 카탈로그의 엔드포인트 탭에서 실행한 호출(Try-it)을 집계한 화면입니다 — 실제 운영 트래픽은 포함되지 않습니다. 호출 수·성공률·지연(평균/p95)·일별 추이·상태 코드·인기 엔드포인트·호출자별 사용량을 보여 줍니다.
       </p>
 
@@ -182,20 +183,19 @@ export function UsageTab({ api, onOpenEndpoint }: {
             {api.endpoints.map((e) => <SelectItem key={e.id} value={`${e.method} ${e.path}`}>{e.method} {e.path}</SelectItem>)}
           </SelectContent>
         </Select>
-        <Button
+        <DisabledReason reason={canSeeAll ? undefined : "전체 호출은 API 소유자·관리자만 볼 수 있습니다."}><Button
           size="sm" variant={mine ? "secondary" : "outline"} className="h-8" aria-pressed={mine}
           disabled={!canSeeAll}
-          title={canSeeAll ? undefined : "전체 호출은 API 소유자·관리자만 볼 수 있습니다."}
           onClick={() => setMine((v) => !v)}
         >
           내 호출만
-        </Button>
+        </Button></DisabledReason>
         <Button size="sm" variant="outline" className="ml-auto h-8" disabled={loading} onClick={() => setReloadSeq((n) => n + 1)}>
-          {loading ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RefreshCcw className="mr-1 h-4 w-4" />}새로고침
+          {loading ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1 h-4 w-4" />}새로고침
         </Button>
       </div>
       {!canSeeAll && (
-        <p className="text-xs text-muted-foreground">
+        <p className="text-xs">
           내 호출만 표시합니다 — 다른 사람의 호출(URL·호출자)이 포함된 전체 호출은 API 소유자·관리자만 볼 수 있습니다.
         </p>
       )}
@@ -205,7 +205,7 @@ export function UsageTab({ api, onOpenEndpoint }: {
       ) : !usage ? (
         <TabLoading />
       ) : (
-        <div className={cn("space-y-4 transition-opacity", loading && "opacity-60")}>
+        <div className={cn("space-y-6 transition-opacity", loading && "opacity-60")}>
           {usage.total_calls === 0 ? (
             <TabEmpty>
               {mine || endpoint !== ALL ? "조건에 맞는 호출 기록이 없습니다." : "기간 내 호출 기록이 없습니다. 엔드포인트 탭에서 행을 펼쳐 호출(Try-it)하면 사용량이 집계됩니다."}
@@ -220,13 +220,13 @@ export function UsageTab({ api, onOpenEndpoint }: {
                 {stat("p95 지연", `${usage.p95_latency_ms} ms`)}
               </div>
 
-              <Card><CardContent className="pt-4">
-                <p className="mb-3 text-sm font-medium">일별 호출 추이</p>
-                <DailyChart days={Number(days)} daily={usage.daily} />
-              </CardContent></Card>
+              <DetailSection title="일별 호출 추이">
+                <div className="rounded-md border p-4">
+                  <DailyChart days={Number(days)} daily={usage.daily} />
+                </div>
+              </DetailSection>
 
-              <Card><CardContent className="pt-4">
-                <p className="mb-2 text-sm font-medium">상태 코드 분포</p>
+              <DetailSection title="상태 코드 분포">
                 <div className="flex flex-wrap gap-x-6 gap-y-2">
                   {groupOrder.map((k) => {
                     const g = groups.get(k)!
@@ -235,18 +235,17 @@ export function UsageTab({ api, onOpenEndpoint }: {
                         <span className="inline-flex items-center gap-1.5">
                           <span className={cn("h-2.5 w-2.5 rounded-full", g.dot)} />
                           {g.label} <b>{g.count.toLocaleString()}</b>건
-                          <span className="text-xs text-muted-foreground">({Math.round((g.count / usage.total_calls) * 100)}%)</span>
+                          <span className="text-xs">({Math.round((g.count / usage.total_calls) * 100)}%)</span>
                         </span>
-                        <p className="ml-4 text-xs text-muted-foreground">{g.codes.join(" · ")}</p>
+                        <p className="ml-4 text-xs">{g.codes.join(" · ")}</p>
                       </div>
                     )
                   })}
                 </div>
-              </CardContent></Card>
+              </DetailSection>
 
-              <div className="grid gap-4 lg:grid-cols-2">
-                <Card><CardContent className="pt-4">
-                  <p className="mb-2 text-sm font-medium">인기 엔드포인트</p>
+              <div className="grid gap-6 lg:grid-cols-2">
+                <DetailSection title="인기 엔드포인트">
                   <div className="overflow-hidden rounded-md border">
                     <table className="w-full text-sm">
                       <thead className="bg-muted/40"><tr>
@@ -270,17 +269,16 @@ export function UsageTab({ api, onOpenEndpoint }: {
                                 )}
                               </td>
                               <td className="px-3 py-2 text-right">{e.count}</td>
-                              <td className="px-3 py-2 text-right text-muted-foreground">{e.avg_latency_ms} ms</td>
+                              <td className="px-3 py-2 text-right">{e.avg_latency_ms} ms</td>
                             </tr>
                           )
                         })}
                       </tbody>
                     </table>
                   </div>
-                </CardContent></Card>
+                </DetailSection>
 
-                <Card><CardContent className="pt-4">
-                  <p className="mb-2 text-sm font-medium">호출자별 사용량</p>
+                <DetailSection title="호출자별 사용량">
                   <div className="overflow-hidden rounded-md border">
                     <table className="w-full text-sm">
                       <thead className="bg-muted/40"><tr>
@@ -297,11 +295,10 @@ export function UsageTab({ api, onOpenEndpoint }: {
                       </tbody>
                     </table>
                   </div>
-                </CardContent></Card>
+                </DetailSection>
               </div>
 
-              <Card><CardContent className="pt-4">
-                <p className="mb-2 text-sm font-medium">최근 호출 <span className="text-xs font-normal text-muted-foreground">(최대 20건 · 쿼리의 키·토큰 값은 *** 로 가려 저장)</span></p>
+              <DetailSection title="최근 호출" description="최대 20건 · 쿼리의 키·토큰 값은 *** 로 가려 저장합니다.">
                 <div className="overflow-hidden rounded-md border">
                   <table className="w-full text-sm">
                     <thead className="bg-muted/40"><tr>
@@ -320,15 +317,15 @@ export function UsageTab({ api, onOpenEndpoint }: {
                           <td className={cn("px-3 py-2 text-right", r.ok ? "text-emerald-600" : "text-red-600")} title={r.error || undefined}>
                             {r.status_code ? r.status_code : <span className="cursor-help underline decoration-dotted">네트워크 오류</span>}
                           </td>
-                          <td className="px-3 py-2 text-right text-muted-foreground">{r.latency_ms} ms</td>
-                          <td className="px-3 py-2 break-all text-muted-foreground">{r.called_by || "-"}</td>
-                          <td className="px-3 py-2 text-muted-foreground">{fmtDateTime(r.created_at)}</td>
+                          <td className="px-3 py-2 text-right">{r.latency_ms} ms</td>
+                          <td className="px-3 py-2 break-all">{r.called_by || "-"}</td>
+                          <td className="px-3 py-2">{fmtDateTime(r.created_at)}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
-              </CardContent></Card>
+              </DetailSection>
             </>
           )}
         </div>

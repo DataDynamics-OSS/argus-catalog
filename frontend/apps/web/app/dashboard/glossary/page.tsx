@@ -1,13 +1,19 @@
 "use client"
 
+import { Tip } from "@/components/tip"
+import Link from "next/link"
+
 import { useCallback, useContext, useEffect, useMemo, useRef, useState, createContext } from "react"
 import { useSearchParams } from "next/navigation"
-import { errorMessage, toast } from "@/lib/notify"
+import { errorMessage, toast, notifyError } from "@/lib/notify"
 import {
   BookOpen, ChevronRight, FolderOpen, FileText, Plus, Pencil, Trash2, Check, X, MoveRight,
 } from "lucide-react"
 import { AgGridReact } from "ag-grid-react"
-import { AllCommunityModule, ModuleRegistry, type ColDef, type CellValueChangedEvent } from "ag-grid-community"
+import {
+  AllCommunityModule, ModuleRegistry, type ColDef, type CellValueChangedEvent,
+  type RowSelectionOptions, type SelectionColumnDef,
+} from "ag-grid-community"
 
 import { Checkbox } from "@workspace/ui/components/checkbox"
 import { Button } from "@workspace/ui/components/button"
@@ -24,8 +30,8 @@ import {
   createGlossaryTerm, deleteGlossaryTerm, fetchGlossaryTerms, updateGlossaryTerm,
 } from "@/features/glossary/api"
 import type { GlossaryTerm } from "@/features/datasets/data/schema"
-import { useAuth } from "@/features/auth"
 import { usePermissions } from "@/features/permissions/use-permissions"
+import { datasetListHref } from "@/features/datasets/links"
 
 ModuleRegistry.registerModules([AllCommunityModule])
 
@@ -112,13 +118,13 @@ function FolderTreePicker({
             style={{ paddingLeft: `${node.depth * 16 + 8}px` }}
           >
             {hasChildren ? (
-              <button
+              <Tip label={isExp ? "접기" : "펼치기"}><button aria-label={isExp ? "접기" : "펼치기"}
                 type="button"
                 onClick={(e) => { e.stopPropagation(); toggleExp(node.id) }}
                 className="shrink-0 p-0.5"
               >
                 <ChevronRight className={`h-3 w-3 transition-transform ${isExp ? "rotate-90" : ""}`} />
-              </button>
+              </button></Tip>
             ) : (
               <span className="w-4" />
             )}
@@ -150,13 +156,29 @@ function FolderTreePicker({
 // Delete renderer for AG Grid
 // ---------------------------------------------------------------------------
 const TermDeleteCtx = createContext<(id: number) => void>(() => {})
+/** 용어 표의 "데이터셋" 칸 — 연결된 데이터셋 수, 누르면 그 용어로 거른 데이터셋 목록. */
+function TermDatasetsRenderer({ data }: { data?: GlossaryTerm }) {
+  if (!data) return null
+  const count = data.dataset_count
+  if (count === 0) return <span >0</span>
+  return (
+    <Link
+      href={datasetListHref({ term: String(data.id) })}
+      className="text-primary hover:underline"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {count == null ? "보기" : `${count.toLocaleString()}개`}
+    </Link>
+  )
+}
+
 function TermDeleteRenderer(props: { value: number }) {
   const onDelete = useContext(TermDeleteCtx)
   return (
-    <button type="button" onClick={() => onDelete(props.value)} aria-label="용어 삭제"
+    <Tip label="용어 삭제"><button type="button" onClick={() => onDelete(props.value)} aria-label="용어 삭제"
       className="flex items-center justify-center w-full h-full text-muted-foreground hover:text-destructive transition-colors cursor-pointer">
       <Trash2 className="h-3.5 w-3.5" />
-    </button>
+    </button></Tip>
   )
 }
 
@@ -164,10 +186,9 @@ function TermDeleteRenderer(props: { value: number }) {
 // Main page
 // ---------------------------------------------------------------------------
 export default function GlossaryPage() {
-  const { user } = useAuth()
-  const { isFeatureGranted } = usePermissions()
+  const { canUseFeature } = usePermissions()
   // 편집 권한 — admin 이거나 권한 관리에서 glossary.edit 를 명시 허용받은 역할 (미설정이면 admin 전용)
-  const canEdit = !!user?.is_admin || isFeatureGranted(GLOSSARY_EDIT_FEATURE)
+  const canEdit = canUseFeature(GLOSSARY_EDIT_FEATURE)
   const searchParams = useSearchParams()
   const [terms, setTerms] = useState<GlossaryTerm[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -294,7 +315,7 @@ export default function GlossaryPage() {
       }
     }
     if (moved) toast.success(`${moved}개 항목을 이동했습니다.`)
-    if (failures.length) toast.error(`이동하지 못한 항목이 있습니다 — ${failures.join(" / ")}`)
+    if (failures.length) notifyError(failures.join("\n"), "이동하지 못한 항목이 있습니다.")
     await load()
   }
 
@@ -344,7 +365,7 @@ export default function GlossaryPage() {
       await load()
     } catch (e) {
       // 대화상자는 열어 둔 채 사유(이름 중복 등)를 알린다
-      toast.error(errMsg(e, "추가하지 못했습니다."))
+      notifyError(e, addMode === "category" ? "분류를 추가하지 못했습니다." : "용어를 추가하지 못했습니다.")
     } finally {
       setCreating(false)
     }
@@ -364,7 +385,7 @@ export default function GlossaryPage() {
       await load()
     } catch (e) {
       // 편집 상태를 유지해 다시 고칠 수 있게 한다
-      toast.error(errMsg(e, "이름을 바꾸지 못했습니다."))
+      notifyError(e, "이름을 바꾸지 못했습니다.")
     }
   }
 
@@ -384,7 +405,7 @@ export default function GlossaryPage() {
       setDescTarget(null)
       await load()
     } catch (e) {
-      toast.error(errMsg(e, "설명을 저장하지 못했습니다."))
+      notifyError(e, "설명을 저장하지 못했습니다.")
     } finally {
       setSavingDesc(false)
     }
@@ -406,7 +427,7 @@ export default function GlossaryPage() {
       await load()
     } catch (e) {
       // 차단형(하위 용어 존재 등) 삭제 실패 — 백엔드 안내 메시지를 토스트로.
-      toast.error(errMsg(e, "삭제하지 못했습니다."))
+      notifyError(e, `'${pendingDelete.name}'을(를) 삭제하지 못했습니다.`)
       setPendingDelete(null)
     } finally {
       setDeleting(false)
@@ -423,7 +444,7 @@ export default function GlossaryPage() {
       const value = field === "description" ? ((newValue ?? "") as string).trim() || null : newValue
       await updateGlossaryTerm(data.id, { [field]: value })
     } catch (e) {
-      toast.error(errMsg(e, "저장하지 못했습니다."))
+      notifyError(e, "변경 내용을 저장하지 못했습니다.")
       await load()
     }
   }, [load])
@@ -451,13 +472,24 @@ export default function GlossaryPage() {
 
   // 편집 권한이 없으면 선택·편집·삭제 열을 두지 않는다 (서버도 403 으로 막음)
   const columnDefs = useMemo<ColDef[]>(() => [
-    ...(canEdit ? [{ headerCheckboxSelection: true, checkboxSelection: true, width: 45, maxWidth: 45, editable: false, sortable: false, headerName: "" }] : []),
     { headerName: "이름", field: "name", minWidth: 160, editable: canEdit, cellStyle: { fontWeight: 500, display: "flex", alignItems: "center" } },
     { headerName: "설명", field: "description", flex: 1, minWidth: 250, editable: canEdit, wrapText: true, autoHeight: true, cellStyle: { lineHeight: "1.4", whiteSpace: "normal", display: "flex", alignItems: "center" } },
+    // 이 용어가 연결된 데이터셋 목록으로(TODO-076)
+    { headerName: "데이터셋", field: "dataset_count", width: 110, maxWidth: 140, editable: false, cellRenderer: "datasetsRenderer", cellStyle: { display: "flex", alignItems: "center" } },
     ...(canEdit ? [{ headerName: "", field: "id", width: 45, maxWidth: 45, editable: false, sortable: false, cellRenderer: "deleteRenderer" }] : []),
   ] as ColDef[], [canEdit])
 
-  const components = useMemo(() => ({ deleteRenderer: TermDeleteRenderer }), [])
+  // 다중 행 선택 — 편집 권한이 있을 때만 체크박스(머리글 전체 선택 포함) 열을 둔다.
+  // 행 클릭으로도 선택된다(AG Grid v32.2 이전 rowSelection="multiple" 의 기본 동작 유지).
+  const rowSelection = useMemo<RowSelectionOptions>(() => ({
+    mode: "multiRow",
+    checkboxes: canEdit,
+    headerCheckbox: canEdit,
+    enableClickSelection: true,
+  }), [canEdit])
+  const selectionColumnDef = useMemo<SelectionColumnDef>(() => ({ width: 45, maxWidth: 45, sortable: false }), [])
+
+  const components = useMemo(() => ({ deleteRenderer: TermDeleteRenderer, datasetsRenderer: TermDatasetsRenderer }), [])
 
   // Visible tree nodes (CATEGORY only — TERMs are shown in right grid)
   const visibleNodes = useMemo(() => {
@@ -532,7 +564,7 @@ export default function GlossaryPage() {
               >
                 <BookOpen className="h-3.5 w-3.5 text-muted-foreground" />
                 전체 용어
-                <span className="ml-auto text-sm text-muted-foreground">
+                <span className="ml-auto text-sm">
                   {terms.filter(t => (t.term_type ?? "TERM") === "TERM").length}
                 </span>
               </button>
@@ -555,13 +587,13 @@ export default function GlossaryPage() {
                     style={{ paddingLeft: `${node.depth * 16 + 8}px` }}
                   >
                     {/* Expand toggle */}
-                    <button
+                    <Tip label={isExpanded ? "접기" : "펼치기"}><button aria-label={isExpanded ? "접기" : "펼치기"}
                       type="button"
                       className={`shrink-0 p-0.5 rounded hover:bg-muted ${isNodeCategory && hasChildren ? "cursor-pointer" : "invisible"}`}
                       onClick={(e) => { e.stopPropagation(); if (hasChildren) toggleExpand(node.id) }}
                     >
                       <ChevronRight className={`h-3.5 w-3.5 transition-transform ${isExpanded ? "rotate-90" : ""}`} />
-                    </button>
+                    </button></Tip>
 
                     {/* Checkbox */}
                     {canEdit && (
@@ -589,12 +621,12 @@ export default function GlossaryPage() {
                           className="h-7 text-sm px-1 flex-1"
                           autoFocus
                         />
-                        <button type="button" onClick={saveRename} className="text-green-600 hover:text-green-800">
+                        <Tip label="이름 저장"><button aria-label="이름 저장" type="button" onClick={saveRename} className="text-green-600 hover:text-green-800">
                           <Check className="h-3.5 w-3.5" />
-                        </button>
-                        <button type="button" onClick={cancelRename} className="text-muted-foreground hover:text-foreground">
+                        </button></Tip>
+                        <Tip label="이름 바꾸기 취소"><button aria-label="이름 바꾸기 취소" type="button" onClick={cancelRename} className="text-muted-foreground hover:text-foreground">
                           <X className="h-3.5 w-3.5" />
-                        </button>
+                        </button></Tip>
                       </div>
                     ) : (
                       <button
@@ -608,20 +640,20 @@ export default function GlossaryPage() {
 
                     {/* Count */}
                     {!isEditing && isNodeCategory && (
-                      <span className="text-sm text-muted-foreground shrink-0">{leafCount}</span>
+                      <span className="text-sm shrink-0">{leafCount}</span>
                     )}
 
                     {/* Actions (visible on hover) */}
                     {!isEditing && canEdit && (
                       <div className="shrink-0 flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button type="button" onClick={(e) => { e.stopPropagation(); startRename(node.id, node.name) }}
+                        <Tip label="이름 바꾸기"><button type="button" onClick={(e) => { e.stopPropagation(); startRename(node.id, node.name) }}
                           aria-label="이름 바꾸기" className="p-0.5 text-muted-foreground hover:text-foreground">
                           <Pencil className="h-3 w-3" />
-                        </button>
-                        <button type="button" onClick={(e) => { e.stopPropagation(); requestDelete(node.id) }}
+                        </button></Tip>
+                        <Tip label="삭제"><button type="button" onClick={(e) => { e.stopPropagation(); requestDelete(node.id) }}
                           aria-label="삭제" className="p-0.5 text-muted-foreground hover:text-destructive">
                           <Trash2 className="h-3 w-3" />
-                        </button>
+                        </button></Tip>
                       </div>
                     )}
                   </div>
@@ -636,7 +668,7 @@ export default function GlossaryPage() {
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium">{breadcrumb}</span>
-                  <span className="text-sm text-muted-foreground">({rightTerms.length})</span>
+                  <span className="text-sm">({rightTerms.length})</span>
                 </div>
                 {selectedNode && isCategory(selectedNode) && (
                   <div className="flex items-center gap-1.5 mt-0.5">
@@ -644,10 +676,10 @@ export default function GlossaryPage() {
                       {selectedNode.description || "분류 설명 없음"}
                     </p>
                     {canEdit && (
-                      <button type="button" onClick={() => openDescEdit(selectedNode)}
+                      <Tip label="분류 설명 편집"><button type="button" onClick={() => openDescEdit(selectedNode)}
                         aria-label="분류 설명 편집" className="p-0.5 text-muted-foreground hover:text-foreground shrink-0">
                         <Pencil className="h-3 w-3" />
-                      </button>
+                      </button></Tip>
                     )}
                   </div>
                 )}
@@ -692,7 +724,8 @@ export default function GlossaryPage() {
                 defaultColDef={{ resizable: true, sortable: true, filter: false, minWidth: 50 }}
                 headerHeight={32}
                 rowHeight={30}
-                rowSelection="multiple"
+                rowSelection={rowSelection}
+                selectionColumnDef={selectionColumnDef}
                 onSelectionChanged={onGridSelectionChanged}
                 stopEditingWhenCellsLoseFocus
                 onCellValueChanged={onCellValueChanged}
@@ -731,7 +764,7 @@ export default function GlossaryPage() {
             <DialogDescription>{descTarget ? `'${descTarget.name}' 분류의 설명을 수정합니다.` : ""}</DialogDescription>
           </DialogHeader>
           <Textarea value={descDraft} onChange={e => setDescDraft(e.target.value)} rows={4}
-            placeholder="이 분류에 속하는 용어의 범위·용도를 설명하세요..." />
+            placeholder="이 분류에 속하는 용어의 범위·용도를 설명하세요…" />
           <DialogFooter>
             <DialogClose asChild>
               <Button variant="outline" disabled={savingDesc}>취소</Button>
@@ -760,7 +793,7 @@ export default function GlossaryPage() {
               <Label>이름</Label>
               <Input value={newName} onChange={e => setNewName(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter" && !e.nativeEvent.isComposing) handleCreate() }} placeholder={addMode === "category" ? "예: 고객 관리" : "예: 고객 생애 가치"} />
-              <p className="text-sm text-muted-foreground">
+              <p className="text-sm">
                 {addMode === "category"
                   ? "분류 이름은 용어집 전체에서 하나만 쓸 수 있습니다(같은 이름의 용어와는 공존 가능)."
                   : "용어 이름은 용어집 전체에서 하나만 쓸 수 있습니다(같은 이름의 분류와는 공존 가능)."}
@@ -768,14 +801,14 @@ export default function GlossaryPage() {
             </div>
             <div className="grid gap-2">
               <Label>설명</Label>
-              <Textarea value={newDesc} onChange={e => setNewDesc(e.target.value)} rows={3} placeholder="용어 설명을 입력하세요..." />
+              <Textarea value={newDesc} onChange={e => setNewDesc(e.target.value)} rows={3} placeholder="용어 설명을 입력하세요…" />
             </div>
           </div>
           <DialogFooter>
             <DialogClose asChild>
               <Button variant="outline">취소</Button>
             </DialogClose>
-            <Button onClick={handleCreate} disabled={!newName.trim() || creating}>생성</Button>
+            <Button onClick={handleCreate} disabled={!newName.trim() || creating}>추가</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

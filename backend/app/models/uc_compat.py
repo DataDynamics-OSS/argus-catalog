@@ -237,7 +237,7 @@ async def update_registered_model(cat: str, sch: str, mdl: str, request: Request
 async def delete_registered_model(cat: str, sch: str, mdl: str, current: CurrentUser, session: AsyncSession = Depends(get_session)):
     """UC ``DeleteRegisteredModel`` — 소프트 삭제(진행 중 버전은 FAILED 로 마감)."""
     full_name = f"{cat}.{sch}.{mdl}"
-    await assert_model_editor(current, session, full_name)
+    await assert_model_editor(current, session, full_name, feature="models.delete")
     logger.info("[UC] DeleteRegisteredModel: %s", full_name)
     if not await service.delete_registered_model(session, full_name):
         logger.warning("[UC] DeleteRegisteredModel 대상 없음: %s", full_name)
@@ -342,7 +342,7 @@ async def delete_model_version(
 ):
     """UC ``DeleteModelVersion`` — DB 행과 그 버전의 파일(디스크·오브젝트 스토리지)을 함께 지운다."""
     full_name = f"{cat}.{sch}.{mdl}"
-    await assert_model_editor(current, session, full_name)
+    await assert_model_editor(current, session, full_name, feature="models.delete")
     logger.info("[UC] DeleteModelVersion: %s v%d", full_name, version)
     if not await service.delete_model_version(session, full_name, version):
         logger.warning("[UC] DeleteModelVersion 대상 없음: %s v%d", full_name, version)

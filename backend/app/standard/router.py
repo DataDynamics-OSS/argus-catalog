@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.catalog import service as catalog_service
 from app.core.auth import CurrentUser, TokenUser, assert_owner_or_admin
 from app.core.database import get_session
-from app.permissions.router import require_feature_granted
+from app.permissions.router import require_feature, require_feature_granted
 from app.standard import service
 from app.standard.schemas import (
     AutoMapResult,
@@ -62,6 +62,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/standards", tags=["standards"])
 
 STANDARDS_EDIT_FEATURE = "standards.edit"
+# 데이터셋 컬럼 ↔ 표준 용어 매핑(TODO-124) — 기본 허용형, 데이터셋 수정 권한(소유자 · 관리자) 확인은 그대로
+_standards_mapper = Depends(require_feature("standards.map"))
 
 
 async def _standards_editor(
@@ -459,7 +461,7 @@ async def delete_term(term_id: int, current: TokenUser = Depends(_standards_edit
 # 용어-컬럼 매핑 (데이터셋 생성자 또는 관리자)
 # ---------------------------------------------------------------------------
 
-@router.post("/mappings", response_model=TermMappingResponse, status_code=201)
+@router.post("/mappings", response_model=TermMappingResponse, status_code=201, dependencies=[_standards_mapper])
 async def create_mapping(current: CurrentUser, data: TermMappingCreate, session: AsyncSession = Depends(get_session)):
     """용어 ↔ 데이터셋 컬럼 매핑 생성(수동). 자동 매핑은 ``/mappings/auto-map`` 사용."""
     await _require_dataset_editor(current, session, data.dataset_id)
@@ -481,7 +483,7 @@ async def list_mappings(
     return await service.list_term_mappings(session, term_id, dataset_id)
 
 
-@router.delete("/mappings/{mapping_id}", status_code=204)
+@router.delete("/mappings/{mapping_id}", status_code=204, dependencies=[_standards_mapper])
 async def delete_mapping(current: CurrentUser, mapping_id: int, session: AsyncSession = Depends(get_session)):
     """매핑 삭제."""
     m = await service.get_term_mapping(session, mapping_id)
@@ -492,7 +494,7 @@ async def delete_mapping(current: CurrentUser, mapping_id: int, session: AsyncSe
     await session.commit()
 
 
-@router.delete("/datasets/{dataset_id}/mappings", status_code=200)
+@router.delete("/datasets/{dataset_id}/mappings", status_code=200, dependencies=[_standards_mapper])
 async def reset_dataset_mappings(
     current: CurrentUser,
     dataset_id: int,
@@ -514,7 +516,7 @@ async def reset_dataset_mappings(
 # 자동 매핑 + 데이터셋 용어 매핑
 # ---------------------------------------------------------------------------
 
-@router.post("/mappings/auto-map", response_model=AutoMapResult)
+@router.post("/mappings/auto-map", response_model=AutoMapResult, dependencies=[_standards_mapper])
 async def auto_map_dataset(
     current: CurrentUser,
     dictionary_id: int = Query(...),
@@ -597,7 +599,7 @@ async def get_dataset_dictionary(
     return {"dictionary_id": await service.get_dataset_dictionary(session, dataset_id)}
 
 
-@router.put("/datasets/{dataset_id}/dictionary")
+@router.put("/datasets/{dataset_id}/dictionary", dependencies=[_standards_mapper])
 async def set_dataset_dictionary(
     current: CurrentUser,
     dataset_id: int,

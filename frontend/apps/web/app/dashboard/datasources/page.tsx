@@ -3,9 +3,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { errorMessage, notifyError, toast } from "@/lib/notify"
 
+import { Plus } from "lucide-react"
+
 import { Button } from "@workspace/ui/components/button"
+import { useConfirm } from "@/components/confirm-provider"
 import { DashboardHeader } from "@/components/dashboard-header"
-import { useAuth } from "@/features/auth"
+import { ORIGINS } from "@/features/datasets/origin"
+import { OriginText } from "@/features/datasets/components/origin-text"
 import type { Datasource } from "@/features/datasets/data/schema"
 import { usePermissions } from "@/features/permissions/use-permissions"
 import {
@@ -17,8 +21,10 @@ import {
 import { findOrg, findSystem, flattenOrgs, flattenSystems } from "@/features/datasources/utils"
 import { AddDatasourceDialog } from "@/features/datasources/components/add-datasource-dialog"
 import { DeleteDatasourceDialog } from "@/features/datasources/components/delete-datasource-dialog"
-import { DetailPanel } from "@/features/datasources/components/detail-panel"
+import { DATASOURCE_TABS, DetailPanel, type DatasourceTab } from "@/features/datasources/components/detail-panel"
+import { useResizableWidth } from "@/hooks/use-resizable-width"
 import type { SystemSavePayload } from "@/features/datasources/components/system-detail"
+import type { OrgSavePayload } from "@/features/datasources/components/org-detail"
 import {
   INITIAL_ORG_DIALOG,
   INITIAL_SYSTEM_DIALOG,
@@ -32,6 +38,7 @@ import {
 import {
   assignDatasourceSystem,
   fetchTopology,
+  updateOrganization,
   updateSystem,
   type Topology,
 } from "@/features/topology/api"
@@ -49,39 +56,27 @@ export default function DatasourcesPage() {
   const [hasData, setHasData] = useState(false)
   const loadSeq = useRef(0)
   const [selected, setSelected] = useState<SelectedNode | null>(null)
+  const [tab, setTab] = useState<DatasourceTab>("info")
+  const askConfirm = useConfirm()
+  // 데이터 소스 기본 정보에 저장 안 된 변경이 있는지 — 다른 노드로 옮기거나 화면을 떠날 때 확인한다
+  const dirtyRef = useRef(false)
+  const onDirtyChange = useCallback((d: boolean) => { dirtyRef.current = d }, [])
 
   // 데이터 소스·조직·시스템 관리 — 명시 허용형 권한(미설정이면 관리자 전용)
-  const { user } = useAuth()
-  const { isFeatureGranted } = usePermissions()
-  const canManage = !!user?.is_admin || isFeatureGranted("datasources.manage")
+  const { canUseFeature } = usePermissions()
+  const canManage = canUseFeature("datasources.manage")
+  const canSync = canUseFeature("datasources.sync")
 
   // 좌측 토폴로지 트리 스크롤 위치 — 추가/편집/삭제 후 재조회 시 위치 복원.
   const treeRef = useRef<HTMLElement>(null)
   const treeScrollRef = useRef(0)
 
-  // 트리/상세 사이 separator 드래그로 트리 폭 조절 (분류 체계 페이지와 동일 패턴)
-  const [asideWidth, setAsideWidth] = useState(288) // w-72 = 18rem 기준
-  const resizeRef = useRef<{ startX: number; startW: number } | null>(null)
-  const startResize = (e: React.MouseEvent) => {
-    e.preventDefault()
-    resizeRef.current = { startX: e.clientX, startW: asideWidth }
-    const onMove = (ev: MouseEvent) => {
-      if (!resizeRef.current) return
-      const next = resizeRef.current.startW + (ev.clientX - resizeRef.current.startX)
-      setAsideWidth(Math.min(560, Math.max(200, next)))
-    }
-    const onUp = () => {
-      resizeRef.current = null
-      window.removeEventListener("mousemove", onMove)
-      window.removeEventListener("mouseup", onUp)
-      document.body.style.userSelect = ""
-      document.body.style.cursor = ""
-    }
-    document.body.style.userSelect = "none"
-    document.body.style.cursor = "col-resize"
-    window.addEventListener("mousemove", onMove)
-    window.addEventListener("mouseup", onUp)
-  }
+  // 트리/상세 사이 separator 드래그로 트리 폭 조절 — 마지막 폭을 브라우저에 기억한다.
+  const { width: asideWidth, startResize } = useResizableWidth("argus.datasources.asideWidth", {
+    defaultWidth: 288, // w-72 = 18rem
+    min: 200,
+    max: 560,
+  })
   useEffect(() => {
     if (isLoading) return
     const el = treeRef.current
@@ -119,7 +114,7 @@ export default function DatasourcesPage() {
   const flatSystems = useMemo(() => {
     const list = flattenSystems(topology.organizations)
     for (const s of topology.unassigned.systems ?? []) {
-      list.push({ id: s.id, name: s.name, orgName: "미분류" })
+      list.push({ id: s.id, name: s.name, orgName: "조직 미지정" })
     }
     return list
   }, [topology])
@@ -148,6 +143,76 @@ export default function DatasourcesPage() {
   useEffect(() => {
     loadAll()
   }, [loadAll])
+
+  // 선택 노드 · 탭을 주소에 남긴다 — 새로 고침 · 링크 공유 · 뒤로 가기 뒤에도 같은 곳이 열린다.
+  // ?datasource=<datasource_id> · ?system=<id> · ?org=<id> · ?unassigned=1, 탭은 &tab=<catalogs|sync|erd>
+  const writeUrl = useCallback((n: SelectedNode | null, t: DatasourceTab) => {
+    const q = new URLSearchParams()
+    if (n?.kind === "datasource") {
+      const ds = datasources.find((d) => d.id === n.id)
+      q.set("datasource", ds?.datasource_id || String(n.id))
+      if (t !== "info") q.set("tab", t)
+    } else if (n?.kind === "system") q.set("system", String(n.id))
+    else if (n?.kind === "org") q.set("org", String(n.id))
+    else if (n?.kind === "unassigned") q.set("unassigned", "1")
+    const qs = q.toString()
+    window.history.replaceState(null, "", qs ? `?${qs}` : window.location.pathname)
+  }, [datasources])
+
+  // 노드를 고른다 — 저장 안 된 변경이 있으면 먼저 확인
+  const selectNode = useCallback(async (n: SelectedNode | null) => {
+    if (dirtyRef.current) {
+      const ok = await askConfirm({
+        title: "저장 안 된 변경",
+        description: "데이터 소스 기본 정보에 저장하지 않은 변경이 있습니다. 버리고 이동할까요?",
+        confirmText: "버리고 이동",
+        destructive: true,
+      })
+      if (!ok) return
+      dirtyRef.current = false
+    }
+    setSelected(n)
+  }, [askConfirm])
+
+  // 주소 반영 — 주소에서 처음 선택을 읽은 뒤부터(아래 효과보다 먼저 선언해, 읽기 전에 주소를 지우지 않는다)
+  const urlSelectApplied = useRef(false)
+  useEffect(() => {
+    if (urlSelectApplied.current) writeUrl(selected, tab)
+  }, [selected, tab, writeUrl])
+
+  // 저장 안 된 변경이 있으면 창을 닫거나 다른 주소로 갈 때 브라우저가 확인한다
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (!dirtyRef.current) return
+      e.preventDefault()
+      e.returnValue = ""
+    }
+    window.addEventListener("beforeunload", onBeforeUnload)
+    return () => window.removeEventListener("beforeunload", onBeforeUnload)
+  }, [])
+
+  // 주소로 들어오면 그 노드를 선택한다. ?datasource=<이름|datasource_id|id> 는 알림 상세 '출처' 링크(DEF-054) —
+  // 수집 알림의 entity_ref 는 데이터 소스 이름이다. 최초 로드 뒤 한 번만 적용한다.
+  useEffect(() => {
+    if (urlSelectApplied.current || !hasData) return
+    urlSelectApplied.current = true
+    const params = new URLSearchParams(window.location.search)
+    const wanted = params.get("datasource")
+    const tabParam = params.get("tab")
+    if (tabParam && (DATASOURCE_TABS as readonly string[]).includes(tabParam)) setTab(tabParam as DatasourceTab)
+    if (wanted) {
+      const match = datasources.find((d) => d.name === wanted)
+        ?? datasources.find((d) => d.datasource_id === wanted || String(d.id) === wanted)
+      if (match) setSelected({ kind: "datasource", id: match.id })
+      else toast.error(`데이터 소스 '${wanted}' 을(를) 찾을 수 없습니다. 삭제되었거나 이름이 바뀌었을 수 있습니다.`)
+      return
+    }
+    const sys = Number(params.get("system"))
+    const org = Number(params.get("org"))
+    if (sys && findSystem(topology, sys)) setSelected({ kind: "system", id: sys })
+    else if (org && findOrg(topology.organizations, org)) setSelected({ kind: "org", id: org })
+    else if (params.get("unassigned")) setSelected({ kind: "unassigned" })
+  }, [hasData, datasources, topology])
 
   // ---- Add / Delete Datasource ----------------------------------------------
 
@@ -208,14 +273,61 @@ export default function DatasourcesPage() {
       status: "ACTIVE",
     })
   // 시스템 편집은 우측 상세 패널의 인라인 폼에서 저장한다 (팝업 대신).
-  const handleSaveSystem = async (id: number, payload: SystemSavePayload) => {
+  const handleSaveSystem = async (id: number, payload: SystemSavePayload): Promise<boolean> => {
     try {
       await updateSystem(id, payload)
       toast.success("시스템을 저장했습니다.")
       await loadAll()
+      return true
     } catch (err) {
       notifyError(err, "시스템을 저장하지 못했습니다.")
+      return false
     }
+  }
+
+  // 조직 저장(오른쪽 상세 인라인 폼) — 이름 · 상위 조직(이동) · 설명
+  const handleSaveOrg = async (id: number, payload: OrgSavePayload): Promise<boolean> => {
+    try {
+      await updateOrganization(id, payload)
+      toast.success("조직을 저장했습니다.")
+      await loadAll()
+      return true
+    } catch (err) {
+      notifyError(err, "조직을 저장하지 못했습니다.")
+      return false
+    }
+  }
+
+  // 미분류 상세에서 여러 개를 한 번에 배정 — 하나씩 보내고 성공 · 실패 수를 알린다
+  const bulkAssign = async (
+    ids: number[], run: (id: number) => Promise<unknown>, what: string, target: string,
+  ) => {
+    const results = await Promise.allSettled(ids.map(run))
+    const failed = results.filter((r): r is PromiseRejectedResult => r.status === "rejected")
+    const ok = ids.length - failed.length
+    if (failed.length === 0) toast.success(`${what} ${ok}개를 ${target}에 배정했습니다.`)
+    else notifyError(failed[0]?.reason, `${what} ${failed.length}개를 배정하지 못했습니다.${ok ? ` (${ok}개는 배정함)` : ""}`)
+    await loadAll()
+  }
+  const assignDatasources = (ids: number[], systemId: number) =>
+    bulkAssign(ids, (id) => assignDatasourceSystem(id, systemId), "데이터 소스",
+      `'${findSystem(topology, systemId)?.name ?? systemId}' 시스템`)
+  const assignSystems = (ids: number[], orgId: number) =>
+    bulkAssign(ids, (id) => updateSystem(id, { org_id: orgId }), "시스템",
+      `'${findOrg(topology.organizations, orgId)?.name ?? orgId}' 조직`)
+
+  // 트리 메뉴와 상세의 작업 메뉴가 같이 쓴다
+  const editOrg = (id: number) => {
+    const o = findOrg(topology.organizations, id)
+    if (o) openEditOrg(o.id, o.name, o.parent_id)
+  }
+  const deleteOrg = (id: number) => {
+    const o = findOrg(topology.organizations, id)
+    setTopoDelete({ kind: "org", id, name: o?.name ?? String(id) })
+  }
+  const deleteSystem = (id: number) => {
+    const s = findSystem(topology, id)
+    setTopoDelete({ kind: "system", id, name: s?.name ?? String(id), datasourceCount: s?.datasources.length ?? 0 })
   }
 
   // ---- Render -------------------------------------------------------------
@@ -224,9 +336,24 @@ export default function DatasourcesPage() {
     <>
       <DashboardHeader title="데이터 소스" />
       <div className="flex flex-1 flex-col gap-3 p-4 min-h-0">
-        <p className="text-sm text-muted-foreground">
-          조직 · 시스템 · 데이터 소스 구조 {canManage ? "(행 우클릭으로 추가/편집)" : "(조회 전용)"}
-        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-sm">
+            조직 · 시스템 · 데이터 소스 구조
+            {canManage ? " — 행의 ⋯ 메뉴나 우클릭으로 하위 항목을 추가 · 편집 · 삭제합니다." : " (조회 전용)"}
+          </p>
+          {canManage && (
+            <span className="ml-auto flex gap-2">
+              <Button size="sm" variant="outline" onClick={() => openCreateOrg(null)}>
+                <Plus className="mr-1 h-3.5 w-3.5" />
+                조직 추가
+              </Button>
+              <Button size="sm" onClick={() => openAddDialog(null)}>
+                <Plus className="mr-1 h-3.5 w-3.5" />
+                데이터 소스 추가
+              </Button>
+            </span>
+          )}
+        </div>
         {loadError && (
           <div className="flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
             <span className="flex-1">목록을 불러오지 못했습니다: {loadError}</span>
@@ -245,7 +372,7 @@ export default function DatasourcesPage() {
             style={{ width: asideWidth }}
           >
             {isLoading ? (
-              <p className="py-8 text-center text-sm text-muted-foreground">불러오는 중...</p>
+              <p className="py-8 text-center text-sm text-muted-foreground">불러오는 중…</p>
             ) : !hasData && loadError ? (
               <p className="py-8 text-center text-sm text-muted-foreground">목록을 불러오지 못했습니다.</p>
             ) : (
@@ -253,29 +380,15 @@ export default function DatasourcesPage() {
                 readOnly={!canManage}
                 topology={topology}
                 selected={selected}
-                onSelect={setSelected}
+                onSelect={(n) => void selectNode(n)}
                 onAddRootOrg={() => openCreateOrg(null)}
                 onAddDatasource={() => openAddDialog(null)}
                 onAddDatasourceToSystem={(sid) => openAddDialog(sid)}
                 onAddSubOrg={(parentId) => openCreateOrg(parentId)}
                 onAddSystem={(orgId) => openCreateSystem(orgId)}
-                onEditOrg={(id) => {
-                  const o = findOrg(topology.organizations, id)
-                  if (o) openEditOrg(o.id, o.name, o.parent_id)
-                }}
-                onDeleteOrg={(id) => {
-                  const o = findOrg(topology.organizations, id)
-                  setTopoDelete({ kind: "org", id, name: o?.name ?? String(id) })
-                }}
-                onDeleteSystem={(id) => {
-                  const s = findSystem(topology, id)
-                  setTopoDelete({
-                    kind: "system",
-                    id,
-                    name: s?.name ?? String(id),
-                    datasourceCount: s?.datasources.length ?? 0,
-                  })
-                }}
+                onEditOrg={editOrg}
+                onDeleteOrg={deleteOrg}
+                onDeleteSystem={deleteSystem}
                 onDeleteDatasource={(id) => {
                   const p = datasources.find((x) => x.id === id)
                   if (p) openDeleteDialog(p)
@@ -295,33 +408,42 @@ export default function DatasourcesPage() {
           </div>
 
           {/* 우측: 선택 노드 상세 */}
-          <main className="flex-1 overflow-auto rounded-md border p-4">
+          {/* 트리만 테두리를 가진다 — 상세는 화면 바탕에 바로(박스는 한 겹) */}
+          <main className="flex-1 overflow-auto px-4 pb-4 pt-1">
             <DetailPanel
               selected={selected}
               datasources={datasources}
               topology={topology}
               flatOrgs={flatOrgs}
               flatSystems={flatSystems}
-              onSelect={setSelected}
+              onSelect={(n) => void selectNode(n)}
+              onSaveOrg={handleSaveOrg}
+              onDeleteOrg={deleteOrg}
+              onAddSubOrg={(parentId) => openCreateOrg(parentId)}
+              onAddSystem={(orgId) => openCreateSystem(orgId)}
+              onAddDatasourceToSystem={(sid) => openAddDialog(sid)}
+              onDeleteSystem={deleteSystem}
+              onDeleteDatasource={(id) => {
+                const p = datasources.find((x) => x.id === id)
+                if (p) openDeleteDialog(p)
+              }}
+              onAssignDatasources={assignDatasources}
+              onAssignSystems={assignSystems}
+              onDirtyChange={onDirtyChange}
+              tab={tab}
+              onTabChange={setTab}
               onSaveSystem={handleSaveSystem}
               onSaveDatasource={handleSaveDatasource}
               canManage={canManage}
+              canSync={canSync}
             />
           </main>
         </div>
 
         {/* 범례 */}
-        <div className="flex h-[28px] items-center gap-4 text-xs text-muted-foreground">
+        <div className="flex h-[28px] items-center gap-4 text-xs">
           <span className="font-medium text-foreground">범례 :</span>
-          <span className="inline-flex items-center gap-1.5">
-            <span className="inline-block h-3 w-3 rounded-full bg-sky-500" /> DEV
-          </span>
-          <span className="inline-flex items-center gap-1.5">
-            <span className="inline-block h-3 w-3 rounded-full bg-orange-500" /> STAGING
-          </span>
-          <span className="inline-flex items-center gap-1.5">
-            <span className="inline-block h-3 w-3 rounded-full bg-emerald-600" /> PROD
-          </span>
+          {ORIGINS.map((o) => <OriginText key={o} origin={o} />)}
         </div>
       </div>
 
@@ -331,6 +453,8 @@ export default function DatasourcesPage() {
         onOpenChange={(o) => setAddDialog((d) => ({ ...d, open: o }))}
         targetSystemId={addDialog.targetSystemId}
         onReload={loadAll}
+        onCreated={(id) => { setSelected({ kind: "datasource", id }); setTab("info") }}
+        canSync={canSync}
       />
 
       <DeleteDatasourceDialog

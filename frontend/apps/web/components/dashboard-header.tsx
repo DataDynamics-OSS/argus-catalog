@@ -2,11 +2,10 @@
 
 import { useRouter } from "next/navigation"
 import { useCallback, useEffect, useState } from "react"
-import { Bell, Brain, Search } from "lucide-react"
+import { Bell, Brain } from "lucide-react"
 
-import { Badge } from "@workspace/ui/components/badge"
+import { StatusBadge } from "@workspace/ui/components/status-badge"
 import { Button } from "@workspace/ui/components/button"
-import { Input } from "@workspace/ui/components/input"
 import { Popover, PopoverContent, PopoverTrigger } from "@workspace/ui/components/popover"
 import { Separator } from "@workspace/ui/components/separator"
 import { SidebarTrigger } from "@workspace/ui/components/sidebar"
@@ -16,6 +15,9 @@ import {
 import { authFetch } from "@/features/auth/auth-fetch"
 import { SEVERITY_LABEL } from "@/features/alerts/labels"
 import { onAlertsChanged } from "@/features/alerts/events"
+import { HelpButton } from "@/features/help/help-button"
+import { usePermissions } from "@/features/permissions/use-permissions"
+import { SearchInput } from "@/components/search-input"
 
 type AlertSummary = {
   total_open: number
@@ -52,6 +54,9 @@ export function DashboardHeader({ title, searchQuery }: DashboardHeaderProps) {
   const [summary, setSummary] = useState<AlertSummary | null>(null)
   const [recentAlerts, setRecentAlerts] = useState<AlertItem[]>([])
   const [popoverOpen, setPopoverOpen] = useState(false)
+  // 알림 메뉴가 닫힌 역할에는 벨을 보이지 않고 요약도 조회하지 않는다(DEF-064)
+  const { loaded: permsLoaded, isMenuAllowed } = usePermissions()
+  const alertsAllowed = permsLoaded && isMenuAllowed("alerts")
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter" && query.trim()) {
@@ -68,10 +73,11 @@ export function DashboardHeader({ title, searchQuery }: DashboardHeaderProps) {
   }, [])
 
   useEffect(() => {
+    if (!alertsAllowed) return
     fetchSummary()
     const interval = setInterval(fetchSummary, 30000) // every 30s
     return () => clearInterval(interval)
-  }, [fetchSummary])
+  }, [fetchSummary, alertsAllowed])
 
   const fetchRecent = useCallback(() => {
     authFetch("/api/v1/alerts?status=OPEN&page_size=5")
@@ -87,9 +93,10 @@ export function DashboardHeader({ title, searchQuery }: DashboardHeaderProps) {
 
   // 알림 화면에서 상태를 바꾸면 30초 주기를 기다리지 않고 바로 반영
   useEffect(() => onAlertsChanged(() => {
+    if (!alertsAllowed) return
     fetchSummary()
     if (popoverOpen) fetchRecent()
-  }), [fetchSummary, fetchRecent, popoverOpen])
+  }), [fetchSummary, fetchRecent, popoverOpen, alertsAllowed])
 
   const totalOpen = summary?.total_open ?? 0
 
@@ -101,10 +108,11 @@ export function DashboardHeader({ title, searchQuery }: DashboardHeaderProps) {
         <h1 className="text-xl font-semibold leading-none">{title}</h1>
       </div>
       <div className="flex items-center gap-2 ml-auto">
-        {/* Notification Bell */}
+        {/* Notification Bell — 알림 메뉴 권한이 있을 때만 */}
+        {alertsAllowed && (
         <Popover open={popoverOpen} onOpenChange={setPopoverOpen}>
           <PopoverTrigger asChild>
-            <Button variant="ghost" size="icon" className="relative h-9 w-9">
+            <Button aria-label="알림" variant="ghost" size="icon" className="relative h-9 w-9">
               <Bell className="h-4 w-4" />
               {totalOpen > 0 && (
                 <span className={`absolute -top-0.5 -right-0.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-sm font-bold text-white ${
@@ -122,14 +130,14 @@ export function DashboardHeader({ title, searchQuery }: DashboardHeaderProps) {
               <span className="text-sm font-medium">알림</span>
               <div className="flex items-center gap-1.5">
                 {(summary?.breaking_count ?? 0) > 0 && (
-                  <Badge className="bg-red-500 text-white text-sm px-1.5 py-0 border-0">
+                  <StatusBadge tone="danger">
                     {SEVERITY_LABEL.BREAKING} {summary!.breaking_count}
-                  </Badge>
+                  </StatusBadge>
                 )}
                 {(summary?.warning_count ?? 0) > 0 && (
-                  <Badge className="bg-amber-500 text-white text-sm px-1.5 py-0 border-0">
+                  <StatusBadge tone="warning">
                     {SEVERITY_LABEL.WARNING} {summary!.warning_count}
-                  </Badge>
+                  </StatusBadge>
                 )}
               </div>
             </div>
@@ -156,13 +164,13 @@ export function DashboardHeader({ title, searchQuery }: DashboardHeaderProps) {
                         <p className="text-sm font-medium truncate">
                           {alert.change_summary}
                         </p>
-                        <p className="text-sm text-muted-foreground mt-0.5">
-                          {alert.entity_ref && `${alert.entity_type === "mcp_deployment" ? "MCP 배포" : alert.entity_type} ${alert.entity_ref}`}
+                        <p className="text-sm mt-0.5">
+                          {alert.entity_ref && `${alert.entity_type === "mcp_deployment" ? "MCP 배포" : alert.entity_type === "datasource" ? "데이터 소스" : alert.entity_type} ${alert.entity_ref}`}
                           {alert.source_datasource_type && `${alert.source_datasource_type}`}
                           {alert.source_dataset_name && `.${alert.source_dataset_name}`}
                           {alert.affected_dataset_name && ` → ${alert.affected_datasource_type}.${alert.affected_dataset_name}`}
                         </p>
-                        <p className="text-sm text-muted-foreground mt-0.5">
+                        <p className="text-sm mt-0.5">
                           {formatTimeAgo(alert.created_at)}
                         </p>
                       </div>
@@ -189,20 +197,18 @@ export function DashboardHeader({ title, searchQuery }: DashboardHeaderProps) {
             )}
           </PopoverContent>
         </Popover>
+        )}
 
         {/* Search */}
-        <div className="relative hidden md:block">
-          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input
-            type="search"
-            placeholder="이름·설명·의미로 데이터셋 검색..."
-            maxLength={500} // 통합 검색 API q 최대 길이(초과 시 422)
-            className="pl-8 w-96 h-9 text-sm"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={handleKeyDown}
-          />
-        </div>
+        <SearchInput
+          className="hidden w-96 md:block"
+          placeholder="이름·설명·의미로 데이터셋 검색…"
+          aria-label="데이터셋 검색"
+          maxLength={500} // 통합 검색 API q 최대 길이(초과 시 422)
+          value={query}
+          onValueChange={setQuery}
+          onKeyDown={handleKeyDown}
+        />
         <Tooltip>
           <TooltipTrigger asChild>
             <div className="hidden md:flex items-center">
@@ -211,6 +217,8 @@ export function DashboardHeader({ title, searchQuery }: DashboardHeaderProps) {
           </TooltipTrigger>
           <TooltipContent>하이브리드 검색 (키워드 + 의미 기반)</TooltipContent>
         </Tooltip>
+        {/* 화면별 도움말 — 좁은 화면에서도 보인다 */}
+        <HelpButton />
       </div>
     </header>
   )

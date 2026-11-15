@@ -226,9 +226,15 @@ class ApiSpecResponse(BaseModel):
 
 class ApiPermissions(BaseModel):
     """현재 사용자가 이 API 에 할 수 있는 작업 — 화면의 버튼 노출 판단용(실제 통제는 각 엔드포인트 가드)."""
-    # 개요 편집·상태 변경·삭제·스펙 새 버전·엔드포인트 추가/수정/삭제·알림 확인 — 생성자 본인 또는 관리자
+    # 개요 편집·상태 변경·스펙 새 버전·엔드포인트 추가/수정/삭제·알림 확인 — 생성자 본인 또는 관리자 + 기능 권한 apis.edit
     can_edit: bool = False
-    # 자격증명·리니지 추가/삭제 — 관리자 전용
+    # 삭제 — 생성자 본인 또는 관리자 + 기능 권한 apis.delete
+    can_delete: bool = False
+    # 다른 사람 호출 이력 · 사용량 전체 보기 — 생성자 본인 또는 관리자
+    can_view_usage: bool = False
+    # 리니지 추가/삭제 — 기능 권한 lineage.edit(명시 허용형, 미설정이면 관리자만)
+    can_edit_lineage: bool = False
+    # 자격증명 추가/삭제 — 관리자 전용
     can_admin: bool = False
 
 

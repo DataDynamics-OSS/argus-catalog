@@ -29,7 +29,6 @@ include::../modules/ROOT/pages/catalog/lineage.adoc[leveloffset=+1]
 
 include::../modules/ROOT/pages/catalog/quality.adoc[leveloffset=+1]
 
-include::../modules/ROOT/pages/catalog/quality-batch.adoc[leveloffset=+1]
 
 include::../modules/ROOT/pages/catalog/platforms.adoc[leveloffset=+1]
 

@@ -99,6 +99,18 @@ CREATE TABLE IF NOT EXISTS catalog_schema_snapshots (
     changes_json TEXT
 );
 
+-- Confluent 호환 스키마 레지스트리 — 데이터셋 Avro 본문 지문마다 한 행(id = 스키마 id). 행은 고치거나 지우지 않는다.
+CREATE TABLE IF NOT EXISTS argus_schema_registry_version (
+    id SERIAL PRIMARY KEY,
+    dataset_id INT NOT NULL REFERENCES catalog_datasets(id) ON DELETE CASCADE,
+    version INT NOT NULL,
+    fingerprint VARCHAR(64) NOT NULL,
+    schema_text TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    CONSTRAINT uq_schema_registry_version UNIQUE (dataset_id, version),
+    CONSTRAINT uq_schema_registry_fingerprint UNIQUE (dataset_id, fingerprint)
+);
+
 -- ---------------------------------------------------------------------------
 -- Tags
 -- ---------------------------------------------------------------------------
@@ -298,6 +310,30 @@ CREATE TABLE IF NOT EXISTS argus_admin_audit_log (
 
 CREATE INDEX IF NOT EXISTS idx_admin_audit_created ON argus_admin_audit_log USING btree (created_at);
 CREATE INDEX IF NOT EXISTS idx_admin_audit_category ON argus_admin_audit_log USING btree (category, created_at);
+
+-- API 키 — 백엔드를 부르는 프로그램(수집·AI·품질·SDK·NiFi 등)의 장기 자격 (TODO-056). 평문은 저장하지 않고 SHA-256 해시만.
+-- 폐기한 키는 지우지 않고 status='revoked' 로 남긴다.
+CREATE TABLE IF NOT EXISTS argus_api_key (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    description VARCHAR(500),
+    key_prefix VARCHAR(20) NOT NULL,
+    key_hash VARCHAR(64) NOT NULL UNIQUE,
+    role_id VARCHAR(50) NOT NULL,
+    scopes VARCHAR(200) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'active',
+    expires_at TIMESTAMPTZ,
+    last_used_at TIMESTAMPTZ,
+    last_used_ip VARCHAR(64),
+    created_by VARCHAR(100),
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    rotated_at TIMESTAMPTZ,
+    revoked_at TIMESTAMPTZ,
+    revoked_by VARCHAR(100)
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_key_status ON argus_api_key USING btree (status);
 
 -- ---------------------------------------------------------------------------
 -- ML Model Registry - Registered Models
@@ -725,14 +761,24 @@ CREATE INDEX IF NOT EXISTS idx_starrocks_query_history_username ON argus_collect
 CREATE TABLE IF NOT EXISTS argus_query_lineage (
     id SERIAL PRIMARY KEY,
     query_hist_id INT,
+    datasource_id VARCHAR(100) NOT NULL DEFAULT '',
+    source_catalog VARCHAR(128) NOT NULL DEFAULT '',
     source_table VARCHAR(512) NOT NULL,
+    target_catalog VARCHAR(128) NOT NULL DEFAULT '',
     target_table VARCHAR(512) NOT NULL,
     source_dataset_id INT,
     target_dataset_id INT,
     created_at TIMESTAMPTZ DEFAULT now(),
-    -- 멱등성: 동일 (source→target) 엣지는 1행으로 유지
-    CONSTRAINT uq_query_lineage_edge UNIQUE (source_table, target_table)
+    -- 멱등성: 엔진·카탈로그별 (source→target) 엣지는 1행으로 유지
+    CONSTRAINT uq_query_lineage_edge_v2 UNIQUE (datasource_id, source_catalog, target_catalog, source_table, target_table)
 );
+
+-- 기존 설치 업그레이드용(재실행 안전): 엔진·카탈로그 컬럼을 더하고 유일 키를 엔진·카탈로그 포함으로 바꾼다.
+ALTER TABLE argus_query_lineage ADD COLUMN IF NOT EXISTS datasource_id VARCHAR(100) NOT NULL DEFAULT '';
+ALTER TABLE argus_query_lineage ADD COLUMN IF NOT EXISTS source_catalog VARCHAR(128) NOT NULL DEFAULT '';
+ALTER TABLE argus_query_lineage ADD COLUMN IF NOT EXISTS target_catalog VARCHAR(128) NOT NULL DEFAULT '';
+ALTER TABLE argus_query_lineage DROP CONSTRAINT IF EXISTS uq_query_lineage_edge;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_query_lineage_edge_v2 ON argus_query_lineage (datasource_id, source_catalog, target_catalog, source_table, target_table);
 
 -- ---------------------------------------------------------------------------
 -- Lineage - Column Lineage (per-query source→target column mapping)
@@ -1263,6 +1309,34 @@ CREATE TABLE IF NOT EXISTS catalog_ai_generation_log (
 CREATE INDEX IF NOT EXISTS idx_ai_gen_log_dataset ON catalog_ai_generation_log (dataset_id);
 CREATE INDEX IF NOT EXISTS idx_ai_gen_log_applied ON catalog_ai_generation_log (applied);
 
+-- AI 어시스턴트 답변 평가(👍/👎) — 답변 하나에 사용자당 한 건 (TODO-068)
+CREATE TABLE IF NOT EXISTS catalog_ai_assistant_feedback (
+    id SERIAL PRIMARY KEY,
+    user_sub VARCHAR(200) NOT NULL,
+    username VARCHAR(200),
+    conversation_id VARCHAR(100),
+    answer_id VARCHAR(64) NOT NULL,
+    rating SMALLINT NOT NULL,
+    comment TEXT,
+    question TEXT,
+    answer TEXT,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    CONSTRAINT uq_ai_assistant_feedback_answer UNIQUE (user_sub, answer_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_assistant_feedback_created ON catalog_ai_assistant_feedback (created_at);
+
+COMMENT ON TABLE catalog_ai_assistant_feedback IS 'AI 어시스턴트 답변 평가 (👍/👎)';
+COMMENT ON COLUMN catalog_ai_assistant_feedback.user_sub IS '평가한 사용자 (토큰 sub)';
+COMMENT ON COLUMN catalog_ai_assistant_feedback.username IS '평가한 사용자 이름';
+COMMENT ON COLUMN catalog_ai_assistant_feedback.conversation_id IS '대화 ID';
+COMMENT ON COLUMN catalog_ai_assistant_feedback.answer_id IS '화면이 답변마다 만든 식별자';
+COMMENT ON COLUMN catalog_ai_assistant_feedback.rating IS '평가 (1 = 좋음, -1 = 나쁨)';
+COMMENT ON COLUMN catalog_ai_assistant_feedback.comment IS '의견';
+COMMENT ON COLUMN catalog_ai_assistant_feedback.question IS '질문 (앞 2,000자)';
+COMMENT ON COLUMN catalog_ai_assistant_feedback.answer IS '답변 (앞 8,000자)';
+
 -- ---------------------------------------------------------------------------
 -- 테이블 한글 설명 (psql ``\d+ <table>`` 또는 메타데이터 조회 시 노출)
 -- ORM 의 docstring/주석과 동일한 의미를 DB 메타에도 남겨 두기 위함.
@@ -1276,6 +1350,7 @@ COMMENT ON COLUMN catalog_datasets.description IS '데이터셋 상세 설명 (�
 COMMENT ON TABLE catalog_dataset_properties IS '데이터셋 부가 속성(key/value)';
 COMMENT ON TABLE catalog_dataset_schemas IS '데이터셋의 컬럼 스키마 (현재 시점)';
 COMMENT ON TABLE catalog_schema_snapshots IS '스키마 변경 이력 — 시점별 전체 스냅샷';
+COMMENT ON TABLE argus_schema_registry_version IS '스키마 레지스트리 버전 — 데이터셋 Avro 본문 지문마다 한 행(id = Confluent 스키마 id)';
 COMMENT ON TABLE catalog_tags IS '태그 마스터(이름·색상·설명)';
 COMMENT ON TABLE catalog_dataset_tags IS '데이터셋 ↔ 태그 매핑';
 COMMENT ON TABLE catalog_glossary_terms IS '용어집 항목';
@@ -1287,6 +1362,7 @@ COMMENT ON TABLE catalog_datasource_storage_formats IS '플랫폼별 지원 저�
 COMMENT ON TABLE catalog_datasource_features IS '플랫폼별 지원 기능 플래그';
 COMMENT ON TABLE argus_users IS '로컬 인증 사용자 계정';
 COMMENT ON TABLE argus_roles IS '권한 역할 정의';
+COMMENT ON TABLE argus_api_key IS 'API 키 — 프로그램용 장기 자격(평문 없이 SHA-256 해시, 폐기도 행 유지)';
 COMMENT ON TABLE argus_user_preferences IS '사용자별 UI 환경 설정(아바타 등) — 토큰 sub 키로 로컬·Keycloak 인증 공용';
 COMMENT ON TABLE catalog_registered_models IS 'MLflow 모델 레지스트리 — 등록 모델';
 COMMENT ON TABLE catalog_model_versions IS 'MLflow 모델 버전 (PENDING_REGISTRATION → READY / FAILED_REGISTRATION)';
@@ -2175,14 +2251,17 @@ COMMENT ON COLUMN argus_lineage_alert.created_at IS '생성 시각';
 -- argus_permissions
 COMMENT ON TABLE argus_permissions IS '역할별 메뉴/기능 허용 권한 매트릭스 (open-by-default 정책)';
 COMMENT ON COLUMN argus_permissions.id IS 'PK';
-COMMENT ON COLUMN argus_permissions.kind IS '권한 유형 (MENU/FEATURE)';
-COMMENT ON COLUMN argus_permissions.perm_key IS '메뉴/기능 key (프런트 레지스트리와 일치)';
-COMMENT ON COLUMN argus_permissions.role_id IS '허용 대상 역할 ID (argus-superuser/argus-user)';
+COMMENT ON COLUMN argus_permissions.kind IS '권한 유형 (MENU/FEATURE/MENU_VIEW 메뉴 보기 전용/ROLE 사용자 정의 역할의 기반 역할)';
+COMMENT ON COLUMN argus_permissions.perm_key IS '메뉴/기능 key (프런트 레지스트리와 일치), ROLE 이면 사용자 정의 역할 ID';
+COMMENT ON COLUMN argus_permissions.role_id IS '허용 대상 역할 ID (argus-superuser/argus-user/사용자 정의 역할, __none__ 은 관리자 전용), ROLE 이면 기반 역할';
 COMMENT ON COLUMN argus_permissions.created_at IS '생성 시각';
 
 -- argus_query_lineage
 COMMENT ON COLUMN argus_query_lineage.id IS 'PK';
 COMMENT ON COLUMN argus_query_lineage.query_hist_id IS '원본 쿼리 이력 ID (argus_query_history(id) 참조)';
+COMMENT ON COLUMN argus_query_lineage.datasource_id IS '쿼리를 실행한 엔진 데이터 소스 식별자(catalog_datasources.datasource_id, 모르면 빈 값)';
+COMMENT ON COLUMN argus_query_lineage.source_catalog IS '소스 테이블의 엔진 쪽 카탈로그 이름(Trino hive 등, 모르면 빈 값)';
+COMMENT ON COLUMN argus_query_lineage.target_catalog IS '타깃 테이블의 엔진 쪽 카탈로그 이름(모르면 빈 값)';
 COMMENT ON COLUMN argus_query_lineage.source_table IS '소스 테이블 정규화 이름 (schema.table)';
 COMMENT ON COLUMN argus_query_lineage.target_table IS '타깃 테이블 정규화 이름 (schema.table)';
 COMMENT ON COLUMN argus_query_lineage.source_dataset_id IS '소스 데이터셋 ID (catalog_datasets(id) 참조, 매칭 시)';
@@ -3718,3 +3797,524 @@ COMMENT ON COLUMN catalog_catalog_connections.role IS '연결 역할 (SYNC/QUERY
 COMMENT ON COLUMN catalog_catalog_connections.remote_name IS '데이터 소스 쪽에서 이 카탈로그를 부르는 이름 (Trino 카탈로그명, UC catalog 등)';
 COMMENT ON COLUMN catalog_catalog_connections.created_at IS '생성 시각';
 COMMENT ON COLUMN catalog_datasets.catalog_id IS '소속 카탈로그 catalog_catalogs(id) 참조 (NULL=미배정)';
+
+-- =============================================================================
+-- 데이터 소스 수집 — 범위·실행 이력 (design/datasource-sync-scope-design.md §6)
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS catalog_datasource_sync_settings (
+    datasource_id INTEGER PRIMARY KEY REFERENCES catalog_datasources(id) ON DELETE CASCADE,
+    scope_json TEXT,
+    schedule_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    schedule_interval_minutes INTEGER,
+    updated_by VARCHAR(200),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS catalog_datasource_sync_runs (
+    id SERIAL PRIMARY KEY,
+    datasource_id INTEGER NOT NULL REFERENCES catalog_datasources(id) ON DELETE CASCADE,
+    trigger_type VARCHAR(20) NOT NULL DEFAULT 'MANUAL',
+    executor VARCHAR(20) NOT NULL,
+    scope_json TEXT NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'QUEUED',
+    phase VARCHAR(20),
+    current_target VARCHAR(500),
+    progress_done INTEGER NOT NULL DEFAULT 0,
+    progress_total INTEGER,
+    created_count INTEGER NOT NULL DEFAULT 0,
+    updated_count INTEGER NOT NULL DEFAULT 0,
+    removed_count INTEGER NOT NULL DEFAULT 0,
+    failed_count INTEGER NOT NULL DEFAULT 0,
+    items_total INTEGER NOT NULL DEFAULT 0,
+    error_message TEXT,
+    requested_by VARCHAR(200),
+    cancel_requested_by VARCHAR(200),
+    queued_at TIMESTAMPTZ DEFAULT now(),
+    started_at TIMESTAMPTZ,
+    finished_at TIMESTAMPTZ,
+    heartbeat_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS ix_catalog_datasource_sync_runs_datasource_id ON catalog_datasource_sync_runs (datasource_id);
+CREATE INDEX IF NOT EXISTS ix_catalog_datasource_sync_runs_status ON catalog_datasource_sync_runs (status);
+
+CREATE TABLE IF NOT EXISTS catalog_datasource_sync_run_items (
+    id SERIAL PRIMARY KEY,
+    run_id INTEGER NOT NULL REFERENCES catalog_datasource_sync_runs(id) ON DELETE CASCADE,
+    level VARCHAR(10) NOT NULL DEFAULT 'ERROR',
+    target VARCHAR(500),
+    message TEXT NOT NULL,
+    occurred_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_catalog_datasource_sync_run_items_run_id ON catalog_datasource_sync_run_items (run_id);
+
+COMMENT ON TABLE catalog_datasource_sync_settings IS '데이터 소스 수집 설정 — 범위·예약 (행이 없거나 범위가 비면 수집 차단)';
+COMMENT ON COLUMN catalog_datasource_sync_settings.datasource_id IS '데이터 소스 catalog_datasources(id) 참조 (PK)';
+COMMENT ON COLUMN catalog_datasource_sync_settings.scope_json IS '수집 범위 JSON {"include_all": bool, "include": [{"path": [...]}]}';
+COMMENT ON COLUMN catalog_datasource_sync_settings.schedule_enabled IS '예약 수집 사용 여부';
+COMMENT ON COLUMN catalog_datasource_sync_settings.schedule_interval_minutes IS '예약 수집 주기(분)';
+COMMENT ON COLUMN catalog_datasource_sync_settings.updated_by IS '마지막으로 바꾼 사용자';
+COMMENT ON COLUMN catalog_datasource_sync_settings.updated_at IS '수정 시각';
+COMMENT ON TABLE catalog_datasource_sync_runs IS '데이터 소스 수집 실행 이력 — 백그라운드 작업의 상태·진행·결과';
+COMMENT ON COLUMN catalog_datasource_sync_runs.id IS 'PK (metadata-sync 작업 id 로도 쓴다)';
+COMMENT ON COLUMN catalog_datasource_sync_runs.datasource_id IS '데이터 소스 catalog_datasources(id) 참조';
+COMMENT ON COLUMN catalog_datasource_sync_runs.trigger_type IS '시작 방식 (MANUAL/SCHEDULE)';
+COMMENT ON COLUMN catalog_datasource_sync_runs.executor IS '실행 주체 (BUILTIN=백엔드 내장 sync, METADATA_SYNC=metadata-sync 작업)';
+COMMENT ON COLUMN catalog_datasource_sync_runs.scope_json IS '실행 당시 수집 범위 JSON';
+COMMENT ON COLUMN catalog_datasource_sync_runs.status IS '상태 (QUEUED/RUNNING/SUCCEEDED/PARTIAL/FAILED/CANCELLED)';
+COMMENT ON COLUMN catalog_datasource_sync_runs.phase IS '단계 (LISTING/COLLECTING/REMOVING/DONE)';
+COMMENT ON COLUMN catalog_datasource_sync_runs.current_target IS '지금 처리 중인 대상(테이블 경로)';
+COMMENT ON COLUMN catalog_datasource_sync_runs.progress_done IS '처리한 테이블 수';
+COMMENT ON COLUMN catalog_datasource_sync_runs.progress_total IS '전체 테이블 수 (대상 조회 전이면 NULL)';
+COMMENT ON COLUMN catalog_datasource_sync_runs.created_count IS '생성한 데이터셋 수';
+COMMENT ON COLUMN catalog_datasource_sync_runs.updated_count IS '갱신한 데이터셋 수';
+COMMENT ON COLUMN catalog_datasource_sync_runs.removed_count IS '제거로 표시한 데이터셋 수';
+COMMENT ON COLUMN catalog_datasource_sync_runs.failed_count IS '실패한 테이블 수';
+COMMENT ON COLUMN catalog_datasource_sync_runs.items_total IS '실패·경고 항목 전체 수 (저장은 최대 1,000건)';
+COMMENT ON COLUMN catalog_datasource_sync_runs.error_message IS '대표 오류 메시지';
+COMMENT ON COLUMN catalog_datasource_sync_runs.requested_by IS '요청한 사용자 (예약이면 NULL)';
+COMMENT ON COLUMN catalog_datasource_sync_runs.cancel_requested_by IS '취소를 요청한 사용자';
+COMMENT ON COLUMN catalog_datasource_sync_runs.queued_at IS '접수 시각';
+COMMENT ON COLUMN catalog_datasource_sync_runs.started_at IS '시작 시각';
+COMMENT ON COLUMN catalog_datasource_sync_runs.finished_at IS '종료 시각';
+COMMENT ON COLUMN catalog_datasource_sync_runs.heartbeat_at IS '마지막 진행 보고 시각 (응답 없음 판정)';
+COMMENT ON TABLE catalog_datasource_sync_run_items IS '수집 실행의 실패·경고 항목 (성공은 건수만)';
+COMMENT ON COLUMN catalog_datasource_sync_run_items.id IS 'PK';
+COMMENT ON COLUMN catalog_datasource_sync_run_items.run_id IS '실행 catalog_datasource_sync_runs(id) 참조';
+COMMENT ON COLUMN catalog_datasource_sync_run_items.level IS '수준 (ERROR/WARNING)';
+COMMENT ON COLUMN catalog_datasource_sync_run_items.target IS '대상(테이블 경로)';
+COMMENT ON COLUMN catalog_datasource_sync_run_items.message IS '사유';
+COMMENT ON COLUMN catalog_datasource_sync_run_items.occurred_at IS '기록 시각';
+
+-- ============================================================================
+-- AI 에이전트 메타데이터 보강 (design/todo.md TODO-019·020·021·024)
+-- 위험 등급·규제 준수, 실행 신원·권한, 기본 입출력 형식, 스킬, 데이터 접근
+-- ============================================================================
+ALTER TABLE catalog_ai_agents ADD COLUMN IF NOT EXISTS risk_tier VARCHAR(20);
+ALTER TABLE catalog_ai_agents ADD COLUMN IF NOT EXISTS risk_rationale TEXT;
+ALTER TABLE catalog_ai_agents ADD COLUMN IF NOT EXISTS impact_assessed_at DATE;
+ALTER TABLE catalog_ai_agents ADD COLUMN IF NOT EXISTS impact_assessment_result VARCHAR(20);
+ALTER TABLE catalog_ai_agents ADD COLUMN IF NOT EXISTS impact_assessment_ref VARCHAR(1000);
+ALTER TABLE catalog_ai_agents ADD COLUMN IF NOT EXISTS compliance JSONB;
+ALTER TABLE catalog_ai_agents ADD COLUMN IF NOT EXISTS log_retention_days INT;
+ALTER TABLE catalog_ai_agents ADD COLUMN IF NOT EXISTS autonomy_level VARCHAR(20);
+ALTER TABLE catalog_ai_agents ADD COLUMN IF NOT EXISTS identity_type VARCHAR(30);
+ALTER TABLE catalog_ai_agents ADD COLUMN IF NOT EXISTS identity_principal VARCHAR(255);
+ALTER TABLE catalog_ai_agents ADD COLUMN IF NOT EXISTS identity_provider VARCHAR(100);
+ALTER TABLE catalog_ai_agents ADD COLUMN IF NOT EXISTS granted_scopes JSONB;
+ALTER TABLE catalog_ai_agents ADD COLUMN IF NOT EXISTS on_behalf_of BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE catalog_ai_agents ADD COLUMN IF NOT EXISTS default_input_modes JSONB;
+ALTER TABLE catalog_ai_agents ADD COLUMN IF NOT EXISTS default_output_modes JSONB;
+CREATE INDEX IF NOT EXISTS ix_catalog_ai_agents_risk_tier ON catalog_ai_agents (risk_tier);
+
+COMMENT ON COLUMN catalog_ai_agents.risk_tier IS '위험 등급 (minimal/limited/high/prohibited — EU AI Act 4단계와 같은 이름)';
+COMMENT ON COLUMN catalog_ai_agents.risk_rationale IS '위험 등급을 매긴 근거';
+COMMENT ON COLUMN catalog_ai_agents.impact_assessed_at IS '영향 평가 수행일';
+COMMENT ON COLUMN catalog_ai_agents.impact_assessment_result IS '영향 평가 결과 (passed/conditional/failed/pending)';
+COMMENT ON COLUMN catalog_ai_agents.impact_assessment_ref IS '영향 평가 문서 위치';
+COMMENT ON COLUMN catalog_ai_agents.compliance IS '준수 대상 규제·표준 목록 (JSON 문자열 배열)';
+COMMENT ON COLUMN catalog_ai_agents.log_retention_days IS '호출·판단 로그 보존 기간(일)';
+COMMENT ON COLUMN catalog_ai_agents.autonomy_level IS '자율 수준 (advisory=제안만/supervised=사람 승인 후 실행/autonomous=자율 실행)';
+COMMENT ON COLUMN catalog_ai_agents.identity_type IS '실행 신원 유형 (service_account/oauth_client/workload/user_delegated)';
+COMMENT ON COLUMN catalog_ai_agents.identity_principal IS '실행 신원 식별자 (계정 ID·client_id·SPIFFE ID 등)';
+COMMENT ON COLUMN catalog_ai_agents.identity_provider IS '신원 제공자 (keycloak/ldap/k8s/aws-iam 등)';
+COMMENT ON COLUMN catalog_ai_agents.granted_scopes IS '부여된 권한 범위 (JSON 문자열 배열)';
+COMMENT ON COLUMN catalog_ai_agents.on_behalf_of IS '사용자를 대신해 실행하는지 (OBO 위임)';
+COMMENT ON COLUMN catalog_ai_agents.default_input_modes IS '기본 입력 MIME 형식 (A2A defaultInputModes, JSON 배열)';
+COMMENT ON COLUMN catalog_ai_agents.default_output_modes IS '기본 출력 MIME 형식 (A2A defaultOutputModes, JSON 배열)';
+
+CREATE TABLE IF NOT EXISTS catalog_ai_agent_skills (
+    id SERIAL PRIMARY KEY,
+    agent_id INT NOT NULL REFERENCES catalog_ai_agents(id) ON DELETE CASCADE,
+    skill_key VARCHAR(100) NOT NULL,
+    name VARCHAR(200) NOT NULL,
+    description TEXT,
+    tags JSONB,
+    examples JSONB,
+    input_modes JSONB,
+    output_modes JSONB,
+    sort_order INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    UNIQUE (agent_id, skill_key)
+);
+COMMENT ON TABLE catalog_ai_agent_skills IS '에이전트가 외부에 내세우는 스킬 (A2A AgentSkill — 호출하는 도구와 구분)';
+COMMENT ON COLUMN catalog_ai_agent_skills.id IS 'PK';
+COMMENT ON COLUMN catalog_ai_agent_skills.agent_id IS '소속 에이전트 (catalog_ai_agents(id) 참조, CASCADE)';
+COMMENT ON COLUMN catalog_ai_agent_skills.skill_key IS '스킬 ID (A2A skill id, 에이전트 안에서 고유)';
+COMMENT ON COLUMN catalog_ai_agent_skills.name IS '스킬 이름';
+COMMENT ON COLUMN catalog_ai_agent_skills.description IS '스킬 설명';
+COMMENT ON COLUMN catalog_ai_agent_skills.tags IS '태그 (JSON 문자열 배열)';
+COMMENT ON COLUMN catalog_ai_agent_skills.examples IS '예시 요청 (JSON 문자열 배열)';
+COMMENT ON COLUMN catalog_ai_agent_skills.input_modes IS '입력 MIME 형식 (NULL = 에이전트 기본값)';
+COMMENT ON COLUMN catalog_ai_agent_skills.output_modes IS '출력 MIME 형식 (NULL = 에이전트 기본값)';
+COMMENT ON COLUMN catalog_ai_agent_skills.sort_order IS '표시 순서';
+COMMENT ON COLUMN catalog_ai_agent_skills.created_at IS '생성 시각';
+
+CREATE TABLE IF NOT EXISTS catalog_ai_agent_data_access (
+    id SERIAL PRIMARY KEY,
+    agent_id INT NOT NULL REFERENCES catalog_ai_agents(id) ON DELETE CASCADE,
+    datasource_id INT REFERENCES catalog_datasources(id) ON DELETE CASCADE,
+    dataset_id INT REFERENCES catalog_datasets(id) ON DELETE CASCADE,
+    access VARCHAR(20) NOT NULL DEFAULT 'read',
+    description TEXT,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    CONSTRAINT ck_ai_agent_data_access_one_target CHECK ((datasource_id IS NULL) <> (dataset_id IS NULL))
+);
+CREATE INDEX IF NOT EXISTS ix_catalog_ai_agent_data_access_agent_id ON catalog_ai_agent_data_access (agent_id);
+CREATE INDEX IF NOT EXISTS ix_catalog_ai_agent_data_access_datasource_id ON catalog_ai_agent_data_access (datasource_id);
+CREATE INDEX IF NOT EXISTS ix_catalog_ai_agent_data_access_dataset_id ON catalog_ai_agent_data_access (dataset_id);
+COMMENT ON TABLE catalog_ai_agent_data_access IS '에이전트가 읽거나 쓰는 데이터 소스·데이터셋 (둘 중 하나만)';
+COMMENT ON COLUMN catalog_ai_agent_data_access.id IS 'PK';
+COMMENT ON COLUMN catalog_ai_agent_data_access.agent_id IS '소속 에이전트 (catalog_ai_agents(id) 참조, CASCADE)';
+COMMENT ON COLUMN catalog_ai_agent_data_access.datasource_id IS '데이터 소스 전체 접근 (catalog_datasources(id) 참조, CASCADE)';
+COMMENT ON COLUMN catalog_ai_agent_data_access.dataset_id IS '데이터셋 접근 (catalog_datasets(id) 참조, CASCADE)';
+COMMENT ON COLUMN catalog_ai_agent_data_access.access IS '접근 종류 (read/write/read_write)';
+COMMENT ON COLUMN catalog_ai_agent_data_access.description IS '용도 설명';
+COMMENT ON COLUMN catalog_ai_agent_data_access.created_at IS '생성 시각';
+
+-- ---------------------------------------------------------------------------
+-- Data Quality - 건수 기반 결과, 진단 실행(워커 대기열), 워커 (TODO-087)
+-- ---------------------------------------------------------------------------
+ALTER TABLE catalog_quality_result ADD COLUMN IF NOT EXISTS checked_count BIGINT;
+ALTER TABLE catalog_quality_result ADD COLUMN IF NOT EXISTS error_count BIGINT;
+COMMENT ON COLUMN catalog_quality_result.checked_count IS '진단한 건수 (건수를 세지 않는 평가는 NULL)';
+COMMENT ON COLUMN catalog_quality_result.error_count IS '진단한 건수 가운데 오류 건수';
+
+CREATE TABLE IF NOT EXISTS catalog_quality_runs (
+    id SERIAL PRIMARY KEY,
+    dataset_id INT NOT NULL REFERENCES catalog_datasets(id) ON DELETE CASCADE,
+    engine VARCHAR(20) NOT NULL DEFAULT 'TRINO',
+    engine_datasource_id INT REFERENCES catalog_datasources(id) ON DELETE SET NULL,
+    engine_table VARCHAR(700),
+    trigger_type VARCHAR(20) NOT NULL DEFAULT 'MANUAL',
+    status VARCHAR(20) NOT NULL DEFAULT 'QUEUED',
+    current_target VARCHAR(500),
+    progress_done INT NOT NULL DEFAULT 0,
+    progress_total INT,
+    rules_total INT NOT NULL DEFAULT 0,
+    rules_evaluated INT NOT NULL DEFAULT 0,
+    checked_count BIGINT,
+    error_count BIGINT,
+    score NUMERIC(5,2),
+    query_ids TEXT,
+    plan_json TEXT,
+    error_message TEXT,
+    requested_by VARCHAR(200),
+    cancel_requested_by VARCHAR(200),
+    worker_id VARCHAR(200),
+    queued_at TIMESTAMPTZ DEFAULT now(),
+    started_at TIMESTAMPTZ,
+    finished_at TIMESTAMPTZ,
+    heartbeat_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS ix_catalog_quality_runs_dataset_id ON catalog_quality_runs (dataset_id);
+CREATE INDEX IF NOT EXISTS ix_catalog_quality_runs_status ON catalog_quality_runs (status);
+COMMENT ON TABLE catalog_quality_runs IS '품질 진단 실행 — 품질 워커가 처리하는 대기열이자 모니터링 정본';
+COMMENT ON COLUMN catalog_quality_runs.id IS 'PK';
+COMMENT ON COLUMN catalog_quality_runs.dataset_id IS '대상 데이터셋 (catalog_datasets(id) 참조, CASCADE)';
+COMMENT ON COLUMN catalog_quality_runs.engine IS '실행 엔진 (TRINO)';
+COMMENT ON COLUMN catalog_quality_runs.engine_datasource_id IS '쿼리를 실행하는 엔진 데이터 소스 (catalog_datasources(id) 참조)';
+COMMENT ON COLUMN catalog_quality_runs.engine_table IS '엔진 쪽 테이블 이름 (catalog.schema.table)';
+COMMENT ON COLUMN catalog_quality_runs.trigger_type IS '시작 방식 (MANUAL/SCHEDULE)';
+COMMENT ON COLUMN catalog_quality_runs.status IS '상태 (QUEUED/RUNNING/SUCCEEDED/PARTIAL/FAILED/CANCELLED)';
+COMMENT ON COLUMN catalog_quality_runs.current_target IS '지금 실행 중인 쿼리 설명';
+COMMENT ON COLUMN catalog_quality_runs.progress_done IS '끝난 쿼리 수';
+COMMENT ON COLUMN catalog_quality_runs.progress_total IS '전체 쿼리 수';
+COMMENT ON COLUMN catalog_quality_runs.rules_total IS '활성 규칙 수';
+COMMENT ON COLUMN catalog_quality_runs.rules_evaluated IS '이번 실행에서 평가한 규칙 수';
+COMMENT ON COLUMN catalog_quality_runs.checked_count IS '진단 건수 합계';
+COMMENT ON COLUMN catalog_quality_runs.error_count IS '오류 건수 합계';
+COMMENT ON COLUMN catalog_quality_runs.score IS '실행 직후 기록된 품질 점수';
+COMMENT ON COLUMN catalog_quality_runs.query_ids IS '엔진 쿼리 ID (JSON 배열)';
+ALTER TABLE catalog_quality_runs ADD COLUMN IF NOT EXISTS plan_json TEXT;
+COMMENT ON COLUMN catalog_quality_runs.plan_json IS '실행 계획의 바탕 (규칙·컬럼 타입·참조 대상 JSON) - 결과 판정에 사용';
+COMMENT ON COLUMN catalog_quality_runs.error_message IS '실패·부분 실패 사유';
+COMMENT ON COLUMN catalog_quality_runs.requested_by IS '요청자';
+COMMENT ON COLUMN catalog_quality_runs.cancel_requested_by IS '취소 요청자 (값이 있으면 워커가 중단)';
+COMMENT ON COLUMN catalog_quality_runs.worker_id IS '처리한 워커';
+COMMENT ON COLUMN catalog_quality_runs.queued_at IS '요청 시각';
+COMMENT ON COLUMN catalog_quality_runs.started_at IS '시작 시각';
+COMMENT ON COLUMN catalog_quality_runs.finished_at IS '종료 시각';
+COMMENT ON COLUMN catalog_quality_runs.heartbeat_at IS '워커의 마지막 진행 보고 시각';
+ALTER TABLE catalog_quality_runs ADD COLUMN IF NOT EXISTS kind VARCHAR(20) NOT NULL DEFAULT 'CHECK';
+COMMENT ON COLUMN catalog_quality_runs.kind IS '실행 종류 (CHECK 규칙 진단 / PROFILE 컬럼 통계 수집)';
+
+CREATE TABLE IF NOT EXISTS catalog_quality_workers (
+    worker_id VARCHAR(200) PRIMARY KEY,
+    hostname VARCHAR(255),
+    version VARCHAR(50),
+    started_at TIMESTAMPTZ DEFAULT now(),
+    heartbeat_at TIMESTAMPTZ,
+    current_run_id INT
+);
+COMMENT ON TABLE catalog_quality_workers IS '품질 워커 — 주기적으로 heartbeat 를 갱신 (모니터링용)';
+COMMENT ON COLUMN catalog_quality_workers.worker_id IS '워커 식별자 (호스트-PID)';
+COMMENT ON COLUMN catalog_quality_workers.hostname IS '호스트 이름';
+ALTER TABLE catalog_quality_workers ADD COLUMN IF NOT EXISTS version VARCHAR(50);
+COMMENT ON COLUMN catalog_quality_workers.version IS '워커 버전';
+COMMENT ON COLUMN catalog_quality_workers.started_at IS '기동 시각';
+COMMENT ON COLUMN catalog_quality_workers.heartbeat_at IS '마지막 heartbeat 시각';
+COMMENT ON COLUMN catalog_quality_workers.current_run_id IS '처리 중인 실행 (없으면 NULL)';
+ALTER TABLE catalog_quality_workers ADD COLUMN IF NOT EXISTS owner VARCHAR(200);
+COMMENT ON COLUMN catalog_quality_workers.owner IS '이 워커 ID 를 등록한 인증 주체 (API 키, apikey:<id>)';
+
+-- ---------------------------------------------------------------------------
+-- 품질 배치 작업 (TODO-089) — 대상·품질 지표·주기를 정해 두고 주기적으로 진단
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS catalog_quality_jobs (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(200) NOT NULL UNIQUE,
+    description TEXT,
+    targets_json TEXT NOT NULL DEFAULT '[]',
+    indicators VARCHAR(500),
+    schedule_type VARCHAR(20) NOT NULL DEFAULT 'NONE',
+    schedule_time VARCHAR(5),
+    schedule_day INT,
+    schedule_interval_hours INT,
+    timezone VARCHAR(64) NOT NULL DEFAULT 'Asia/Seoul',
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    next_run_at TIMESTAMPTZ,
+    created_by VARCHAR(200),
+    updated_by VARCHAR(200),
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_catalog_quality_jobs_next_run_at ON catalog_quality_jobs (next_run_at);
+COMMENT ON TABLE catalog_quality_jobs IS '품질 배치 작업 — 대상·품질 지표·주기의 정의';
+COMMENT ON COLUMN catalog_quality_jobs.id IS 'PK';
+COMMENT ON COLUMN catalog_quality_jobs.name IS '작업 이름 (유일)';
+COMMENT ON COLUMN catalog_quality_jobs.description IS '설명';
+COMMENT ON COLUMN catalog_quality_jobs.targets_json IS '대상 JSON 배열 (type: catalog/schema/dataset) - 카탈로그·스키마는 실행 시점에 데이터셋으로 푼다';
+COMMENT ON COLUMN catalog_quality_jobs.indicators IS '측정할 품질 지표 키 (쉼표 구분, NULL 이면 전체)';
+COMMENT ON COLUMN catalog_quality_jobs.schedule_type IS '주기 (NONE/HOURLY/DAILY/WEEKLY/MONTHLY)';
+COMMENT ON COLUMN catalog_quality_jobs.schedule_time IS '실행 시각 HH:MM (DAILY/WEEKLY/MONTHLY)';
+COMMENT ON COLUMN catalog_quality_jobs.schedule_day IS 'WEEKLY: 요일 0(월)~6(일), MONTHLY: 날짜 1~31 (없는 날은 말일)';
+COMMENT ON COLUMN catalog_quality_jobs.schedule_interval_hours IS 'HOURLY: N 시간마다';
+COMMENT ON COLUMN catalog_quality_jobs.timezone IS '주기를 해석하는 시간대';
+COMMENT ON COLUMN catalog_quality_jobs.enabled IS '사용 여부 (false 면 주기 실행 안 함)';
+COMMENT ON COLUMN catalog_quality_jobs.next_run_at IS '다음 주기 실행 시각';
+COMMENT ON COLUMN catalog_quality_jobs.created_by IS '만든 사람';
+COMMENT ON COLUMN catalog_quality_jobs.updated_by IS '마지막으로 고친 사람';
+COMMENT ON COLUMN catalog_quality_jobs.created_at IS '생성 시각';
+COMMENT ON COLUMN catalog_quality_jobs.updated_at IS '수정 시각';
+
+CREATE TABLE IF NOT EXISTS catalog_quality_job_runs (
+    id SERIAL PRIMARY KEY,
+    job_id INT NOT NULL REFERENCES catalog_quality_jobs(id) ON DELETE CASCADE,
+    trigger_type VARCHAR(20) NOT NULL DEFAULT 'SCHEDULE',
+    status VARCHAR(20) NOT NULL DEFAULT 'RUNNING',
+    indicators VARCHAR(500),
+    targets_total INT NOT NULL DEFAULT 0,
+    runs_total INT NOT NULL DEFAULT 0,
+    runs_succeeded INT NOT NULL DEFAULT 0,
+    runs_failed INT NOT NULL DEFAULT 0,
+    skipped_json TEXT,
+    checked_count BIGINT,
+    error_count BIGINT,
+    message TEXT,
+    requested_by VARCHAR(200),
+    started_at TIMESTAMPTZ DEFAULT now(),
+    finished_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS ix_catalog_quality_job_runs_job_id ON catalog_quality_job_runs (job_id);
+CREATE INDEX IF NOT EXISTS ix_catalog_quality_job_runs_status ON catalog_quality_job_runs (status);
+COMMENT ON TABLE catalog_quality_job_runs IS '품질 배치 작업의 실행 1회 (배치 이력)';
+COMMENT ON COLUMN catalog_quality_job_runs.id IS 'PK';
+COMMENT ON COLUMN catalog_quality_job_runs.job_id IS '배치 작업 (catalog_quality_jobs(id) 참조, CASCADE)';
+COMMENT ON COLUMN catalog_quality_job_runs.trigger_type IS '시작 방식 (SCHEDULE/MANUAL)';
+COMMENT ON COLUMN catalog_quality_job_runs.status IS '상태 (RUNNING/SUCCEEDED/PARTIAL/FAILED/CANCELLED/SKIPPED)';
+COMMENT ON COLUMN catalog_quality_job_runs.indicators IS '실행 시점의 품질 지표 키 (쉼표 구분, NULL 이면 전체)';
+COMMENT ON COLUMN catalog_quality_job_runs.targets_total IS '대상 데이터셋 수';
+COMMENT ON COLUMN catalog_quality_job_runs.runs_total IS '대기열에 넣은 데이터셋 실행 수';
+COMMENT ON COLUMN catalog_quality_job_runs.runs_succeeded IS '성공한 데이터셋 실행 수';
+COMMENT ON COLUMN catalog_quality_job_runs.runs_failed IS '실패·일부 실패·취소된 데이터셋 실행 수';
+COMMENT ON COLUMN catalog_quality_job_runs.skipped_json IS '실행하지 않은 데이터셋과 사유 (JSON 배열)';
+COMMENT ON COLUMN catalog_quality_job_runs.checked_count IS '진단 건수 합계';
+COMMENT ON COLUMN catalog_quality_job_runs.error_count IS '오류 건수 합계';
+COMMENT ON COLUMN catalog_quality_job_runs.message IS '실패·건너뜀 사유';
+COMMENT ON COLUMN catalog_quality_job_runs.requested_by IS '요청자 (주기 실행은 NULL)';
+COMMENT ON COLUMN catalog_quality_job_runs.started_at IS '시작 시각';
+COMMENT ON COLUMN catalog_quality_job_runs.finished_at IS '종료 시각';
+ALTER TABLE catalog_quality_job_runs ADD COLUMN IF NOT EXISTS cancel_requested_by VARCHAR(200);
+COMMENT ON COLUMN catalog_quality_job_runs.cancel_requested_by IS '취소 요청자 (값이 있으면 마감할 때 CANCELLED)';
+
+ALTER TABLE catalog_quality_runs ADD COLUMN IF NOT EXISTS job_run_id INT REFERENCES catalog_quality_job_runs(id) ON DELETE SET NULL;
+ALTER TABLE catalog_quality_runs ADD COLUMN IF NOT EXISTS indicators VARCHAR(500);
+CREATE INDEX IF NOT EXISTS ix_catalog_quality_runs_job_run_id ON catalog_quality_runs (job_run_id);
+COMMENT ON COLUMN catalog_quality_runs.job_run_id IS '이 실행을 넣은 배치 실행 (직접 요청한 실행은 NULL)';
+COMMENT ON COLUMN catalog_quality_runs.indicators IS '측정한 품질 지표 키 (쉼표 구분, NULL 이면 전체)';
+-- 측정할 품질 지표(미리 정의한 지표) 선택 — 배치 작업·배치 실행·진단 실행
+ALTER TABLE catalog_quality_jobs ADD COLUMN IF NOT EXISTS definition_ids VARCHAR(2000);
+COMMENT ON COLUMN catalog_quality_jobs.definition_ids IS '측정할 품질 지표 ID (catalog_quality_definition, 쉼표 구분, NULL 이면 전체)';
+-- 진단과 함께 프로파일도 대기열에 넣기 (TODO-095)
+ALTER TABLE catalog_quality_jobs ADD COLUMN IF NOT EXISTS include_profile BOOLEAN NOT NULL DEFAULT false;
+COMMENT ON COLUMN catalog_quality_jobs.include_profile IS '진단과 함께 프로파일(컬럼 통계 수집) 실행도 대기열에 넣는다 (규칙 없는 대상 데이터셋도 프로파일)';
+ALTER TABLE catalog_quality_job_runs ADD COLUMN IF NOT EXISTS definition_ids VARCHAR(2000);
+COMMENT ON COLUMN catalog_quality_job_runs.definition_ids IS '실행 시점에 고른 품질 지표 ID (쉼표 구분, NULL 이면 전체)';
+ALTER TABLE catalog_quality_runs ADD COLUMN IF NOT EXISTS definition_ids VARCHAR(2000);
+COMMENT ON COLUMN catalog_quality_runs.definition_ids IS '측정한 품질 지표 ID (쉼표 구분, NULL 이면 가리지 않음)';
+
+ALTER TABLE catalog_quality_result ADD COLUMN IF NOT EXISTS run_id INT REFERENCES catalog_quality_runs(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS ix_catalog_quality_result_run_id ON catalog_quality_result (run_id);
+COMMENT ON COLUMN catalog_quality_result.run_id IS '이 결과를 만든 진단 실행 (서버 검증·외부 반입은 NULL)';
+
+-- ---------------------------------------------------------------------------
+-- Data Quality - 규칙의 도메인: 같은 유형을 품질 지표 16개로 나눈다 (TODO-091)
+-- ---------------------------------------------------------------------------
+ALTER TABLE catalog_quality_rule ADD COLUMN IF NOT EXISTS domain VARCHAR(32);
+COMMENT ON COLUMN catalog_quality_rule.domain IS '품질 지표를 가르는 도메인 (CODE/YN, AMOUNT/QUANTITY/RATE, TIME_ORDER/SEQUENCE). NULL 이면 컬럼 이름으로 정함';
+
+-- 품질 지표 — 미리 정해 두고 컬럼에 할당하는 진단 기준. 할당하면 그 컬럼에 이 지표를 가리키는 규칙이 생긴다
+CREATE TABLE IF NOT EXISTS catalog_quality_definition (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL UNIQUE,
+    category VARCHAR(32) NOT NULL,
+    check_type VARCHAR(50) NOT NULL,
+    expected_value TEXT,
+    threshold DECIMAL(5,2) DEFAULT 100.00,
+    severity VARCHAR(16) NOT NULL DEFAULT 'WARNING',
+    description TEXT,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+COMMENT ON TABLE catalog_quality_definition IS '품질 지표 — 미리 정해 두고 컬럼에 할당하는 진단 기준';
+COMMENT ON COLUMN catalog_quality_definition.id IS 'PK';
+COMMENT ON COLUMN catalog_quality_definition.name IS '지표 이름 (고유)';
+COMMENT ON COLUMN catalog_quality_definition.category IS '분류 — 관리지침 진단 기준 키 (DATE/YN/CODE/AMOUNT/QUANTITY/RATE/NUMBER/REQUIRED/DUPLICATE/BROKEN_TEXT/WHITESPACE)';
+COMMENT ON COLUMN catalog_quality_definition.check_type IS '규칙 유형 (NOT_NULL/UNIQUE/DATE_FORMAT/REGEX/ACCEPTED_VALUES/MIN_VALUE/MAX_VALUE/BROKEN_TEXT/WHITESPACE)';
+COMMENT ON COLUMN catalog_quality_definition.expected_value IS '기준값 — 날짜 형식·허용 값·범위·정규식';
+COMMENT ON COLUMN catalog_quality_definition.threshold IS '통과 임계값 (%)';
+COMMENT ON COLUMN catalog_quality_definition.severity IS '심각도 (BREAKING/WARNING/INFO)';
+COMMENT ON COLUMN catalog_quality_definition.description IS '설명';
+COMMENT ON COLUMN catalog_quality_definition.created_at IS '생성 시각';
+COMMENT ON COLUMN catalog_quality_definition.updated_at IS '수정 시각';
+
+ALTER TABLE catalog_quality_rule ADD COLUMN IF NOT EXISTS definition_id INT REFERENCES catalog_quality_definition(id) ON DELETE SET NULL;
+COMMENT ON COLUMN catalog_quality_rule.definition_id IS '할당된 품질 지표 (catalog_quality_definition(id) 참조). NULL 이면 데이터셋에서 직접 정한 규칙';
+CREATE INDEX IF NOT EXISTS idx_quality_rule_definition ON catalog_quality_rule (definition_id);
+
+-- AI-Ready 메타데이터 — 「공공데이터의 인공지능 친화적 관리 가이드라인」 항목 (TODO-096 1단계,
+-- design/ai-ready-public-data-guideline-review.md §5.2). 기존 설치 업그레이드용, 재실행 안전.
+ALTER TABLE catalog_datasets ADD COLUMN IF NOT EXISTS legal_basis TEXT;
+ALTER TABLE catalog_datasets ADD COLUMN IF NOT EXISTS publisher VARCHAR(200);
+ALTER TABLE catalog_datasets ADD COLUMN IF NOT EXISTS landing_page VARCHAR(1000);
+ALTER TABLE catalog_datasets ADD COLUMN IF NOT EXISTS contact_email VARCHAR(255);
+ALTER TABLE catalog_datasets ADD COLUMN IF NOT EXISTS data_language VARCHAR(50);
+ALTER TABLE catalog_datasets ADD COLUMN IF NOT EXISTS persistent_id VARCHAR(255);
+ALTER TABLE catalog_datasets ADD COLUMN IF NOT EXISTS temporal_start DATE;
+ALTER TABLE catalog_datasets ADD COLUMN IF NOT EXISTS temporal_end DATE;
+ALTER TABLE catalog_datasets ADD COLUMN IF NOT EXISTS spatial_coverage VARCHAR(255);
+ALTER TABLE catalog_datasets ADD COLUMN IF NOT EXISTS data_version VARCHAR(50);
+ALTER TABLE catalog_datasets ADD COLUMN IF NOT EXISTS version_notes TEXT;
+ALTER TABLE catalog_datasets ADD COLUMN IF NOT EXISTS license VARCHAR(30);
+ALTER TABLE catalog_datasets ADD COLUMN IF NOT EXISTS license_url VARCHAR(1000);
+ALTER TABLE catalog_datasets ADD COLUMN IF NOT EXISTS rights TEXT;
+ALTER TABLE catalog_datasets ADD COLUMN IF NOT EXISTS allowed_uses VARCHAR(100);
+ALTER TABLE catalog_datasets ADD COLUMN IF NOT EXISTS contains_synthetic VARCHAR(5);
+ALTER TABLE catalog_datasets ADD COLUMN IF NOT EXISTS contains_machine_annotation VARCHAR(5);
+ALTER TABLE catalog_datasets ADD COLUMN IF NOT EXISTS data_biases TEXT;
+ALTER TABLE catalog_datasets ADD COLUMN IF NOT EXISTS known_limitations TEXT;
+ALTER TABLE catalog_datasets ADD COLUMN IF NOT EXISTS missing_data_info TEXT;
+ALTER TABLE catalog_datasets ADD COLUMN IF NOT EXISTS missing_value_notation VARCHAR(100);
+ALTER TABLE catalog_datasets ADD COLUMN IF NOT EXISTS privacy_measures TEXT;
+COMMENT ON COLUMN catalog_datasets.legal_basis IS '관련법령 (dct:references)';
+COMMENT ON COLUMN catalog_datasets.publisher IS '제공기관 (dct:publisher). NULL 이면 설정 ai_ready_publisher';
+COMMENT ON COLUMN catalog_datasets.landing_page IS '제공시스템 URL (dcat:landingPage)';
+COMMENT ON COLUMN catalog_datasets.contact_email IS '공용 문의 연락처 이메일 (dcat:contactPoint). NULL 이면 설정 ai_ready_contact_email';
+COMMENT ON COLUMN catalog_datasets.data_language IS '언어 ISO 639-1 쉼표 구분 (dct:language). NULL 이면 설정 ai_ready_language';
+COMMENT ON COLUMN catalog_datasets.persistent_id IS '영구 식별자 (dct:identifier). NULL 이면 URN';
+COMMENT ON COLUMN catalog_datasets.temporal_start IS '시간범위 시작 (dct:temporal)';
+COMMENT ON COLUMN catalog_datasets.temporal_end IS '시간범위 끝 (dct:temporal)';
+COMMENT ON COLUMN catalog_datasets.spatial_coverage IS '공간범위 (dct:spatial)';
+COMMENT ON COLUMN catalog_datasets.data_version IS '데이터 버전 (owl:versionInfo)';
+COMMENT ON COLUMN catalog_datasets.version_notes IS '버전 노트 — 이전 버전 대비 변경 사항 (adms:versionNotes)';
+COMMENT ON COLUMN catalog_datasets.license IS '라이선스 코드 (KOGL-1~4/CC-BY-4.0 등/CUSTOM). NULL 이면 설정 ai_ready_license';
+COMMENT ON COLUMN catalog_datasets.license_url IS '라이선스·이용약관 URL';
+COMMENT ON COLUMN catalog_datasets.rights IS '저작권·이용 조건 (dct:rights)';
+COMMENT ON COLUMN catalog_datasets.allowed_uses IS '허용 이용 유형 쉼표 구분 (VIEW/ANALYSIS/COMBINE/AI_TRAINING)';
+COMMENT ON COLUMN catalog_datasets.contains_synthetic IS '합성 데이터 포함 여부 (true/false)';
+COMMENT ON COLUMN catalog_datasets.contains_machine_annotation IS '기계 자동 주석(라벨) 포함 여부 (true/false)';
+COMMENT ON COLUMN catalog_datasets.data_biases IS '알려진 편향 (rai:dataBiases)';
+COMMENT ON COLUMN catalog_datasets.known_limitations IS '한계·해석 유의사항 (rai:knownLimitations)';
+COMMENT ON COLUMN catalog_datasets.missing_data_info IS '결측 비율·사유·처리 방식 (rai:dataCollectionMissingData)';
+COMMENT ON COLUMN catalog_datasets.missing_value_notation IS '결측·특수값 표기 규칙';
+COMMENT ON COLUMN catalog_datasets.privacy_measures IS '개인정보 보호조치 — 비식별·가명처리 방식, 적정성 검토';
+
+-- AI-Ready 체크리스트 수동 판정 (TODO-096 2단계, app/catalog/ai_ready_check.py). 자동 판정은 저장하지 않고 조회 때 계산한다.
+CREATE TABLE IF NOT EXISTS catalog_ai_ready_judgment (
+    id SERIAL PRIMARY KEY,
+    dataset_id INTEGER NOT NULL REFERENCES catalog_datasets(id) ON DELETE CASCADE,
+    item_key VARCHAR(10) NOT NULL,
+    status VARCHAR(10) NOT NULL,
+    note TEXT,
+    judged_by VARCHAR(200),
+    judged_at TIMESTAMPTZ DEFAULT now(),
+    CONSTRAINT uq_ai_ready_judgment UNIQUE (dataset_id, item_key)
+);
+CREATE INDEX IF NOT EXISTS ix_catalog_ai_ready_judgment_dataset_id ON catalog_ai_ready_judgment USING btree (dataset_id);
+COMMENT ON TABLE catalog_ai_ready_judgment IS 'AI-Ready 체크리스트 항목의 수동 판정 — 자동 판정보다 우선, 행을 지우면 자동 판정으로 돌아감';
+COMMENT ON COLUMN catalog_ai_ready_judgment.item_key IS '체크리스트 항목 키 — C01~C33(공통), T1~T5(유형별)';
+COMMENT ON COLUMN catalog_ai_ready_judgment.status IS 'PASS(적정) / FAIL(미흡) / NA(해당없음)';
+COMMENT ON COLUMN catalog_ai_ready_judgment.note IS '판정 근거 — 문서 링크·메모';
+COMMENT ON COLUMN catalog_ai_ready_judgment.judged_by IS '판정한 사용자';
+COMMENT ON COLUMN catalog_ai_ready_judgment.judged_at IS '판정 시각';
+
+-- 데이터셋 배포본 (TODO-096 3단계, dcat:Distribution). Argus 는 데이터를 배포하지 않고 위치·형식·용량·체크섬만 기록한다.
+CREATE TABLE IF NOT EXISTS catalog_dataset_distribution (
+    id SERIAL PRIMARY KEY,
+    dataset_id INTEGER NOT NULL REFERENCES catalog_datasets(id) ON DELETE CASCADE,
+    title VARCHAR(200),
+    description TEXT,
+    format VARCHAR(30),
+    media_type VARCHAR(100),
+    access_url VARCHAR(1000) NOT NULL,
+    download_url VARCHAR(1000),
+    byte_size BIGINT,
+    checksum_algorithm VARCHAR(20),
+    checksum VARCHAR(200),
+    ordinal INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_catalog_dataset_distribution_dataset_id ON catalog_dataset_distribution USING btree (dataset_id);
+COMMENT ON TABLE catalog_dataset_distribution IS '데이터셋 배포본 (dcat:Distribution) — 포털·API·파일 서버에 있는 배포본의 위치·형식·용량·체크섬';
+COMMENT ON COLUMN catalog_dataset_distribution.title IS '배포본 이름 (dct:title)';
+COMMENT ON COLUMN catalog_dataset_distribution.format IS '형식 (dct:format) — CSV/JSON/PARQUET/API 등';
+COMMENT ON COLUMN catalog_dataset_distribution.media_type IS 'MIME (dcat:mediaType). NULL 이면 형식에서 정함';
+COMMENT ON COLUMN catalog_dataset_distribution.access_url IS '접속 URL (dcat:accessURL)';
+COMMENT ON COLUMN catalog_dataset_distribution.download_url IS '내려받기 URL (dcat:downloadURL)';
+COMMENT ON COLUMN catalog_dataset_distribution.byte_size IS '용량 바이트 (dcat:byteSize)';
+COMMENT ON COLUMN catalog_dataset_distribution.checksum_algorithm IS '체크섬 알고리즘 SHA-256/SHA-512/SHA-1/MD5 (spdx:algorithm)';
+COMMENT ON COLUMN catalog_dataset_distribution.checksum IS '체크섬 값 16진수 (spdx:checksumValue)';
+
+-- 오류 신고·개선 요청 처리 (TODO-096 4단계, 체크리스트 C31). 데이터셋의 최상위 댓글 중 분류가 bug·suggestion 인 것만 값이 있다.
+ALTER TABLE catalog_comments ADD COLUMN IF NOT EXISTS status VARCHAR(20);
+ALTER TABLE catalog_comments ADD COLUMN IF NOT EXISTS due_at TIMESTAMPTZ;
+ALTER TABLE catalog_comments ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ;
+ALTER TABLE catalog_comments ADD COLUMN IF NOT EXISTS resolution TEXT;
+ALTER TABLE catalog_comments ADD COLUMN IF NOT EXISTS handled_by VARCHAR(100);
+CREATE INDEX IF NOT EXISTS ix_catalog_comments_status ON catalog_comments USING btree (entity_type, status);
+COMMENT ON COLUMN catalog_comments.status IS '오류 신고·개선 요청 처리 상태 OPEN/IN_PROGRESS/RESOLVED/REJECTED. 처리 대상이 아니면 NULL';
+COMMENT ON COLUMN catalog_comments.due_at IS '처리 기한 — 접수 시각 + 설정 ai_ready_report_due_days';
+COMMENT ON COLUMN catalog_comments.resolved_at IS '해결·소명한 시각';
+COMMENT ON COLUMN catalog_comments.resolution IS '처리 결과 또는 소명 사유';
+COMMENT ON COLUMN catalog_comments.handled_by IS '처리 상태를 마지막으로 바꾼 사용자';
+-- 기존 댓글 중 처리 대상(데이터셋 최상위 오류 신고·개선 요청)은 접수 상태로, 기한은 작성 시각 + 10일
+UPDATE catalog_comments SET status = 'OPEN', due_at = created_at + INTERVAL '10 days'
+ WHERE status IS NULL AND entity_type = 'dataset' AND parent_id IS NULL AND is_deleted = false
+   AND category IN ('bug', 'suggestion');
+
+-- 데이터 버전 이력 (TODO-096 4단계, 체크리스트 C32). 데이터셋의 '버전'(owl:versionInfo)을 바꿀 때마다 한 줄.
+CREATE TABLE IF NOT EXISTS catalog_dataset_version (
+    id SERIAL PRIMARY KEY,
+    dataset_id INTEGER NOT NULL REFERENCES catalog_datasets(id) ON DELETE CASCADE,
+    version VARCHAR(50) NOT NULL,
+    notes TEXT,
+    created_by VARCHAR(200),
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_catalog_dataset_version_dataset_id ON catalog_dataset_version USING btree (dataset_id);
+COMMENT ON TABLE catalog_dataset_version IS '데이터 버전 이력 — 버전 라벨·노트·바꾼 사람·시각 (가이드라인 §3 버전 관리)';
+COMMENT ON COLUMN catalog_dataset_version.version IS '버전 라벨 (owl:versionInfo)';
+COMMENT ON COLUMN catalog_dataset_version.notes IS '버전 노트 — 이전 버전 대비 변경 사항 (adms:versionNotes)';
+COMMENT ON COLUMN catalog_dataset_version.created_by IS '버전을 붙인 사용자';

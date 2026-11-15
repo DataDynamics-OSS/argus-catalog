@@ -1,14 +1,18 @@
 "use client"
 
+import { Tip } from "@/components/tip"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { ArrowLeft, FlaskConical, Loader2, RefreshCw } from "lucide-react"
 
 import { Badge } from "@workspace/ui/components/badge"
+import { StatusBadge } from "@workspace/ui/components/status-badge"
 import { Button } from "@workspace/ui/components/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@workspace/ui/components/tabs"
 import { DETAIL_TAB_LABELS, DetailHeader } from "@/components/model-hub/detail-layout"
+import { LINE_TABS_LIST, LINE_TABS_TRIGGER } from "@/components/detail-section"
 import { useAuth } from "@/features/auth"
+import { usePermissions } from "@/features/permissions/use-permissions"
 import { fetchOciLinkedToMlflow, type LinkedOciModel } from "@/features/oci-hub/api"
 
 import {
@@ -23,6 +27,7 @@ import { frameworkLabel, StageBadge } from "./detail/shared"
 import { UsageTab } from "./detail/usage"
 import { VersionsTab } from "./detail/versions"
 import { errorMessage } from "@/lib/notify"
+import { AgentUsagePanel } from "@/features/ai-agents/components/ai-agents-skills-data"
 
 type ModelsDetailProps = {
   modelName: string
@@ -39,6 +44,7 @@ const LEGACY_TABS: Record<string, Tab> = {
 /** MLflow 등록 모델 상세 — `/dashboard/models/{name}?tab=...`. */
 export function ModelsDetail({ modelName, onBack }: ModelsDetailProps) {
   const { user } = useAuth()
+  const { canUseFeature } = usePermissions()
   const params = useSearchParams()
   const router = useRouter()
   const pathname = usePathname()
@@ -83,8 +89,9 @@ export function ModelsDetail({ modelName, onBack }: ModelsDetailProps) {
     [modelName],
   )
 
-  // 쓰기 권한 — 관리자, 모델 등록자, 모델 소유자 (서버 가드와 같은 기준)
-  const canEdit = !!user && !!detail && (user.is_admin || [detail.owner, detail.created_by].includes(user.username))
+  // 쓰기 권한 — 관리자, 모델 등록자, 모델 소유자 (서버 가드와 같은 기준) + 역할의 기능 권한 models.edit(TODO-122)
+  const isOwner = !!user && !!detail && (user.is_admin || [detail.owner, detail.created_by].includes(user.username))
+  const canEdit = isOwner && canUseFeature("models.edit")
 
   // 헤더 요약 — 운영·스테이징 버전 (스테이지는 버전 단위라 모델에는 여러 개일 수 있다)
   const stageSummary = useMemo(() => {
@@ -101,7 +108,7 @@ export function ModelsDetail({ modelName, onBack }: ModelsDetailProps) {
 
   const backButton = (
     <Button variant="ghost" size="sm" className="h-7 -ml-2 self-start px-2 text-muted-foreground hover:text-foreground" onClick={onBack}>
-      <ArrowLeft className="mr-1 h-4 w-4" />모델 목록으로
+      <ArrowLeft className="mr-1 h-4 w-4" />목록으로
     </Button>
   )
 
@@ -132,31 +139,31 @@ export function ModelsDetail({ modelName, onBack }: ModelsDetailProps) {
           <>
             {stageSummary.prod
               ? <StageBadge stage="PRODUCTION" version={stageSummary.prod.version} />
-              : versions.length > 0 && <span className="rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground">운영 버전 없음</span>}
+              : versions.length > 0 && <StatusBadge tone="muted">운영 버전 없음</StatusBadge>}
             {stageSummary.staging && <StageBadge stage="STAGING" version={stageSummary.staging.version} />}
             {fw && <Badge variant="outline" className="font-normal">{fw}</Badge>}
           </>
         }
         description={detail.description}
         actions={
-          <Button variant="ghost" size="icon-sm" onClick={reload} aria-label="새로고침" title="새로고침">
+          <Tip label="새로고침"><Button variant="ghost" size="icon-sm" onClick={reload} aria-label="새로고침">
             <RefreshCw className="h-3.5 w-3.5" />
-          </Button>
+          </Button></Tip>
         }
       />
 
       <Tabs value={tab} onValueChange={setTab}>
-        <TabsList variant="line">
-          <TabsTrigger value="overview" className="text-base">{DETAIL_TAB_LABELS.overview}</TabsTrigger>
-          <TabsTrigger value="versions" className="text-base">
-            {DETAIL_TAB_LABELS.versions} <span className="ml-1 text-xs text-muted-foreground">{versions.length}</span>
+        <TabsList variant="line" className={LINE_TABS_LIST}>
+          <TabsTrigger value="overview" className={LINE_TABS_TRIGGER}>{DETAIL_TAB_LABELS.overview}</TabsTrigger>
+          <TabsTrigger value="versions" className={LINE_TABS_TRIGGER}>
+            {DETAIL_TAB_LABELS.versions} ({versions.length})
           </TabsTrigger>
-          <TabsTrigger value="performance" className="text-base">{DETAIL_TAB_LABELS.performance}</TabsTrigger>
-          <TabsTrigger value="lineage" className="text-base">
-            {DETAIL_TAB_LABELS.lineage} <span className="ml-1 text-xs text-muted-foreground">{lineage.length + (linked?.length ?? 0)}</span>
+          <TabsTrigger value="performance" className={LINE_TABS_TRIGGER}>{DETAIL_TAB_LABELS.performance}</TabsTrigger>
+          <TabsTrigger value="lineage" className={LINE_TABS_TRIGGER}>
+            {DETAIL_TAB_LABELS.lineage} ({lineage.length + (linked?.length ?? 0)})
           </TabsTrigger>
-          <TabsTrigger value="usage" className="text-base">{DETAIL_TAB_LABELS.usage}</TabsTrigger>
-          <TabsTrigger value="activity" className="text-base">{DETAIL_TAB_LABELS.activity}</TabsTrigger>
+          <TabsTrigger value="usage" className={LINE_TABS_TRIGGER}>{DETAIL_TAB_LABELS.usage}</TabsTrigger>
+          <TabsTrigger value="activity" className={LINE_TABS_TRIGGER}>{DETAIL_TAB_LABELS.activity}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="mt-4">
@@ -177,12 +184,16 @@ export function ModelsDetail({ modelName, onBack }: ModelsDetailProps) {
             versions={versions.map((v) => v.version).sort((a, b) => b - a)}
             canEdit={canEdit} onChanged={reloadLineage}
           />
+          {/* 이 모델을 기반 모델·리니지로 쓰는 AI 에이전트 (TODO-019) */}
+          <div className="mt-8">
+            <AgentUsagePanel target={{ model_id: detail.id }} />
+          </div>
         </TabsContent>
         <TabsContent value="usage" className="mt-4">
           <UsageTab detail={detail} versions={versions} />
         </TabsContent>
         <TabsContent value="activity" className="mt-4">
-          <ActivityTab modelName={detail.name} canEdit={canEdit} />
+          <ActivityTab modelName={detail.name} canEdit={isOwner} />
         </TabsContent>
       </Tabs>
     </div>

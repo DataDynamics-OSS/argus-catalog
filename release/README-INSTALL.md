@@ -146,7 +146,7 @@ Kudu 데이터 소스는 OS 의 Kudu 클라이언트 라이브러리가 필요�
 
 ```bash
 dnf install -y ./argus-catalog-sdk-<버전>-1.x86_64.rpm
-export ARGUS_SERVER=http://<카탈로그 서버>:4600 ARGUS_TOKEN=<토큰>   # 또는 ARGUS_USERNAME / ARGUS_PASSWORD
+export ARGUS_SERVER=http://<카탈로그 서버>:4600 ARGUS_CATALOG_API_KEY=<API 키>   # 카탈로그 설정 › API 키에서 발급
 argus-model --help
 ```
 
@@ -170,10 +170,9 @@ curl -s http://127.0.0.1:8930/health
 카탈로그 화면 **설정 › AI 어시스턴트** 에서 "AI 서비스 기반 어시스턴트"를 켜고 URL 에 `http://<이 서버>:8930` 을
 넣은 뒤 연결 테스트 → 저장합니다(재시작 불필요). 설정 파일로 정하려면 카탈로그 서버의 `assistant.service.url`.
 
-메타데이터 보강은 1회 실행 또는 상시 워커로 돌립니다. 결과를 카탈로그에 반입하므로 `ARGUS_USERNAME`/`ARGUS_PASSWORD`
-에 관리자 권한 계정이 필요합니다. 기본 설정은 서비스 계정 `argus` 이니, 먼저 카탈로그 **관리 › 사용자 관리** 에서
-`argus` 계정을 관리자(argus-admin) 역할로 만들고 그 비밀번호를 `ai-service.env` 의 `ARGUS_PASSWORD` 에 적으세요
-(임시 비밀번호로 만들면 최초 비밀번호 변경 전까지 API 호출이 막히니, 한 번 로그인해 바꾼 값을 넣습니다). 그리고 기본(`ARGUS_AI_MODE=suggest`)은 사람이 승인할 제안으로 들어갑니다.
+메타데이터 보강은 1회 실행 또는 상시 워커로 돌립니다. 결과를 카탈로그에 반입하므로 관리자 역할의 API 키가 필요합니다.
+카탈로그 **관리 › 설정 › API 키** 에서 역할 "관리자", 범위 "카탈로그 읽기·쓰기" 로 발급해 `ai-service.env` 의
+`ARGUS_CATALOG_API_KEY` 에 적으세요. 그리고 기본(`ARGUS_AI_MODE=suggest`)은 사람이 승인할 제안으로 들어갑니다.
 
 ```bash
 # 1회 — 데이터 소스 전체 (작업: describe summarize columns tags pii all)
@@ -185,7 +184,7 @@ systemctl enable --now argus-catalog-ai-enrich
 ```
 
 워커는 데이터 소스 하나를 맡습니다. 여러 개라면 unit 을 복사해 `ARGUS_AI_DATASOURCE_ID` 만 바꿔 띄우세요.
-이전 이름(`argus-agent`, 환경변수 `AGENT_*`)은 한 버전 동안 경고와 함께 동작합니다.
+이전 이름(`argus-agent`, 이전 최상위 명령, 환경변수 `AGENT_*`)은 0.7.0 에서 제거했습니다. `ai-service.env` 에 `AGENT_*` 가 남아 있으면 `ARGUS_AI_*` 로 바꾸세요.
 
 ## 10. 엔진 수집기 (collectors)
 

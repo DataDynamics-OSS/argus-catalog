@@ -1,5 +1,6 @@
 "use client"
 
+import { Tip } from "@/components/tip"
 import { useCallback, useEffect, useState } from "react"
 import { Bot, Check, Eye, EyeOff, Loader2, Play, Save, Sparkles, X } from "lucide-react"
 
@@ -210,7 +211,7 @@ export function LLMSettings() {
               <div>
                 <span className="text-muted-foreground">생성 건수: </span>
                 <span className="font-semibold">{stats.total_generations}</span>
-                <span className="text-muted-foreground ml-2">({stats.applied_count}건 적용, {stats.pending_count}건 대기)</span>
+                <span className="ml-2">({stats.applied_count}건 적용, {stats.pending_count}건 대기)</span>
               </div>
               <div>
                 <span className="text-muted-foreground">토큰: </span>
@@ -242,7 +243,7 @@ export function LLMSettings() {
           <div className="flex items-center justify-between">
             <div>
               <Label>AI 메타데이터 생성 활성화</Label>
-              <p className="text-xs text-muted-foreground mt-0.5">
+              <p className="text-xs mt-0.5">
                 활성화하면 AI 가 설명을 생성하고 태그를 제안하며 PII 를 감지할 수 있습니다.
               </p>
             </div>
@@ -291,13 +292,13 @@ export function LLMSettings() {
                   placeholder={provider === "openai" ? "sk-..." : "sk-ant-..."}
                   className="pr-10"
                 />
-                <button
+                <Tip label={showApiKey ? "값 숨기기" : "값 보기"}><button aria-label={showApiKey ? "값 숨기기" : "값 보기"}
                   type="button"
                   className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground"
                   onClick={() => setShowApiKey(!showApiKey)}
                 >
                   {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </button>
+                </button></Tip>
               </div>
             </div>
           )}
@@ -343,7 +344,7 @@ export function LLMSettings() {
               onChange={(e) => setTemperature(parseFloat(e.target.value))}
               className="h-2"
             />
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs">
               낮을수록 사실 중심, 높을수록 창의적. 메타데이터에는 0.3 권장.
             </p>
           </div>
@@ -364,7 +365,7 @@ export function LLMSettings() {
           <div className="flex items-center justify-between">
             <div>
               <Label>동기화 시 자동 생성</Label>
-              <p className="text-xs text-muted-foreground mt-0.5">
+              <p className="text-xs mt-0.5">
                 메타데이터 동기화 후 새로 추가된 데이터셋에 대해 자동으로 설명을 생성합니다.
               </p>
             </div>
@@ -407,13 +408,24 @@ export function LLMSettings() {
               variant="outline"
               onClick={() => handleBulkGenerate(["description", "columns", "tags", "pii"])}
               disabled={generating || !enabled}
+              title="설명 · 컬럼 설명 · 태그 · PII 를 한 번에 생성합니다"
             >
               {generating ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Sparkles className="h-4 w-4 mr-1" />}
-              전체 생성 (설명 + 컬럼 + 태그 + PII)
+              전체 생성
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => handleBulkGenerate(["ai_ready"])}
+              disabled={generating || !enabled}
+              title="비어 있는 편향 · 한계 · 관련법령의 초안을 씁니다"
+            >
+              {generating ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Sparkles className="h-4 w-4 mr-1" />}
+              AI-Ready 초안
             </Button>
           </div>
-          <p className="text-xs text-muted-foreground">
-            설명이 비어 있는 데이터셋만 처리되며, 결과는 즉시 적용됩니다.
+          <p className="text-xs">
+            설명 · 전체 생성은 설명이 비어 있는 데이터셋만 처리되며, 결과는 즉시 적용됩니다. AI-Ready 초안은 편향 · 한계 · 관련법령 중
+            하나라도 빈 데이터셋을 처리하고, 결과는 적용하지 않고 각 데이터셋의 AI 제안으로 남깁니다(담당자가 읽고 적용).
           </p>
         </CardContent>
       </Card>

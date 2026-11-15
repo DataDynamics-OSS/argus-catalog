@@ -39,7 +39,7 @@ from app.models.schemas import (
     RegisteredModelResponse,
     RegisteredModelUpdate,
 )
-from app.permissions.router import require_feature
+from app.permissions.router import check_feature, require_feature
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,8 @@ router = APIRouter(prefix="/models", tags=["models"])
 _RELATION_TYPES = ("TRAINING_DATA", "EVALUATION_DATA", "FEATURE_SOURCE")
 
 
-async def assert_model_editor(current: TokenUser, session: AsyncSession, model_name: str):
+async def assert_model_editor(current: TokenUser, session: AsyncSession, model_name: str,
+                              feature: str = "models.edit"):
     """모델 쓰기 가드 — 관리자, 모델 생성자, 또는 모델 소유자(owner)면 통과.
 
     모델 정보·스테이지·메트릭·모델 카드·리니지 변경이 모두 같은 기준을 쓴다.
@@ -70,10 +71,14 @@ async def assert_model_editor(current: TokenUser, session: AsyncSession, model_n
     if not model:
         logger.warning("모델을 찾을 수 없음: %s", model_name)
         raise HTTPException(status_code=404, detail=f"모델 '{model_name}'을(를) 찾을 수 없습니다.")
-    if current.is_admin or current.username in {model.created_by, model.owner} - {None, ""}:
-        return model
-    logger.warning("모델 쓰기 거부: %s (요청자 %s)", model_name, current.username)
-    raise HTTPException(status_code=403, detail="모델의 소유자 또는 관리자만 수행할 수 있습니다.")
+    if not (current.is_admin or current.username in {model.created_by, model.owner} - {None, ""}):
+        logger.warning("모델 쓰기 거부: %s (요청자 %s)", model_name, current.username)
+        raise HTTPException(status_code=403, detail="모델의 소유자 또는 관리자만 수행할 수 있습니다.")
+    # 역할의 기능 권한(수정 models.edit · 삭제 models.delete, 기본 허용형)도 본다(TODO-122)
+    if not await check_feature(session, current, feature):
+        logger.warning("모델 쓰기 거부(기능 권한 %s): %s (요청자 %s)", feature, model_name, current.username)
+        raise HTTPException(status_code=403, detail=f"기능 권한이 없습니다: {feature}")
+    return model
 
 
 # ---------------------------------------------------------------------------
@@ -152,14 +157,21 @@ async def get_model_detail(
 
 @router.get("/{model_name}/download", response_model=ModelDownloadStats)
 async def get_model_download_stats(
+    current: CurrentUser,
     model_name: str, session: AsyncSession = Depends(get_session),
 ):
-    """모델 단위 다운로드 통계(일별 차트 + 최근 로그). 없거나 삭제된 모델은 404."""
+    """모델 단위 다운로드 통계(일별 차트 + 최근 로그). 없거나 삭제된 모델은 404.
+
+    최근 로그의 접속 IP · User-Agent 는 관리자와 그 모델의 소유자 · 등록자에게만 준다(DEF-120) —
+    다른 사용자에게는 날짜 · 버전 · 방식만 보인다."""
     logger.debug("GET /models/%s/download", model_name)
-    if not await service.get_registered_model_by_name(session, model_name):
+    model = await service.get_registered_model_by_name(session, model_name)
+    if not model:
         logger.warning("다운로드 통계 조회 실패(모델 없음): %s", model_name)
         raise HTTPException(status_code=404, detail=f"모델 '{model_name}'을(를) 찾을 수 없습니다.")
-    return await service.get_model_download_stats(session, model_name)
+    me = current.username
+    include_client = current.is_admin or (bool(me) and me in (model.owner, model.created_by))
+    return await service.get_model_download_stats(session, model_name, include_client=include_client)
 
 
 @router.get("/{model_name}", response_model=RegisteredModelResponse)
@@ -204,7 +216,7 @@ async def delete_registered_model(current: CurrentUser,
 
     등록 대기(PENDING_REGISTRATION) 버전은 FAILED_REGISTRATION 으로 마감된다."""
     logger.info("DELETE /models/%s (soft)", model_name)
-    await assert_model_editor(current, session, model_name)
+    await assert_model_editor(current, session, model_name, feature="models.delete")
     if not await service.delete_registered_model(session, model_name):
         logger.warning("삭제할 모델을 찾을 수 없음: %s", model_name)
         raise HTTPException(status_code=404, detail=f"모델 '{model_name}'을(를) 찾을 수 없습니다.")
@@ -349,7 +361,7 @@ async def delete_model_version(current: CurrentUser,
 ):
     """모델 버전 삭제(관리자·모델 등록자·소유자)."""
     logger.info("DELETE /models/%s/versions/%d", model_name, version)
-    await assert_model_editor(current, session, model_name)
+    await assert_model_editor(current, session, model_name, feature="models.delete")
     if not await service.delete_model_version(session, model_name, version):
         logger.warning("삭제할 버전을 찾을 수 없음: %s v%d", model_name, version)
         raise HTTPException(

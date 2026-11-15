@@ -101,7 +101,7 @@ export function CreateFolderDialog({
               취소
             </Button>
             <Button type="submit" disabled={isLoading}>
-              {isLoading ? "생성 중..." : "생성"}
+              {isLoading ? "만드는 중…" : "만들기"}
             </Button>
           </DialogFooter>
         </form>

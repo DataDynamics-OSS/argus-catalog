@@ -6,8 +6,10 @@
 // 설계: design/ai-agent-bulk-registration-design.md §5
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import { ChevronLeft, ChevronRight, EyeOff, Plus, Radar, RotateCcw, Search } from "lucide-react"
-import { errorMessage, toast } from "@/lib/notify"
+import { ChevronLeft, ChevronRight, EyeOff, Plus, Radar, RotateCcw } from "lucide-react"
+
+import { StatusBadge, type StatusTone } from "@workspace/ui/components/status-badge"
+import { toast, notifyError } from "@/lib/notify"
 
 import { Button } from "@workspace/ui/components/button"
 import {
@@ -46,13 +48,10 @@ import {
 } from "../api"
 import { useAIAgents } from "./ai-agents-provider"
 import { usePermissions } from "@/features/permissions/use-permissions"
+import { SearchInput } from "@/components/search-input"
 
 const STATUS_LABEL: Record<DiscoveryStatus, string> = { new: "처리 전", ignored: "무시", registered: "등록됨" }
-const STATUS_CLASS: Record<DiscoveryStatus, string> = {
-  new: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
-  ignored: "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400",
-  registered: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300",
-}
+const STATUS_TONE: Record<DiscoveryStatus, StatusTone> = { new: "warning", ignored: "muted", registered: "success" }
 const PAGE_SIZE = 20
 
 function fmt(ts: string | null) {
@@ -89,7 +88,7 @@ export function AIAgentsDiscoveries({ onChanged }: { onChanged?: () => void }) {
       setItems(data.items)
       setTotal(data.total)
     } catch (e) {
-      if (my === seq.current) toast.error(errorMessage(e) ?? String(e))
+      if (my === seq.current) notifyError(e, "발견 목록을 불러오지 못했습니다.")
     } finally {
       if (my === seq.current) setLoading(false)
     }
@@ -129,7 +128,7 @@ export function AIAgentsDiscoveries({ onChanged }: { onChanged?: () => void }) {
       await Promise.all([reload(), refreshAgents()])
       onChanged?.()
     } catch (e) {
-      toast.error(errorMessage(e) ?? String(e))
+      notifyError(e, "초안으로 등록하지 못했습니다.")
     } finally {
       setBusyId(null)
     }
@@ -143,7 +142,7 @@ export function AIAgentsDiscoveries({ onChanged }: { onChanged?: () => void }) {
       await reload()
       onChanged?.()
     } catch (e) {
-      toast.error(errorMessage(e) ?? String(e))
+      notifyError(e, "상태를 바꾸지 못했습니다.")
     } finally {
       setBusyId(null)
     }
@@ -153,28 +152,24 @@ export function AIAgentsDiscoveries({ onChanged }: { onChanged?: () => void }) {
 
   return (
     <div className="flex flex-col gap-3">
-      <p className="text-sm text-muted-foreground">
+      <p className="text-sm">
         실행 환경이 보낸 호출 기록·정책 판정 기록 중 카탈로그에 없는 에이전트입니다. 등록하면 초안 상태의 에이전트가
         만들어지고(소유자·부서는 등록 대화상자에서 지정 — 기본값은 등록하는 사람), 이후 기록은 정상 수집됩니다.
       </p>
       <div className="flex flex-wrap items-center gap-2">
-        <div className="relative max-w-xs flex-1">
-          <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="이름 검색..."
-            value={search}
-            onChange={(e) => {
-              const v = e.target.value
-              setSearch(v)
-              if (debounce.current) clearTimeout(debounce.current)
-              debounce.current = setTimeout(() => {
-                setPage(1)
-                load({ status, search: v, page: 1 })
-              }, 400)
-            }}
-            className="h-9 pl-8"
-          />
-        </div>
+        <SearchInput
+          className="max-w-xs flex-1"
+          placeholder="이름 검색…"
+          value={search}
+          onValueChange={(v) => {
+            setSearch(v)
+            if (debounce.current) clearTimeout(debounce.current)
+            debounce.current = setTimeout(() => {
+              setPage(1)
+              load({ status, search: v, page: 1 })
+            }, 400)
+          }}
+        />
         <Select
           value={status}
           onValueChange={(v) => {
@@ -194,7 +189,7 @@ export function AIAgentsDiscoveries({ onChanged }: { onChanged?: () => void }) {
             <SelectItem value="all">전체</SelectItem>
           </SelectContent>
         </Select>
-        <span className="text-sm text-muted-foreground">총 {total}개</span>
+        <span className="text-sm">총 {total}개</span>
       </div>
 
       <div className="rounded-md border">
@@ -213,11 +208,11 @@ export function AIAgentsDiscoveries({ onChanged }: { onChanged?: () => void }) {
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">불러오는 중...</TableCell>
+                <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">불러오는 중…</TableCell>
               </TableRow>
             ) : items.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
+                <TableCell colSpan={7} className="h-24 text-center">
                   <Radar className="mx-auto mb-1 h-5 w-5" />
                   {status === "new" ? "처리할 미등록 에이전트가 없습니다." : "해당하는 기록이 없습니다."}
                 </TableCell>
@@ -240,29 +235,28 @@ export function AIAgentsDiscoveries({ onChanged }: { onChanged?: () => void }) {
                     </div>
                   </TableCell>
                   <TableCell>
-                    <span className={`rounded-full px-2 py-0.5 text-xs ${STATUS_CLASS[d.status]}`}>
-                      {STATUS_LABEL[d.status]}
-                    </span>
+                    <StatusBadge tone={STATUS_TONE[d.status] ?? "neutral"} label={STATUS_LABEL[d.status] ?? d.status} />
                     {d.status_changed_by && (
-                      <div className="mt-0.5 text-[11px] text-muted-foreground">{d.status_changed_by}</div>
+                      <div className="mt-0.5 text-[11px]">{d.status_changed_by}</div>
                     )}
                   </TableCell>
                   <TableCell className="text-right text-sm">
                     <div>{d.seen_count.toLocaleString()}</div>
-                    <div className="text-[11px] text-muted-foreground">
+                    <div className="text-[11px]">
                       호출 {d.invocation_count} · 판정 {d.hook_event_count}
                     </div>
                   </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">{fmt(d.first_seen_at)}</TableCell>
-                  <TableCell className="text-xs text-muted-foreground">{fmt(d.last_seen_at)}</TableCell>
-                  <TableCell className="text-xs text-muted-foreground">
+                  <TableCell className="text-xs">{fmt(d.first_seen_at)}</TableCell>
+                  <TableCell className="text-xs">{fmt(d.last_seen_at)}</TableCell>
+                  <TableCell className="text-xs">
                     <div>{d.reported_by || "-"}</div>
                     <div>{d.last_consumer || "-"}</div>
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
-                      {d.status !== "registered" && (
-                        <Button size="sm" variant="outline" disabled={busyId === d.id || !canRegister} title={canRegister ? undefined : "에이전트 등록 권한이 없습니다"} onClick={() => openRegister(d)}>
+                      {/* 등록 권한(agents.register)이 없으면 버튼을 두지 않는다 — 서버도 403 */}
+                      {d.status !== "registered" && canRegister && (
+                        <Button size="sm" variant="outline" disabled={busyId === d.id} onClick={() => openRegister(d)}>
                           <Plus className="mr-1 h-3.5 w-3.5" /> 등록
                         </Button>
                       )}
@@ -346,7 +340,7 @@ export function AIAgentsDiscoveries({ onChanged }: { onChanged?: () => void }) {
                 {regTouched && bad && <p className="text-xs text-destructive">{msg}</p>}
               </div>
             ))}
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs">
               같은 이름의 에이전트가 이미 있으면 새로 만들지 않고 그 에이전트에 연결만 합니다.
             </p>
           </div>
@@ -355,7 +349,7 @@ export function AIAgentsDiscoveries({ onChanged }: { onChanged?: () => void }) {
               취소
             </Button>
             <Button onClick={register} disabled={busyId === regTarget?.id}>
-              {busyId === regTarget?.id ? "등록 중..." : "등록"}
+              {busyId === regTarget?.id ? "등록 중…" : "등록"}
             </Button>
           </DialogFooter>
         </DialogContent>

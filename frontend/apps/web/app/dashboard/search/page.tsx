@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation"
 import { BookOpen, Bot, Database, Loader2, Plug, Search, Webhook } from "lucide-react"
 
 import { Badge } from "@workspace/ui/components/badge"
+import { StatusBadge, statusMeta, type StatusMeta } from "@workspace/ui/components/status-badge"
 import { DashboardHeader } from "@/components/dashboard-header"
 import {
   unifiedSearch,
@@ -12,7 +13,17 @@ import {
   type SemanticSearchResult,
 } from "@/features/datasets/api"
 import { datasetExcerpt } from "@/features/search/excerpt"
+import { hasInAppHistory } from "@/lib/navigation"
 import { errorMessage } from "@/lib/notify"
+import { MatchTypeBadge } from "@/components/match-type-badge"
+import { OriginText } from "@/features/datasets/components/origin-text"
+import { apiStatus, protocolLabel } from "@/features/apis/components/apis-constants"
+import { LIFECYCLE_STATUS } from "@/lib/lifecycle"
+
+/** 검색 결과의 상태 — API 는 API 상태, 에이전트 · MCP 서버는 수명 주기 상태(DEF-116, 예전엔 코드 그대로 무채색) */
+function entityStatus(entityType: string, status: string): StatusMeta {
+  return entityType === "api" ? apiStatus(status) : statusMeta(LIFECYCLE_STATUS, status)
+}
 
 function scoreColor(score: number): string {
   if (score >= 0.8) return "text-emerald-600"
@@ -28,11 +39,8 @@ function scoreBg(score: number): string {
   return "bg-muted/50 border-muted"
 }
 
-function MatchBadge({ type }: { type: string }) {
-  if (type === "hybrid") return <Badge variant="outline" className="text-[10px] px-1 py-0 text-purple-600 border-purple-200">hybrid</Badge>
-  if (type === "semantic") return <Badge variant="outline" className="text-[10px] px-1 py-0 text-blue-600 border-blue-200">semantic</Badge>
-  return <Badge variant="outline" className="text-[10px] px-1 py-0">keyword</Badge>
-}
+// 검색 일치 방식 — 데이터셋 의미 검색과 공용(TODO-107)
+const MatchBadge = MatchTypeBadge
 
 function ScorePill({ score }: { score: number }) {
   return (
@@ -74,24 +82,24 @@ function EntitySection({
                 <td className="px-3 py-2.5">
                   <div className="font-medium">{item.display_name || item.name}</div>
                   {item.description && (
-                    <p className="text-xs text-muted-foreground truncate max-w-[500px]">
+                    <p className="text-xs truncate max-w-[500px]">
                       {item.description}
                     </p>
                   )}
                 </td>
-                <td className="px-3 py-2.5 text-muted-foreground w-44">
+                <td className="px-3 py-2.5 w-44">
                   <div className="flex items-center justify-end gap-1.5">
                     {item.extra.category && (
-                      <Badge variant="outline" className="text-xs">{item.extra.category}</Badge>
+                      <Badge variant="outline">{item.extra.category}</Badge>
                     )}
                     {item.extra.protocol && (
-                      <Badge variant="outline" className="text-xs">{item.extra.protocol}</Badge>
+                      <Badge variant="outline">{protocolLabel(item.extra.protocol)}</Badge>
                     )}
                     {item.extra.platform && (
-                      <Badge variant="outline" className="text-xs">{item.extra.platform}</Badge>
+                      <Badge variant="outline">{item.extra.platform}</Badge>
                     )}
                     {item.extra.status && (
-                      <Badge variant="outline" className="text-xs">{item.extra.status}</Badge>
+                      <StatusBadge {...entityStatus(item.entity_type, item.extra.status)} />
                     )}
                   </div>
                 </td>
@@ -162,8 +170,9 @@ export default function SearchPage() {
     if (q) {
       doSearch(q)
     } else {
-      // No query (e.g. browser back) — go back to previous page
-      router.back()
+      // 검색어가 없으면(예: 브라우저 뒤로) 앱 안 이전 화면으로, 기록이 없으면 대시보드로(DEF-066)
+      if (hasInAppHistory()) router.back()
+      else router.replace("/dashboard")
     }
   }, [q, doSearch, router])
 
@@ -175,12 +184,12 @@ export default function SearchPage() {
       <div className="flex flex-1 flex-col gap-4 p-4">
         {/* Search meta */}
         {!isLoading && q && !error && (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <div className="flex items-center gap-2 text-sm">
             <span>&ldquo;{q}&rdquo; 검색 결과 {total}건</span>
             {provider ? (
-              <Badge variant="outline" className="text-[10px] px-1.5 py-0">{provider}/{model}</Badge>
+              <Badge size="sm" variant="outline">{provider}/{model}</Badge>
             ) : (
-              <Badge variant="outline" className="text-[10px] px-1.5 py-0">키워드 검색만 (임베딩 비활성)</Badge>
+              <Badge size="sm" variant="outline">키워드 검색만 (임베딩 비활성)</Badge>
             )}
           </div>
         )}
@@ -189,7 +198,7 @@ export default function SearchPage() {
         {isLoading && (
           <div className="flex items-center justify-center py-16 gap-2 text-muted-foreground">
             <Loader2 className="h-5 w-5 animate-spin" />
-            <span className="text-sm">검색 중...</span>
+            <span className="text-sm">검색 중…</span>
           </div>
         )}
 
@@ -243,26 +252,26 @@ export default function SearchPage() {
                         <div className="flex items-baseline gap-2">
                           <span className="font-medium">{r.dataset.name}</span>
                           {r.dataset.display_name && (
-                            <span className="text-xs text-muted-foreground">{r.dataset.display_name}</span>
+                            <span className="text-xs">{r.dataset.display_name}</span>
                           )}
                         </div>
                         {datasetExcerpt(r.dataset) && (
-                          <p className="text-xs text-muted-foreground truncate max-w-[500px]">
+                          <p className="text-xs truncate max-w-[500px]">
                             {datasetExcerpt(r.dataset)}
                           </p>
                         )}
                       </td>
-                      <td className="px-3 py-2.5 text-muted-foreground">
+                      <td className="px-3 py-2.5">
                         <span className="flex items-center gap-1">
                           <Database className="h-3 w-3" />
                           {r.dataset.datasource_name}
                         </span>
                       </td>
                       <td className="px-3 py-2.5 text-center">
-                        <Badge variant="outline" className="text-xs">{r.dataset.origin}</Badge>
+                        <OriginText origin={r.dataset.origin} />
                       </td>
-                      <td className="px-3 py-2.5 text-center text-muted-foreground">{r.dataset.schema_field_count}</td>
-                      <td className="px-3 py-2.5 text-center text-muted-foreground">{r.dataset.tag_count}</td>
+                      <td className="px-3 py-2.5 text-center">{r.dataset.schema_field_count}</td>
+                      <td className="px-3 py-2.5 text-center">{r.dataset.tag_count}</td>
                       <td className="px-3 py-2.5 text-center"><MatchBadge type={r.match_type} /></td>
                       <td className="px-3 py-2.5 text-center"><ScorePill score={r.score} /></td>
                     </tr>

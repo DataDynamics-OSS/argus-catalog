@@ -5,11 +5,11 @@
 list/dict 로 그대로 노출되며 ``from_attributes`` 로 ORM → 응답 변환된다.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # 예산 한도 상한 — DB 열이 Numeric(12, 4)(정수부 8자리)라 1억 이상은 저장할 수 없다(넘기면 500 대신 422).
 # 최대 단계는 1 이상, 예산은 0 이상 — 정의 파일 반영(manifest)과 같은 기준.
@@ -29,6 +29,15 @@ class AgentStatus(str, Enum):
     BLOCKED = "blocked"
     DEPRECATED = "deprecated"
     RETIRED = "retired"
+
+
+# 위험 등급(EU AI Act 4단계와 같은 이름), 영향 평가 결과, 자율 수준, 실행 신원 유형 (TODO-020·021)
+RiskTier = Literal["minimal", "limited", "high", "prohibited"]
+ImpactResult = Literal["passed", "conditional", "failed", "pending"]
+AutonomyLevel = Literal["advisory", "supervised", "autonomous"]
+IdentityType = Literal["service_account", "oauth_client", "workload", "user_delegated"]
+DataAccessMode = Literal["read", "write", "read_write"]
+LOG_RETENTION_MAX = 36_500  # 100년 — 그 이상은 입력 실수로 본다
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +93,23 @@ class AIAgentCreate(BaseModel):
     hitl_config: dict[str, Any] | None = None
     sub_agents: list[dict[str, Any]] | None = None
     tags: list[str] | None = None
+    default_input_modes: list[str] | None = None
+    default_output_modes: list[str] | None = None
+    # 위험 등급·규제 준수 (TODO-020)
+    risk_tier: RiskTier | None = None
+    risk_rationale: str | None = None
+    impact_assessed_at: date | None = None
+    impact_assessment_result: ImpactResult | None = None
+    impact_assessment_ref: str | None = Field(None, max_length=1000)
+    compliance: list[str] | None = None
+    log_retention_days: int | None = Field(None, ge=1, le=LOG_RETENTION_MAX)
+    autonomy_level: AutonomyLevel | None = None
+    # 실행 신원·권한·위임 (TODO-021)
+    identity_type: IdentityType | None = None
+    identity_principal: str | None = Field(None, max_length=255)
+    identity_provider: str | None = Field(None, max_length=100)
+    granted_scopes: list[str] | None = None
+    on_behalf_of: bool = False
 
 
 class AIAgentUpdate(BaseModel):
@@ -128,11 +154,41 @@ class AIAgentUpdate(BaseModel):
     hitl_config: dict[str, Any] | None = None
     sub_agents: list[dict[str, Any]] | None = None
     tags: list[str] | None = None
+    default_input_modes: list[str] | None = None
+    default_output_modes: list[str] | None = None
+    # 위험 등급·규제 준수 (TODO-020)
+    risk_tier: RiskTier | None = None
+    risk_rationale: str | None = None
+    impact_assessed_at: date | None = None
+    impact_assessment_result: ImpactResult | None = None
+    impact_assessment_ref: str | None = Field(None, max_length=1000)
+    compliance: list[str] | None = None
+    log_retention_days: int | None = Field(None, ge=1, le=LOG_RETENTION_MAX)
+    autonomy_level: AutonomyLevel | None = None
+    # 실행 신원·권한·위임 (TODO-021)
+    identity_type: IdentityType | None = None
+    identity_principal: str | None = Field(None, max_length=255)
+    identity_provider: str | None = Field(None, max_length=100)
+    granted_scopes: list[str] | None = None
+    on_behalf_of: bool | None = None
 
 
 # ---------------------------------------------------------------------------
 # AIAgent — 응답
 # ---------------------------------------------------------------------------
+
+
+class AgentOwnerInfo(BaseModel):
+    """owner_email 과 일치하는 등록 사용자(argus_users) — 목록 표시용(이름·툴팁)."""
+
+    email: str
+    username: str
+    first_name: str | None = None
+    last_name: str | None = None
+    organization: str | None = None
+    department: str | None = None
+
+    model_config = {"from_attributes": True}
 
 
 class AIAgentSummary(BaseModel):
@@ -145,6 +201,8 @@ class AIAgentSummary(BaseModel):
     version: str
     status: str
     owner_email: str | None = None
+    # 등록자 — 목록에서 '내가 고칠 수 있는 에이전트'(관리자 · 등록자 · 소유자)를 가리는 데 쓴다
+    created_by: str | None = None
     department: str | None = None
     category: str | None = None
     base_model: str | None = None
@@ -161,6 +219,10 @@ class AIAgentSummary(BaseModel):
     completeness: int | None = None  # 0~100
     missing_fields: list[str] = Field(default_factory=list)  # 완성도에서 빠진 항목 키
     max_risk: str | None = None  # 보유 도구의 최고 위험도
+    risk_tier: str | None = None
+    autonomy_level: str | None = None
+    # owner_email 로 조회한 등록 사용자 — 목록에서만 채움. 미지정·미등록 이메일이면 None
+    owner: AgentOwnerInfo | None = None
 
     model_config = {"from_attributes": True}
 
@@ -210,8 +272,41 @@ class AIAgentLineageResponse(BaseModel):
     target_ref: str
     relation: str
     description: str | None = None
+    # 대상을 카탈로그 엔티티로 해석한 id (agent/model/dataset). 외부 대상이거나 찾지 못하면 None
+    target_id: int | None = None
 
     model_config = {"from_attributes": True}
+
+
+class AIAgentSkillResponse(BaseModel):
+    """에이전트가 외부에 내세우는 스킬 (A2A AgentSkill)."""
+
+    id: int
+    skill_key: str
+    name: str
+    description: str | None = None
+    tags: list[str] | None = None
+    examples: list[str] | None = None
+    input_modes: list[str] | None = None
+    output_modes: list[str] | None = None
+    sort_order: int = 0
+
+    model_config = {"from_attributes": True}
+
+
+class AIAgentDataAccessResponse(BaseModel):
+    """에이전트가 읽거나 쓰는 데이터 소스·데이터셋. 대상 이름은 조회 시 채운다."""
+
+    id: int
+    target_type: str  # datasource / dataset
+    datasource_id: int | None = None
+    dataset_id: int | None = None
+    target_name: str | None = None  # 데이터 소스 이름 또는 데이터셋 이름
+    target_urn: str | None = None  # 데이터셋 URN 또는 데이터 소스 datasource_id
+    datasource_name: str | None = None  # 데이터셋이면 소속 데이터 소스 이름
+    contains_pii: bool | None = None  # 데이터셋에 개인정보 컬럼(pii_type)이 있는지 (데이터 소스는 None)
+    access: str
+    description: str | None = None
 
 
 class AIAgentVersionResponse(BaseModel):
@@ -278,6 +373,25 @@ class AIAgentDetailResponse(BaseModel):
     hitl_config: dict[str, Any] | None = None
     sub_agents: list[dict[str, Any]] | None = None
     tags: list[str] | None = None
+    default_input_modes: list[str] | None = None
+    default_output_modes: list[str] | None = None
+    risk_tier: str | None = None
+    risk_rationale: str | None = None
+    impact_assessed_at: date | None = None
+    impact_assessment_result: str | None = None
+    impact_assessment_ref: str | None = None
+    compliance: list[str] | None = None
+    log_retention_days: int | None = None
+    autonomy_level: str | None = None
+    identity_type: str | None = None
+    identity_principal: str | None = None
+    identity_provider: str | None = None
+    granted_scopes: list[str] | None = None
+    on_behalf_of: bool = False
+    # 실행 신원이 사용자 목록에 있는지: ok / unknown(사용자 목록에 없음) / inactive / None(확인 대상 아님)
+    identity_state: str | None = None
+    # base_model_ref 가 가리키는 등록 모델 이름 (모델 상세 링크용)
+    base_model_name: str | None = None
     usage_count: int
     last_invoked_at: datetime | None = None
     created_at: datetime
@@ -294,11 +408,15 @@ class AIAgentDetailResponse(BaseModel):
     completeness: int | None = None
     missing_fields: list[str] = Field(default_factory=list)
     max_risk: str | None = None
+    # owner_email 과 일치하는 등록 사용자(대소문자 무시) — 목록 AIAgentSummary.owner 와 같은 기준(DEF-084)
+    owner: AgentOwnerInfo | None = None
     # 관계
     tools: list[AIAgentToolResponse] = []
     mcp_servers: list[AIAgentMcpServerResponse] = []
     lineage: list[AIAgentLineageResponse] = []
     versions: list[AIAgentVersionResponse] = []
+    skills: list["AIAgentSkillResponse"] = []
+    data_access: list["AIAgentDataAccessResponse"] = []
 
     model_config = {"from_attributes": True}
 
@@ -355,6 +473,62 @@ class AIAgentLineageCreate(BaseModel):
     description: str | None = None
 
 
+class AIAgentSkillCreate(BaseModel):
+    """스킬 추가. ``skill_key`` 를 비우면 이름에서 만든다."""
+
+    skill_key: str | None = Field(None, max_length=100, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    name: str = Field(..., min_length=1, max_length=200)
+    description: str | None = None
+    tags: list[str] | None = None
+    examples: list[str] | None = None
+    input_modes: list[str] | None = None
+    output_modes: list[str] | None = None
+    sort_order: int = 0
+
+
+class AIAgentSkillUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=200)
+    description: str | None = None
+    tags: list[str] | None = None
+    examples: list[str] | None = None
+    input_modes: list[str] | None = None
+    output_modes: list[str] | None = None
+    sort_order: int | None = None
+
+
+class AIAgentDataAccessCreate(BaseModel):
+    """데이터 접근 추가. 데이터셋(``dataset_id``/``dataset_urn``) 또는 데이터 소스
+    (``datasource_id``/``datasource_name``) 중 하나만 지정한다."""
+
+    dataset_id: int | None = None
+    dataset_urn: str | None = Field(None, max_length=500)
+    datasource_id: int | None = None
+    datasource_name: str | None = Field(None, max_length=200)
+    access: DataAccessMode = "read"
+    description: str | None = None
+
+    @model_validator(mode="after")
+    def _one_target(self):
+        ds = self.dataset_id is not None or bool(self.dataset_urn)
+        src = self.datasource_id is not None or bool(self.datasource_name)
+        if ds == src:
+            raise ValueError("데이터셋이나 데이터 소스 중 하나만 지정하세요")
+        return self
+
+
+class AgentResourceUsage(BaseModel):
+    """자원(데이터셋·데이터 소스·모델)을 쓰는 에이전트 한 건 — 역방향 조회 응답."""
+
+    agent_id: int
+    agent_name: str
+    display_name: str | None = None
+    status: str
+    owner_email: str | None = None
+    relation: str  # read / write / read_write(데이터 접근) · base_model(기반 모델) · lineage relation
+    via: str  # data_access / datasource(소속 데이터 소스 경유) / base_model / lineage
+    description: str | None = None
+
+
 class AIAgentVersionCreate(BaseModel):
     version: str = Field(..., min_length=1, max_length=50)
     source: str | None = None
@@ -401,6 +575,9 @@ class AIAgentStats(BaseModel):
     by_status: list[NameCount]
     by_framework: list[NameCount]
     by_category: list[NameCount]
+    by_risk_tier: list[NameCount] = Field(default_factory=list)  # 위험 등급별 (미지정 제외)
+    unassessed_risk_count: int = 0       # 위험 등급 미지정(폐기 제외)
+    high_risk_unassessed_count: int = 0  # high/prohibited 인데 영향 평가 기록이 없는 에이전트(폐기 제외)
     multi_agent_count: int
     hitl_required_count: int
     total_invocations: int
@@ -563,34 +740,68 @@ class AIAgentMeteringResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class AgentCardSkill(BaseModel):
-    name: str
+# A2A 1.0 AgentCard 형식(https://a2a-protocol.org/latest/specification/ 4.4). JSON 키는 camelCase(alias)로 내보낸다.
+A2A_PROTOCOL_VERSION = "1.0"
+# 카탈로그 고유 정보(식별 이름·URN·상태·소유자·부서 등)를 싣는 A2A 확장의 URI. 다른 카탈로그가 이 확장을 읽어 그대로 되살린다.
+CATALOG_CARD_EXTENSION_URI = "urn:argus-catalog:agent-card:v1"
+
+
+class _A2AModel(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
+
+
+class AgentCardInterface(_A2AModel):
+    """A2A ``AgentInterface`` — 호출 주소와 프로토콜 바인딩(JSONRPC / GRPC / HTTP+JSON)."""
+
+    url: str
+    protocol_binding: str = Field(alias="protocolBinding")
+    protocol_version: str = Field(A2A_PROTOCOL_VERSION, alias="protocolVersion")
+
+
+class AgentCardExtension(_A2AModel):
+    """A2A ``AgentExtension``."""
+
+    uri: str
     description: str | None = None
+    required: bool = False
+    params: dict[str, Any] = {}
 
 
-class AgentCardProvider(BaseModel):
-    organization: str | None = None
-    contact: str | None = None
+class AgentCardCapabilities(_A2AModel):
+    """A2A ``AgentCapabilities``."""
+
+    streaming: bool = False
+    push_notifications: bool = Field(False, alias="pushNotifications")
+    extensions: list[AgentCardExtension] = []
 
 
-class AIAgentCard(BaseModel):
-    """Google A2A 스타일 에이전트 카드(상호 검색·협업용).
+class AgentCardSkill(_A2AModel):
+    """A2A ``AgentSkill`` — 외부에 제공하는 기능. 에이전트가 호출하는 도구(tools)와는 다르다."""
 
-    카탈로그가 보유한 메타데이터로부터 조립된다(별도 저장 없음).
+    id: str
+    name: str
+    description: str
+    tags: list[str] = []
+    examples: list[str] | None = None
+    input_modes: list[str] | None = Field(None, alias="inputModes")
+    output_modes: list[str] | None = Field(None, alias="outputModes")
+
+
+class AIAgentCard(_A2AModel):
+    """A2A 1.0 에이전트 카드(상호 검색·협업용).
+
+    카탈로그가 보유한 메타데이터로부터 조립된다(별도 저장 없음). 카탈로그 고유 정보는
+    ``capabilities.extensions`` 의 ``CATALOG_CARD_EXTENSION_URI`` 확장 ``params`` 에 싣는다.
     """
 
     name: str
-    display_name: str | None = None
-    description: str | None = None
+    description: str
     version: str
-    url: str | None = None
-    protocol: str | None = None
-    auth_method: str | None = None
-    provider: AgentCardProvider
-    capabilities: list[str] = []
-    supported_languages: list[str] = []
+    supported_interfaces: list[AgentCardInterface] = Field([], alias="supportedInterfaces")
+    capabilities: AgentCardCapabilities
+    default_input_modes: list[str] = Field(alias="defaultInputModes")
+    default_output_modes: list[str] = Field(alias="defaultOutputModes")
     skills: list[AgentCardSkill] = []
-    streaming: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -621,6 +832,25 @@ class PolicyMcpServer(BaseModel):
     deployment: str | None = None
     urn: str | None = None
     allowed_tools: list[str] | None = None
+
+
+class PolicyDataAccess(BaseModel):
+    """에이전트가 접근하도록 등록된 데이터 (집행기가 이 밖의 접근을 막는 기준)."""
+
+    target_type: str  # datasource / dataset
+    name: str | None = None
+    urn: str | None = None  # 데이터셋 URN 또는 데이터 소스 식별 ID
+    access: str  # read / write / read_write
+
+
+class PolicyIdentity(BaseModel):
+    """에이전트가 실행할 때 쓰는 신원과 권한 범위 (TODO-021)."""
+
+    type: str | None = None
+    principal: str | None = None
+    provider: str | None = None
+    scopes: list[str] = []
+    on_behalf_of: bool = False
 
 
 class AIAgentPolicyBundle(BaseModel):
@@ -664,6 +894,13 @@ class AIAgentPolicyBundle(BaseModel):
     auth_method: str | None = None
     protocol: str | None = None
     endpoint: str | None = None
+
+    # --- 데이터 접근·실행 신원·위험 등급 (TODO-019·020·021) ---
+    data_access: list[PolicyDataAccess] = []
+    identity: PolicyIdentity | None = None
+    risk_tier: str | None = None
+    autonomy_level: str | None = None
+    log_retention_days: int | None = None
 
 
 # ---------------------------------------------------------------------------

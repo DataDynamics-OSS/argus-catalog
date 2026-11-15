@@ -60,3 +60,11 @@ class Comment(Base):
 
     # 소프트 삭제
     is_deleted = Column(Boolean, nullable=False, default=False)
+
+    # 오류 신고·개선 요청 처리 (TODO-096 4단계) — 데이터셋의 최상위 댓글 중 분류가 bug·suggestion 인 것만.
+    # 다른 댓글은 모두 NULL. 기한은 접수 때 설정(ai_ready_report_due_days)으로 정해 저장한다(설정을 바꿔도 기존 신고는 그대로).
+    status = Column(String(20))                       # OPEN · IN_PROGRESS · RESOLVED · REJECTED
+    due_at = Column(DateTime(timezone=True))          # 처리 기한
+    resolved_at = Column(DateTime(timezone=True))     # 해결·소명한 시각
+    resolution = Column(Text)                         # 처리 결과 또는 소명
+    handled_by = Column(String(100))                  # 상태를 마지막으로 바꾼 사용자

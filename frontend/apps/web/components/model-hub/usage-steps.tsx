@@ -1,5 +1,6 @@
 "use client"
 
+import { Tip } from "@/components/tip"
 import { useState } from "react"
 import { Check, Copy } from "lucide-react"
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
@@ -7,13 +8,14 @@ import { oneLight } from "react-syntax-highlighter/dist/esm/styles/prism"
 import { toast } from "@/lib/notify"
 
 import { Button } from "@workspace/ui/components/button"
+import { copyText } from "@/lib/clipboard"
 
 /** 복사 버튼이 붙은 가벼운 코드 블록 (높이는 내용에 맞춘다). */
 export function CodeSnippet({ code, language = "bash" }: { code: string; language?: string }) {
   const [copied, setCopied] = useState(false)
   async function copy() {
     try {
-      await navigator.clipboard.writeText(code)
+      await copyText(code)
       setCopied(true)
       window.setTimeout(() => setCopied(false), 1500)
     } catch {
@@ -22,13 +24,13 @@ export function CodeSnippet({ code, language = "bash" }: { code: string; languag
   }
   return (
     <div className="group relative rounded-md border bg-muted/30">
-      <Button
+      <Tip label="코드 복사"><Button
         variant="ghost" size="icon-sm"
         className="absolute right-1.5 top-1.5 h-7 w-7 opacity-60 group-hover:opacity-100"
-        onClick={copy} aria-label="코드 복사" title="복사"
+        onClick={copy} aria-label="코드 복사"
       >
         {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
-      </Button>
+      </Button></Tip>
       <SyntaxHighlighter
         language={language}
         style={oneLight}
@@ -58,7 +60,7 @@ export function UsageSteps({ steps }: { steps: UsageStep[] }) {
           <div className="min-w-0 space-y-2">
             <div>
               <h3 className="text-sm font-semibold">{s.title}</h3>
-              {s.description && <p className="mt-0.5 text-sm text-muted-foreground">{s.description}</p>}
+              {s.description && <p className="mt-0.5 text-sm">{s.description}</p>}
             </div>
             {s.code && <CodeSnippet code={s.code} language={s.language} />}
           </div>

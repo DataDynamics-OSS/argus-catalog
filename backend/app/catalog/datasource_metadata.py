@@ -699,6 +699,7 @@ DATASOURCE_METADATA = {
 DATASOURCE_ROLES: dict[str, str] = {
     "hive": "CATALOG",
     "iceberg-rest": "CATALOG",
+    "iceberg-hadoop": "CATALOG",
     "kudu": "CATALOG",
     "unity_catalog": "CATALOG",
     "impala": "ENGINE",

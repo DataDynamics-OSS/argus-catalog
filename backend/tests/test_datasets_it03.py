@@ -186,9 +186,24 @@ def test_external_avro_nullable_default_and_doc() -> None:
 
     avro = asyncio.run(run())
     assert avro["doc"] == "주문 원장"
+    # DEF-040 — 데이터소스 ID 의 '-' 를 그대로 두면 Java Avro·fastavro 가 거부한다
+    assert avro["namespace"] == "pg_1" and avro["name"] == "s_orders"
     f = {x["name"]: x for x in avro["fields"]}
     assert f["order_id"]["type"] == "int" and "default" not in f["order_id"]
     assert f["amount"]["type"][0] == "null" and f["amount"]["default"] is None
+
+
+def test_avro_names_follow_avro_spec() -> None:
+    """DEF-040 — 이름·네임스페이스는 [A-Za-z_][A-Za-z0-9_]* (화면 avro.ts 와 같은 규칙)."""
+    from app.external.service import avro_name, avro_namespace
+
+    assert avro_name("commerce.order_events") == "commerce_order_events"
+    assert avro_name("order-id") == "order_id"
+    assert avro_name("2026_sales") == "_2026_sales"
+    assert avro_name("") == "_"
+    assert avro_namespace("s3-1a1c0a9f9a98360d4") == "s3_1a1c0a9f9a98360d4"
+    assert avro_namespace("a-b.c d") == "a_b.c_d"
+    assert avro_namespace("") == "default"
 
 
 # ---------------------------------------------------------------------------

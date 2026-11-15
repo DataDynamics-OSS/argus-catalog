@@ -5,9 +5,10 @@
  *
  * All edits are local (in-memory) until the parent calls save.
  * This prevents accidental DB updates — the user must explicitly
- * click "Update" to persist changes.
+ * click "저장" to persist changes.
  */
 
+import { Tip } from "@/components/tip"
 import { useCallback, useContext, useEffect, useMemo, useRef, createContext } from "react"
 import { AgGridReact } from "ag-grid-react"
 import { AllCommunityModule, ModuleRegistry, type ColDef } from "ag-grid-community"
@@ -46,13 +47,13 @@ const DeleteContext = createContext<(key: string) => void>(() => {})
 function DeleteCellRenderer(props: { value: string }) {
   const onDelete = useContext(DeleteContext)
   return (
-    <button
+    <Tip label="필드 삭제"><button aria-label="필드 삭제"
       type="button"
       onClick={() => onDelete(props.value)}
       className="flex items-center justify-center w-full h-full text-muted-foreground hover:text-destructive transition-colors cursor-pointer"
     >
       <Trash2 className="h-3.5 w-3.5" />
-    </button>
+    </button></Tip>
   )
 }
 
@@ -91,20 +92,20 @@ export function SchemaEditGrid({ fields, onChange, dataTypeOptions = [] }: Schem
       cellStyle: { color: "#9ca3af", textAlign: "right" },
     },
     {
-      headerName: "Field *",
+      headerName: "필드 *",
       field: "field_path",
       minWidth: 140,
       editable: true,
       cellStyle: { fontWeight: 500 },
     },
     {
-      headerName: "Logical Name",
+      headerName: "논리명",
       field: "display_name",
       minWidth: 140,
       editable: true,
     },
     {
-      headerName: "Type *",
+      headerName: "타입 *",
       field: "field_type",
       width: 120,
       editable: true,
@@ -112,7 +113,7 @@ export function SchemaEditGrid({ fields, onChange, dataTypeOptions = [] }: Schem
       cellEditorParams: { values: typeValues },
     },
     {
-      headerName: "Native Type",
+      headerName: "네이티브 타입",
       field: "native_type",
       width: 130,
       editable: true,
@@ -128,7 +129,7 @@ export function SchemaEditGrid({ fields, onChange, dataTypeOptions = [] }: Schem
       cellStyle: { textAlign: "center" },
     },
     {
-      headerName: "Unique",
+      headerName: "고유",
       field: "is_unique",
       width: 70,
       editable: true,
@@ -138,7 +139,7 @@ export function SchemaEditGrid({ fields, onChange, dataTypeOptions = [] }: Schem
       cellStyle: { textAlign: "center" },
     },
     {
-      headerName: "Index",
+      headerName: "인덱스",
       field: "is_indexed",
       width: 60,
       editable: false,
@@ -146,7 +147,7 @@ export function SchemaEditGrid({ fields, onChange, dataTypeOptions = [] }: Schem
       cellStyle: { textAlign: "center", color: "#9ca3af" },
     },
     {
-      headerName: "Partition",
+      headerName: "파티션",
       field: "is_partition_key",
       width: 75,
       editable: true,
@@ -156,7 +157,7 @@ export function SchemaEditGrid({ fields, onChange, dataTypeOptions = [] }: Schem
       cellStyle: { textAlign: "center" },
     },
     {
-      headerName: "Nullable",
+      headerName: "Null",
       field: "nullable",
       width: 80,
       editable: true,
@@ -165,7 +166,7 @@ export function SchemaEditGrid({ fields, onChange, dataTypeOptions = [] }: Schem
       cellRenderer: (p: { value: string }) => p.value === "true" ? "Yes" : "No",
     },
     {
-      headerName: "Description",
+      headerName: "설명",
       field: "description",
       minWidth: 200,
       flex: 1,
@@ -247,7 +248,7 @@ export function SchemaEditGrid({ fields, onChange, dataTypeOptions = [] }: Schem
       </div>
       <Button variant="outline" size="sm" onClick={addField}>
         <Plus className="mr-1 h-3.5 w-3.5" />
-        Add Field
+        필드 추가
       </Button>
     </div>
     </DeleteContext.Provider>

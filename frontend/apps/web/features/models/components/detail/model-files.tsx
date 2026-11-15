@@ -11,6 +11,7 @@ import {
 import { LocalFilesystemBrowser } from "@/components/local-filesystem-browser"
 import { createFilesystemDataSource } from "@/features/filesystem/api"
 import { useAuth } from "@/features/auth"
+import { usePermissions } from "@/features/permissions/use-permissions"
 
 import { filesHref } from "./shared"
 
@@ -29,6 +30,8 @@ export function ModelFilesLink({
   variant?: "button" | "link"
 }) {
   const isAdmin = !!useAuth().user?.is_admin
+  // 내려받기는 역할의 기능 권한 models.download(서버와 같은 기준, TODO-122) — 보기는 그대로
+  const canDownload = usePermissions().canUseFeature("models.download")
   const [open, setOpen] = useState(false)
   const label = variant === "button" ? "파일 보기" : "파일"
   const icon = <FolderOpen className={variant === "button" ? "mr-1.5 h-3.5 w-3.5" : "h-3 w-3"} />
@@ -60,14 +63,14 @@ export function ModelFilesLink({
           {icon}{label}
         </button>
       )}
-      {open && <ModelFilesDialog path={path} title={title} onOpenChange={setOpen} />}
+      {open && <ModelFilesDialog path={path} title={title} canDownload={canDownload} onOpenChange={setOpen} />}
     </>
   )
 }
 
 function ModelFilesDialog({
-  path, title, onOpenChange,
-}: { path: string; title: string; onOpenChange: (open: boolean) => void }) {
+  path, title, canDownload, onOpenChange,
+}: { path: string; title: string; canDownload: boolean; onOpenChange: (open: boolean) => void }) {
   const dataSource = useMemo(() => createFilesystemDataSource("model-artifacts"), [])
   return (
     <Dialog open onOpenChange={onOpenChange}>
@@ -83,6 +86,7 @@ function ModelFilesDialog({
           rootPath={path}
           dataSource={dataSource}
           readOnly
+          canDownload={canDownload}
         />
       </DialogContent>
     </Dialog>

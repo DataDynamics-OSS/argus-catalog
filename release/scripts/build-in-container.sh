@@ -112,6 +112,10 @@ build_web() {
   corepack enable
   rm -rf "$fe"
   rsync -a --exclude node_modules --exclude .next --exclude .turbo "$SRC/frontend/" "$fe/"
+  log "web: 사용자 매뉴얼(도움말 /manual/) 빌드"
+  rm -rf "$WORK/docs"
+  rsync -a --exclude node_modules --exclude build --exclude .antora-cache --exclude pdf/fonts "$SRC/docs/" "$WORK/docs/"
+  (export npm_config_cache="$CACHE/npm"; "$WORK/docs/tools/build-web-manual.sh" "$fe/apps/web/public/manual")
   log "web: pnpm install ($(node --version))"
   (cd "$fe" && pnpm config set store-dir "$CACHE/pnpm-store" >/dev/null && pnpm install --frozen-lockfile --reporter=silent)
   log "web: next build (standalone)"
@@ -140,8 +144,8 @@ build_metadata_sync() {
   wheelhouse "$st/opt/wheels" pip \
     "$e/argus-catalog-sqlglot-impala" "$e/argus-sql-parse" "$e/argus-relationship-analyzer" \
     "$e/argus-catalog-metadata-sync[trino,oracle,mssql,iceberg,kerberos]"
-  cp "$SRC"/extensions/argus-catalog-metadata-sync/packaging/config/config.yml \
-     "$SRC"/extensions/argus-catalog-metadata-sync/packaging/config/config.properties "$st/conf/"
+  cp "$SRC"/extensions/argus-catalog-metadata-sync/config/config.yml \
+     "$SRC"/extensions/argus-catalog-metadata-sync/config/config.properties "$st/conf/"
 }
 
 # ------------------------------------------------------------------ query-service

@@ -50,7 +50,7 @@ import { PasswordInput } from "@/components/password-input"
 import { SelectDropdown } from "@/components/select-dropdown"
 import { useAuth } from "@/features/auth"
 import { changeMyPassword, changeUserRole, checkUserExists, createUser, modifyUser } from "../api"
-import { roles } from "../data/data"
+import { useRoleOptions } from "../use-role-options"
 import { type User } from "../data/schema"
 import { useUsersOptional } from "./users-provider"
 
@@ -175,8 +175,15 @@ export function UsersActionDialog({
   const isEdit = !!currentRow
   // Keycloak 모드: 이름·이메일·소속·역할·비밀번호는 Keycloak 이 원천(로그인마다 덮어씀, 서버도 400)
   // → 수정 화면에서는 전화번호만 바꾼다
-  const { authType, applyTokens } = useAuth()
+  const { authType, applyTokens, user } = useAuth()
   const synced = isEdit && authType === "keycloak"
+  // 역할 변경은 관리자만(서버도 관리자 전용). 사용자 관리를 위임받은 사람은 수정 화면에서 역할을 바꾸지 못하고,
+  // 추가할 때도 관리자 역할은 고를 수 없다(서버 403, TODO-123).
+  const isAdmin = !!user?.is_admin
+  const showRole = !hideRole && (isAdmin || !isEdit)
+  // 기본 역할 + 사용자 정의 역할(TODO-124)
+  const roleOptions = useRoleOptions()
+  const roleItems = roleOptions.filter(({ value }) => isAdmin || value !== "argus-admin")
   const usersCtx = useUsersOptional()
   const refreshUsers = usersCtx?.refreshUsers
 
@@ -317,7 +324,7 @@ export function UsersActionDialog({
           phone_number: values.phoneNumber,
         })
         // Change role if it was modified (skip in hideRole mode)
-        if (!hideRole && values.role && values.role !== currentRow.role) {
+        if (showRole && values.role && values.role !== currentRow.role) {
           await changeUserRole(currentRow.id, values.role)
         }
       } else {
@@ -530,7 +537,7 @@ export function UsersActionDialog({
               />
 
               {/* Phone Number and Role side by side */}
-              <div className={hideRole ? "" : "grid grid-cols-2 gap-4"}>
+              <div className={showRole ? "grid grid-cols-2 gap-4" : ""}>
                 <FormField
                   control={form.control}
                   name="phoneNumber"
@@ -544,7 +551,7 @@ export function UsersActionDialog({
                     </FormItem>
                   )}
                 />
-                {!hideRole && !synced && (
+                {showRole && !synced && (
                   <FormField
                     control={form.control}
                     name="role"
@@ -556,7 +563,7 @@ export function UsersActionDialog({
                           onValueChange={field.onChange}
                           placeholder="역할 선택"
                           className="w-full"
-                          items={roles.map(({ label, value }) => ({ label, value }))}
+                          items={roleItems.map(({ label, value }) => ({ label, value }))}
                         />
                         <FormMessage />
                       </FormItem>

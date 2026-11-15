@@ -51,7 +51,7 @@ function EntryIcon({ entry, className }: { entry: FilesystemEntry; className?: s
 function PropertyRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-start gap-4 py-2 border-b last:border-b-0">
-      <span className="text-sm font-medium text-muted-foreground w-32 shrink-0">
+      <span className="text-sm font-medium w-32 shrink-0">
         {label}
       </span>
       <span className="text-sm break-all">{value}</span>

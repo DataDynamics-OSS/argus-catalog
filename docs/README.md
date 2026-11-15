@@ -72,6 +72,9 @@ content:
 
 기본 저장소에서 브랜치를 체크아웃한 경우에는 기존 `make build`를 그대로 사용합니다.
 
+워크트리나 `.git` 이 없는 곳에서는 `tools/build-web-manual.sh <출력 폴더>` 로도 빌드할 수 있습니다.
+docs/ 를 임시 git 저장소로 복사해 빌드하므로 커밋하지 않은 수정도 반영됩니다(`make site-for-web` 이 이 스크립트를 씁니다).
+
 ## 디렉토리
 
 ```
@@ -111,6 +114,18 @@ docs/
 2. `modules/ROOT/nav.adoc` 에 한 줄 추가 (`** xref:<category>/<slug>.adoc[제목]`).
 3. PDF 에 포함하려면 `pdf/argus-catalog-book.adoc` 의 `include::` 에 등록.
 4. `make build` / `make pdf` 로 산출물 갱신.
+
+## 웹 UI 도움말과의 연결
+
+웹 UI 헤더의 `?` 아이콘(F1)은 지금 화면에 맞는 매뉴얼 쪽을 별도 창으로 엽니다.
+웹 빌드가 이 매뉴얼을 `frontend/apps/web/public/manual/` 에 넣어 `/manual/` 로 서빙합니다(`make site-for-web`).
+화면 → 쪽·절 대응은 `frontend/apps/web/features/help/topics.ts` 에 있고, 그 테스트가 쪽과 앵커가 있는지 검사합니다.
+
+- 도움말이 가리키는 절은 제목 끝에 `[[help-<주제>]]` 앵커를 답니다(예: `== 품질 탭 화면 구성 [[help-dataset-quality]]`).
+  이 id 는 바꾸거나 지우지 않습니다. 절에 `[[_…]]` 같은 명시 id 가 이미 있으면 `help-` 는 보조 id 가 되고,
+  없으면 `help-` 가 그 절의 id 가 됩니다(자동 id `_제목` 대신).
+- 쪽 이름(파일 경로)을 바꾸거나 쪽을 지우면 `topics.ts` 도 함께 고칩니다.
+- 화면을 새로 만들면 `topics.ts` 에 주제를 더하고, 필요하면 이 매뉴얼에 쪽·절을 보탭니다.
 
 ## 스크린샷 추가
 

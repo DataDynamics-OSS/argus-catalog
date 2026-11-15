@@ -1,22 +1,32 @@
 "use client"
 
+import { Tip } from "@/components/tip"
 import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import {
-  BookOpen, Box, ChevronDown, Code2, Grid3X3, Import, List, Loader2, Plus, RefreshCw, Search, X,
+  BookOpen,
+  Box,
+  ChevronDown,
+  Code2,
+  Grid3X3,
+  Import,
+  List,
+  Loader2,
+  Plus,
+  RefreshCw,
+  X,
 } from "lucide-react"
 
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
-import { Card, CardContent } from "@workspace/ui/components/card"
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
-import { Input } from "@workspace/ui/components/input"
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@workspace/ui/components/select"
+import { MenuItemContent } from "@/components/menu-item-content"
 import { useAuth } from "@/features/auth"
 
 import {
@@ -32,6 +42,10 @@ import { OciImportDialog } from "./oci-import-dialog"
 import { OciModelDialog } from "./oci-model-dialog"
 import { errorMessage } from "@/lib/notify"
 import { usePermissions } from "@/features/permissions/use-permissions"
+import { EntityCard, EntityCardGrid, EntityCardText } from "@/components/entity-card"
+import { LinkMenuItems } from "@/components/link-menu-items"
+import { SOURCE_LABELS } from "@/features/oci-hub/oci-hub-dashboard"
+import { SearchInput } from "@/components/search-input"
 
 const PAGE_SIZE = 12
 
@@ -39,48 +53,53 @@ export function ociDetailHref(name: string): string {
   return `/dashboard/oci-hub/${encodeURIComponent(name)}`
 }
 
-function ModelCard({ model }: { model: OciModelSummary }) {
-  const kind = [model.task, model.framework].filter(Boolean).join(" · ")
-  const tags = model.tags ?? []
+/**
+ * 모델 카드(TODO-117) — 데이터셋 · AI 에이전트 · MCP · API 카드와 같은 틀(`EntityCard`).
+ * 경로 자리에 출처, 이름(표시 이름은 크게) · 등록 이름, 상태 · 태스크 · 프레임워크, 설명 두 줄, 태그, 바닥 줄에 버전 · 크기 · 다운로드와 수정 시점.
+ */
+export function ModelCard({ model: m }: { model: OciModelSummary }) {
+  const href = ociDetailHref(m.name)
+  const title = m.display_name || m.name
+  const kind = [m.task, m.framework, m.language].filter(Boolean).join(" · ")
+  const tags = m.tags ?? []
   return (
-    <Link href={ociDetailHref(model.name)} className="block">
-      <Card className="h-full gap-0 py-0 transition-colors hover:border-primary/40 hover:bg-muted/30">
-        <CardContent className="flex h-full flex-col gap-2 px-4 pt-3.5 pb-3">
-          <div className="flex items-start gap-2">
-            <Box className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
-            <div className="min-w-0 flex-1">
-              <h3 className="truncate font-semibold leading-tight" title={model.display_name || model.name}>
-                {model.display_name || model.name}
-              </h3>
-              <p className="truncate text-xs text-muted-foreground">{kind || model.name}</p>
-            </div>
-            <StatusBadge status={model.status} />
-          </div>
-          <p className="min-h-[2.5rem] text-sm text-muted-foreground line-clamp-2">
-            {model.description || <span className="italic text-muted-foreground/60">설명이 없습니다.</span>}
-          </p>
-          {tags.length > 0 && (
-            <div className="flex flex-wrap gap-1">
-              {tags.slice(0, 3).map((t) => (
-                <Badge key={t.id} variant="outline" className="text-[11px]" style={{ borderColor: t.color, color: t.color }}>
-                  {t.name}
-                </Badge>
-              ))}
-              {tags.length > 3 && <span className="text-[11px] text-muted-foreground">+{tags.length - 3}</span>}
-            </div>
-          )}
-          <div className="mt-auto flex items-center gap-2 border-t pt-2 text-xs text-muted-foreground">
-            <SourceBadge sourceType={model.source_type} />
-            <span className="truncate">
-              {model.version_count > 0
-                ? `v${model.version_count} · ${formatSize(model.total_size)} · 다운로드 ${model.download_count.toLocaleString()}회`
-                : "버전 없음"}
-            </span>
-            <span className="ml-auto shrink-0">{timeAgo(model.updated_at)}</span>
-          </div>
-        </CardContent>
-      </Card>
-    </Link>
+    <EntityCard
+      crumb={m.source_type ? (SOURCE_LABELS[m.source_type] ?? m.source_type) : null}
+      title={title}
+      prominent={!!m.display_name}
+      identifier={m.display_name ? m.name : null}
+      href={href}
+      menuLabel={`${title} 메뉴`}
+      menu={<LinkMenuItems href={href} />}
+      footer={
+        <>
+          <span className="truncate tabular-nums">
+            {m.version_count > 0
+              ? `버전 v${m.version_count} · ${formatSize(m.total_size)} · 다운로드 ${m.download_count.toLocaleString()}회`
+              : <span className="text-muted-foreground">버전 없음</span>}
+          </span>
+          <span className="ml-auto shrink-0">{timeAgo(m.updated_at)} 수정</span>
+        </>
+      }
+    >
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+        <StatusBadge status={m.status} />
+        {kind && <span>{kind}</span>}
+      </div>
+
+      <EntityCardText text={m.description} />
+
+      {tags.length > 0 && (
+        <div className="flex min-w-0 items-center gap-1">
+          {tags.slice(0, 3).map((t) => (
+            <Badge key={t.id} size="sm" variant="outline" className="block min-w-0 shrink truncate" style={{ borderColor: t.color, color: t.color }}>
+              {t.name}
+            </Badge>
+          ))}
+          {tags.length > 3 && <span className="shrink-0 text-[11px] tabular-nums">+{tags.length - 3}</span>}
+        </div>
+      )}
+    </EntityCard>
   )
 }
 
@@ -195,17 +214,18 @@ export function OciModelList() {
     <div className="space-y-4">
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-2">
-        <div className="relative w-56">
-          <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="이름·표시 이름·설명 검색"
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") setParams({ q: searchInput.trim() || null }) }}
-            className="pl-8 h-9"
-            aria-label="모델 검색"
-          />
-        </div>
+        <SearchInput
+          className="w-56"
+          placeholder="이름·표시 이름·설명 검색…"
+          value={searchInput}
+          onValueChange={setSearchInput}
+          onSearch={() => setParams({ q: searchInput.trim() || null })}
+          onClear={() => {
+            setSearchInput("")
+            setParams({ q: null })
+          }}
+          aria-label="모델 검색"
+        />
         <FacetSelect label="태스크" value={task} options={facets.tasks} onChange={(v) => setParams({ task: v || null })} />
         <FacetSelect label="프레임워크" value={framework} options={facets.frameworks} onChange={(v) => setParams({ framework: v || null })} />
         <FacetSelect
@@ -222,22 +242,22 @@ export function OciModelList() {
           </Button>
         )}
         <div className="flex items-center gap-2 ml-auto">
-          <Button variant="ghost" size="icon-sm" onClick={reload} aria-label="새로고침" title="새로고침">
+          <Tip label="새로고침"><Button variant="ghost" size="icon-sm" onClick={reload} aria-label="새로고침">
             <RefreshCw className="h-3.5 w-3.5" />
-          </Button>
+          </Button></Tip>
           <div className="flex items-center border rounded-md">
-            <Button
+            <Tip label="카드 보기"><Button
               variant={view === "card" ? "secondary" : "ghost"} size="icon-sm"
               onClick={() => setParams({ view: null, page: params.get("page") })} aria-label="카드 보기"
             >
               <Grid3X3 className="h-3.5 w-3.5" />
-            </Button>
-            <Button
+            </Button></Tip>
+            <Tip label="목록 보기"><Button
               variant={view === "list" ? "secondary" : "ghost"} size="icon-sm"
               onClick={() => setParams({ view: "list", page: params.get("page") })} aria-label="목록 보기"
             >
               <List className="h-3.5 w-3.5" />
-            </Button>
+            </Button></Tip>
           </div>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -247,29 +267,27 @@ export function OciModelList() {
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem onSelect={() => setGuide("import")}>
-                <Import className="h-4 w-4" />모델 올리기 (push·가져오기)
+                <MenuItemContent icon={Import} label="모델 올리기" hint="push 또는 가져오기" />
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => setGuide("use")}>
-                <Code2 className="h-4 w-4" />모델 내려받아 쓰기
+                <MenuItemContent icon={Code2} label="모델 내려받아 쓰기" hint="pull · 코드에서 불러오기" />
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          {user && (user.is_admin || canUseFeature("oci.register")) && (
+          {user && canUseFeature("oci.register") && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button size="sm">
-                  <Plus className="h-4 w-4 mr-1.5" />모델 추가<ChevronDown className="h-3.5 w-3.5 ml-1" />
+                  <Plus className="h-4 w-4 mr-1.5" />모델 등록<ChevronDown className="h-3.5 w-3.5 ml-1" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-64">
-                <DropdownMenuItem onSelect={() => setCreateOpen(true)} className="flex-col items-start gap-0.5">
-                  <span className="flex items-center gap-2 font-medium"><Plus className="h-4 w-4" />직접 등록</span>
-                  <span className="pl-6 text-xs text-muted-foreground">빈 모델을 만들고 CLI·SDK 로 파일 push</span>
+                <DropdownMenuItem onSelect={() => setCreateOpen(true)}>
+                  <MenuItemContent icon={Plus} label="직접 등록" hint="빈 모델을 만들고 CLI·SDK 로 파일을 올립니다" />
                 </DropdownMenuItem>
-                {user.is_admin && (
-                  <DropdownMenuItem onSelect={() => setImportOpen(true)} className="flex-col items-start gap-0.5">
-                    <span className="flex items-center gap-2 font-medium"><Import className="h-4 w-4" />HuggingFace 에서 가져오기</span>
-                    <span className="pl-6 text-xs text-muted-foreground">서버가 백그라운드로 내려받음 (관리자)</span>
+                {canUseFeature("oci.import-hf") && (
+                  <DropdownMenuItem onSelect={() => setImportOpen(true)}>
+                    <MenuItemContent icon={Import} label="HuggingFace 에서 가져오기" hint="서버가 백그라운드로 내려받습니다" />
                   </DropdownMenuItem>
                 )}
               </DropdownMenuContent>
@@ -279,7 +297,7 @@ export function OciModelList() {
       </div>
 
       {!loading && !error && (
-        <p className="text-sm text-muted-foreground">
+        <p className="text-sm">
           {filtered ? `검색 결과 ${total.toLocaleString()}개` : `전체 ${total.toLocaleString()}개`}
         </p>
       )}
@@ -310,12 +328,12 @@ export function OciModelList() {
             <>
               <p>아직 모델이 없습니다.</p>
               <div className="flex justify-center gap-2">
-                {user?.is_admin && (
+                {canUseFeature("oci.import-hf") && (
                   <Button size="sm" onClick={() => setImportOpen(true)}>
                     <Import className="h-4 w-4 mr-1.5" />HuggingFace 에서 가져오기
                   </Button>
                 )}
-                {user && (
+                {user && canUseFeature("oci.register") && (
                   <Button size="sm" variant="outline" onClick={() => setCreateOpen(true)}>
                     <Plus className="h-4 w-4 mr-1.5" />모델 등록
                   </Button>
@@ -328,9 +346,9 @@ export function OciModelList() {
           )}
         </div>
       ) : view === "card" ? (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <EntityCardGrid>
           {models.map((m) => <ModelCard key={m.id} model={m} />)}
-        </div>
+        </EntityCardGrid>
       ) : (
         <div className="border rounded-md overflow-auto">
           <table className="w-full text-sm table-fixed">
@@ -364,14 +382,14 @@ export function OciModelList() {
                       <span className="font-medium truncate" title={m.display_name || m.name}>{m.display_name || m.name}</span>
                     </Link>
                   </td>
-                  <td className="px-3 py-2 align-top text-muted-foreground whitespace-normal break-words">{m.description || "-"}</td>
+                  <td className="px-3 py-2 align-top whitespace-normal break-words">{m.description || "-"}</td>
                   <td className="px-3 py-2 align-top text-center">{m.task || "-"}</td>
                   <td className="px-3 py-2 align-top text-center">{m.framework || "-"}</td>
                   <td className="px-3 py-2 align-top text-center"><StatusBadge status={m.status} /></td>
                   <td className="px-3 py-2 align-top text-center">{formatSize(m.total_size)}</td>
                   <td className="px-3 py-2 align-top text-center">{versionLabel(m.version_count)}</td>
                   <td className="px-3 py-2 align-top text-center"><SourceBadge sourceType={m.source_type} /></td>
-                  <td className="px-3 py-2 align-top text-center text-muted-foreground">{timeAgo(m.updated_at)}</td>
+                  <td className="px-3 py-2 align-top text-center">{timeAgo(m.updated_at)}</td>
                 </tr>
               ))}
             </tbody>

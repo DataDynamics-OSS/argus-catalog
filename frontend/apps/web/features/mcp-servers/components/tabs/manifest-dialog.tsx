@@ -4,6 +4,7 @@
  * manifest 가져오기 (설계 §6.2) — 서버 정의(정적 manifest, 정의만) 또는 배포(정의 + 노출·그룹·범위 관측값).
  */
 
+import { CodeEditor } from "@/components/code-editor"
 import { useEffect, useState } from "react"
 import { Loader2 } from "lucide-react"
 import { notifyError, toast } from "@/lib/notify"
@@ -17,7 +18,6 @@ import {
   DialogTitle,
 } from "@workspace/ui/components/dialog"
 import { Input } from "@workspace/ui/components/input"
-import { Textarea } from "@workspace/ui/components/textarea"
 
 import { importDeploymentManifest, importServerManifest } from "../../api"
 import type { McpCollectResult } from "../../data/schema"
@@ -71,10 +71,10 @@ export function ManifestImportDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-3xl">
         <DialogHeader>
-          <DialogTitle>manifest 가져오기 — {target === "server" ? "서버 정의" : "배포"}</DialogTitle>
+          <DialogTitle>매니페스트 가져오기 — {target === "server" ? "서버 정의" : "배포"}</DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs">
             {target === "server"
               ? "릴리즈 산출물(mcp-manifest.json)로 도구·그룹 정의를 갱신합니다. 배포별 노출 상태는 바꾸지 않습니다."
               : "서버가 보고한 manifest(GET /api/v1/manifest 응답 또는 파일)로 정의와 이 배포의 노출·그룹 on/off·리소스 범위·limits·보안 경고를 갱신합니다."}
@@ -84,11 +84,11 @@ export function ManifestImportDialog({
             const f = e.target.files?.[0]
             if (f) { setContent(await f.text()); setPreview(null) }
           }} />
-          <Textarea value={content} onChange={(e) => { setContent(e.target.value); setPreview(null) }} rows={12}
-            className="font-mono text-xs" placeholder={EXAMPLE} />
+          <CodeEditor language="json" aria-label="manifest 내용" value={content} onChange={(v) => { setContent(v); setPreview(null) }}
+            minHeight={240} placeholder={EXAMPLE} />
           {preview && (
             <div className="rounded-md border p-3">
-              <div className="mb-2 text-xs text-muted-foreground">
+              <div className="mb-2 text-xs">
                 도구 {preview.tool_count}개{target === "deployment" ? ` · 노출 ${preview.exposed_count}개` : ""}
               </div>
               {preview.diff && <DiffView diff={preview.diff} />}

@@ -1,16 +1,18 @@
 "use client"
 
+import { Tip } from "@/components/tip"
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react"
 import { AgGridReact } from "ag-grid-react"
 import {
   AllCommunityModule, ModuleRegistry,
-  type CellValueChangedEvent, type ColDef, type ICellRendererParams,
+  type CellValueChangedEvent, type ColDef, type ICellRendererParams, type RowSelectionOptions,
 } from "ag-grid-community"
-import { errorMessage, toast } from "@/lib/notify"
+import { errorMessage, toast, notifyError } from "@/lib/notify"
 import { DashboardHeader } from "@/components/dashboard-header"
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { Card, CardContent } from "@workspace/ui/components/card"
 import { Badge } from "@workspace/ui/components/badge"
+import { StatusBadge } from "@workspace/ui/components/status-badge"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 import { Label } from "@workspace/ui/components/label"
@@ -21,11 +23,21 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@workspace/ui/components/select"
 import {
-  BookOpen, ChevronLeft, ChevronRight, FileCode, Grid3X3, Hash, History, Pencil, Plus, Search, Trash2, Type,
+  BookOpen,
+  ChevronLeft,
+  ChevronRight,
+  FileCode,
+  Grid3X3,
+  Hash,
+  History,
+  Pencil,
+  Plus,
+  Trash2,
+  Type,
 } from "lucide-react"
-import { useAuth } from "@/features/auth"
 import { authFetch, throwOnError } from "@/features/auth/auth-fetch"
 import { usePermissions } from "@/features/permissions/use-permissions"
+import { SearchInput } from "@/components/search-input"
 
 ModuleRegistry.registerModules([AllCommunityModule])
 
@@ -33,6 +45,9 @@ const BASE = "/api/v1/standards"
 const STANDARDS_EDIT_FEATURE = "standards.edit"
 const STATUS_VALUES = ["ACTIVE", "INACTIVE", "DEPRECATED"]
 const STATUS_LABEL: Record<string, string> = { ACTIVE: "활성", INACTIVE: "비활성", DEPRECATED: "사용중지" }
+// 코드 그룹 단일 선택 — 체크박스 없이 행 클릭으로 선택(v32.2 이전 rowSelection="single" 과 같은 동작).
+// singleRow 모드는 checkboxes 기본값이 true 라 명시적으로 끈다.
+const SINGLE_ROW_SELECTION: RowSelectionOptions = { mode: "singleRow", checkboxes: false, enableClickSelection: true }
 const GRID_STYLE = { "--ag-font-family": "var(--font-sans)", "--ag-font-size": "13px" } as React.CSSProperties
 
 // ---------------------------------------------------------------------------
@@ -56,9 +71,8 @@ async function api<T = unknown>(url: string, fallback: string, init?: RequestIni
 
 /** 표준 사전 편집 — admin 이거나 standards.edit 기능 권한이 명시적으로 허용된 역할. */
 function useCanEditStandards(): boolean {
-  const { user } = useAuth()
-  const { isFeatureGranted } = usePermissions()
-  return !!user?.is_admin || isFeatureGranted(STANDARDS_EDIT_FEATURE)
+  const { canUseFeature } = usePermissions()
+  return canUseFeature(STANDARDS_EDIT_FEATURE)
 }
 
 function useDebounced<T>(value: T, ms = 300): T {
@@ -124,7 +138,7 @@ async function saveCellEdit(event: CellValueChangedEvent, url: string): Promise<
     return true
   } catch (e) {
     event.node.setData({ ...data, [field]: oldValue })
-    toast.error(errMsg(e, "변경 내용을 저장하지 못했습니다."))
+    notifyError(e, "변경 내용을 저장하지 못했습니다.")
     return false
   }
 }
@@ -163,7 +177,7 @@ function useConfirm() {
           await opts.run()
           setOpts(null)
         } catch (e) {
-          toast.error(errMsg(e, "삭제하지 못했습니다."))
+          notifyError(e, `${opts.title.replace(/ 삭제$/, "")}을(를) 삭제하지 못했습니다.`)
         } finally {
           setBusy(false)
         }
@@ -194,14 +208,14 @@ const DeleteCtx = createContext<(row: { id: number }) => void>(() => {})
 function DeleteRenderer(props: ICellRendererParams) {
   const onDelete = useContext(DeleteCtx)
   return (
-    <button
+    <Tip label="삭제"><button
       type="button"
       aria-label="삭제"
       onClick={() => props.data && onDelete(props.data)}
       className="flex items-center justify-center w-full h-full text-muted-foreground hover:text-destructive transition-colors cursor-pointer"
     >
       <Trash2 className="h-3.5 w-3.5" />
-    </button>
+    </button></Tip>
   )
 }
 
@@ -346,7 +360,7 @@ export default function StandardsPage() {
               </p>
               {canEdit && (
                 <Button size="sm" onClick={() => setDictDialog({ mode: "create" })}>
-                  <Plus className="h-3.5 w-3.5 mr-1" /> 새 사전
+                  <Plus className="h-3.5 w-3.5 mr-1" /> 사전 추가
                 </Button>
               )}
             </CardContent>
@@ -361,14 +375,14 @@ export default function StandardsPage() {
               onValueChange={(v) => setSelectedDictId(Number(v))}
             >
               <SelectTrigger className="w-72 h-9">
-                <SelectValue placeholder="사전 선택..." />
+                <SelectValue placeholder="사전 선택…" />
               </SelectTrigger>
               <SelectContent>
                 {dictionaries.map((d) => (
                   <SelectItem key={d.id} value={String(d.id)}>
                     {d.dict_name}
-                    {d.version && <span className="text-muted-foreground ml-1">({d.version})</span>}
-                    {d.status !== "ACTIVE" && <span className="text-muted-foreground ml-1">· {STATUS_LABEL[d.status] ?? d.status}</span>}
+                    {d.version && <span className="ml-1">({d.version})</span>}
+                    {d.status !== "ACTIVE" && <span className="ml-1">· {STATUS_LABEL[d.status] ?? d.status}</span>}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -386,13 +400,13 @@ export default function StandardsPage() {
                   </>
                 )}
                 <Button variant="outline" size="sm" onClick={() => setDictDialog({ mode: "create" })}>
-                  <Plus className="h-3.5 w-3.5 mr-1" /> 새 사전
+                  <Plus className="h-3.5 w-3.5 mr-1" /> 사전 추가
                 </Button>
               </>
             )}
 
             {selectedDict && (
-              <div className="ml-auto flex items-center gap-3 text-sm text-muted-foreground">
+              <div className="ml-auto flex items-center gap-3 text-sm">
                 <span>단어: <span className="text-foreground font-medium">{selectedDict.word_count}</span></span>
                 <span>도메인: <span className="text-foreground font-medium">{selectedDict.domain_count}</span></span>
                 <span>용어: <span className="text-foreground font-medium">{selectedDict.term_count}</span></span>
@@ -402,7 +416,7 @@ export default function StandardsPage() {
           </div>
         )}
         {selectedDict?.description && (
-          <p className="text-sm text-muted-foreground -mt-2">{selectedDict.description}</p>
+          <p className="text-sm -mt-2">{selectedDict.description}</p>
         )}
 
         {selectedDictId && (
@@ -485,7 +499,7 @@ function DictionaryDialog({ state, onClose, onSaved }: {
       await onSaved(saved)
       onClose()
     } catch (e) {
-      toast.error(errMsg(e))
+      notifyError(e, editing ? "사전을 수정하지 못했습니다." : "사전을 만들지 못했습니다.")
     } finally {
       setSaving(false)
     }
@@ -494,7 +508,7 @@ function DictionaryDialog({ state, onClose, onSaved }: {
   return (
     <Dialog open={!!state} onOpenChange={(o) => { if (!o) onClose() }}>
       <DialogContent className="max-w-md">
-        <DialogHeader><DialogTitle>{editing ? "사전 편집" : "새 사전"}</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle>{editing ? "사전 편집" : "사전 추가"}</DialogTitle></DialogHeader>
         <div className="space-y-3">
           <div><Label className="text-xs">이름</Label><Input value={name} maxLength={200} onChange={(e) => setName(e.target.value)} className="h-9" /></div>
           <div><Label className="text-xs">버전</Label><Input value={version} maxLength={50} onChange={(e) => setVersion(e.target.value)} placeholder="v1.0" className="h-9" /></div>
@@ -512,7 +526,7 @@ function DictionaryDialog({ state, onClose, onSaved }: {
           <div><Label className="text-xs">설명</Label><Textarea value={desc} onChange={(e) => setDesc(e.target.value)} rows={2} /></div>
           <div className="flex justify-end gap-2">
             <Button variant="outline" onClick={onClose} disabled={saving}>취소</Button>
-            <Button onClick={save} disabled={saving || !name.trim()}>{saving ? "저장 중..." : editing ? "저장" : "생성"}</Button>
+            <Button onClick={save} disabled={saving || !name.trim()}>{saving ? "저장 중…" : editing ? "저장" : "추가"}</Button>
           </div>
         </div>
       </DialogContent>
@@ -534,7 +548,7 @@ function WordsTab({ dictId, canEdit, onChanged }: TabProps) {
   const fetchWords = useCallback(async () => {
     try {
       setWords(await api<Word[]>(`${BASE}/words?dictionary_id=${dictId}`, "단어 목록을 불러오지 못했습니다."))
-    } catch (e) { toast.error(errMsg(e)) }
+    } catch (e) { notifyError(e, "단어 목록을 불러오지 못했습니다.") }
   }, [dictId])
   useEffect(() => { fetchWords() }, [fetchWords])
 
@@ -550,7 +564,7 @@ function WordsTab({ dictId, canEdit, onChanged }: TabProps) {
       await fetchWords()
       onChanged()
       focusNewRow(gridRef.current, w.id, "word_name")
-    } catch (e) { toast.error(errMsg(e)) }
+    } catch (e) { notifyError(e, "단어를 추가하지 못했습니다.") }
   }, [dictId, fetchWords, words, onChanged])
 
   const deleteWord = useCallback(async (row: { id: number }) => {
@@ -615,7 +629,7 @@ function WordsTab({ dictId, canEdit, onChanged }: TabProps) {
     <DeleteCtx.Provider value={deleteWord}>
       <div className="flex flex-col flex-1 min-h-0 h-full">
         <div className="flex items-center justify-between mb-3 flex-shrink-0">
-          <p className="text-sm text-muted-foreground">단어 {words.length}개</p>
+          <p className="text-sm">단어 {words.length}개</p>
           {canEdit && (
             <Button variant="outline" size="sm" onClick={addWord}>
               <Plus className="h-3.5 w-3.5 mr-1" />추가
@@ -662,7 +676,7 @@ function DomainsTab({ dictId, canEdit, onChanged }: TabProps) {
       ])
       setDomains(ds)
       setGroups(gs.map((g) => ({ id: g.id, group_name: g.group_name })))
-    } catch (e) { toast.error(errMsg(e)) }
+    } catch (e) { notifyError(e, "도메인 목록을 불러오지 못했습니다.") }
   }, [dictId])
   useEffect(() => { fetchDomains() }, [fetchDomains])
 
@@ -675,7 +689,7 @@ function DomainsTab({ dictId, canEdit, onChanged }: TabProps) {
       await fetchDomains()
       onChanged()
       focusNewRow(gridRef.current, d.id, "domain_name")
-    } catch (e) { toast.error(errMsg(e)) }
+    } catch (e) { notifyError(e, "도메인을 추가하지 못했습니다.") }
   }, [dictId, fetchDomains, domains, onChanged])
 
   const deleteDomain = useCallback(async (row: { id: number }) => {
@@ -732,7 +746,7 @@ function DomainsTab({ dictId, canEdit, onChanged }: TabProps) {
     <DeleteCtx.Provider value={deleteDomain}>
       <div className="flex flex-col flex-1 min-h-0 h-full">
         <div className="flex items-center justify-between mb-3 flex-shrink-0">
-          <p className="text-sm text-muted-foreground">도메인 {domains.length}개</p>
+          <p className="text-sm">도메인 {domains.length}개</p>
           {canEdit && <Button variant="outline" size="sm" onClick={addDomain}><Plus className="h-3.5 w-3.5 mr-1" />추가</Button>}
         </div>
         <div className="ag-theme-alpine flex-1 min-h-0" style={GRID_STYLE}>
@@ -766,7 +780,7 @@ function TermsTab({ dictId, canEdit, onChanged }: TabProps) {
     if (debouncedSearch) params.set("search", debouncedSearch)
     try {
       setTerms(await api<Term[]>(`${BASE}/terms?${params}`, "용어 목록을 불러오지 못했습니다."))
-    } catch (e) { toast.error(errMsg(e)) }
+    } catch (e) { notifyError(e, "용어 목록을 불러오지 못했습니다.") }
   }, [dictId, debouncedSearch])
   useEffect(() => { fetchTerms() }, [fetchTerms])
 
@@ -810,11 +824,10 @@ function TermsTab({ dictId, canEdit, onChanged }: TabProps) {
       cellEditorParams: { values: [null, ...domains.map((d) => d.id)] },
       valueFormatter: (p) => (p.value == null ? "" : domainNames.get(p.value) ?? p.data?.domain_name ?? `#${p.value}`),
     },
-    { headerName: "타입", field: "domain_data_type", width: 90, editable: false, cellStyle: { color: "#6b7280" } },
+    { headerName: "타입", field: "domain_data_type", width: 90, editable: false },
     {
       headerName: "구성 단어", field: "words", minWidth: 160, editable: false, sortable: false,
       valueFormatter: (p) => ((p.value as TermWord[] | undefined) ?? []).map((w) => w.word_name).join(" + "),
-      cellStyle: { color: "#6b7280", fontSize: "12px" },
     },
     { headerName: "매핑수", field: "mapping_count", width: 70, editable: false, cellStyle: { textAlign: "center" } },
     statusCol,
@@ -827,11 +840,8 @@ function TermsTab({ dictId, canEdit, onChanged }: TabProps) {
     <DeleteCtx.Provider value={deleteTerm}>
       <div className="flex flex-col flex-1 min-h-0 h-full">
         <div className="flex items-center gap-3 mb-3 flex-shrink-0">
-          <div className="relative flex-1">
-            <Search className="absolute left-2.5 top-2 h-4 w-4 text-muted-foreground" />
-            <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="용어명·물리명·영문명 검색..." className="h-8 pl-8 text-xs" />
-          </div>
-          <p className="text-sm text-muted-foreground">용어 {terms.length}개</p>
+          <SearchInput size="sm" className="flex-1" value={search} onValueChange={setSearch} placeholder="용어명·물리명·영문명 검색…" />
+          <p className="text-sm">용어 {terms.length}개</p>
           {canEdit && (
             <Button variant="outline" size="sm" onClick={() => setAddOpen(true)}>
               <Plus className="h-3.5 w-3.5 mr-1" />추가
@@ -890,7 +900,7 @@ function TermAddDialog({ open, onOpenChange, dictId, domains, onCreated }: {
       setPhysical(r.physical_name)
       setDomainId(r.recommended_domain ? String(r.recommended_domain.id) : "none")
     } catch (e) {
-      toast.error(errMsg(e))
+      notifyError(e, "용어명을 형태소 분석하지 못했습니다.")
     } finally {
       setAnalyzing(false)
     }
@@ -913,7 +923,7 @@ function TermAddDialog({ open, onOpenChange, dictId, domains, onCreated }: {
       await onCreated()
       onOpenChange(false)
     } catch (e) {
-      toast.error(errMsg(e))
+      notifyError(e, "용어를 저장하지 못했습니다.")
     } finally {
       setSaving(false)
     }
@@ -938,7 +948,7 @@ function TermAddDialog({ open, onOpenChange, dictId, domains, onCreated }: {
             </div>
             <div className="flex items-end">
               <Button onClick={analyze} disabled={analyzing || !termName.trim()} variant="outline" size="sm">
-                {analyzing ? "분석 중..." : "분석"}
+                {analyzing ? "분석 중…" : "분석"}
               </Button>
             </div>
           </div>
@@ -949,20 +959,20 @@ function TermAddDialog({ open, onOpenChange, dictId, domains, onCreated }: {
             <Card className="bg-muted/30">
               <CardContent className="p-4 space-y-3">
                 <div>
-                  <span className="text-xs text-muted-foreground">단어 분해</span>
+                  <span className="text-xs">단어 분해</span>
                   <div className="flex flex-wrap items-center gap-1 mt-1">
                     {analysis.words.map((w, i) => (
                       <span key={i} className="flex items-center gap-1">
-                        {i > 0 && <span className="text-muted-foreground">+</span>}
-                        <Badge variant={w.word_type === "SUFFIX" ? "secondary" : "outline"} className="text-xs px-2 py-0.5">
+                        {i > 0 && <span >+</span>}
+                        <Badge variant={w.word_type === "SUFFIX" ? "secondary" : "outline"}>
                           {w.word_name} ({w.word_abbr})
                         </Badge>
                       </span>
                     ))}
                     {analysis.unmatched_parts.length > 0 && (
-                      <Badge variant="destructive" className="text-xs px-2 py-0.5">
+                      <StatusBadge tone="danger">
                         사전에 없는 부분: {analysis.unmatched_parts.join(", ")}
-                      </Badge>
+                      </StatusBadge>
                     )}
                   </div>
                 </div>
@@ -973,8 +983,8 @@ function TermAddDialog({ open, onOpenChange, dictId, domains, onCreated }: {
                   </div>
                 )}
                 <div className="grid grid-cols-2 gap-3 text-xs">
-                  <div><span className="text-muted-foreground">영문</span><p className="font-medium">{analysis.term_english}</p></div>
-                  <div><span className="text-muted-foreground">약어</span><p className="font-mono font-medium">{analysis.term_abbr}</p></div>
+                  <div><span >영문</span><p className="font-medium">{analysis.term_english}</p></div>
+                  <div><span >약어</span><p className="font-mono font-medium">{analysis.term_abbr}</p></div>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
@@ -1003,7 +1013,7 @@ function TermAddDialog({ open, onOpenChange, dictId, domains, onCreated }: {
           <div className="flex justify-end gap-2">
             <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>취소</Button>
             <Button onClick={save} disabled={!analysis || stale || saving || forbidden.length > 0}>
-              {saving ? "저장 중..." : "용어 저장"}
+              {saving ? "저장 중…" : "용어 저장"}
             </Button>
           </div>
         </div>
@@ -1029,7 +1039,7 @@ function CodesTab({ dictId, canEdit, onChanged }: TabProps) {
       setGroups(data)
       // 선택이 없거나 사라졌으면 첫 그룹
       setSelectedGroupId((cur) => (cur && data.some((g) => g.id === cur) ? cur : data[0]?.id ?? null))
-    } catch (e) { toast.error(errMsg(e)) }
+    } catch (e) { notifyError(e, "코드 그룹 목록을 불러오지 못했습니다.") }
   }, [dictId])
   useEffect(() => { fetchGroups() }, [fetchGroups])
 
@@ -1038,7 +1048,7 @@ function CodesTab({ dictId, canEdit, onChanged }: TabProps) {
     try {
       const g = await api<CodeGroup>(`${BASE}/code-groups/${selectedGroupId}`, "코드 값을 불러오지 못했습니다.")
       setValues(g.values || [])
-    } catch (e) { toast.error(errMsg(e)) }
+    } catch (e) { notifyError(e, "코드 값을 불러오지 못했습니다.") }
   }, [selectedGroupId])
   useEffect(() => { fetchValues() }, [fetchValues])
 
@@ -1051,7 +1061,7 @@ function CodesTab({ dictId, canEdit, onChanged }: TabProps) {
       setSelectedGroupId(g.id)
       onChanged()
       focusNewRow(groupGridRef.current, g.id, "group_name")
-    } catch (e) { toast.error(errMsg(e)) }
+    } catch (e) { notifyError(e, "코드 그룹을 추가하지 못했습니다.") }
   }, [dictId, groups, fetchGroups, onChanged])
 
   const deleteGroup = useCallback(async (row: { id: number }) => {
@@ -1100,7 +1110,7 @@ function CodesTab({ dictId, canEdit, onChanged }: TabProps) {
         method: "POST", json: { code_value: `NEW${n}`, code_name: "(new)", sort_order: values.length + 1 },
       })
       await fetchValues()
-    } catch (e) { toast.error(errMsg(e)) }
+    } catch (e) { notifyError(e, "코드 값을 추가하지 못했습니다.") }
   }, [selectedGroupId, values, fetchValues])
 
   const deleteValue = useCallback(async (row: { id: number }) => {
@@ -1154,7 +1164,7 @@ function CodesTab({ dictId, canEdit, onChanged }: TabProps) {
       <div className="flex flex-1 gap-4 min-h-0">
         <div className="flex flex-col w-2/5 min-h-0">
           <div className="flex items-center justify-between mb-2 flex-shrink-0">
-            <span className="text-sm font-medium text-muted-foreground">코드 그룹 {groups.length}개</span>
+            <span className="text-sm font-medium">코드 그룹 {groups.length}개</span>
             {canEdit && (
               <Button variant="outline" size="sm" onClick={addGroup}>
                 <Plus className="h-3.5 w-3.5 mr-1" />추가
@@ -1174,7 +1184,7 @@ function CodesTab({ dictId, canEdit, onChanged }: TabProps) {
                 stopEditingWhenCellsLoseFocus
                 onCellValueChanged={onGroupCellChanged}
                 onRowClicked={onGroupRowClicked}
-                rowSelection="single"
+                rowSelection={SINGLE_ROW_SELECTION}
                 animateRows={false}
                 getRowId={(params) => String(params.data.id)}
                 components={GRID_COMPONENTS}
@@ -1186,7 +1196,7 @@ function CodesTab({ dictId, canEdit, onChanged }: TabProps) {
 
         <div className="flex flex-col w-3/5 min-h-0">
           <div className="flex items-center justify-between mb-2 flex-shrink-0">
-            <span className="text-sm font-medium text-muted-foreground">
+            <span className="text-sm font-medium">
               {selectedGroup ? `${selectedGroup.group_name} — 값 ${values.length}개` : "그룹 선택"}
             </span>
             {canEdit && selectedGroupId && (
@@ -1241,7 +1251,7 @@ function ComplianceTab({ dictId }: { dictId: number }) {
   }, [dictId])
 
   if (error) return <p className="text-sm text-destructive text-center py-8">{error}</p>
-  if (!stats) return <p className="text-sm text-muted-foreground text-center py-8">불러오는 중...</p>
+  if (!stats) return <p className="text-sm text-muted-foreground text-center py-8">불러오는 중…</p>
   if (stats.dataset_count === 0) {
     return (
       <p className="text-sm text-muted-foreground text-center py-8">
@@ -1262,8 +1272,8 @@ function ComplianceTab({ dictId }: { dictId: number }) {
         <CardContent className="p-6">
           <div className="text-center mb-4">
             <p className="text-4xl font-bold">{pct}%</p>
-            <p className="text-sm text-muted-foreground">표준 준수율</p>
-            <p className="text-xs text-muted-foreground mt-1">
+            <p className="text-sm">표준 준수율</p>
+            <p className="text-xs mt-1">
               이 사전을 적용한 데이터셋 {stats.dataset_count}개의 컬럼 {stats.total_columns}개 중 표준과 일치(매칭)하는 비율
             </p>
           </div>
@@ -1271,11 +1281,11 @@ function ComplianceTab({ dictId }: { dictId: number }) {
             <div className="bg-green-500 h-4 rounded-full transition-all" style={{ width: `${pct}%` }} />
           </div>
           <div className="grid grid-cols-5 gap-4 text-center text-sm">
-            <div><p className="text-lg font-semibold">{stats.total_columns}</p><p className="text-muted-foreground">전체</p></div>
-            <div><p className="text-lg font-semibold text-green-600">{stats.matched}</p><p className="text-muted-foreground">매칭</p></div>
-            <div><p className="text-lg font-semibold text-amber-600">{stats.similar}</p><p className="text-muted-foreground">유사</p></div>
-            <div><p className="text-lg font-semibold text-red-600">{stats.violation}</p><p className="text-muted-foreground">위반</p></div>
-            <div><p className="text-lg font-semibold text-gray-400">{stats.unmapped}</p><p className="text-muted-foreground">미매핑</p></div>
+            <div><p className="text-lg font-semibold">{stats.total_columns}</p><p >전체</p></div>
+            <div><p className="text-lg font-semibold text-green-600">{stats.matched}</p><p >매칭</p></div>
+            <div><p className="text-lg font-semibold text-amber-600">{stats.similar}</p><p >유사</p></div>
+            <div><p className="text-lg font-semibold text-red-600">{stats.violation}</p><p >위반</p></div>
+            <div><p className="text-lg font-semibold text-gray-400">{stats.unmapped}</p><p >미매핑</p></div>
           </div>
         </CardContent>
       </Card>
@@ -1321,20 +1331,20 @@ function HistoryTab({ dictId }: { dictId: number }) {
             {Object.entries(ENTITY_LABEL).map(([k, v]) => <SelectItem key={k} value={k}>{v}</SelectItem>)}
           </SelectContent>
         </Select>
-        <span className="text-sm text-muted-foreground">{data ? `${data.total}건` : ""}</span>
+        <span className="text-sm">{data ? `${data.total}건` : ""}</span>
         <div className="ml-auto flex items-center gap-1">
-          <Button variant="ghost" size="sm" disabled={page <= 1} onClick={() => setPage((p) => p - 1)} aria-label="이전 페이지">
+          <Tip label="이전 페이지"><Button variant="ghost" size="sm" disabled={page <= 1} onClick={() => setPage((p) => p - 1)} aria-label="이전 페이지">
             <ChevronLeft className="h-4 w-4" />
-          </Button>
-          <span className="text-xs text-muted-foreground">{page} / {pages}</span>
-          <Button variant="ghost" size="sm" disabled={page >= pages} onClick={() => setPage((p) => p + 1)} aria-label="다음 페이지">
+          </Button></Tip>
+          <span className="text-xs">{page} / {pages}</span>
+          <Tip label="다음 페이지"><Button variant="ghost" size="sm" disabled={page >= pages} onClick={() => setPage((p) => p + 1)} aria-label="다음 페이지">
             <ChevronRight className="h-4 w-4" />
-          </Button>
+          </Button></Tip>
         </div>
       </div>
 
       {error && <p className="text-sm text-destructive">{error}</p>}
-      {!error && !data && <p className="text-sm text-muted-foreground text-center py-8">불러오는 중...</p>}
+      {!error && !data && <p className="text-sm text-muted-foreground text-center py-8">불러오는 중…</p>}
       {data && data.items.length === 0 && (
         <p className="text-sm text-muted-foreground text-center py-8">변경 이력이 없습니다.</p>
       )}
@@ -1354,19 +1364,19 @@ function HistoryTab({ dictId }: { dictId: number }) {
             <tbody>
               {data.items.map((r) => (
                 <tr key={r.id} className="border-t align-top">
-                  <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">
+                  <td className="px-3 py-2 whitespace-nowrap">
                     {r.changed_at ? new Date(r.changed_at).toLocaleString() : "-"}
                   </td>
                   <td className="px-3 py-2">
-                    <Badge variant="outline" className="mr-1.5 text-xs">{ENTITY_LABEL[r.entity_type] ?? r.entity_type}</Badge>
-                    {r.entity_name ?? <span className="text-muted-foreground">#{r.entity_id}</span>}
+                    <Badge variant="outline" className="mr-1.5">{ENTITY_LABEL[r.entity_type] ?? r.entity_type}</Badge>
+                    {r.entity_name ?? <span >#{r.entity_id}</span>}
                   </td>
                   <td className="px-3 py-2 whitespace-nowrap">
                     <span className={r.change_type === "DELETE" ? "text-destructive" : r.change_type === "CREATE" ? "text-green-600" : ""}>
                       {CHANGE_LABEL[r.change_type] ?? r.change_type}
                     </span>
                   </td>
-                  <td className="px-3 py-2 text-muted-foreground">{r.field_name ?? ""}</td>
+                  <td className="px-3 py-2">{r.field_name ?? ""}</td>
                   <td className="px-3 py-2 break-all">
                     {r.change_type === "UPDATE" && (
                       <>

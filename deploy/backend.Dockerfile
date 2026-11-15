@@ -28,5 +28,6 @@ RUN mkdir -p /var/log/argus-catalog-server /var/lib/argus-catalog-server
 EXPOSE 4600
 
 # 기본은 API 서버. 워커는 compose 에서 command 로 덮어쓴다.
-#   python -m app.change_mgmt.worker
+#   python -m app.change_mgmt.worker   (변경 관리)
+# 품질 진단 워커는 이 이미지가 아니다 — deploy/quality-worker.Dockerfile (extensions/argus-catalog-quality-worker).
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "4600"]

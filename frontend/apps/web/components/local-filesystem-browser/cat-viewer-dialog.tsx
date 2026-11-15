@@ -109,7 +109,7 @@ export function CatViewerDialog({
 
           {error && (
             <div className="flex items-center justify-center h-[200px]">
-              <p className="text-sm text-muted-foreground">{error}</p>
+              <p className="text-sm">{error}</p>
             </div>
           )}
 

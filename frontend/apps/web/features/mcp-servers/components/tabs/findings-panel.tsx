@@ -115,7 +115,7 @@ export function FindingsPanel({ name, onChanged, canEdit = true }: {
             {Object.entries(FINDING_KIND_LABEL).map(([k, v]) => <SelectItem key={k} value={k}>{v}</SelectItem>)}
           </SelectContent>
         </Select>
-        <span className="text-xs text-muted-foreground">{total}건</span>
+        <span className="text-xs">{total}건</span>
         {name && canEdit && (
           <Button
             size="sm"
@@ -176,7 +176,7 @@ export function FindingsPanel({ name, onChanged, canEdit = true }: {
                       >
                         <span className="font-mono text-xs">{f.deployment_name}</span>
                       </button>
-                      <div className="text-[11px] text-muted-foreground">{f.environment} · {f.server_name}</div>
+                      <div className="text-[11px]">{f.environment} · {f.server_name}</div>
                     </TableCell>
                   )}
                   <TableCell className="text-xs">{FINDING_KIND_LABEL[f.kind] ?? f.kind}</TableCell>
@@ -185,14 +185,14 @@ export function FindingsPanel({ name, onChanged, canEdit = true }: {
                     {f.alert_id && <BellRing className="ml-1 inline h-3.5 w-3.5 text-amber-600" aria-label="알림 발행됨" />}
                   </TableCell>
                   <TableCell><FindingStatusBadge status={f.status} /></TableCell>
-                  <TableCell className="text-xs text-muted-foreground">{fmtDate(f.last_seen_at)}</TableCell>
+                  <TableCell className="text-xs">{fmtDate(f.last_seen_at)}</TableCell>
                   <TableCell onClick={(e) => e.stopPropagation()}>
                     {canEdit && f.status === "open" && (
                       <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => ack(f, "acknowledged")}>확인</Button>
                     )}
                     {canEdit && f.status === "acknowledged" && (
                       <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => ack(f, "open")}>
-                        <RotateCcw className="mr-1 h-3 w-3" /> 열기
+                        <RotateCcw className="mr-1 h-3 w-3" /> 다시 열기
                       </Button>
                     )}
                   </TableCell>

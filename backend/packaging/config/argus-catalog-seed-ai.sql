@@ -196,7 +196,7 @@ VALUES
      '["대여 이력 조회 응대", "연체 안내", "환불 접수(승인 필요)"]'::json,
      '["sakila", "demo"]'::json, 'admin'),
     ('ops.quality-watchdog', 'ops.quality-watchdog.agent', '품질 감시 에이전트',
-     '품질 배치(quality/*.py) 결과를 모니터링해 점수 하락·규칙 실패를 감지하면 담당자에게 알리는 운영 에이전트. 야간 배치 후 자동 실행된다.',
+     '품질 진단 결과를 모니터링해 점수 하락·규칙 실패를 감지하면 담당자에게 알리는 운영 에이전트. 야간 품질 진단 작업 뒤 자동 실행된다.',
      '1.0.1', 'active', 'iuhong@data-dynamics.io', '물류데이터팀',
      'operations', 'llm-qwen2.5-7b-instruct', 'internal', 'crewai', 'restricted',
      'https://agents.data-dynamics.io/quality-watchdog', 'REST', false, 'batch', 'ApiKey',

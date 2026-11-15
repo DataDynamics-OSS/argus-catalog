@@ -1,12 +1,13 @@
 "use client"
 
+import { Tip } from "@/components/tip"
+import { CodeEditor } from "@/components/code-editor"
 import { type ReactNode, useCallback, useEffect, useState } from "react"
 import { AlertTriangle, CheckCircle2, FileText, Info, Loader2, X } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 import { Tabs, TabsList, TabsTrigger } from "@workspace/ui/components/tabs"
-import { Textarea } from "@workspace/ui/components/textarea"
 
 import { type SpecPreview, previewApiSpec } from "../api"
 import { SPEC_FORMAT_LABEL } from "./apis-constants"
@@ -121,29 +122,31 @@ export function SpecSourceInput({ value, onChange, onError, preview, urlSuggesti
             <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />
             <div className="min-w-0 flex-1">
               <p className="truncate font-medium" title={value.file.name}>{value.file.name}</p>
-              <p className="text-xs text-muted-foreground">{fmtBytes(value.file.size)} · 큰 파일이라 내용을 접어 두었습니다.</p>
+              <p className="text-xs">{fmtBytes(value.file.size)} · 큰 파일이라 내용을 접어 두었습니다.</p>
             </div>
             <Button type="button" size="sm" variant="outline" className="h-8" onClick={() => set({ collapsed: false })}>내용 펼치기</Button>
-            <Button type="button" size="icon" variant="ghost" className="h-8 w-8" title="지우기" aria-label="불러온 스펙 지우기" onClick={() => set({ text: "", file: null, collapsed: false })}>
+            <Tip label="불러온 스펙 지우기"><Button type="button" size="icon" variant="ghost" className="h-8 w-8" aria-label="불러온 스펙 지우기" onClick={() => set({ text: "", file: null, collapsed: false })}>
               <X className="h-4 w-4" />
-            </Button>
+            </Button></Tip>
           </div>
         ) : (
           <>
             {value.file && (
               <div className="flex items-center gap-1">
-                <p className="min-w-0 flex-1 truncate text-xs text-muted-foreground" title={value.file.name}>불러온 파일: {value.file.name} ({fmtBytes(value.file.size)})</p>
-                <Button type="button" size="icon" variant="ghost" className="h-6 w-6 shrink-0" title="지우기" aria-label="불러온 스펙 지우기" onClick={() => set({ text: "", file: null, collapsed: false })}>
+                <p className="min-w-0 flex-1 truncate text-xs" title={value.file.name}>불러온 파일: {value.file.name} ({fmtBytes(value.file.size)})</p>
+                <Tip label="불러온 스펙 지우기"><Button type="button" size="icon" variant="ghost" className="h-6 w-6 shrink-0" aria-label="불러온 스펙 지우기" onClick={() => set({ text: "", file: null, collapsed: false })}>
                   <X className="h-3.5 w-3.5" />
-                </Button>
+                </Button></Tip>
               </div>
             )}
-            <Textarea
+            <CodeEditor
+              language="yaml"
               aria-label="OpenAPI 스펙"
               placeholder={textPlaceholder ?? '{"openapi":"3.0.0","info":{"title":"My API","version":"1.0.0"}, ...}  또는 YAML (파일 불러오기 가능)'}
               value={value.text}
-              onChange={(e) => set({ text: e.target.value })}
-              className="max-h-80 min-h-48 font-mono text-xs"
+              onChange={(v) => set({ text: v })}
+              minHeight={192}
+              maxHeight={320}
             />
           </>
         )
@@ -178,7 +181,7 @@ export function SpecSourceInput({ value, onChange, onError, preview, urlSuggesti
 export function SpecPreviewSummary({ preview, children }: { preview: SpecPreviewState; children?: (p: SpecPreview) => ReactNode }) {
   if (preview.status === "idle") return null
   if (preview.status === "loading") {
-    return <div className="flex items-center gap-2 rounded-md border bg-muted/20 px-3 py-2 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" /> 스펙 확인 중...</div>
+    return <div className="flex items-center gap-2 rounded-md border bg-muted/20 px-3 py-2 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" /> 스펙 확인 중…</div>
   }
   if (preview.status === "error" || !preview.data) {
     return (
@@ -194,7 +197,7 @@ export function SpecPreviewSummary({ preview, children }: { preview: SpecPreview
       <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
         <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
         <span className="font-medium text-foreground">{p.title || "(제목 없음)"}</span>
-        <span className="text-muted-foreground">v{p.version} · {SPEC_FORMAT_LABEL[p.format] ?? p.format} · 엔드포인트 {p.endpoint_count}개 · 서버 {p.server_count} · 보안 스킴 {p.security_count}</span>
+        <span >v{p.version} · {SPEC_FORMAT_LABEL[p.format] ?? p.format} · 엔드포인트 {p.endpoint_count}개 · 서버 {p.server_count} · 보안 스킴 {p.security_count}</span>
       </div>
       {p.base_url && <div className="text-muted-foreground">서버 주소: <span className="font-mono">{p.base_url}</span></div>}
       {needsBaseUrl(p) && (

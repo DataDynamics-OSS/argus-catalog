@@ -181,6 +181,44 @@ async def upload_files(
     return results
 
 
+def visible_files(root: Path) -> list[Path]:
+    """``root`` 아래의 올릴 파일(정렬) — 숨김 경로(어느 단계든 ``.`` 으로 시작: ``.git/``, ``sub/.DS_Store``)는 뺀다.
+
+    SDK ``push`` · HuggingFace 반입 · 로컬 반입이 같은 규칙을 쓴다."""
+    return [
+        fp for fp in sorted(root.rglob("*"))
+        if fp.is_file() and not any(part.startswith(".") for part in fp.relative_to(root).parts)
+    ]
+
+
+async def upload_paths(
+    model_name: str,
+    version: int,
+    root: Path,
+    paths: list[Path],
+    bucket: str | None = None,
+) -> list[dict]:
+    """디스크의 파일들을 ``{name}/v{ver}/{root 기준 상대 경로}`` 로 올린다 — 내용을 메모리에 다 올리지 않는다.
+
+    파일 경로 기반 관리형 전송(큰 파일은 멀티파트)으로 스트리밍하고, SHA256 은 조각 단위로 계산해
+    객체 메타데이터 ``sha256`` 에 남긴다(manifest 생성 때 재사용). 중간 실패 시 앞서 올린 파일은 남는다.
+    반환: 파일마다 ``{"key", "size", "sha256"}``.
+    """
+    import asyncio
+
+    bucket = bucket or settings.os_bucket
+    await ensure_bucket(bucket)
+    prefix = _s3_prefix(model_name, version)
+    results = []
+    async with get_s3_client() as s3:
+        for fp in paths:
+            key = prefix + safe_filename(fp.relative_to(root).as_posix())
+            sha = await asyncio.to_thread(_sha256_file, fp)
+            await s3.upload_file(str(fp), bucket, key, ExtraArgs={"Metadata": {"sha256": sha}})
+            results.append({"key": key, "size": fp.stat().st_size, "sha256": sha})
+    return results
+
+
 # =========================================================================== #
 # 2. Presigned URL
 # =========================================================================== #
@@ -645,24 +683,11 @@ async def import_from_huggingface(
         )
         local_path = Path(local_dir)
 
-        # 파일 수집 — 숨김(.git, .cache) 제외. 내용은 메모리에 올리지 않는다.
-        paths = [
-            fp for fp in sorted(local_path.rglob("*"))
-            if fp.is_file() and not any(part.startswith(".") for part in fp.relative_to(local_path).parts)
-        ]
+        # 파일 수집 — 숨김(.git, .cache) 제외. 내용은 메모리에 올리지 않고 스트리밍으로 올린다.
+        paths = visible_files(local_path)
         total_size = sum(fp.stat().st_size for fp in paths)
         logger.info("HuggingFace 에서 %d개 파일 다운로드 (총 %d bytes)", len(paths), total_size)
-
-        # S3 로 업로드 — 파일 경로 기반 관리형 전송(대용량은 멀티파트)으로 스트리밍,
-        # 다이제스트는 조각 단위로 계산해 메타데이터에 남긴다(manifest 생성 때 재사용).
-        prefix = _s3_prefix(model_name, version)
-        async with get_s3_client() as s3:
-            for fp in paths:
-                rel = fp.relative_to(local_path).as_posix()
-                sha = await asyncio.to_thread(_sha256_file, fp)
-                await s3.upload_file(
-                    str(fp), bucket, prefix + rel, ExtraArgs={"Metadata": {"sha256": sha}},
-                )
+        await upload_paths(model_name, version, local_path, paths, bucket)
 
         metadata = {
             "source": f"huggingface:{hf_model_id}",
@@ -724,30 +749,21 @@ async def import_from_local_directory(
 ) -> dict:
     """로컬 디렉토리(에어갭/사내 망)에서 모델 파일을 S3 로 가져온다(import-local).
 
-    에어갭 시나리오에서 사용한다: 먼저 USB/SCP 로 파일을 전송한 뒤,
+    에어갭 시나리오에서 사용한다: 먼저 USB 등으로 파일을 서버로 옮긴 뒤,
     로컬 파일시스템에서 MinIO 로 임포트한다. 디렉터리가 없으면 ``FileNotFoundError``.
 
-    주의: 모든 파일 내용을 메모리에 올린 뒤 업로드한다(대용량 모델은 메모리 사용 큼).
-    숨김 판정은 최상위 경로 조각이 ``.`` 으로 시작하는지만 본다.
+    파일은 스트리밍으로 올린다(``upload_paths`` — 큰 모델도 메모리에 다 올리지 않음).
+    숨김 경로는 ``push`` 와 같이 어느 단계든 ``.`` 으로 시작하면 뺀다(``visible_files``).
     """
     local_path = Path(local_dir)
     if not local_path.is_dir():
         raise FileNotFoundError(f"Directory not found: {local_path}")
 
-    all_files: list[tuple[str, bytes]] = []
-    total_size = 0
-    for file_path in sorted(local_path.rglob("*")):
-        if file_path.is_file():
-            rel = file_path.relative_to(local_path)
-            if str(rel).startswith("."):
-                continue
-            data = file_path.read_bytes()
-            all_files.append((str(rel), data))
-            total_size += len(data)
+    paths = visible_files(local_path)
+    total_size = sum(fp.stat().st_size for fp in paths)
+    logger.info("%s 에서 %d개 파일 임포트 (%d bytes)", local_path, len(paths), total_size)
 
-    logger.info("%s 에서 %d개 파일 임포트 (%d bytes)", local_path, len(all_files), total_size)
-
-    results = await upload_files(model_name, version, all_files, bucket)
+    results = await upload_paths(model_name, version, local_path, paths, bucket)
 
     annotations = {"ai.argus.model.source": source}
     manifest = await generate_manifest(model_name, version, annotations, bucket)

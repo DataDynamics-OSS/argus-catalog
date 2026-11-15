@@ -1,4 +1,5 @@
 import {
+  Activity,
   Bell,
   BookOpen,
   Bot,
@@ -13,6 +14,8 @@ import {
   Shield,
   ShieldCheck,
   LayoutDashboard,
+  ListChecks,
+  MessageSquareWarning,
   Network,
   Plug,
   Server,
@@ -26,6 +29,7 @@ import type { LucideIcon } from "lucide-react"
 import { pluginIcons } from "@/plugins/registry"
 
 const iconMap: Record<string, LucideIcon> = {
+  Activity,
   Bell,
   BookOpen,
   Bot,
@@ -37,6 +41,8 @@ const iconMap: Record<string, LucideIcon> = {
   Globe,
   Inbox,
   LayoutDashboard,
+  ListChecks,
+  MessageSquareWarning,
   Network,
   Plug,
   Server,

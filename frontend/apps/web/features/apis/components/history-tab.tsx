@@ -1,15 +1,16 @@
 "use client"
 
+import { DetailSection } from "@/components/detail-section"
 import { useEffect, useRef, useState } from "react"
 import { ArrowRight, FileCode2, Loader2, RefreshCcw } from "lucide-react"
 
 import { Badge } from "@workspace/ui/components/badge"
-import { Card, CardContent } from "@workspace/ui/components/card"
+import { StatusBadge } from "@workspace/ui/components/status-badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@workspace/ui/components/select"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { type ApiSpec, type ApiSpecDiff, type ApiStatusHistory, fetchApiDiff } from "../api"
-import { API_STATUS_LABEL } from "./apis-constants"
+import { apiStatus } from "./apis-constants"
 import { TabEmpty, TabError, fmtDateTime } from "./apis-detail-shared"
 import { errorMessage } from "@/lib/notify"
 
@@ -70,7 +71,7 @@ function SpecDiffView({ apiName, specs, request }: { apiName: string; specs: Api
       {same ? (
         <TabEmpty>서로 다른 두 버전을 고르세요.</TabEmpty>
       ) : !cur ? (
-        <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> 비교 중...</div>
+        <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> 비교 중…</div>
       ) : cur.error ? (
         <TabError message={cur.error} onRetry={() => setReloadSeq((n) => n + 1)} />
       ) : d?.message ? (
@@ -79,8 +80,8 @@ function SpecDiffView({ apiName, specs, request }: { apiName: string; specs: Api
         <>
           <div className="flex flex-wrap items-center gap-2 text-xs">
             {d.breaking
-              ? <Badge className="bg-red-600 text-white">Breaking {d.breaking_count}건</Badge>
-              : <Badge variant="outline" className="text-emerald-600">Breaking 변경 없음</Badge>}
+              ? <StatusBadge tone="danger">Breaking {d.breaking_count}건</StatusBadge>
+              : <StatusBadge tone="success">Breaking 변경 없음</StatusBadge>}
             <Badge variant="outline">추가 {d.added_count}</Badge>
             <Badge variant="outline">제거 {d.removed_count}</Badge>
             <Badge variant="outline">변경 {d.changed_count}</Badge>
@@ -98,14 +99,14 @@ function SpecDiffView({ apiName, specs, request }: { apiName: string; specs: Api
                 <tbody>
                   {d.removed.map((k) => (
                     <tr key={`r:${k}`} className="border-t bg-red-50/50 align-top">
-                      <td className="px-3 py-2"><Badge className="bg-red-600 text-[10px] text-white">제거</Badge></td>
+                      <td className="px-3 py-2"><StatusBadge tone="danger">제거</StatusBadge></td>
                       <td className="px-3 py-2 break-all">{k}</td>
                       <td className="px-3 py-2 text-red-700">엔드포인트 제거 (Breaking)</td>
                     </tr>
                   ))}
                   {d.changed.map((c) => (
                     <tr key={`c:${c.key}`} className={cn("border-t align-top", c.breaking && "bg-red-50/50")}>
-                      <td className="px-3 py-2"><Badge variant="outline" className={cn("text-[10px]", c.breaking && "border-red-600 text-red-700")}>변경</Badge></td>
+                      <td className="px-3 py-2"><StatusBadge tone={c.breaking ? "danger" : "warning"}>변경</StatusBadge></td>
                       <td className="px-3 py-2 break-all">{c.key}</td>
                       <td className="px-3 py-2">
                         <ul className="space-y-0.5">
@@ -118,9 +119,9 @@ function SpecDiffView({ apiName, specs, request }: { apiName: string; specs: Api
                   ))}
                   {d.added.map((k) => (
                     <tr key={`a:${k}`} className="border-t align-top">
-                      <td className="px-3 py-2"><Badge variant="outline" className="text-[10px] text-emerald-700">추가</Badge></td>
+                      <td className="px-3 py-2"><StatusBadge tone="success">추가</StatusBadge></td>
                       <td className="px-3 py-2 break-all">{k}</td>
-                      <td className="px-3 py-2 text-muted-foreground">새 엔드포인트</td>
+                      <td className="px-3 py-2">새 엔드포인트</td>
                     </tr>
                   ))}
                 </tbody>
@@ -156,9 +157,8 @@ export function HistoryTab({ apiName, history, specs, diffRequest }: {
 
   return (
     <>
-      <p className="text-sm text-muted-foreground">API 상태(초안·게시·사용 중단·폐기) 변경과 스펙 버전 등록 이력입니다. 스펙 버전이 둘 이상이면 아래에서 두 버전을 비교할 수 있습니다.</p>
-      <Card><CardContent className="pt-4">
-        <p className="mb-2 text-sm font-medium">변경 이력 ({items.length})</p>
+      <p className="text-sm">API 상태(초안·게시·사용 중단·폐기) 변경과 스펙 버전 등록 이력입니다. 스펙 버전이 둘 이상이면 아래에서 두 버전을 비교할 수 있습니다.</p>
+      <DetailSection title={`변경 이력 (${items.length})`}>
         {items.length === 0 ? (
           <TabEmpty>변경 이력이 없습니다.</TabEmpty>
         ) : (
@@ -173,40 +173,39 @@ export function HistoryTab({ apiName, history, specs, diffRequest }: {
               <tbody>
                 {items.map((it) => it.kind === "status" ? (
                   <tr key={`h:${it.h.id}`} className="border-t align-top">
-                    <td className="px-3 py-2 text-muted-foreground"><RefreshCcw className="mr-1 inline h-3.5 w-3.5" />상태 변경</td>
+                    <td className="px-3 py-2"><RefreshCcw className="mr-1 inline h-3.5 w-3.5" />상태 변경</td>
                     <td className="px-3 py-2">
-                      {it.h.from_status ? <Badge variant="outline" className="text-xs">{API_STATUS_LABEL[it.h.from_status] ?? it.h.from_status}</Badge> : "—"}
-                      <span className="mx-1 text-muted-foreground">→</span>
-                      <Badge variant="secondary" className="text-xs">{API_STATUS_LABEL[it.h.to_status] ?? it.h.to_status}</Badge>
-                      {it.h.note && <p className="mt-1 text-xs whitespace-pre-wrap text-muted-foreground">사유: {it.h.note}</p>}
+                      {it.h.from_status ? <StatusBadge {...apiStatus(it.h.from_status)} /> : "—"}
+                      <span className="mx-1">→</span>
+                      <StatusBadge {...apiStatus(it.h.to_status)} />
+                      {it.h.note && <p className="mt-1 text-xs whitespace-pre-wrap">사유: {it.h.note}</p>}
                     </td>
-                    <td className="px-3 py-2 text-muted-foreground">{fmtDateTime(it.h.changed_at)}</td>
-                    <td className="px-3 py-2 text-muted-foreground">{it.h.changed_by || "-"}</td>
+                    <td className="px-3 py-2">{fmtDateTime(it.h.changed_at)}</td>
+                    <td className="px-3 py-2">{it.h.changed_by || "-"}</td>
                   </tr>
                 ) : (
                   <tr key={`s:${it.s.id}`} className="border-t align-top">
-                    <td className="px-3 py-2 text-muted-foreground"><FileCode2 className="mr-1 inline h-3.5 w-3.5" />스펙 등록</td>
+                    <td className="px-3 py-2"><FileCode2 className="mr-1 inline h-3.5 w-3.5" />스펙 등록</td>
                     <td className="px-3 py-2">
                       <span className="font-medium">v{it.s.version}</span>
-                      {it.s.is_current === "true" && <Badge variant="secondary" className="ml-2 text-[10px]">현재</Badge>}
-                      {it.s.source_url && <p className="mt-0.5 text-xs break-all text-muted-foreground">출처: {it.s.source_url}</p>}
+                      {it.s.is_current === "true" && <Badge size="sm" variant="secondary" className="ml-2">현재</Badge>}
+                      {it.s.source_url && <p className="mt-0.5 text-xs break-all">출처: {it.s.source_url}</p>}
                     </td>
-                    <td className="px-3 py-2 text-muted-foreground">{fmtDateTime(it.s.created_at)}</td>
-                    <td className="px-3 py-2 text-muted-foreground">{it.s.created_by || "-"}</td>
+                    <td className="px-3 py-2">{fmtDateTime(it.s.created_at)}</td>
+                    <td className="px-3 py-2">{it.s.created_by || "-"}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
         )}
-      </CardContent></Card>
+      </DetailSection>
 
       {specs.length >= 2 && (
         <div ref={diffRef} className="scroll-mt-4">
-          <Card><CardContent className="pt-4">
-            <p className="mb-2 text-sm font-medium">스펙 버전 비교</p>
+          <DetailSection title="스펙 버전 비교">
             <SpecDiffView apiName={apiName} specs={specs} request={diffRequest} />
-          </CardContent></Card>
+          </DetailSection>
         </div>
       )}
     </>

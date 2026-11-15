@@ -12,6 +12,8 @@
   - ``catalog_ai_agent_tools``         : 호출 가능 도구 + 스키마
   - ``catalog_ai_agent_mcp_servers``   : 연결된 MCP 서버
   - ``catalog_ai_agent_lineage``       : 에이전트 ↔ 에이전트/모델/데이터셋 의존 관계
+  - ``catalog_ai_agent_skills``        : 외부에 내세우는 스킬 (A2A AgentSkill)
+  - ``catalog_ai_agent_data_access``   : 읽거나 쓰는 데이터 소스·데이터셋
 
 이름/버전 규칙:
   - ``name``    : 전사 고유 식별자 (예: ``cs.payment-refund-assistant``)
@@ -31,7 +33,9 @@ JSON 컬럼:
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     Column,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
@@ -108,6 +112,27 @@ class AIAgent(Base):
     hitl_required = Column(Boolean, nullable=False, default=False)
     audit_log_ref = Column(String(500))
 
+    # --- 위험 등급·규제 준수 (TODO-020) ---
+    # minimal / limited / high / prohibited (EU AI Act 4단계와 같은 이름)
+    risk_tier = Column(String(20))
+    risk_rationale = Column(Text)  # 등급을 매긴 근거
+    impact_assessed_at = Column(Date)  # 영향 평가 수행일
+    # passed / conditional / failed / pending
+    impact_assessment_result = Column(String(20))
+    impact_assessment_ref = Column(String(1000))  # 평가 문서 위치
+    compliance = Column(JSON)  # list[str] 준수 대상 (예: ["PIPA", "EU AI Act", "ISO 42001"])
+    log_retention_days = Column(Integer)  # 호출·판단 로그 보존 기간(일)
+    # advisory(제안만) / supervised(사람 승인 후 실행) / autonomous(자율 실행)
+    autonomy_level = Column(String(20))
+
+    # --- 실행 신원·권한·위임 (TODO-021) ---
+    # service_account / oauth_client / workload / user_delegated
+    identity_type = Column(String(30))
+    identity_principal = Column(String(255))  # 계정 ID·client_id·SPIFFE ID 등
+    identity_provider = Column(String(100))  # keycloak / ldap / k8s / aws-iam ...
+    granted_scopes = Column(JSON)  # list[str] 부여된 권한 범위
+    on_behalf_of = Column(Boolean, nullable=False, server_default="false")  # 사용자 대신 실행(OBO)
+
     # --- 관측 / 성능 (G9) — 미터링 집계 캐시 ---
     latency_p50 = Column(Integer)
     latency_p95 = Column(Integer)
@@ -132,6 +157,9 @@ class AIAgent(Base):
     hitl_config = Column(JSON)  # dict (중요 액션 사람 서명 정책)
     sub_agents = Column(JSON)  # list[dict] 하위 에이전트 구성
     tags = Column(JSON)  # list[str] (MVP: 단순 문자열 태그)
+    # 기본 입출력 MIME 형식 (A2A defaultInputModes/defaultOutputModes, TODO-024)
+    default_input_modes = Column(JSON)  # list[str]
+    default_output_modes = Column(JSON)  # list[str]
 
     # --- 라이프사이클 / 사용 통계 (G12) ---
     usage_count = Column(Integer, nullable=False, default=0)
@@ -216,6 +244,59 @@ class AIAgentMcpServer(Base):
     # 에이전트별 허용 범위 (NULL = 인스턴스에서 노출·승인된 전체)
     allowed_groups = Column(JSON)
     allowed_tools = Column(JSON)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class AIAgentSkill(Base):
+    """에이전트가 외부에 내세우는 스킬 (A2A AgentSkill, TODO-024).
+
+    도구(tool)는 에이전트가 내부에서 호출하는 함수이고, 스킬은 호출자에게 "이 에이전트가 할 수 있는 일"
+    을 알리는 단위다. 에이전트 카드의 ``skills[]`` 로 내보낸다.
+    """
+
+    __tablename__ = "catalog_ai_agent_skills"
+    __table_args__ = (UniqueConstraint("agent_id", "skill_key"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    agent_id = Column(
+        Integer, ForeignKey("catalog_ai_agents.id", ondelete="CASCADE"), nullable=False
+    )
+    skill_key = Column(String(100), nullable=False)  # A2A skill id (에이전트 안에서 고유)
+    name = Column(String(200), nullable=False)
+    description = Column(Text)
+    tags = Column(JSON)  # list[str]
+    examples = Column(JSON)  # list[str] 예시 요청
+    input_modes = Column(JSON)  # list[str] MIME (NULL = 에이전트 기본값)
+    output_modes = Column(JSON)  # list[str] MIME (NULL = 에이전트 기본값)
+    sort_order = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class AIAgentDataAccess(Base):
+    """에이전트가 읽거나 쓰는 데이터 소스·데이터셋 (TODO-019).
+
+    ``datasource_id`` 와 ``dataset_id`` 중 정확히 하나를 채운다. 데이터셋·데이터 소스 상세의
+    "이 자원을 쓰는 에이전트" 역방향 조회에 쓴다.
+    """
+
+    __tablename__ = "catalog_ai_agent_data_access"
+    __table_args__ = (
+        CheckConstraint("(datasource_id IS NULL) <> (dataset_id IS NULL)", name="ck_ai_agent_data_access_one_target"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    agent_id = Column(
+        Integer, ForeignKey("catalog_ai_agents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    datasource_id = Column(
+        Integer, ForeignKey("catalog_datasources.id", ondelete="CASCADE"), index=True
+    )
+    dataset_id = Column(
+        Integer, ForeignKey("catalog_datasets.id", ondelete="CASCADE"), index=True
+    )
+    # read / write / read_write
+    access = Column(String(20), nullable=False, default="read")
+    description = Column(Text)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 

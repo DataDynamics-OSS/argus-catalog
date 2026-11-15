@@ -29,10 +29,11 @@ from app.core import passwords
 from app.core.auth import TokenUser, create_local_token, get_current_user, get_optional_user
 from app.core.config import settings
 from app.core.database import Base, get_session
+from app.permissions.models import Permission
 from app.usermgr import ownership
 from app.usermgr import router as umr
 from app.usermgr import service as usvc
-from app.usermgr.models import ArgusRole, ArgusUser
+from app.usermgr.models import ArgusRole, ArgusUser, ArgusUserPreference
 
 
 @pytest.fixture(autouse=True)
@@ -45,7 +46,7 @@ def _fast_hash(monkeypatch):
 @pytest.fixture
 async def factory(monkeypatch):
     engine = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool)
-    tables = [ArgusRole.__table__, ArgusUser.__table__] + [a.model.__table__ for a in ownership._registry()]
+    tables = [Permission.__table__, ArgusRole.__table__, ArgusUser.__table__, ArgusUserPreference.__table__] + [a.model.__table__ for a in ownership._registry()]
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all, tables=tables)
     make = async_sessionmaker(engine, expire_on_commit=False)
@@ -315,3 +316,20 @@ async def test_non_admin_sees_no_phone_numbers(factory):
         assert (await c.get(f"/api/v1/usermgr/users/{other}")).json()["phone_number"] == "010-9999-8888"
         assert (await c.get("/api/v1/usermgr/users?search=9999")).json()["total"] == 1
         assert (await c.get("/api/v1/usermgr/check-user?username=other")).json()["username_exists"] is True
+
+
+async def test_delete_user_removes_preferences(factory):
+    """DEF-009 — 로컬 사용자 삭제 시 UI 설정 행(sub=str(id))도 지운다. 다른 사용자의 행은 그대로."""
+
+    await _add(factory, "boss", role="argus-admin")
+    uid = await _add(factory, "gone")
+    keep = await _add(factory, "stay")
+    async with factory() as s:
+        s.add_all([ArgusUserPreference(sub=str(uid), avatar_preset_id="cat"),
+                   ArgusUserPreference(sub=str(keep), avatar_preset_id="dog")])
+        await s.commit()
+    async with factory() as s:
+        assert await usvc.delete_user(s, uid)
+    async with factory() as s:
+        subs = (await s.execute(select(ArgusUserPreference.sub))).scalars().all()
+    assert subs == [str(keep)]

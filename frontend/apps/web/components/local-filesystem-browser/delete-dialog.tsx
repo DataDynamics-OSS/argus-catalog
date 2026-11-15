@@ -45,7 +45,7 @@ export function DeleteDialog({
         </span>
       }
       destructive
-      confirmText={isLoading ? "삭제 중..." : "삭제"}
+      confirmText={isLoading ? "삭제 중…" : "삭제"}
       handleConfirm={onConfirm}
       isLoading={isLoading}
     />

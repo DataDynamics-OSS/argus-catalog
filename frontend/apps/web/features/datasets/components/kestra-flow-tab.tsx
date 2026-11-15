@@ -1,102 +1,107 @@
 "use client"
 
+/**
+ * Kestra Flow 탭 — RDBMS → S3 데이터레이크 적재 워크플로우(YAML) 자동 생성.
+ *
+ * 하위 탭: Basic(JDBC → CSV) · PySpark(Spark 에 스크립트 제출) · Shell + AWS CLI(일자 CSV) ·
+ * Hive(PySpark 가 쓴 Parquet 을 beeline 으로 외부 테이블 · 파티션 등록) · Trino(Trino 가 원본을 읽어 데이터레이크 테이블에 적재).
+ * 원본 이름 · JDBC · 방언별 SQL 조각은 features/datasets/transfer-code.ts 를 함께 쓴다.
+ */
+
 import { useMemo } from "react"
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@workspace/ui/components/card"
+import { DetailSection } from "@/components/detail-section"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@workspace/ui/components/tabs"
 import type { DatasetDetail } from "@/features/datasets/data/schema"
 import { CodeViewer } from "@/components/code-viewer"
+import {
+  DATALAKE_BUCKET,
+  hiveSql,
+  incrementalColumn,
+  indent,
+  jdbcInfo,
+  kestraJdbcPlugin,
+  sourceColumns,
+  sourceDayStart,
+  sourceIdent,
+  transferTarget,
+  trinoSql,
+} from "@/features/datasets/transfer-code"
 
-// ---------------------------------------------------------------------------
-// JDBC helpers
-// ---------------------------------------------------------------------------
+// Kestra 표현식(Pebble) — 일자는 입력값, 없으면 예약 시각(수동 실행은 실행 시각)의 전일
+const TARGET_DATE_VAR = `variables:
+  # 적재 일자 — 입력값, 없으면 예약 시각(수동 실행은 실행 시각)의 전일
+  target_date: "{{ inputs.target_date ?? ((trigger.date ?? execution.startDate) | dateAdd(-1, 'DAYS') | date('yyyy-MM-dd')) }}"`
 
-function getJdbcUrl(datasourceType: string): { url: string; driver: string } {
-  switch (datasourceType) {
-    case "mysql": return { url: "jdbc:mysql://<HOST>:<PORT>/<DATABASE>", driver: "com.mysql.cj.jdbc.Driver" }
-    case "postgresql": case "greenplum": return { url: "jdbc:postgresql://<HOST>:<PORT>/<DATABASE>", driver: "org.postgresql.Driver" }
-    case "starrocks": return { url: "jdbc:mysql://<HOST>:<PORT>/<DATABASE>", driver: "com.mysql.cj.jdbc.Driver" }
-    case "trino": return { url: "jdbc:trino://<HOST>:<PORT>/<CATALOG>/<SCHEMA>", driver: "io.trino.jdbc.TrinoDriver" }
-    case "oracle": return { url: "jdbc:oracle:thin:@<HOST>:<PORT>:<SID>", driver: "oracle.jdbc.OracleDriver" }
-    default: return { url: `jdbc:${datasourceType}://<HOST>:<PORT>/<DATABASE>`, driver: "<DRIVER_CLASS>" }
-  }
+const TARGET_DATE_INPUT = `inputs:
+  - id: target_date
+    type: STRING
+    required: false
+    description: "적재 일자 YYYY-MM-DD (비우면 전일)"`
+
+const DATE = "{{ render(vars.target_date) }}"
+const NEXT_DATE = "{{ render(vars.target_date) | dateAdd(1, 'DAYS') | date('yyyy-MM-dd') }}"
+
+function flowId(prefix: string, dataset: DatasetDetail): string {
+  const t = transferTarget(dataset)
+  return `${prefix}-${t.secretPrefix.toLowerCase()}-${t.slug}`.replace(/_/g, "-")
 }
 
-// 잘 알려진 수정시각 컬럼 → 시간성 이름 패턴 → DATE 타입 순으로 증분 기준 후보를 찾는다.
-// (테이블마다 다르므로 생성된 코드의 주석에서 담당자 확인을 안내한다)
-const KNOWN_UPDATE_COLUMNS = ["last_update", "updated_at", "update_dt", "modified_at", "last_modified"]
-const TIME_NAME_PATTERN = /(_date|_dt|_at|_time|_timestamp)$/i
-
-function guessIncrementalColumn(dataset: DatasetDetail): string {
-  const fields = dataset.schema_fields
-  for (const known of KNOWN_UPDATE_COLUMNS) {
-    const f = fields.find(x => x.field_path.toLowerCase() === known)
-    if (f) return f.field_path
-  }
-  const byName = fields.find(f => TIME_NAME_PATTERN.test(f.field_path))
-  if (byName) return byName.field_path
-  const byType = fields.find(f => f.field_type === "DATE")
-  return byType?.field_path || "<INCREMENTAL_COLUMN>"
+function secret(dataset: DatasetDetail, name: "USERNAME" | "PASSWORD"): string {
+  return `{{ secret('${transferTarget(dataset).secretPrefix}_${name}') }}`
 }
 
-function getDatasetParts(dataset: DatasetDetail) {
-  const parts = dataset.name.split(".")
-  const dbName = parts.length > 1 ? parts[0] : "<database>"
-  const tblName = parts.length > 1 ? parts[1] : parts[0]
-  const datasourceType = dataset.datasource.type
-  const datasourceId = dataset.datasource.datasource_id
-  const jdbc = getJdbcUrl(datasourceType)
-  // 데이터레이크 표준 경로 — PySpark 탭과 동일 규칙 (s3a:// 는 Spark 에서 사용)
-  const s3Base = `s3://<DATALAKE_BUCKET>/raw/${datasourceId}/${dbName}/${tblName}`
-  const s3aBase = `s3a://<DATALAKE_BUCKET>/raw/${datasourceId}/${dbName}/${tblName}`
-  const columns = dataset.schema_fields.map(f => f.field_path).join(", ")
-  const pkColumn = dataset.schema_fields.find(f => f.is_primary_key === "true")?.field_path || "id"
-  const incrementalColumn = guessIncrementalColumn(dataset)
-  return { dbName, tblName, datasourceType, datasourceId, jdbc, s3Base, s3aBase, columns, pkColumn, incrementalColumn }
+/** 원본 JDBC 조회 작업의 머리(type · url · 자격 증명). 플러그인이 없는 유형은 안내 주석. */
+function jdbcTaskHead(dataset: DatasetDetail): string {
+  const t = transferTarget(dataset)
+  const plugin = kestraJdbcPlugin(t.type)
+  const type = plugin
+    ? `io.kestra.plugin.jdbc.${plugin}.Query`
+    : `io.kestra.plugin.jdbc.<PLUGIN>.Query  # [필수 확인] ${t.type} 용 Kestra JDBC 플러그인이 없다 — PySpark 하위 탭을 쓴다`
+  return `    type: ${type}
+    url: "${jdbcInfo(t.type).url}"
+    username: "${secret(dataset, "USERNAME")}"
+    password: "${secret(dataset, "PASSWORD")}"`
 }
 
 // ---------------------------------------------------------------------------
 // YAML generators
 // ---------------------------------------------------------------------------
 
-function generateBasicYaml(dataset: DatasetDetail): string {
-  const { dbName, tblName, datasourceType, datasourceId, jdbc, columns } = getDatasetParts(dataset)
-  const dbType = datasourceType === "mysql" ? "mysql" : datasourceType === "postgresql" || datasourceType === "greenplum" ? "postgresql" : datasourceType
+export function generateBasicYaml(dataset: DatasetDetail): string {
+  const t = transferTarget(dataset)
 
-  return `# Kestra Flow: Basic JDBC Extract → S3 Load
-# Source: ${dataset.datasource.name} (${datasourceId})
-# Table: ${dbName}.${tblName}
+  return `# Kestra Flow: Basic JDBC Extract → S3 Load (CSV, 전체 스냅숏)
+# Source: ${dataset.datasource.name} (${t.datasourceId})
+# Table: ${dataset.name}
 # Generated by Argus Catalog
 
-id: ingest-${datasourceId}-${tblName}
+id: ${flowId("ingest", dataset)}
 namespace: argus.catalog
 
 description: |
-  Extract data from ${dbName}.${tblName} via JDBC
-  and upload to the S3 data lake as a single file.
+  Extract ${dataset.name} via JDBC and upload it to the S3 data lake as CSV.
 
 tasks:
   - id: extract
-    type: io.kestra.plugin.jdbc.${dbType}.Query
-    url: "${jdbc.url}"
-    username: "\${secret('${datasourceId.toUpperCase().replace(/-/g, '_')}_USERNAME')}"
-    password: "\${secret('${datasourceId.toUpperCase().replace(/-/g, '_')}_PASSWORD')}"
+${jdbcTaskHead(dataset)}
     sql: |
-      SELECT ${columns}
-      FROM ${dbName}.${tblName}
-    store: true
+      SELECT ${sourceColumns(dataset).join(", ")}
+      FROM ${t.sourceTable}
+    fetchType: STORE  # 결과를 Kestra 내부 저장소에 Ion 파일로
 
-  - id: convert-to-parquet
-    type: io.kestra.plugin.serdes.avro.AvroToParquet
+  - id: to-csv
+    type: io.kestra.plugin.serdes.csv.IonToCsv
     from: "{{ outputs.extract.uri }}"
-    compressionCodec: SNAPPY
 
   - id: upload-to-s3
     type: io.kestra.plugin.aws.s3.Upload
     region: "<AWS_REGION>"          # MinIO 등 S3 호환 스토리지는 endpointOverride 추가
-    bucket: "<DATALAKE_BUCKET>"
-    from: "{{ outputs['convert-to-parquet'].uri }}"
-    key: "raw/${datasourceId}/${dbName}/${tblName}/data.parquet"
+    accessKeyId: "{{ secret('AWS_ACCESS_KEY_ID') }}"
+    secretKeyId: "{{ secret('AWS_SECRET_ACCESS_KEY') }}"
+    bucket: "${DATALAKE_BUCKET}"
+    from: "{{ outputs['to-csv'].uri }}"
+    key: "${t.s3Prefix}/snapshot/data.csv"
 
 triggers:
   - id: daily-schedule
@@ -105,77 +110,43 @@ triggers:
 `
 }
 
-function generateSparkYaml(dataset: DatasetDetail): string {
-  const { dbName, tblName, datasourceId, jdbc, s3aBase, incrementalColumn } = getDatasetParts(dataset)
+export function generateSparkYaml(dataset: DatasetDetail): string {
+  const t = transferTarget(dataset)
+  const jdbc = jdbcInfo(t.type)
 
   return `# Kestra Flow: PySpark Partitioned Load
-# Source: ${dataset.datasource.name} (${datasourceId})
-# Table: ${dbName}.${tblName}
+# Source: ${dataset.datasource.name} (${t.datasourceId})
+# Table: ${dataset.name}
 # Generated by Argus Catalog
+#
+# 데이터셋 상세 > PySpark 탭의 '일단위 증분' 스크립트를 이 흐름의 네임스페이스 파일(ingest_${t.slug}.py)로
+# 올려 두고 Spark 에 제출한다(스크립트를 두 곳에 두지 않는다).
 
-id: spark-ingest-${datasourceId}-${tblName}
+id: ${flowId("spark-ingest", dataset)}
 namespace: argus.catalog
 
 description: |
-  Use PySpark to read ${dbName}.${tblName} via JDBC,
-  partition by date, and write to the S3 data lake as Parquet.
+  Submit the PySpark incremental script for ${dataset.name}
+  and write one date partition to the S3 data lake as Parquet.
 
-inputs:
-  - id: target_date
-    type: STRING
-    defaults: "{{ now() | dateAdd(-1, 'DAYS') | date('yyyy-MM-dd') }}"
-    description: "Date to process (default: yesterday)"
+${TARGET_DATE_INPUT}
+
+${TARGET_DATE_VAR}
 
 tasks:
   - id: spark-load
     type: io.kestra.plugin.spark.PythonSubmit
-    runner: PROCESS
-    mainScript: |
-      from datetime import datetime, timedelta
-
-      from pyspark.sql import SparkSession
-      from pyspark.sql.functions import lit
-
-      spark = SparkSession.builder \\
-          .appName("kestra-${datasourceId}-${tblName}") \\
-          .getOrCreate()
-      # S3A 접속 설정(IAM Role 권장, MinIO 는 endpoint 지정) — PySpark 탭 주석 참고
-
-      target_date = "{{ inputs.target_date }}"
-      next_date = (datetime.strptime(target_date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
-
-      # [필수 확인] 일단위 증분 기준 컬럼 — 테이블마다 달라 담당자 확인 필요.
-      # 카탈로그 스키마 기준 추정값: ${incrementalColumn}
-      # (후보 목록·주의사항은 데이터셋 상세 > PySpark 탭의 주석 참고)
-      incremental_column = "${incrementalColumn}"
-
-      # 반개구간 비교로 원본 인덱스를 활용 (DATE(컬럼) = '...' 비교는 인덱스를 못 탄다)
-      pushdown = (
-          "(SELECT * FROM ${dbName}.${tblName} "
-          "WHERE {0} >= '{1} 00:00:00' AND {0} < '{2} 00:00:00') AS t"
-      ).format(incremental_column, target_date, next_date)
-
-      df = spark.read \\
-          .format("jdbc") \\
-          .option("url", "${jdbc.url}") \\
-          .option("driver", "${jdbc.driver}") \\
-          .option("dbtable", pushdown) \\
-          .option("user", "{{ secret('${datasourceId.toUpperCase().replace(/-/g, '_')}_USERNAME') }}") \\
-          .option("password", "{{ secret('${datasourceId.toUpperCase().replace(/-/g, '_')}_PASSWORD') }}") \\
-          .option("fetchsize", "10000") \\
-          .load()
-
-      print(f"Read {df.count()} rows for {target_date}")
-
-      # 일자 파티션 경로를 직접 지정 + overwrite → 같은 날짜 재실행에 멱등
-      target_path = "${s3aBase}/dt=" + target_date
-      df.withColumn("dt", lit(target_date)) \\
-          .write \\
-          .mode("overwrite") \\
-          .parquet(target_path)
-
-      print(f"Written to {target_path}")
-      spark.stop()
+    master: "<SPARK_MASTER_URL>"   # 예: spark://<HOST>:7077, k8s://…, yarn
+    mainScript: "{{ read('ingest_${t.slug}.py') }}"
+    args:
+      - "--target-date"
+      - "${DATE}"
+    configurations:
+      spark.jars: "<JAR_DIR>/${jdbc.jar}"   # [필수 확인] JDBC 드라이버 jar 경로
+    # 원본 자격 증명 — 스크립트(드라이버)가 환경변수로 읽는다
+    env:
+      ${t.secretPrefix}_USERNAME: "${secret(dataset, "USERNAME")}"
+      ${t.secretPrefix}_PASSWORD: "${secret(dataset, "PASSWORD")}"
 
 triggers:
   - id: daily-schedule
@@ -184,53 +155,56 @@ triggers:
 `
 }
 
-function generateShellYaml(dataset: DatasetDetail): string {
-  const { dbName, tblName, datasourceType, datasourceId, jdbc, s3Base, columns, incrementalColumn } = getDatasetParts(dataset)
-  const dbType = datasourceType === "mysql" ? "mysql" : datasourceType === "postgresql" || datasourceType === "greenplum" ? "postgresql" : datasourceType
+export function generateShellYaml(dataset: DatasetDetail): string {
+  const t = transferTarget(dataset)
+  const inc = incrementalColumn(dataset)
+  const incExpr = sourceIdent(t.type, inc)
+  const target = `s3://${DATALAKE_BUCKET}/${t.s3Prefix}/csv/${t.partition}=${DATE}/${t.slug}.csv`
 
-  return `# Kestra Flow: Shell + AWS CLI
-# Source: ${dataset.datasource.name} (${datasourceId})
-# Table: ${dbName}.${tblName}
+  return `# Kestra Flow: Shell + AWS CLI (일자 CSV)
+# Source: ${dataset.datasource.name} (${t.datasourceId})
+# Table: ${dataset.name}
 # Generated by Argus Catalog
 
-id: shell-ingest-${datasourceId}-${tblName}
+id: ${flowId("shell-ingest", dataset)}
 namespace: argus.catalog
 
 description: |
-  Extract ${dbName}.${tblName} via JDBC to a local file
-  and upload it to the S3 data lake partition path.
+  Extract one day of ${dataset.name} via JDBC to CSV
+  and upload it to the S3 data lake partition path with the AWS CLI.
 
-inputs:
-  - id: target_date
-    type: STRING
-    defaults: "{{ now() | dateAdd(-1, 'DAYS') | date('yyyy-MM-dd') }}"
+${TARGET_DATE_INPUT}
+
+${TARGET_DATE_VAR}
 
 tasks:
-  - id: extract-to-csv
-    type: io.kestra.plugin.jdbc.${dbType}.Query
-    url: "${jdbc.url}"
-    username: "\${secret('${datasourceId.toUpperCase().replace(/-/g, '_')}_USERNAME')}"
-    password: "\${secret('${datasourceId.toUpperCase().replace(/-/g, '_')}_PASSWORD')}"
+  - id: extract
+${jdbcTaskHead(dataset)}
     sql: |
-      -- [필수 확인] 증분 기준 컬럼(${incrementalColumn})은 테이블마다 다름 — 담당자 확인 필요.
+      -- [필수 확인] 증분 기준 컬럼(${inc})은 테이블마다 다름 — 담당자 확인 필요.
       -- 반개구간 비교로 원본 인덱스 활용.
-      SELECT ${columns}
-      FROM ${dbName}.${tblName}
-      WHERE ${incrementalColumn} >= '{{ inputs.target_date }} 00:00:00'
-        AND ${incrementalColumn} <  '{{ inputs.target_date | dateAdd(1, "DAYS") | date("yyyy-MM-dd") }} 00:00:00'
-    store: true
+      SELECT ${sourceColumns(dataset).join(", ")}
+      FROM ${t.sourceTable}
+      WHERE ${incExpr} >= ${sourceDayStart(t.type, DATE)}
+        AND ${incExpr} <  ${sourceDayStart(t.type, NEXT_DATE)}
+    fetchType: STORE
+
+  - id: to-csv
+    type: io.kestra.plugin.serdes.csv.IonToCsv
+    from: "{{ outputs.extract.uri }}"
 
   - id: upload-to-partition
     type: io.kestra.plugin.scripts.shell.Commands
+    containerImage: amazon/aws-cli:2.17.0   # Docker 없이 돌리려면 taskRunner 를 Process 로, 호스트에 aws CLI 설치
+    inputFiles:
+      data.csv: "{{ outputs['to-csv'].uri }}"
+    env:
+      AWS_ACCESS_KEY_ID: "{{ secret('AWS_ACCESS_KEY_ID') }}"
+      AWS_SECRET_ACCESS_KEY: "{{ secret('AWS_SECRET_ACCESS_KEY') }}"
     commands:
-      # MinIO 등 S3 호환 스토리지는 --endpoint-url 옵션 추가
-      - aws s3 cp "{{ outputs['extract-to-csv'].uri }}" "${s3Base}/dt={{ inputs.target_date }}/${tblName}.csv"
-
-  - id: verify
-    type: io.kestra.plugin.scripts.shell.Commands
-    commands:
-      - aws s3 ls "${s3Base}/dt={{ inputs.target_date }}/"
-      - echo "Upload complete for {{ inputs.target_date }}"
+      # MinIO 등 S3 호환 스토리지는 --endpoint-url 옵션 추가. 같은 날짜는 같은 키를 덮어써 멱등
+      - aws s3 cp data.csv "${target}"
+      - aws s3 ls "${target}"
 
 triggers:
   - id: daily-schedule
@@ -239,78 +213,113 @@ triggers:
 `
 }
 
-function generateSqlYaml(dataset: DatasetDetail): string {
-  const { dbName, tblName, datasourceType, datasourceId, s3aBase, incrementalColumn } = getDatasetParts(dataset)
+export function generateHiveYaml(dataset: DatasetDetail): string {
+  const t = transferTarget(dataset)
+  const sql = hiveSql(dataset, DATE)
 
-  return `# Kestra Flow: Hive/Trino SQL Partitioned Load
-# Source: ${dataset.datasource.name} (${datasourceId})
-# Table: ${dbName}.${tblName}
+  return `# Kestra Flow: Hive 외부 테이블 · 일자 파티션 등록
+# Source: ${dataset.datasource.name} (${t.datasourceId})
+# Table: ${dataset.name}
 # Generated by Argus Catalog
+#
+# PySpark 하위 탭 흐름(${flowId("spark-ingest", dataset)})이 ${sql.location}/${t.partition}=YYYY-MM-DD/ 에 쓴
+# Parquet 을 HiveServer2(beeline)로 외부 테이블 ${sql.table} 에 등록한다. Hive 는 원본 DB 를 읽지 않는다.
+# Kestra 에는 Hive JDBC 플러그인이 없어 beeline 을 쓴다.
+#
+# [필수 확인] 컬럼 타입은 원본 타입으로 추정한 Spark(JDBC) 기준값이다 — Parquet 파일의 타입과 다르면 조회가 실패하므로
+#            첫 적재 뒤 파일 스키마와 맞춰 본다. Hive 에서 s3a 접근 설정이 필요하다.
 
-id: sql-ingest-${datasourceId}-${tblName}
+id: ${flowId("hive-register", dataset)}
 namespace: argus.catalog
 
 description: |
-  Use Hive/Trino SQL to create partitions and INSERT data
-  from the source ${dbName}.${tblName} table.
+  Register the Parquet partition of ${dataset.name} written by the PySpark flow
+  as a Hive external table partition.
 
-inputs:
-  - id: target_date
-    type: STRING
-    defaults: "{{ now() | dateAdd(-1, 'DAYS') | date('yyyy-MM-dd') }}"
+${TARGET_DATE_INPUT}
+
+${TARGET_DATE_VAR}
 
 tasks:
-  - id: create-external-table
-    type: io.kestra.plugin.jdbc.trino.Query
-    url: "jdbc:trino://<TRINO_HOST>:8080/hive/catalog_${datasourceId.replace(/-/g, '_')}"
-    username: "<TRINO_USER>"
-    sql: |
-      CREATE TABLE IF NOT EXISTS ${tblName} (
-        ${dataset.schema_fields.map(f => `${f.field_path} VARCHAR`).join(",\n        ")}
-      )
-      WITH (
-        format = 'PARQUET',
-        partitioned_by = ARRAY['dt'],
-        external_location = '${s3aBase}'
-      )
-    disabled: true  # Run once to create table, then disable
+  - id: register-partition
+    type: io.kestra.plugin.scripts.shell.Commands
+    containerImage: apache/hive:4.0.1   # beeline 이 있는 이미지 또는 호스트(taskRunner Process)
+    inputFiles:
+      register.hql: |
+${indent(`${sql.createDatabase};\n\n${sql.create};\n\n${sql.addPartition};\n\n${sql.verify};`, 8)}
+    env:
+      HIVE_PASSWORD: "{{ secret('HIVE_PASSWORD') }}"
+    commands:
+      - beeline -u "jdbc:hive2://<HIVESERVER2_HOST>:10000/default" -n "<HIVE_USER>" -p "$HIVE_PASSWORD" -f register.hql
 
-  - id: add-partition
-    type: io.kestra.plugin.jdbc.trino.Query
-    url: "jdbc:trino://<TRINO_HOST>:8080/hive/catalog_${datasourceId.replace(/-/g, '_')}"
+triggers:
+  # PySpark 흐름(03:00)이 끝난 뒤 — 오래 걸리면 시각을 늦추거나 Flow 트리거로 바꾼다
+  - id: daily-schedule
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "0 4 * * *"
+`
+}
+
+export function generateTrinoYaml(dataset: DatasetDetail): string {
+  const t = transferTarget(dataset)
+  const sql = trinoSql(dataset, DATE)
+  const inc = incrementalColumn(dataset)
+  const trinoTask = `    type: io.kestra.plugin.jdbc.trino.Query
+    url: "jdbc:trino://<TRINO_HOST>:<TRINO_PORT>"
     username: "<TRINO_USER>"
+    password: "{{ secret('TRINO_PASSWORD') }}"`
+
+  return `# Kestra Flow: Trino 적재 (원본 → 데이터레이크 테이블)
+# Source: ${dataset.datasource.name} (${t.datasourceId})
+# Table: ${dataset.name}
+# Generated by Argus Catalog
+#
+# Trino 가 원본을 커넥터 카탈로그로 읽어 데이터레이크(Hive 커넥터) 카탈로그의 일자 파티션 테이블에 넣는다.
+# Spark 없이 SQL 만으로 옮길 때 쓴다. 테이블은 원본 타입 그대로 만든다(CTAS ... WITH NO DATA).
+#
+# [필수 확인]
+#   - <SOURCE_CATALOG>: 이 원본을 읽는 Trino 카탈로그 — 카탈로그의 데이터 소스 > 카탈로그 연결의 원격 이름
+#   - <LAKE_CATALOG>: 데이터레이크 Hive 커넥터 카탈로그(쓰기 가능)
+#   - 증분 기준 컬럼(${inc})은 테이블마다 다름 — 날짜 · 시각 타입이어야 한다
+
+id: ${flowId("trino-ingest", dataset)}
+namespace: argus.catalog
+
+description: |
+  Load one day of ${dataset.name} into the data lake table with Trino SQL.
+
+${TARGET_DATE_INPUT}
+
+${TARGET_DATE_VAR}
+
+tasks:
+  # 스키마 · 테이블은 IF NOT EXISTS — 매번 돌려도 그대로
+  - id: create-schema
+${trinoTask}
     sql: |
-      -- Trino automatically discovers partitions for Hive tables
-      -- For manual partition management:
-      CALL system.sync_partition_metadata(
-        schema_name => 'catalog_${datasourceId.replace(/-/g, '_')}',
-        table_name => '${tblName}',
-        mode => 'ADD'
-      )
+${indent(sql.createSchema, 6)}
+
+  - id: create-table
+${trinoTask}
+    sql: |
+${indent(sql.create, 6)}
+
+  # 같은 날짜를 다시 돌리면 그 파티션을 지우고 다시 넣는다(멱등)
+  - id: delete-partition
+${trinoTask}
+    sql: |
+${indent(sql.deletePartition, 6)}
 
   - id: insert-data
-    type: io.kestra.plugin.jdbc.trino.Query
-    url: "jdbc:trino://<TRINO_HOST>:8080/hive/catalog_${datasourceId.replace(/-/g, '_')}"
-    username: "<TRINO_USER>"
+${trinoTask}
     sql: |
-      INSERT INTO ${tblName}
-      SELECT
-        ${dataset.schema_fields.map(f => `CAST(${f.field_path} AS VARCHAR)`).join(",\n        ")},
-        '{{ inputs.target_date }}' AS dt
-      FROM ${datasourceType}.${dbName}.${tblName}
-      -- [필수 확인] 증분 기준 컬럼(${incrementalColumn})은 테이블마다 다름 — 담당자 확인 필요.
-      WHERE ${incrementalColumn} >= TIMESTAMP '{{ inputs.target_date }} 00:00:00'
-        AND ${incrementalColumn} <  TIMESTAMP '{{ inputs.target_date }} 00:00:00' + INTERVAL '1' DAY
+${indent(sql.insert, 6)}
 
   - id: verify-count
-    type: io.kestra.plugin.jdbc.trino.Query
-    url: "jdbc:trino://<TRINO_HOST>:8080/hive/catalog_${datasourceId.replace(/-/g, '_')}"
-    username: "<TRINO_USER>"
+${trinoTask}
     sql: |
-      SELECT count(*) AS row_count
-      FROM ${tblName}
-      WHERE dt = '{{ inputs.target_date }}'
-    store: true
+${indent(sql.verify, 6)}
+    fetchType: FETCH_ONE
 
 triggers:
   - id: daily-schedule
@@ -320,7 +329,7 @@ triggers:
 }
 
 // ---------------------------------------------------------------------------
-// Code viewer with Monaco
+// Code viewer
 // ---------------------------------------------------------------------------
 
 function YamlViewer({ code }: { code: string }) {
@@ -331,6 +340,8 @@ function YamlViewer({ code }: { code: string }) {
       language="yaml"
       height={Math.min(lineCount * 20 + 20, 600)}
       copyLabel="Kestra YAML"
+      border
+      className="py-2"
     />
   )
 }
@@ -339,50 +350,38 @@ function YamlViewer({ code }: { code: string }) {
 // Main component
 // ---------------------------------------------------------------------------
 
-type KestraFlowTabProps = {
-  dataset: DatasetDetail
-}
+const VARIANTS = [
+  { value: "basic", label: "Basic", make: generateBasicYaml },
+  { value: "spark", label: "PySpark", make: generateSparkYaml },
+  { value: "shell", label: "Shell + AWS CLI", make: generateShellYaml },
+  { value: "hive", label: "Hive", make: generateHiveYaml },
+  { value: "trino", label: "Trino", make: generateTrinoYaml },
+] as const
 
-export function KestraFlowTab({ dataset }: KestraFlowTabProps) {
-  const basicYaml = useMemo(() => generateBasicYaml(dataset), [dataset])
-  const sparkYaml = useMemo(() => generateSparkYaml(dataset), [dataset])
-  const shellYaml = useMemo(() => generateShellYaml(dataset), [dataset])
-  const sqlYaml = useMemo(() => generateSqlYaml(dataset), [dataset])
+export function KestraFlowTab({ dataset }: { dataset: DatasetDetail }) {
+  const codes = useMemo(() => VARIANTS.map((v) => v.make(dataset)), [dataset])
 
   return (
-    <Card>
-      <CardHeader className="py-3">
-        <CardTitle className="text-base">Kestra Flow</CardTitle>
-        <CardDescription className="text-xs mt-1">
-          {dataset.datasource.type.toUpperCase()} → S3 데이터레이크 적재용 Kestra 워크플로우(YAML)를 자동 생성합니다.
-          인프라 환경에 맞는 방식을 선택하세요. 증분 기준 컬럼은 코드 주석의 안내에 따라 담당자 확인이 필요합니다.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="p-0">
+    <DetailSection
+      title="Kestra Flow"
+      description={<>
+            {dataset.datasource.type.toUpperCase()} → S3 데이터레이크 적재용 Kestra 워크플로우(YAML)를 자동 생성합니다.
+            인프라 환경에 맞는 방식을 선택하세요. Hive 는 PySpark 가 쓴 파일을 테이블로 등록하고, Trino 는 Spark 없이 Trino 로
+            원본을 읽어 적재합니다. 증분 기준 컬럼 · 자리표시자(&lt;…&gt;)는 코드 주석의 안내에 따라 확인이 필요합니다.
+      </>}
+    >
         <Tabs defaultValue="basic" className="w-full">
-          <div className="border-t px-4 pt-2">
+          <div>
             <TabsList>
-              <TabsTrigger value="basic">Basic</TabsTrigger>
-              <TabsTrigger value="spark">PySpark</TabsTrigger>
-              <TabsTrigger value="shell">Shell + AWS CLI</TabsTrigger>
-              <TabsTrigger value="sql">Hive/Trino SQL</TabsTrigger>
+              {VARIANTS.map((v) => <TabsTrigger key={v.value} value={v.value}>{v.label}</TabsTrigger>)}
             </TabsList>
           </div>
-
-          <TabsContent value="basic" className="mt-0">
-            <YamlViewer code={basicYaml} />
-          </TabsContent>
-          <TabsContent value="spark" className="mt-0">
-            <YamlViewer code={sparkYaml} />
-          </TabsContent>
-          <TabsContent value="shell" className="mt-0">
-            <YamlViewer code={shellYaml} />
-          </TabsContent>
-          <TabsContent value="sql" className="mt-0">
-            <YamlViewer code={sqlYaml} />
-          </TabsContent>
+          {VARIANTS.map((v, i) => (
+            <TabsContent key={v.value} value={v.value} className="mt-0">
+              <YamlViewer code={codes[i]!} />
+            </TabsContent>
+          ))}
         </Tabs>
-      </CardContent>
-    </Card>
+    </DetailSection>
   )
 }

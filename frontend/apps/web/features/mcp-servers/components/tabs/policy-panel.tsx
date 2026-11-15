@@ -8,12 +8,12 @@
  * 집행한다(Phase 3, EnforcementCard).
  */
 
+import { Tip } from "@/components/tip"
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react"
 import { History, Loader2, Plus, Save, ShieldCheck, Trash2, Wand2 } from "lucide-react"
 import { errorMessage, notifyError, toast } from "@/lib/notify"
 
 import { Button } from "@workspace/ui/components/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@workspace/ui/components/card"
 import { Checkbox } from "@workspace/ui/components/checkbox"
 import {
   Dialog,
@@ -53,6 +53,8 @@ import {
 import { EffectBadge, OriginBadge, RiskBadge, RowSourceBadge, fmtDate } from "../mcp-badges"
 import { JsonBlock } from "../mcp-server-detail"
 import { EnforcementCard } from "./enforcement-card"
+import { DetailSection } from "@/components/detail-section"
+import { TagInput } from "@/components/tag-input"
 
 type Tri = "on" | "off" | "unset"
 type ToolEdit = { blocked: boolean; requires_approval: Tri }
@@ -180,26 +182,22 @@ export function PolicyPanel({ name, onChanged, canEdit = true }: {
   const observedLimits = policy.observed_limits ?? {}
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* 헤더 */}
-      <Card>
-        <CardContent className="flex flex-wrap items-center justify-between gap-3 pt-6">
-          <div className="space-y-1 text-sm">
-            <div className="flex flex-wrap items-center gap-2">
-              <ShieldCheck className="h-4 w-4 text-violet-600" />
-              <span className="font-medium">승인 정책</span>
-              <OriginBadge origin="argus" />
-              <span className="font-mono text-xs text-muted-foreground">{policy.policy_version ?? "미설정"}</span>
-            </div>
-            <p className="text-xs text-muted-foreground">
+    <div className="flex flex-col gap-6">
+      {/* 헤더 — 정책 버전 · 모드 · 이력 · 관측값 채택 */}
+      <DetailSection
+        icon={<ShieldCheck />}
+        title={<>
+          승인 정책 <OriginBadge origin="argus" />
+          <span className="font-mono text-xs font-normal">{policy.policy_version ?? "미설정"}</span>
+        </>}
+        description={<>
               {policy.policy_updated_at
                 ? `${fmtDate(policy.policy_updated_at)} · ${policy.policy_updated_by ?? "-"}`
                 : "아직 승인 정책이 없습니다. “관측값 채택”으로 현재 상태를 기준선으로 삼을 수 있습니다."}
               {" "}관측값과 다르면 finding 이 생기고 알림 규칙(MCP_POLICY_DRIFT)으로 발행됩니다.
               {policy.policy_mode === "enforce" ? " 강제 모드 — 서버가 이 정책으로 도구 호출을 거부합니다." : " 관측 모드 — 서버에 강제하지는 않습니다."}
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
+        </>}
+        actions={<>
             <Select disabled={ro} value={draft.policy_mode} onValueChange={(v) => setDraft({ ...draft, policy_mode: v })}>
               <SelectTrigger size="sm" className="w-[150px]"><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -215,21 +213,17 @@ export function PolicyPanel({ name, onChanged, canEdit = true }: {
                 <Wand2 className="mr-1 h-4 w-4" /> 관측값 채택
               </Button>
             )}
-          </div>
-        </CardContent>
-      </Card>
+        </>}
+      />
 
       <EnforcementCard name={name} policy={policy} mode={draft.policy_mode} canEdit={canEdit} />
 
       {/* 그룹 */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm">도구 그룹</CardTitle>
-          <p className="text-xs text-muted-foreground">
-            승인 “꺼짐”인 그룹이 서버에서 켜져 있으면 finding 이 됩니다. “미지정”은 비교하지 않습니다.
-          </p>
-        </CardHeader>
-        <CardContent>
+      <DetailSection
+        title="도구 그룹"
+        description="승인 “꺼짐”인 그룹이 서버에서 켜져 있으면 finding 이 됩니다. “미지정”은 비교하지 않습니다."
+      >
+        <div className="rounded-md border">
           <Table>
             <TableHeader>
               <TableRow>
@@ -248,13 +242,13 @@ export function PolicyPanel({ name, onChanged, canEdit = true }: {
                   <TableRow key={g.key} className={cn(drift && "bg-red-50/60 dark:bg-red-950/20")}>
                     <TableCell>
                       <div className="font-medium">{g.label || g.key}</div>
-                      <div className="font-mono text-[11px] text-muted-foreground">{g.key}{g.mutating ? " · 변경" : ""}</div>
+                      <div className="font-mono text-[11px]">{g.key}{g.mutating ? " · 변경" : ""}</div>
                     </TableCell>
-                    <TableCell className="font-mono text-[11px] text-muted-foreground">{g.config_key || "-"}</TableCell>
+                    <TableCell className="font-mono text-[11px]">{g.config_key || "-"}</TableCell>
                     <TableCell><RiskBadge risk={g.risk} /></TableCell>
                     <TableCell>
                       <OnOff value={g.observed_enabled} />
-                      {g.observed_basis && <span className="ml-1 text-[11px] text-muted-foreground">({g.observed_basis})</span>}
+                      {g.observed_basis && <span className="ml-1 text-[11px]">({g.observed_basis})</span>}
                     </TableCell>
                     <TableCell>
                       <Select disabled={ro} value={appr} onValueChange={(v) => setGroup(g.key, v as Tri)}>
@@ -271,23 +265,20 @@ export function PolicyPanel({ name, onChanged, canEdit = true }: {
               })}
             </TableBody>
           </Table>
-        </CardContent>
-      </Card>
+        </div>
+      </DetailSection>
 
       {/* 도구 */}
-      <Card>
-        <CardHeader className="flex flex-row items-start justify-between gap-2">
-          <div>
-            <CardTitle className="text-sm">도구 차단 · 사람 승인</CardTitle>
-            <p className="text-xs text-muted-foreground">
-              차단한 도구가 노출되거나 호출되면 finding(치명) 이 됩니다. 사람 승인 필요 여부는 에이전트 정책 번들에 반영됩니다.
-            </p>
-          </div>
-          <label className="flex shrink-0 items-center gap-2 text-xs">
+      <DetailSection
+        title="도구 차단 · 사람 승인"
+        description="차단한 도구가 노출되거나 호출되면 finding(치명) 이 됩니다. 사람 승인 필요 여부는 에이전트 정책 번들에 반영됩니다."
+        actions={
+          <label className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
             <Switch checked={showAllTools} onCheckedChange={setShowAllTools} /> 읽기 도구도 표시
           </label>
-        </CardHeader>
-        <CardContent>
+        }
+      >
+        <div className="rounded-md border">
           <Table>
             <TableHeader>
               <TableRow>
@@ -310,7 +301,7 @@ export function PolicyPanel({ name, onChanged, canEdit = true }: {
                     <TableCell className="text-xs">{t.group_key ?? "-"}</TableCell>
                     <TableCell>
                       <RiskBadge risk={t.risk} />
-                      {!t.risk_confirmed && t.mutating && <span className="ml-1 text-[10px] text-amber-600">미확정</span>}
+                      {!t.risk_confirmed && t.mutating && <span className="ml-1 text-[11px] text-amber-600">미확정</span>}
                     </TableCell>
                     <TableCell><OnOff value={t.observed_exposed} /></TableCell>
                     <TableCell>
@@ -331,20 +322,16 @@ export function PolicyPanel({ name, onChanged, canEdit = true }: {
               })}
             </TableBody>
           </Table>
-        </CardContent>
-      </Card>
+        </div>
+      </DetailSection>
 
       {/* 리소스 범위 */}
-      <div className="grid gap-4 xl:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-sm">승인 리소스 범위 <OriginBadge origin="argus" /></CardTitle>
-            <p className="text-xs text-muted-foreground">
-              승인 deny/protect 가 서버 설정에 없거나, 서버 allow 목록이 승인 allow 보다 넓으면 finding 입니다.
-              감사 이벤트 판정에도 쓰입니다(없으면 관측 범위 사용).
-            </p>
-          </CardHeader>
-          <CardContent className="space-y-2">
+      <div className="grid items-start gap-6 xl:grid-cols-2">
+        <DetailSection
+          title={<>승인 리소스 범위 <OriginBadge origin="argus" /></>}
+          description="승인 deny/protect 가 서버 설정에 없거나, 서버 allow 목록이 승인 allow 보다 넓으면 finding 입니다. 감사 이벤트 판정에도 쓰입니다(없으면 관측 범위 사용)."
+          className="space-y-2"
+        >
             {draft.scopes.map((s, i) => (
               <ScopeRow
                 key={i}
@@ -363,22 +350,19 @@ export function PolicyPanel({ name, onChanged, canEdit = true }: {
                 <Plus className="mr-1 h-4 w-4" /> 규칙 추가
               </Button>
             )}
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-sm">관측 리소스 범위 <OriginBadge origin="server_config" /></CardTitle>
-            <p className="text-xs text-muted-foreground">서버 설정·manifest 에서 수집한 규칙 (읽기 전용 비교용)</p>
-          </CardHeader>
-          <CardContent>
+        </DetailSection>
+        <DetailSection
+          title={<>관측 리소스 범위 <OriginBadge origin="server_config" /></>}
+          description="서버 설정·manifest 에서 수집한 규칙 (읽기 전용 비교용)"
+        >
             {policy.observed_scopes.length === 0 ? (
-              <p className="text-xs text-muted-foreground">관측된 규칙이 없습니다.</p>
+              <p className="text-xs">관측된 규칙이 없습니다.</p>
             ) : (
               <div className="space-y-1.5">
                 {policy.observed_scopes.map((s) => (
                   <div key={s.id} className="flex flex-wrap items-center gap-1.5 text-xs">
                     <code className="font-mono">{s.resource_type}</code>
-                    <span className="text-muted-foreground">{s.action}</span>
+                    <span >{s.action}</span>
                     <EffectBadge effect={s.effect} />
                     {s.patterns.map((p) => <code key={p} className="rounded bg-muted px-1 text-[11px]">{p}</code>)}
                     <RowSourceBadge source={s.source} />
@@ -386,19 +370,17 @@ export function PolicyPanel({ name, onChanged, canEdit = true }: {
                 ))}
               </div>
             )}
-          </CardContent>
-        </Card>
+        </DetailSection>
       </div>
 
       {/* limits · 버전 */}
-      <div className="grid gap-4 xl:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm">제한값(limits)</CardTitle>
-            <p className="text-xs text-muted-foreground">관측값이 승인값보다 크면 finding 입니다 (숫자만 비교).</p>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            <div className="grid grid-cols-[1fr_110px_110px_auto] gap-2 text-[11px] text-muted-foreground">
+      <div className="grid items-start gap-6 xl:grid-cols-2">
+        <DetailSection
+          title="제한값(limits)"
+          description="관측값이 승인값보다 크면 finding 입니다 (숫자만 비교)."
+          className="space-y-2"
+        >
+            <div className="grid grid-cols-[1fr_110px_110px_auto] gap-2 text-[11px]">
               <span>키</span><span>관측</span><span>승인</span><span />
             </div>
             {draft.limits.map((l, i) => (
@@ -409,10 +391,10 @@ export function PolicyPanel({ name, onChanged, canEdit = true }: {
                 <Input disabled={ro} className="h-8 text-xs" value={l.value}
                   onChange={(e) => setDraft({ ...draft, limits: draft.limits.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)) })} />
                 {ro ? <span /> : (
-                  <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="삭제"
+                  <Tip label="삭제"><Button variant="ghost" size="icon" className="h-7 w-7" aria-label="삭제"
                     onClick={() => setDraft({ ...draft, limits: draft.limits.filter((_, j) => j !== i) })}>
                     <Trash2 className="h-4 w-4" />
-                  </Button>
+                  </Button></Tip>
                 )}
               </div>
             ))}
@@ -424,14 +406,12 @@ export function PolicyPanel({ name, onChanged, canEdit = true }: {
                 <Plus className="mr-1 h-4 w-4" /> 제한 추가
               </Button>
             )}
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm">승인 버전</CardTitle>
-            <p className="text-xs text-muted-foreground">배포 버전이 승인 버전과 다르면 finding(낮음) 입니다.</p>
-          </CardHeader>
-          <CardContent className="grid gap-3 sm:grid-cols-2">
+        </DetailSection>
+        <DetailSection
+          title="승인 버전"
+          description="배포 버전이 승인 버전과 다르면 finding(낮음) 입니다."
+        >
+          <div className="grid gap-3 sm:grid-cols-2">
             <div className="grid gap-1">
               <Label className="flex items-center gap-1.5 text-xs">배포 버전 <OriginBadge origin="mcp" /></Label>
               <span className="font-mono text-sm">{policy.deployed_version ?? "-"}</span>
@@ -441,13 +421,13 @@ export function PolicyPanel({ name, onChanged, canEdit = true }: {
               <Input disabled={ro} className="h-8" value={draft.approved_version} placeholder="예: 1.2.0"
                 onChange={(e) => setDraft({ ...draft, approved_version: e.target.value })} />
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </DetailSection>
       </div>
 
       {/* 저장 바 */}
       {ro ? (
-        <p className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
+        <p className="rounded-md border bg-muted/30 p-3 text-xs">
           읽기 전용 — 승인 정책은 배포 등록자(기능 권한 “MCP 승인 정책 변경” 필요) 또는 관리자만 바꿀 수 있습니다.
         </p>
       ) : (
@@ -474,10 +454,6 @@ export function ScopeRow({ value, onChange, onRemove, readOnly = false }: {
   onChange: (v: McpScopeInput) => void
   onRemove: () => void
 }) {
-  const [patterns, setPatterns] = useState(value.patterns.join(", "))
-  useEffect(() => {
-    setPatterns(value.patterns.join(", "))
-  }, [value.patterns])
   return (
     <div className="grid gap-2 rounded-md border p-2 sm:grid-cols-[1fr_90px_95px_2fr_auto] sm:items-center">
       <Input disabled={readOnly} className="h-8 font-mono text-xs" placeholder="리소스 유형 (예: topic)" value={value.resource_type}
@@ -490,13 +466,12 @@ export function ScopeRow({ value, onChange, onRemove, readOnly = false }: {
         <SelectTrigger size="sm" className="h-8"><SelectValue /></SelectTrigger>
         <SelectContent>{["allow", "deny", "protect"].map((a) => <SelectItem key={a} value={a}>{a}</SelectItem>)}</SelectContent>
       </Select>
-      <Input disabled={readOnly} className="h-8 text-xs" placeholder="패턴 (쉼표 구분, fnmatch)" value={patterns}
-        onChange={(e) => setPatterns(e.target.value)}
-        onBlur={() => onChange({ ...value, patterns: patterns.split(",").map((p) => p.trim()).filter(Boolean) })} />
+      <TagInput disabled={readOnly} size="sm" mono aria-label="패턴" placeholder="패턴(fnmatch) 입력 후 Enter" value={value.patterns}
+        onChange={(patterns) => onChange({ ...value, patterns })} />
       {readOnly ? <span /> : (
-        <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="삭제" onClick={onRemove}>
+        <Tip label="삭제"><Button variant="ghost" size="icon" className="h-7 w-7" aria-label="삭제" onClick={onRemove}>
           <Trash2 className="h-4 w-4" />
-        </Button>
+        </Button></Tip>
       )}
     </div>
   )
@@ -518,7 +493,7 @@ function AdoptDialog({ open, onOpenChange, name, onDone }: {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader><DialogTitle>관측값을 승인 기준선으로 채택</DialogTitle></DialogHeader>
-        <p className="text-xs text-muted-foreground">
+        <p className="text-xs">
           현재 서버에서 관측된 값을 그대로 승인합니다. 처음 정책을 만들 때 쓰고, 이후에는 필요한 항목만 좁혀 저장하세요.
         </p>
         <div className="space-y-2">

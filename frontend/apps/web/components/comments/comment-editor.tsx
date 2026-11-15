@@ -7,14 +7,16 @@
  *       TextAlign + TaskList/Item + TextStyle + Color + Indent + Placeholder.
  * Toolbar: 텍스트 서식 / 색상 / 이모지 / 헤딩 / 목록 / 정렬 / 블록 / 링크·이미지 /
  *          표 / Undo·Redo.
- * 부가 기능: 이미지 paste & drop 자동 압축(base64), 표 우클릭 컨텍스트 메뉴.
+ * 부가 기능: 이미지 paste & drop 자동 압축(base64), 표 우클릭 컨텍스트 메뉴, 격자 표 삽입,
+ *           코드 블록 줄 번호·언어 선택, Tab/Shift-Tab 들여쓰기.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react"
-import { createPortal } from "react-dom"
+import { Tip } from "@/components/tip"
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react"
 import { useEditor, EditorContent, type Editor } from "@tiptap/react"
 import { StarterKit } from "@tiptap/starter-kit"
-import { CodeBlockLowlight } from "@tiptap/extension-code-block-lowlight"
+import type { EditorProps } from "@tiptap/pm/view"
+import type { Node as ProseMirrorNode } from "@tiptap/pm/model"
 import { Underline } from "@tiptap/extension-underline"
 import { Link } from "@tiptap/extension-link"
 import { Placeholder } from "@tiptap/extension-placeholder"
@@ -29,6 +31,7 @@ import { TextStyle } from "@tiptap/extension-text-style"
 import { Color } from "@tiptap/extension-color"
 import {
   AlignCenter, AlignLeft, AlignRight,
+  BetweenHorizontalEnd, BetweenHorizontalStart, BetweenVerticalEnd, BetweenVerticalStart,
   Bold, Code, Code2,
   Heading1, Heading2, Heading3,
   Image as ImageIcon,
@@ -36,11 +39,19 @@ import {
   Link as LinkIcon, List, ListChecks, ListOrdered,
   Minus, Outdent as OutdentIcon, Palette, Quote,
   Redo, RemoveFormatting, Sigma, Smile, Strikethrough,
-  Table as TableIcon,
+  Table as TableIcon, TableCellsMerge, TableCellsSplit, Trash2,
   Underline as UnderlineIcon, Undo,
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@workspace/ui/components/dropdown-menu"
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@workspace/ui/components/select"
@@ -50,6 +61,8 @@ import { ResizableImage } from "./resizable-image"
 import { Indent as IndentExtension } from "./indent-extension"
 import { usePrompt } from "@/components/confirm-provider"
 import { LANGUAGE_OPTIONS, lowlight } from "./lowlight"
+import { CodeBlockWithGutter } from "./code-block"
+import { ToolbarPopover } from "./toolbar-popover"
 import {
   EMOJI_CATEGORIES,
   type EmojiItem,
@@ -58,6 +71,7 @@ import {
   pushRecentEmoji,
   searchEmojis,
 } from "./emoji-data"
+import { SearchInput } from "@/components/search-input"
 
 type CommentEditorProps = {
   onSubmit: (content: string, contentPlain: string, category: string) => Promise<void>
@@ -103,7 +117,7 @@ async function insertImagesFromFiles(
 
 export function CommentEditor({
   onSubmit,
-  placeholder = "댓글을 작성하세요...",
+  placeholder = "댓글을 작성하세요…",
   submitLabel = "등록",
   autoFocus = false,
   onCancel,
@@ -120,14 +134,31 @@ export function CommentEditor({
   const [isEmpty, setIsEmpty] = useState(!initialContent)
   const [tableMenu, setTableMenu] = useState<{ x: number; y: number } | null>(null)
 
-  const editor = useEditor({
-    immediatelyRender: false,
-    content: initialContent,
-    extensions: [
+  // onChange·onReady 는 ref 로 보관 — 호출부가 매 렌더 새 함수를 넘겨도 useEditor 옵션·effect 가 흔들리지 않게.
+  const onChangeRef = useRef(onChange)
+  const onReadyRef = useRef(onReady)
+  useEffect(() => {
+    onChangeRef.current = onChange
+    onReadyRef.current = onReady
+  })
+  // content 는 초기값만 쓴다(이후 prop 이 바뀌어도 옵션 참조가 변하지 않게).
+  const [initialHtml] = useState(initialContent)
+
+  // ⚠️ extensions / editorProps 는 반드시 메모이즈해 참조를 고정한다.
+  // @tiptap/react 의 useEditor 는 매 렌더마다 옵션을 비교해 다르면 editor.setOptions() 를 부른다.
+  // .configure() 는 매 렌더 새 확장 인스턴스를, 인라인 editorProps 는 매 렌더 새 객체를 만들어 "항상 다름"이
+  // 된다. 그러면 키 입력 → onUpdate → 부모 setState(예: 변경 요청 설명의 onChange) → 리렌더 → setOptions() 가
+  // 매 키 입력마다 호출되고, 한글 IME 조합 중 view props 가 재적용돼 "한글" → "ㅎ하한한ㄱ그글글" 처럼
+  // 글자가 중복된다. 참조를 고정하면 setOptions 가 키 입력마다 호출되지 않아 조합이 보존된다.
+  const extensions = useMemo(
+    () => [
       // StarterKit 의 기본 codeBlock 은 CodeBlockLowlight 로 교체 — syntax highlight
       // 지원 + language 속성으로 직렬화. ``<pre><code class="language-xxx">...``.
-      StarterKit.configure({ codeBlock: false }),
-      CodeBlockLowlight.configure({
+      // tiptap v3 의 StarterKit 은 link/underline 도 번들 — 아래에서 따로 설정해 추가하므로
+      // 중복(Duplicate extension names) 방지로 끈다.
+      StarterKit.configure({ codeBlock: false, link: false, underline: false }),
+      // 코드 블록 — lowlight 문법 강조 + 줄 번호 + hover 언어 선택(code-block.tsx).
+      CodeBlockWithGutter.configure({
         lowlight,
         defaultLanguage: "plaintext",
         HTMLAttributes: { class: "hljs" },
@@ -162,8 +193,11 @@ export function CommentEditor({
       IndentExtension,
       Placeholder.configure({ placeholder }),
     ],
-    autofocus: autoFocus,
-    editorProps: {
+    [placeholder],
+  )
+
+  const editorProps = useMemo<EditorProps>(
+    () => ({
       attributes: {
         class:
           // resize-y: 우하단 그립으로 높이 조절 가능(overflow-auto 필요).
@@ -177,7 +211,7 @@ export function CommentEditor({
           // 않게 한다. 안의 <code> 는 부모 pre 의 text-sm 을 상속하고 토큰 색은
           // ``.hljs-xxx`` 셀렉터가 더 specific 하므로 그대로 보존된다.
           "[&_pre]:bg-muted [&_pre]:p-3 [&_pre]:rounded [&_pre]:text-sm " +
-          "[&_pre]:overflow-x-auto [&_pre]:whitespace-pre [&_pre]:font-[D2Coding,monospace] " +
+          "[&_pre]:whitespace-pre [&_pre]:font-[D2Coding,monospace] " +
           "[&_pre_code]:bg-transparent [&_pre_code]:p-0 " +
           // 인라인 <code> — 본문과 동일한 14px(text-sm) + 본문과 동일한 font-weight.
           // prose 의 ``.prose code { font-weight: 600 }`` 기본은 ``font-normal`` 로 override.
@@ -198,6 +232,10 @@ export function CommentEditor({
       },
       // 이미지 클립보드 paste / drag-drop — 압축 후 base64 inline.
       handlePaste(view, event) {
+        // Excel/Sheets 등은 이미지 비트맵 + <table> HTML 을 함께 클립보드에 담는다.
+        // 표가 포함된 HTML 이면 이미지 삽입을 양보해 ProseMirror 가 표로 파싱하게 한다.
+        const html = event.clipboardData?.getData("text/html") || ""
+        if (/<table[\s>]/i.test(html)) return false
         const files = Array.from(event.clipboardData?.files || []).filter((f) =>
           f.type.startsWith("image/"),
         )
@@ -218,17 +256,26 @@ export function CommentEditor({
         void insertImagesFromFiles(view, files, coords?.pos)
         return true
       },
-    },
+    }),
+    [],
+  )
+
+  const editor = useEditor({
+    immediatelyRender: false,
+    content: initialHtml,
+    extensions,
+    autofocus: autoFocus,
+    editorProps,
     onUpdate: ({ editor: e }) => {
       setIsEmpty(e.isEmpty)
-      onChange?.(e.getHTML())
+      onChangeRef.current?.(e.getHTML())
     },
   })
 
   // 에디터 생성/변경 시 인스턴스 전달(immediatelyRender:false 환경에서 onCreate 보다 신뢰적).
   useEffect(() => {
-    if (editor) onReady?.(editor)
-  }, [editor, onReady])
+    if (editor) onReadyRef.current?.(editor)
+  }, [editor])
 
   const handleSubmit = useCallback(async () => {
     if (!editor || editor.isEmpty) return
@@ -283,9 +330,9 @@ export function CommentEditor({
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="general">일반</SelectItem>
-              <SelectItem value="suggestion">제안</SelectItem>
+              <SelectItem value="suggestion">개선 요청</SelectItem>
               <SelectItem value="feature">기능 요청</SelectItem>
-              <SelectItem value="bug">버그</SelectItem>
+              <SelectItem value="bug">오류 신고</SelectItem>
             </SelectContent>
           </Select>
         ) : (
@@ -298,7 +345,7 @@ export function CommentEditor({
             </Button>
           )}
           <Button size="sm" onClick={handleSubmit} disabled={submitting || isEmpty}>
-            {submitting ? "등록 중..." : submitLabel}
+            {submitting ? "등록 중…" : submitLabel}
           </Button>
         </div>
       </div>
@@ -313,6 +360,16 @@ export function CommentEditor({
 
 function Toolbar({ editor }: { editor: Editor }) {
   const askInput = usePrompt()
+  // tiptap v3 의 useEditor 는 트랜잭션마다 리렌더하지 않는다(shouldRerenderOnTransaction 기본 false).
+  // 클릭·방향키로 커서만 옮기면 리렌더가 없어 isActive() 기반 활성 표시(굵게·제목 등)와 undo/redo
+  // 가능 여부가 갱신되지 않는다. 트랜잭션을 구독해 툴바만 다시 그린다(에디터 옵션과 무관 — IME 영향 없음).
+  const [, rerender] = useReducer((n: number) => n + 1, 0)
+  useEffect(() => {
+    editor.on("transaction", rerender)
+    return () => {
+      editor.off("transaction", rerender)
+    }
+  }, [editor])
   const btn =
     "h-7 w-7 inline-flex items-center justify-center rounded hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed text-muted-foreground"
   const btnActive =
@@ -322,31 +379,31 @@ function Toolbar({ editor }: { editor: Editor }) {
   return (
     <div className="flex flex-wrap items-center gap-0.5 px-2 py-1 border-b bg-muted/30">
       {/* 텍스트 서식 */}
-      <button
-        type="button" title="굵게 (Ctrl+B)"
+      <Tip label="굵게 (Ctrl+B)"><button
+        type="button" aria-label="굵게 (Ctrl+B)"
         onClick={() => editor.chain().focus().toggleBold().run()}
         className={editor.isActive("bold") ? btnActive : btn}
-      ><Bold className="h-3.5 w-3.5" /></button>
-      <button
-        type="button" title="기울임 (Ctrl+I)"
+      ><Bold className="h-3.5 w-3.5" /></button></Tip>
+      <Tip label="기울임 (Ctrl+I)"><button
+        type="button" aria-label="기울임 (Ctrl+I)"
         onClick={() => editor.chain().focus().toggleItalic().run()}
         className={editor.isActive("italic") ? btnActive : btn}
-      ><Italic className="h-3.5 w-3.5" /></button>
-      <button
-        type="button" title="밑줄 (Ctrl+U)"
+      ><Italic className="h-3.5 w-3.5" /></button></Tip>
+      <Tip label="밑줄 (Ctrl+U)"><button
+        type="button" aria-label="밑줄 (Ctrl+U)"
         onClick={() => editor.chain().focus().toggleUnderline().run()}
         className={editor.isActive("underline") ? btnActive : btn}
-      ><UnderlineIcon className="h-3.5 w-3.5" /></button>
-      <button
-        type="button" title="취소선"
+      ><UnderlineIcon className="h-3.5 w-3.5" /></button></Tip>
+      <Tip label="취소선"><button
+        type="button" aria-label="취소선"
         onClick={() => editor.chain().focus().toggleStrike().run()}
         className={editor.isActive("strike") ? btnActive : btn}
-      ><Strikethrough className="h-3.5 w-3.5" /></button>
-      <button
-        type="button" title="인라인 코드"
+      ><Strikethrough className="h-3.5 w-3.5" /></button></Tip>
+      <Tip label="인라인 코드"><button
+        type="button" aria-label="인라인 코드"
         onClick={() => editor.chain().focus().toggleCode().run()}
         className={editor.isActive("code") ? btnActive : btn}
-      ><Code className="h-3.5 w-3.5" /></button>
+      ><Code className="h-3.5 w-3.5" /></button></Tip>
       <ColorButton editor={editor} />
       <EmojiButton editor={editor} />
       <EmojiButton editor={editor} defaultTab="sym" icon={<Sigma className="h-3.5 w-3.5" />} title="특수문자" />
@@ -354,43 +411,43 @@ function Toolbar({ editor }: { editor: Editor }) {
       <span className={sep} />
 
       {/* 헤딩 */}
-      <button
-        type="button" title="제목 1"
+      <Tip label="제목 1"><button
+        type="button" aria-label="제목 1"
         onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
         className={editor.isActive("heading", { level: 1 }) ? btnActive : btn}
-      ><Heading1 className="h-3.5 w-3.5" /></button>
-      <button
-        type="button" title="제목 2"
+      ><Heading1 className="h-3.5 w-3.5" /></button></Tip>
+      <Tip label="제목 2"><button
+        type="button" aria-label="제목 2"
         onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
         className={editor.isActive("heading", { level: 2 }) ? btnActive : btn}
-      ><Heading2 className="h-3.5 w-3.5" /></button>
-      <button
-        type="button" title="제목 3"
+      ><Heading2 className="h-3.5 w-3.5" /></button></Tip>
+      <Tip label="제목 3"><button
+        type="button" aria-label="제목 3"
         onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
         className={editor.isActive("heading", { level: 3 }) ? btnActive : btn}
-      ><Heading3 className="h-3.5 w-3.5" /></button>
+      ><Heading3 className="h-3.5 w-3.5" /></button></Tip>
 
       <span className={sep} />
 
       {/* 목록 */}
-      <button
-        type="button" title="글머리 기호"
+      <Tip label="글머리 기호"><button
+        type="button" aria-label="글머리 기호"
         onClick={() => editor.chain().focus().toggleBulletList().run()}
         className={editor.isActive("bulletList") ? btnActive : btn}
-      ><List className="h-3.5 w-3.5" /></button>
-      <button
-        type="button" title="번호 매기기"
+      ><List className="h-3.5 w-3.5" /></button></Tip>
+      <Tip label="번호 매기기"><button
+        type="button" aria-label="번호 매기기"
         onClick={() => editor.chain().focus().toggleOrderedList().run()}
         className={editor.isActive("orderedList") ? btnActive : btn}
-      ><ListOrdered className="h-3.5 w-3.5" /></button>
-      <button
-        type="button" title="체크리스트"
+      ><ListOrdered className="h-3.5 w-3.5" /></button></Tip>
+      <Tip label="체크리스트"><button
+        type="button" aria-label="체크리스트"
         onClick={() => editor.chain().focus().toggleTaskList().run()}
         className={editor.isActive("taskList") ? btnActive : btn}
-      ><ListChecks className="h-3.5 w-3.5" /></button>
+      ><ListChecks className="h-3.5 w-3.5" /></button></Tip>
       {/* 들여쓰기 — 리스트 안이면 sinkListItem, 그 외엔 IndentExtension */}
-      <button
-        type="button" title="들여쓰기"
+      <Tip label="들여쓰기"><button
+        type="button" aria-label="들여쓰기"
         onClick={() => {
           const c = editor.chain().focus()
           if (editor.isActive("taskItem")) c.sinkListItem("taskItem").run()
@@ -398,9 +455,9 @@ function Toolbar({ editor }: { editor: Editor }) {
           else c.indent().run()
         }}
         className={btn}
-      ><IndentIcon className="h-3.5 w-3.5" /></button>
-      <button
-        type="button" title="내어쓰기"
+      ><IndentIcon className="h-3.5 w-3.5" /></button></Tip>
+      <Tip label="내어쓰기"><button
+        type="button" aria-label="내어쓰기"
         onClick={() => {
           const c = editor.chain().focus()
           if (editor.isActive("taskItem")) c.liftListItem("taskItem").run()
@@ -408,52 +465,52 @@ function Toolbar({ editor }: { editor: Editor }) {
           else c.outdent().run()
         }}
         className={btn}
-      ><OutdentIcon className="h-3.5 w-3.5" /></button>
+      ><OutdentIcon className="h-3.5 w-3.5" /></button></Tip>
 
       <span className={sep} />
 
       {/* 정렬 */}
-      <button
-        type="button" title="왼쪽 정렬"
+      <Tip label="왼쪽 정렬"><button
+        type="button" aria-label="왼쪽 정렬"
         onClick={() => editor.chain().focus().setTextAlign("left").run()}
         className={editor.isActive({ textAlign: "left" }) ? btnActive : btn}
-      ><AlignLeft className="h-3.5 w-3.5" /></button>
-      <button
-        type="button" title="가운데 정렬"
+      ><AlignLeft className="h-3.5 w-3.5" /></button></Tip>
+      <Tip label="가운데 정렬"><button
+        type="button" aria-label="가운데 정렬"
         onClick={() => editor.chain().focus().setTextAlign("center").run()}
         className={editor.isActive({ textAlign: "center" }) ? btnActive : btn}
-      ><AlignCenter className="h-3.5 w-3.5" /></button>
-      <button
-        type="button" title="오른쪽 정렬"
+      ><AlignCenter className="h-3.5 w-3.5" /></button></Tip>
+      <Tip label="오른쪽 정렬"><button
+        type="button" aria-label="오른쪽 정렬"
         onClick={() => editor.chain().focus().setTextAlign("right").run()}
         className={editor.isActive({ textAlign: "right" }) ? btnActive : btn}
-      ><AlignRight className="h-3.5 w-3.5" /></button>
+      ><AlignRight className="h-3.5 w-3.5" /></button></Tip>
 
       <span className={sep} />
 
       {/* 블록 */}
-      <button
-        type="button" title="인용"
+      <Tip label="인용"><button
+        type="button" aria-label="인용"
         onClick={() => editor.chain().focus().toggleBlockquote().run()}
         className={editor.isActive("blockquote") ? btnActive : btn}
-      ><Quote className="h-3.5 w-3.5" /></button>
-      <button
-        type="button" title="코드 블록"
+      ><Quote className="h-3.5 w-3.5" /></button></Tip>
+      <Tip label="코드 블록"><button
+        type="button" aria-label="코드 블록"
         onClick={() => editor.chain().focus().toggleCodeBlock().run()}
         className={editor.isActive("codeBlock") ? btnActive : btn}
-      ><Code2 className="h-3.5 w-3.5" /></button>
+      ><Code2 className="h-3.5 w-3.5" /></button></Tip>
       <LanguageSelect editor={editor} />
-      <button
-        type="button" title="가로선"
+      <Tip label="가로선"><button
+        type="button" aria-label="가로선"
         onClick={() => editor.chain().focus().setHorizontalRule().run()}
         className={btn}
-      ><Minus className="h-3.5 w-3.5" /></button>
+      ><Minus className="h-3.5 w-3.5" /></button></Tip>
 
       <span className={sep} />
 
       {/* 링크 / 이미지 */}
-      <button
-        type="button" title="링크"
+      <Tip label="링크"><button
+        type="button" aria-label="링크"
         onClick={async () => {
           const prev = editor.getAttributes("link").href as string | undefined
           const input = await askInput({
@@ -471,46 +528,42 @@ function Toolbar({ editor }: { editor: Editor }) {
           editor.chain().focus().extendMarkRange("link").setLink({ href: url }).run()
         }}
         className={editor.isActive("link") ? btnActive : btn}
-      ><LinkIcon className="h-3.5 w-3.5" /></button>
-      <button
-        type="button" title="이미지 (URL)"
+      ><LinkIcon className="h-3.5 w-3.5" /></button></Tip>
+      <Tip label="이미지 (URL)"><button
+        type="button" aria-label="이미지 (URL)"
         onClick={async () => {
           const url = (await askInput({ title: "이미지 삽입", label: "이미지 URL", defaultValue: "https://", required: true }))?.trim()
           if (!url) return
           editor.chain().focus().setImage({ src: url }).run()
         }}
         className={btn}
-      ><ImageIcon className="h-3.5 w-3.5" /></button>
+      ><ImageIcon className="h-3.5 w-3.5" /></button></Tip>
 
       <span className={sep} />
 
-      {/* 표 */}
-      <button
-        type="button" title="표 삽입 (3×3)"
-        onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}
-        className={btn}
-      ><TableIcon className="h-3.5 w-3.5" /></button>
+      {/* 표 — 격자에서 행·열을 골라 삽입 (MS Word 식). 편집은 표 안 우클릭 메뉴. */}
+      <TableInsertButton editor={editor} />
 
       <span className={sep} />
 
       {/* 서식 지우기 / Undo / Redo */}
-      <button
-        type="button" title="서식 지우기"
+      <Tip label="서식 지우기"><button
+        type="button" aria-label="서식 지우기"
         onClick={() => editor.chain().focus().unsetAllMarks().clearNodes().run()}
         className={btn}
-      ><RemoveFormatting className="h-3.5 w-3.5" /></button>
-      <button
-        type="button" title="실행 취소 (Ctrl+Z)"
+      ><RemoveFormatting className="h-3.5 w-3.5" /></button></Tip>
+      <Tip label="실행 취소 (Ctrl+Z)"><button
+        type="button" aria-label="실행 취소 (Ctrl+Z)"
         onClick={() => editor.chain().focus().undo().run()}
         disabled={!editor.can().undo()}
         className={btn}
-      ><Undo className="h-3.5 w-3.5" /></button>
-      <button
-        type="button" title="다시 실행 (Ctrl+Y)"
+      ><Undo className="h-3.5 w-3.5" /></button></Tip>
+      <Tip label="다시 실행 (Ctrl+Y)"><button
+        type="button" aria-label="다시 실행 (Ctrl+Y)"
         onClick={() => editor.chain().focus().redo().run()}
         disabled={!editor.can().redo()}
         className={btn}
-      ><Redo className="h-3.5 w-3.5" /></button>
+      ><Redo className="h-3.5 w-3.5" /></button></Tip>
     </div>
   )
 }
@@ -544,9 +597,30 @@ function LanguageSelect({ editor }: { editor: Editor }) {
 }
 
 // ---------------------------------------------------------------------------
-// Table Context Menu — 표 안에서 우클릭 시 노출되는 floating 메뉴.
-// Portal 로 body 에 렌더 → overflow 컨테이너 영향 없음.
+// Table Context Menu — 표 안에서 우클릭하면 그 자리에 여는 메뉴.
+// 공용 DropdownMenu 를 마우스 위치의 보이지 않는 기준점에 붙여 키보드 이동 · Esc · 바깥 클릭을 그대로 쓴다.
+// 순서: 추가 → 셀 병합 · 분리 → 머리글 → (구분선) → 삭제(빨강)
 // ---------------------------------------------------------------------------
+
+/** 커서가 있는 표의 첫 행 · 첫 열이 머리글인지. */
+function tableHeaderState(editor: Editor): { row: boolean; col: boolean } {
+  const { $from } = editor.state.selection
+  for (let d = $from.depth; d >= 0; d--) {
+    const node = $from.node(d)
+    if (node.type.name !== "table") continue
+    const rows: ProseMirrorNode[] = []
+    node.forEach((r) => { rows.push(r) })
+    const isHeader = (cell: ProseMirrorNode | null | undefined) => cell?.type.name === "tableHeader"
+    const first = rows[0]
+    const firstRowCells: ProseMirrorNode[] = []
+    first?.forEach((c) => { firstRowCells.push(c) })
+    return {
+      row: firstRowCells.length > 0 && firstRowCells.every(isHeader),
+      col: rows.length > 0 && rows.every((r) => isHeader(r.firstChild)),
+    }
+  }
+  return { row: false, col: false }
+}
 
 function TableContextMenu({
   editor, x, y, onClose,
@@ -556,90 +630,143 @@ function TableContextMenu({
   y: number
   onClose: () => void
 }) {
-  useEffect(() => {
-    const onDown = (e: MouseEvent) => {
-      const tgt = e.target as Node
-      if (tgt instanceof HTMLElement && !tgt.closest("[data-tt-table-menu]")) {
-        onClose()
-      }
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose()
-    }
-    document.addEventListener("mousedown", onDown)
-    document.addEventListener("keydown", onKey)
-    return () => {
-      document.removeEventListener("mousedown", onDown)
-      document.removeEventListener("keydown", onKey)
-    }
-  }, [onClose])
-
-  const left = typeof window !== "undefined" ? Math.min(x, window.innerWidth - 220) : x
-  const top = typeof window !== "undefined" ? Math.min(y, window.innerHeight - 380) : y
-
+  const can = editor.can()
+  const header = tableHeaderState(editor)
   const run = (fn: () => void) => () => {
     fn()
     onClose()
   }
+  const chain = () => editor.chain().focus()
 
-  type Item =
-    | { kind: "sep" }
-    | { kind: "action"; label: string; disabled?: boolean; onClick: () => void; danger?: boolean }
+  return (
+    <DropdownMenu open onOpenChange={(o) => { if (!o) onClose() }} modal={false}>
+      <DropdownMenuTrigger asChild>
+        <span aria-hidden style={{ position: "fixed", left: x, top: y, width: 0, height: 0 }} />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" side="bottom" sideOffset={2} className="w-52" aria-label="표 메뉴" data-tt-table-menu>
+        <DropdownMenuItem disabled={!can.addRowBefore()} onSelect={run(() => chain().addRowBefore().run())}>
+          <BetweenHorizontalStart /> 위에 행 추가
+        </DropdownMenuItem>
+        <DropdownMenuItem disabled={!can.addRowAfter()} onSelect={run(() => chain().addRowAfter().run())}>
+          <BetweenHorizontalEnd /> 아래에 행 추가
+        </DropdownMenuItem>
+        <DropdownMenuItem disabled={!can.addColumnBefore()} onSelect={run(() => chain().addColumnBefore().run())}>
+          <BetweenVerticalStart /> 왼쪽에 열 추가
+        </DropdownMenuItem>
+        <DropdownMenuItem disabled={!can.addColumnAfter()} onSelect={run(() => chain().addColumnAfter().run())}>
+          <BetweenVerticalEnd /> 오른쪽에 열 추가
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem disabled={!can.mergeCells()} onSelect={run(() => chain().mergeCells().run())}>
+          <TableCellsMerge /> 셀 병합
+        </DropdownMenuItem>
+        <DropdownMenuItem disabled={!can.splitCell()} onSelect={run(() => chain().splitCell().run())}>
+          <TableCellsSplit /> 셀 분리
+        </DropdownMenuItem>
+        <DropdownMenuCheckboxItem
+          checked={header.row}
+          disabled={!can.toggleHeaderRow()}
+          onSelect={run(() => chain().toggleHeaderRow().run())}
+        >
+          첫 행을 머리글로
+        </DropdownMenuCheckboxItem>
+        <DropdownMenuCheckboxItem
+          checked={header.col}
+          disabled={!can.toggleHeaderColumn()}
+          onSelect={run(() => chain().toggleHeaderColumn().run())}
+        >
+          첫 열을 머리글로
+        </DropdownMenuCheckboxItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem variant="destructive" disabled={!can.deleteRow()} onSelect={run(() => chain().deleteRow().run())}>
+          <Trash2 /> 행 삭제
+        </DropdownMenuItem>
+        <DropdownMenuItem variant="destructive" disabled={!can.deleteColumn()} onSelect={run(() => chain().deleteColumn().run())}>
+          <Trash2 /> 열 삭제
+        </DropdownMenuItem>
+        <DropdownMenuItem variant="destructive" disabled={!can.deleteTable()} onSelect={run(() => chain().deleteTable().run())}>
+          <Trash2 /> 표 삭제
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
 
-  const items: Item[] = [
-    { kind: "action", label: "↑ 위에 행 추가", disabled: !editor.can().addRowBefore(),
-      onClick: run(() => editor.chain().focus().addRowBefore().run()) },
-    { kind: "action", label: "↓ 아래에 행 추가", disabled: !editor.can().addRowAfter(),
-      onClick: run(() => editor.chain().focus().addRowAfter().run()) },
-    { kind: "action", label: "← 왼쪽 열 추가", disabled: !editor.can().addColumnBefore(),
-      onClick: run(() => editor.chain().focus().addColumnBefore().run()) },
-    { kind: "action", label: "→ 오른쪽 열 추가", disabled: !editor.can().addColumnAfter(),
-      onClick: run(() => editor.chain().focus().addColumnAfter().run()) },
-    { kind: "sep" },
-    { kind: "action", label: "행 삭제", disabled: !editor.can().deleteRow(),
-      onClick: run(() => editor.chain().focus().deleteRow().run()) },
-    { kind: "action", label: "열 삭제", disabled: !editor.can().deleteColumn(),
-      onClick: run(() => editor.chain().focus().deleteColumn().run()) },
-    { kind: "sep" },
-    { kind: "action", label: "셀 병합", disabled: !editor.can().mergeCells(),
-      onClick: run(() => editor.chain().focus().mergeCells().run()) },
-    { kind: "action", label: "셀 분리", disabled: !editor.can().splitCell(),
-      onClick: run(() => editor.chain().focus().splitCell().run()) },
-    { kind: "action", label: "헤더 행 토글", disabled: !editor.can().toggleHeaderRow(),
-      onClick: run(() => editor.chain().focus().toggleHeaderRow().run()) },
-    { kind: "action", label: "헤더 열 토글", disabled: !editor.can().toggleHeaderColumn(),
-      onClick: run(() => editor.chain().focus().toggleHeaderColumn().run()) },
-    { kind: "sep" },
-    { kind: "action", label: "표 삭제", disabled: !editor.can().deleteTable(), danger: true,
-      onClick: run(() => editor.chain().focus().deleteTable().run()) },
-  ]
+// ---------------------------------------------------------------------------
+// 표 삽입 — 격자 위에서 마우스를 움직여 행×열을 고르고 클릭해 삽입한다.
+// ---------------------------------------------------------------------------
 
-  return createPortal(
-    <div
-      data-tt-table-menu
-      style={{ position: "fixed", top, left, zIndex: 1000, minWidth: 200 }}
-      className="rounded-md border border-input bg-white shadow-lg py-1 text-sm"
-    >
-      {items.map((it, i) =>
-        it.kind === "sep" ? (
-          <div key={i} className="my-1 h-px bg-border" />
-        ) : (
-          <button
-            key={i}
-            type="button"
-            disabled={it.disabled}
-            onClick={it.onClick}
-            className={
-              "block w-full text-left px-3 py-1.5 hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed " +
-              (it.danger ? "text-rose-600" : "")
-            }
+const TABLE_PICKER_COLS = 10
+const TABLE_PICKER_ROWS = 8
+const TABLE_PICKER_WIDTH = TABLE_PICKER_COLS * 21 + 16 // 셀 18px + gap 3px, 좌우 패딩
+
+function TableInsertButton({ editor }: { editor: Editor }) {
+  const [open, setOpen] = useState(false)
+  const [hover, setHover] = useState<{ rows: number; cols: number }>({ rows: 3, cols: 3 })
+  const [withHeaderRow, setWithHeaderRow] = useState(true)
+  const wrapRef = useRef<HTMLSpanElement | null>(null)
+  const close = useCallback(() => setOpen(false), [])
+
+  const toggle = () => {
+    setHover({ rows: 3, cols: 3 })
+    setOpen((v) => !v)
+  }
+
+  const insert = (rows: number, cols: number) => {
+    editor.chain().focus().insertTable({ rows, cols, withHeaderRow }).run()
+    setOpen(false)
+  }
+
+  return (
+    <span ref={wrapRef} className="relative inline-flex">
+      <Tip label="표 삽입"><button
+        type="button" aria-label="표 삽입"
+        onClick={toggle}
+        disabled={!editor.can().insertTable()}
+        className={
+          "h-7 w-7 inline-flex items-center justify-center rounded disabled:opacity-30 disabled:cursor-not-allowed " +
+          (open ? "bg-muted text-foreground" : "hover:bg-muted text-muted-foreground")
+        }
+      ><TableIcon className="h-3.5 w-3.5" /></button></Tip>
+      <ToolbarPopover anchorRef={wrapRef} open={open} onClose={close} width={TABLE_PICKER_WIDTH} className="select-none">
+        <div onMouseLeave={() => setHover({ rows: 3, cols: 3 })}>
+          <div
+            className="grid gap-[3px]"
+            style={{ gridTemplateColumns: `repeat(${TABLE_PICKER_COLS}, 18px)` }}
+            role="grid"
+            aria-label="표 크기 선택"
           >
-            {it.label}
-          </button>
-        ),
-      )}
-    </div>,
-    document.body,
+            {Array.from({ length: TABLE_PICKER_ROWS * TABLE_PICKER_COLS }, (_, i) => {
+              const r = Math.floor(i / TABLE_PICKER_COLS) + 1
+              const c = (i % TABLE_PICKER_COLS) + 1
+              const active = r <= hover.rows && c <= hover.cols
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  role="gridcell"
+                  aria-label={`${r} × ${c}`}
+                  onMouseEnter={() => setHover({ rows: r, cols: c })}
+                  onFocus={() => setHover({ rows: r, cols: c })}
+                  onClick={() => insert(r, c)}
+                  className={
+                    "h-[18px] w-[18px] rounded-[2px] border " +
+                    (active ? "border-primary bg-primary/25" : "border-slate-300 bg-white hover:border-slate-400")
+                  }
+                />
+              )
+            })}
+          </div>
+          <div className="mt-2 flex items-center justify-between gap-3 text-[11px]">
+            <span className="tabular-nums text-foreground">{hover.rows} 행 × {hover.cols} 열</span>
+            <label className="inline-flex items-center gap-1 cursor-pointer text-muted-foreground">
+              <input type="checkbox" checked={withHeaderRow} onChange={(e) => setWithHeaderRow(e.target.checked)} />
+              머리글 행
+            </label>
+          </div>
+        </div>
+      </ToolbarPopover>
+    </span>
   )
 }
 
@@ -658,21 +785,7 @@ function ColorButton({ editor }: { editor: Editor }) {
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLSpanElement | null>(null)
   const colorInputRef = useRef<HTMLInputElement | null>(null)
-
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e: MouseEvent) => {
-      const tgt = e.target as Node
-      if (wrapRef.current && !wrapRef.current.contains(tgt)) setOpen(false)
-    }
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false) }
-    document.addEventListener("mousedown", onDown)
-    document.addEventListener("keydown", onKey)
-    return () => {
-      document.removeEventListener("mousedown", onDown)
-      document.removeEventListener("keydown", onKey)
-    }
-  }, [open])
+  const close = useCallback(() => setOpen(false), [])
 
   const current = (editor.getAttributes("textStyle").color as string) || ""
 
@@ -687,11 +800,11 @@ function ColorButton({ editor }: { editor: Editor }) {
 
   return (
     <span ref={wrapRef} className="relative inline-flex">
-      <button
+      <Tip label="글자 색"><button
         type="button"
         onClick={() => setOpen((v) => !v)}
         className="h-7 w-7 inline-flex items-center justify-center rounded hover:bg-muted relative text-muted-foreground"
-        title="글자 색"
+        aria-label="글자 색"
       >
         <Palette className="h-3.5 w-3.5" />
         <span
@@ -699,7 +812,7 @@ function ColorButton({ editor }: { editor: Editor }) {
           className="absolute bottom-1 left-1.5 right-1.5 h-0.5 rounded-sm"
           style={{ backgroundColor: current || "transparent" }}
         />
-      </button>
+      </button></Tip>
       <input
         ref={colorInputRef}
         type="color"
@@ -710,11 +823,8 @@ function ColorButton({ editor }: { editor: Editor }) {
         tabIndex={-1}
         aria-hidden
       />
-      {open && (
-        <div
-          className="absolute top-full left-0 mt-1 z-50 rounded-md border border-input bg-white shadow-lg p-2"
-          style={{ minWidth: 180 }}
-        >
+      <ToolbarPopover anchorRef={wrapRef} open={open} onClose={close} width={180}>
+        <div>
           <div className="grid grid-cols-5 gap-1 mb-2">
             {COLOR_PALETTE.map((c) => (
               <button
@@ -749,7 +859,7 @@ function ColorButton({ editor }: { editor: Editor }) {
             </button>
           </div>
         </div>
-      )}
+      </ToolbarPopover>
     </span>
   )
 }
@@ -774,6 +884,7 @@ function EmojiButton({
   const [query, setQuery] = useState("")
   const [recent, setRecent] = useState<string[]>([])
   const wrapRef = useRef<HTMLSpanElement | null>(null)
+  const close = useCallback(() => setOpen(false), [])
 
   useEffect(() => {
     if (!open) return
@@ -784,21 +895,6 @@ function EmojiButton({
       return getRecentEmojis().length > 0 ? "recent" : (EMOJI_CATEGORIES[0]?.key ?? "face")
     })
   }, [open, defaultTab])
-
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e: MouseEvent) => {
-      const tgt = e.target as Node
-      if (wrapRef.current && !wrapRef.current.contains(tgt)) setOpen(false)
-    }
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false) }
-    document.addEventListener("mousedown", onDown)
-    document.addEventListener("keydown", onKey)
-    return () => {
-      document.removeEventListener("mousedown", onDown)
-      document.removeEventListener("keydown", onKey)
-    }
-  }, [open])
 
   const insert = (it: EmojiItem) => {
     editor.chain().focus().insertContent(it.char).run()
@@ -816,25 +912,22 @@ function EmojiButton({
 
   return (
     <span ref={wrapRef} className="relative inline-flex">
-      <button
+      <Tip label={title}><button
         type="button"
         onClick={() => setOpen((v) => !v)}
         className="h-7 w-7 inline-flex items-center justify-center rounded hover:bg-muted text-muted-foreground"
-        title={title}
+        aria-label={title}
       >
         {icon ?? <Smile className="h-3.5 w-3.5" />}
-      </button>
-      {open && (
-        <div
-          className="absolute top-full left-0 mt-1 z-50 rounded-md border border-input bg-white shadow-lg p-2"
-          style={{ width: 360 }}
-        >
-          <input
-            type="text"
+      </button></Tip>
+      <ToolbarPopover anchorRef={wrapRef} open={open} onClose={close} width={360}>
+        <div>
+          <SearchInput
+            size="xs"
+            className="mb-2"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="검색 (예: 체크, smile, →)"
-            className="w-full mb-2 h-7 rounded border border-input bg-background px-2 text-xs"
+            onValueChange={setQuery}
+            placeholder="이모지 검색(예: 체크, smile, →)…"
             autoFocus
           />
           {!query.trim() && (
@@ -871,7 +964,7 @@ function EmojiButton({
             )}
           </div>
         </div>
-      )}
+      </ToolbarPopover>
     </span>
   )
 }

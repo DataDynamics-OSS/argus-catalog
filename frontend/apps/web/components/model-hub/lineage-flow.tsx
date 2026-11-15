@@ -41,9 +41,9 @@ function FlowNodeView({ data }: { data: NodeData }) {
       title={data.href ? "눌러서 열기" : undefined}
     >
       <Handle type="target" position={Position.Left} className="!h-2 !w-2 !bg-muted-foreground" />
-      <div className="mb-1 text-xs text-muted-foreground">{data.isCurrent ? "현재 모델" : `${s.icon} ${s.label}`}</div>
+      <div className="mb-1 text-xs">{data.isCurrent ? "현재 모델" : `${s.icon} ${s.label}`}</div>
       <div className="break-all text-sm font-medium">{data.label}</div>
-      {data.description && <div className="mt-1 text-xs text-muted-foreground">{data.description}</div>}
+      {data.description && <div className="mt-1 text-xs">{data.description}</div>}
       {data.href && <div className="mt-1 text-[11px] text-primary">열기 ↗</div>}
       <Handle type="source" position={Position.Right} className="!h-2 !w-2 !bg-muted-foreground" />
     </div>

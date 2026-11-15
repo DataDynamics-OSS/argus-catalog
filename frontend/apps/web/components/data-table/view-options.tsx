@@ -29,11 +29,11 @@ export function DataTableViewOptions<TData>({
           className="ms-auto hidden h-8 lg:flex"
         >
           <SlidersHorizontal className="size-4" />
-          보기
+          표시할 열
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-[150px]">
-        <DropdownMenuLabel>컬럼 표시</DropdownMenuLabel>
+        <DropdownMenuLabel>표시할 열</DropdownMenuLabel>
         <DropdownMenuSeparator />
         {table
           .getAllColumns()

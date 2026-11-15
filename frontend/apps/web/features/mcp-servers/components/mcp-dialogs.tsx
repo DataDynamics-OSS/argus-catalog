@@ -1,5 +1,6 @@
 "use client"
 
+import { CodeEditor } from "@/components/code-editor"
 import { useEffect, useState } from "react"
 import { notifyError, toast } from "@/lib/notify"
 
@@ -32,6 +33,7 @@ import {
 } from "../api"
 import {
   AUTH_METHODS,
+  AUTH_METHOD_LABEL,
   ENVIRONMENTS,
   PROVIDER_LABEL,
   PROVIDER_TYPES,
@@ -114,7 +116,7 @@ function AddServerDialog() {
           <DialogTitle>MCP 서버 정의 등록</DialogTitle>
         </DialogHeader>
         <div className="grid max-h-[70vh] gap-3 overflow-y-auto py-1">
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs">
             서버 정의는 “어떤 MCP 서버(패키지·제품)인가”를 나타냅니다. 실제 운영 엔드포인트는 등록 후 “배포”로 추가합니다.
             외부·커뮤니티 서버는 MCP Registry server.json 가져오기를 사용하면 표준 메타데이터가 그대로 채워집니다.
           </p>
@@ -167,7 +169,7 @@ function AddServerDialog() {
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => setOpen(null)} disabled={saving}>취소</Button>
-          <Button onClick={submit} disabled={saving || !valid}>{saving ? "등록 중..." : "등록"}</Button>
+          <Button onClick={submit} disabled={saving || !valid}>{saving ? "등록 중…" : "등록"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -235,7 +237,7 @@ function AddDeploymentDialog() {
           <DialogTitle>MCP 배포 등록</DialogTitle>
         </DialogHeader>
         <div className="grid gap-3 py-1">
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs">
             배포는 서버 정의의 실제 운영 인스턴스(엔드포인트·환경)입니다. 같은 서버를 여러 환경·대상 시스템에 배포할 수 있습니다.
           </p>
           <div className="grid gap-1.5">
@@ -274,20 +276,20 @@ function AddDeploymentDialog() {
             <OLabel origin="argus">MCP 엔드포인트</OLabel>
             <Input value={endpoint} onChange={(e) => setEndpoint(e.target.value)} placeholder="https://host:port/mcp" disabled={transport === "stdio"} />
             {transport === "stdio" && (
-              <p className="text-xs text-muted-foreground">stdio 서버는 Argus 가 실행하지 않으므로 수동 등록·가져오기로만 도구를 관리합니다.</p>
+              <p className="text-xs">stdio 서버는 Argus 가 실행하지 않으므로 수동 등록·가져오기로만 도구를 관리합니다.</p>
             )}
           </div>
           <div className="grid gap-1.5">
             <OLabel origin="argus">인증 방식</OLabel>
             <Select value={auth} onValueChange={setAuth}>
               <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>{AUTH_METHODS.map((a) => <SelectItem key={a} value={a}>{a}</SelectItem>)}</SelectContent>
+              <SelectContent>{AUTH_METHODS.map((a) => <SelectItem key={a} value={a}>{AUTH_METHOD_LABEL[a]}</SelectItem>)}</SelectContent>
             </Select>
           </div>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={close} disabled={saving}>취소</Button>
-          <Button onClick={submit} disabled={saving || !valid}>{saving ? "등록 중..." : "등록"}</Button>
+          <Button onClick={submit} disabled={saving || !valid}>{saving ? "등록 중…" : "등록"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -338,7 +340,7 @@ function ImportDialog() {
       if (dryRun) setPreview(r)
       else {
         const created = r.items.filter((i) => i.action === "created" || i.action === "updated").length
-        toast.success(`MCP 문서를 가져왔습니다: ${created}건 반영`)
+        toast.success(`MCP 문서를 가져와 ${created}건을 반영했습니다.`)
         setOpen(null)
         reload()
       }
@@ -363,22 +365,23 @@ function ImportDialog() {
             </TabsList>
           </Tabs>
           {format === "server_json" ? (
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs">
               공식 MCP Registry 형식(name·description·version·packages·remotes)을 서버 정의로 가져옵니다(remotes 는 서버 정의에 기록되며, 운영 배포는 별도로 등록합니다).
               Argus 에서 내보낸 파일의 <code>_meta</code> 에 담긴 Argus 전용 정보 <OriginBadge origin="argus" className="align-middle" /> 도 복원됩니다.
               하나의 객체 또는 배열을 붙여넣을 수 있습니다.
             </p>
           ) : (
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs">
               Claude Desktop·Cursor·VS Code 등의 <code>mcpServers</code>/<code>servers</code> 설정을 서버 정의 + 배포로 가져옵니다.
               환경변수·헤더는 <b>키 이름만</b> 기록하고 값(토큰 등)은 저장하지 않습니다. Argus Forge 서버는 자동 인식합니다.
             </p>
           )}
-          <Textarea
+          <CodeEditor
+            language="json"
+            aria-label={format === "server_json" ? "server.json 내용" : "mcp.json 내용"}
             value={content}
-            onChange={(e) => { setContent(e.target.value); setPreview(null) }}
-            rows={12}
-            className="font-mono text-xs"
+            onChange={(v) => { setContent(v); setPreview(null) }}
+            minHeight={240}
             placeholder={format === "server_json"
               ? '{\n  "name": "io.github.org/server",\n  "description": "...",\n  "version": "1.0.0",\n  "remotes": [{ "type": "streamable-http", "url": "https://..." }]\n}'
               : '{\n  "mcpServers": {\n    "github": { "url": "https://api.githubcopilot.com/mcp/", "headers": { "Authorization": "Bearer ..." } }\n  }\n}'}
@@ -399,10 +402,10 @@ function ImportDialog() {
                 <ul className="space-y-1">
                   {preview.items.map((i, idx) => (
                     <li key={`${i.kind}-${i.name}-${idx}`} className="flex flex-wrap items-center gap-2 text-xs">
-                      <Badge variant="outline" className="text-[10px]">{i.kind === "server" ? "서버" : "배포"}</Badge>
+                      <Badge size="sm" variant="outline">{i.kind === "server" ? "서버" : "배포"}</Badge>
                       <span className="font-mono">{i.name}</span>
                       <span className={ACTION_STYLE[i.action]}>{ACTION_LABEL[i.action] ?? i.action}</span>
-                      {i.message && <span className="text-muted-foreground">— {i.message}</span>}
+                      {i.message && <span >— {i.message}</span>}
                     </li>
                   ))}
                 </ul>

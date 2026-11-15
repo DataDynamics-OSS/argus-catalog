@@ -9,6 +9,8 @@ from enum import Enum
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.core.html_sanitize import RichHtml
+
 
 def _naive_as_utc(v: datetime | None) -> datetime | None:
     """시간대 없는(naive) 일시는 UTC 로 본다 — 저장(timestamptz)·워크플로우(``workflow.py``)와 같은 규칙.
@@ -85,6 +87,9 @@ class NotificationStage(str, Enum):
     T_MINUS_1 = "T_MINUS_1"
     T_MINUS_1H = "T_MINUS_1H"
     APPLIED = "APPLIED"
+    # 적용 직전 미확인 소비자 에스컬레이션(요청자·결재자에게, DEF-004). 빠져 있으면 이력 조회가
+    # 응답 검증에서 500 이 났다(DEF-028). 값은 ``activities.ESCALATION_STAGE`` 와 같다.
+    ESCALATION = "ESCALATION"
 
 
 # ---------------------------------------------------------------------------
@@ -165,6 +170,7 @@ class NotificationLogResponse(BaseModel):
     sent_at: datetime | None
     acked_at: datetime | None
     ack_comment: str | None
+    error: str | None = None   # FAILED·SKIPPED 사유 (DEF-005)
 
     class Config:
         from_attributes = True
@@ -192,7 +198,7 @@ class ReferrerResponse(ReferrerInput):
 
 class ChangeRequestCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=500)
-    description: str | None = None
+    description: RichHtml | None = None  # 리치 텍스트, 저장 전 정화(TODO-027)
     dataset_id: int
     change_type: ChangeType
     priority: Priority = Priority.NORMAL
@@ -249,6 +255,8 @@ class ChangeRequestResponse(BaseModel):
     updated_at: datetime
     approval_steps: list[ApprovalStepResponse] = Field(default_factory=list)
     referrers: list[ReferrerResponse] = Field(default_factory=list)
+    # 대상 데이터셋 표시 이름(qualified_name) — 목록·결재함 카드용, 서비스가 채운다
+    dataset_name: str | None = None
 
     class Config:
         from_attributes = True

@@ -63,6 +63,8 @@ async def create_organization(
     """조직 생성 — 상위 조직이 없으면 400."""
     try:
         return await svc.create_organization(session, req)
+    except svc.DuplicateNameError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         logger.warning("조직 생성 거부: name=%s reason=%s", req.name, e)
         raise HTTPException(status_code=400, detail=str(e))
@@ -86,6 +88,8 @@ async def update_organization(
     """조직 수정·이동 — 순환·상위 없음은 400, 조직이 없으면 404."""
     try:
         org = await svc.update_organization(session, org_id, req)
+    except svc.DuplicateNameError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         logger.warning("조직 수정 거부: org_id=%d reason=%s", org_id, e)
         raise HTTPException(status_code=400, detail=str(e))
@@ -128,6 +132,8 @@ async def create_system(_admin: DatasourceManager, req: SystemCreate, session: A
     """시스템 생성 — 조직이 없으면 400."""
     try:
         return await svc.create_system(session, req)
+    except svc.DuplicateNameError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         logger.warning("시스템 생성 거부: name=%s reason=%s", req.name, e)
         raise HTTPException(status_code=400, detail=str(e))
@@ -151,6 +157,8 @@ async def update_system(
     """시스템 수정 — 조직이 없으면 400, 시스템이 없으면 404."""
     try:
         system = await svc.update_system(session, system_id, req)
+    except svc.DuplicateNameError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         logger.warning("시스템 수정 거부: system_id=%d reason=%s", system_id, e)
         raise HTTPException(status_code=400, detail=str(e))
@@ -196,6 +204,8 @@ async def assign_datasource_system(
     """데이터 소스를 시스템에 배정/이동하거나 해제(system_id=null)한다. 시스템 없음 400, 데이터 소스 없음 404."""
     try:
         datasource = await svc.assign_datasource_system(session, datasource_id, req.system_id)
+    except svc.DuplicateNameError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         logger.warning("데이터 소스 배정 거부: datasource_id=%d system_id=%s reason=%s", datasource_id, req.system_id, e)
         raise HTTPException(status_code=400, detail=str(e))

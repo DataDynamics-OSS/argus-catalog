@@ -4,6 +4,8 @@
  * - 브라우저 기본 alert()/confirm()/prompt() 금지 (toast / useConfirm / usePrompt 사용)
  * - 직접 만든 고정 위치 toast(portal + fixed bottom) 금지
  * - 오류 원문(err.message) 직접 표시 금지 — errorMessage()/notifyError() 로 네트워크 오류를 한국어로
+ * - catch 한 오류를 사유만으로 띄우지 않는다 — notifyError(err, "<대상>을(를) <동작>하지 못했습니다.")
+ * - 클립보드는 lib/clipboard.ts 만 직접 쓴다 — http 주소에서도 복사되도록
  */
 import { readdirSync, readFileSync, statSync } from "node:fs"
 import { join, relative } from "node:path"
@@ -64,6 +66,37 @@ describe("알림 일관성", () => {
     const bad = files
       .filter((f) => /createPortal\(/.test(f.src) && /fixed bottom-\d+[^"]*-translate-x-1\/2/.test(f.src))
       .map((f) => f.rel)
+    expect(bad).toEqual([])
+  })
+
+  it("catch 한 오류를 사유만으로 toast 하지 않는다 — notifyError(err, \"…하지 못했습니다.\") 로 무엇이 실패했는지 함께", () => {
+    // toast.error(errorMessage(e) ?? …), toast.error(errMsg(e)), toast.error(String(e)), toast.error(err.message), toast.error(message)
+    const re = /toast\.(error|warning)\(\s*(errorMessage\(|errMsg\(|String\(|\w+\.message\b|message\s*[,)])/
+    const bad: string[] = []
+    for (const f of files) {
+      if (f.rel === "lib/notify.ts") continue
+      f.src.split("\n").forEach((line, i) => {
+        if (/^\s*(\*|\/\*|\/\/)/.test(line)) return
+        if (re.test(line)) bad.push(`${f.rel}:${i + 1}`)
+      })
+    }
+    expect(bad).toEqual([])
+  })
+
+  it("toast 문구는 문장형 — \"○○ 실패\"·\"○○ 완료\" 같은 명사형을 쓰지 않는다", () => {
+    const re = /(toast\.\w+|notifySuccess|notifyError\([^,]+,)\s*\(?\s*[`"][^`"]*(실패|완료|성공)(\s*[—:-]|[`"])/
+    const bad: string[] = []
+    for (const f of files) {
+      f.src.split("\n").forEach((line, i) => {
+        if (/^\s*(\*|\/\*|\/\/)/.test(line)) return
+        if (re.test(line)) bad.push(`${f.rel}:${i + 1}`)
+      })
+    }
+    expect(bad).toEqual([])
+  })
+
+  it("navigator.clipboard 는 lib/clipboard.ts 만 쓴다 — 보안 컨텍스트가 아닌 http 주소 대비", () => {
+    const bad = files.filter((f) => f.rel !== "lib/clipboard.ts" && /navigator\.clipboard/.test(f.src)).map((f) => f.rel)
     expect(bad).toEqual([])
   })
 })

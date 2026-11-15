@@ -42,7 +42,7 @@ export function UsageTab({ detail, versions }: { detail: ModelDetail; versions: 
   return (
     <div className="max-w-4xl space-y-4">
       {fw && (
-        <p className="text-sm text-muted-foreground">
+        <p className="text-sm">
           이 모델은 <span className="font-medium text-foreground">{fw}</span>{py ? ` / Python ${py}` : ""} 로 만들어졌습니다. 같은 환경에서 로드하세요.
         </p>
       )}

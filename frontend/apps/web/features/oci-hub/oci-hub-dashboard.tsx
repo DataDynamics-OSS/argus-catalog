@@ -6,10 +6,11 @@ import { Box, Download, HardDrive, ShieldCheck } from "lucide-react"
 import { Button } from "@workspace/ui/components/button"
 import { Card, CardContent } from "@workspace/ui/components/card"
 import { StatCard } from "@/components/stat-card"
+import { OTHER, SERIES } from "@/components/charts/chart-style"
 import { ActivityTrendCard } from "@/components/model-hub/activity-trend-card"
 import { DistributionCard } from "@/components/model-hub/distribution-card"
 import { TopBarCard } from "@/components/model-hub/top-bar-card"
-import { formatBytes, formatBytesAxis } from "@/components/model-hub/format"
+import { formatBytes } from "@/components/model-hub/format"
 
 import { fetchOciHubStats, OCI_STATUS_LABELS, type OciHubStats } from "./api"
 import { errorMessage } from "@/lib/notify"
@@ -24,8 +25,9 @@ export const SOURCE_LABELS: Record<string, string> = {
   unknown: "기타",
 }
 
+// 출처 색 — 공통 계열 색을 순서대로(검증된 순서). 기타는 회색
 const SOURCE_COLORS: Record<string, string> = {
-  huggingface: "#3b82f6", my: "#f97316", file: "#10b981", local: "#14b8a6", mlflow: "#8b5cf6", unknown: "#a1a1aa",
+  huggingface: SERIES[0], my: SERIES[1], file: SERIES[2], local: SERIES[3], mlflow: SERIES[4], unknown: OTHER,
 }
 
 // 모델 상태 — 수명 주기 순서대로 범례에 보이도록 순서를 고정한다 (상태 배지와 같은 색 계열).
@@ -134,14 +136,14 @@ export function OciHubDashboard() {
           }))}
         />
         <TopBarCard
-          title="다운로드 상위 모델" color="#10b981" empty="아직 다운로드된 모델이 없습니다."
+          title="다운로드 상위 모델" empty="아직 다운로드된 모델이 없습니다."
           items={stats.top_downloads.map((m) => ({
             name: m.model_name, value: m.download_count,
             display: `다운로드 ${m.download_count.toLocaleString()}회`, href: href(m.model_name),
           }))}
         />
         <TopBarCard
-          title="크기 상위 모델" color="#3b82f6" empty="저장된 파일이 있는 모델이 없습니다." axisFormat={formatBytesAxis}
+          title="크기 상위 모델" empty="저장된 파일이 있는 모델이 없습니다."
           items={stats.model_sizes.map((m) => ({
             name: m.model_name, value: m.total_size,
             display: formatBytes(m.total_size), href: href(m.model_name),

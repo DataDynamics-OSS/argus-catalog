@@ -30,7 +30,7 @@ import { DashboardHeader } from "@/components/dashboard-header"
 import { type ChangeRequest, listChangeRequests, listMyInbox } from "@/features/change-mgmt/api"
 import {
   CHANGE_TYPE_LABEL,
-  PRIORITY_LABEL,
+  PriorityBadge,
   StatusBadge,
   useUserNames,
 } from "@/features/change-mgmt/labels"
@@ -51,19 +51,14 @@ function fmtDate(s?: string | null): string {
 /** 라벨에서 한글 부분만 추출 ("호환성 깨짐 (Breaking)" → "호환성 깨짐"). */
 const short = (label: string) => label.split(" (")[0]
 
-const PRIORITY_COLOR: Record<string, string> = {
-  EMERGENCY: "text-red-600 font-medium",
-  HIGH: "text-amber-600",
-  NORMAL: "text-foreground",
-  LOW: "text-muted-foreground",
-}
+
 
 
 export default function ChangeRequestsPage() {
   const router = useRouter()
   const { user } = useAuth()
   // 기능 권한 changes.create — 서버도 같은 키로 403
-  const canCreate = usePermissions().isFeatureAllowed("changes.create")
+  const canCreate = usePermissions().canUseFeature("changes.create")
   const { userMap } = useUserNames()
   const [crs, setCrs] = useState<ChangeRequest[]>([])
   // 내 결재 대기 — 서버 인박스(현재 단계 결재자=나)를 단일 기준으로 사용한다
@@ -116,7 +111,7 @@ export default function ChangeRequestsPage() {
         accessorKey: "cr_code",
         header: "코드",
         cell: ({ row }) => (
-          <span className="font-mono text-xs text-muted-foreground">{row.original.cr_code}</span>
+          <span className="font-mono text-xs">{row.original.cr_code}</span>
         ),
         meta: { className: "whitespace-nowrap" },
       },
@@ -145,9 +140,7 @@ export default function ChangeRequestsPage() {
         accessorKey: "priority",
         header: "우선순위",
         cell: ({ row }) => (
-          <span className={PRIORITY_COLOR[row.original.priority] ?? ""}>
-            {short(PRIORITY_LABEL[row.original.priority])}
-          </span>
+          <PriorityBadge priority={row.original.priority} />
         ),
         meta: { className: "whitespace-nowrap" },
       },
@@ -168,7 +161,7 @@ export default function ChangeRequestsPage() {
               return p.tone === "rejected" ? (
                 <span className="font-medium text-red-600">{p.text}</span>
               ) : p.tone === "stopped" ? (
-                <span className="text-muted-foreground">{p.text}</span>
+                <span >{p.text}</span>
               ) : (
                 p.text
               )
@@ -181,7 +174,7 @@ export default function ChangeRequestsPage() {
         accessorKey: "scheduled_at",
         header: ({ column }) => <DataTableColumnHeader column={column} title="적용 예정" />,
         cell: ({ row }) => (
-          <span className="text-muted-foreground">{fmtDate(row.original.scheduled_at)}</span>
+          <span >{fmtDate(row.original.scheduled_at)}</span>
         ),
         meta: { className: "whitespace-nowrap" },
       },
@@ -189,7 +182,7 @@ export default function ChangeRequestsPage() {
         accessorKey: "created_at",
         header: ({ column }) => <DataTableColumnHeader column={column} title="생성일" />,
         cell: ({ row }) => (
-          <span className="text-muted-foreground">{fmtDate(row.original.created_at)}</span>
+          <span >{fmtDate(row.original.created_at)}</span>
         ),
         meta: { className: "whitespace-nowrap" },
       },
@@ -231,7 +224,7 @@ export default function ChangeRequestsPage() {
         {canCreate && (
           <Button size="sm" asChild>
             <Link href="/dashboard/changes/new">
-              <Plus className="mr-1 h-4 w-4" /> 변경 요청 생성
+              <Plus className="mr-1 h-4 w-4" /> 변경 요청 만들기
             </Link>
           </Button>
         )}
@@ -270,7 +263,7 @@ export default function ChangeRequestsPage() {
             {loading ? (
               <TableRow>
                 <TableCell colSpan={columns.length} className="h-24 text-center">
-                  <p className="text-muted-foreground">불러오는 중...</p>
+                  <p className="text-muted-foreground">불러오는 중…</p>
                 </TableCell>
               </TableRow>
             ) : table.getRowModel().rows?.length ? (
@@ -298,7 +291,7 @@ export default function ChangeRequestsPage() {
             ) : (
               <TableRow>
                 <TableCell colSpan={columns.length} className="h-24 text-center">
-                  <p className="text-muted-foreground">
+                  <p >
                     {tab === "approve"
                       ? "결재할 변경 요청이 없습니다."
                       : tab === "mine"

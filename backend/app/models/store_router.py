@@ -19,6 +19,7 @@ import json
 import logging
 import mimetypes
 from pathlib import Path
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
@@ -26,17 +27,21 @@ from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import download_link
-from app.core.auth import AdminUser, CurrentUser, OptionalUser, TokenUser
+from app.core.auth import CurrentUser, OptionalUser, TokenUser
 from app.core.config import settings
 from app.core.database import get_session
 from app.models import model_store, service
+from app.permissions.router import require_feature_granted
 
 logger = logging.getLogger(__name__)
+
+# 모델 반입(HuggingFace · 서버 로컬 디렉터리) — 명시 허용형(미설정이면 관리자만, TODO-122)
+ModelImporter = Annotated[TokenUser, Depends(require_feature_granted("oci.import-hf"))]
 
 router = APIRouter(prefix="/model-store", tags=["model-store"])
 
 
-async def _require_browse_scope(current: TokenUser, session: AsyncSession, path: str) -> None:
+async def _require_browse_scope(current: TokenUser, session: AsyncSession, path: str, download: bool = False) -> None:
     """저장소 탐색 범위 — 관리자는 버킷 전체, 그 밖의 사용자는 OCI 모델 한 개의 경로 안에서만.
 
     버킷 전체 탐색(설정 › OCI 모델 파일)은 관리자 전용 메뉴다. 일반 사용자는 OCI 모델 상세의 파일
@@ -48,7 +53,7 @@ async def _require_browse_scope(current: TokenUser, session: AsyncSession, path:
     from sqlalchemy import select
 
     from app.oci_hub.models import OciModel
-    from app.permissions.router import check_menu
+    from app.permissions.router import check_feature, check_menu
 
     # 루트("/")·상대 경로 조각은 버킷 전체 탐색으로 보고 거부한다
     parts = [p for p in (path or "").split("/") if p]
@@ -65,6 +70,9 @@ async def _require_browse_scope(current: TokenUser, session: AsyncSession, path:
     if not found:
         logger.warning("저장소 탐색 거부(OCI 모델 경로 아님): path=%s user=%s", path, current.username)
         raise HTTPException(status_code=403, detail="OCI 모델 경로만 탐색할 수 있습니다.")
+    if download and not await check_feature(session, current, "oci.download"):
+        logger.warning("저장소 파일 내려받기 거부(기능 권한 oci.download): path=%s user=%s", path, current.username)
+        raise HTTPException(status_code=403, detail="기능 권한이 없습니다: oci.download")
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +141,45 @@ class ImportResponse(BaseModel):
 # 업로드 엔드포인트
 # ---------------------------------------------------------------------------
 
+async def _require_model_menu(current: TokenUser, session: AsyncSession, model_name: str,
+                              download: bool = False) -> None:
+    """model-store 읽기(다운로드 주소 · 파일 목록 · manifest) 가드 — 그 모델이 속한 메뉴 권한을 본다.
+
+    model-store 는 OCI 허브와 MLflow 모델이 함께 쓰는 API 라 라우터 단위 메뉴 가드를 걸 수 없다. 그래서
+    모델 이름으로 어느 메뉴(``oci-hub`` · ``models``)의 모델인지 찾아 그 메뉴가 막힌 역할은 403 으로 막는다
+    (메뉴만 막고 API 로 파일을 받아 가는 우회 방지, DEF-119). 등록되지 않은 이름은 관리자가 아니면 404.
+    """
+    if current.is_admin:
+        return
+    from sqlalchemy import select
+
+    from app.models.models import RegisteredModel
+    from app.oci_hub.models import OciModel
+    from app.permissions.router import check_menu
+
+    menu = None
+    if (await session.execute(select(OciModel.id).where(OciModel.name == model_name))).first():
+        menu = "oci-hub"
+    elif (await session.execute(select(RegisteredModel.id).where(
+        RegisteredModel.name == model_name, RegisteredModel.status != "deleted",
+    ))).first():
+        menu = "models"
+    if menu is None:
+        logger.warning("model-store 읽기 거부(등록되지 않은 모델): %s user=%s", model_name, current.username)
+        raise HTTPException(status_code=404, detail=f"'{model_name}' 은(는) 등록된 모델이 아닙니다.")
+    if not await check_menu(session, current, menu):
+        logger.warning("model-store 읽기 거부(%s 메뉴 권한 없음): %s user=%s", menu, model_name, current.username)
+        raise HTTPException(status_code=403, detail=f"메뉴 접근 권한이 없습니다: {menu}")
+    if download:
+        # 파일 내려받기(다운로드 주소 발급)는 그 레지스트리의 내려받기 권한도 본다(TODO-122)
+        from app.permissions.router import check_feature
+
+        feature = "oci.download" if menu == "oci-hub" else "models.download"
+        if not await check_feature(session, current, feature):
+            logger.warning("model-store 다운로드 거부(기능 권한 %s): %s user=%s", feature, model_name, current.username)
+            raise HTTPException(status_code=403, detail=f"기능 권한이 없습니다: {feature}")
+
+
 async def _assert_store_writer(current: TokenUser, session: AsyncSession, model_name: str) -> None:
     """model-store 쓰기(업로드·확정) 가드 — 대상 모델이 등록돼 있어야 하고(OCI 허브 또는 MLflow),
     관리자 또는 그 모델의 생성자·소유자만 허용한다. 등록되지 않은 이름에 파일이 쌓이는 것을 막는다."""
@@ -153,10 +200,16 @@ async def _assert_store_writer(current: TokenUser, session: AsyncSession, model_
             detail=f"'{model_name}' 은(는) 등록된 모델이 아닙니다. OCI 허브(POST /api/v1/oci-models) 또는 "
                    "MLflow 모델(POST /api/v1/models) 로 먼저 등록하세요.",
         )
-    if current.is_admin or current.username in {target.created_by, target.owner} - {None, ""}:
-        return
-    logger.warning("model-store 쓰기 거부(권한 없음): %s user=%s", model_name, current.username)
-    raise HTTPException(status_code=403, detail="모델의 소유자 또는 관리자만 파일을 올리거나 확정할 수 있습니다.")
+    if not (current.is_admin or current.username in {target.created_by, target.owner} - {None, ""}):
+        logger.warning("model-store 쓰기 거부(권한 없음): %s user=%s", model_name, current.username)
+        raise HTTPException(status_code=403, detail="모델의 소유자 또는 관리자만 파일을 올리거나 확정할 수 있습니다.")
+    # 파일 올리기 · 확정 · 지우기는 모델 수정 — 그 레지스트리의 수정 권한도 본다(TODO-122)
+    from app.permissions.router import check_feature
+
+    feature = "oci.edit" if oci else "models.edit"
+    if not await check_feature(session, current, feature):
+        logger.warning("model-store 쓰기 거부(기능 권한 %s): %s user=%s", feature, model_name, current.username)
+        raise HTTPException(status_code=403, detail=f"기능 권한이 없습니다: {feature}")
 
 
 @router.post("/{model_name}/versions/{version}/upload")
@@ -216,7 +269,9 @@ async def get_download_url(_user: CurrentUser,
 ):
     """단일 파일에 대한 presigned download URL 발급 (로그인 필요).
 
-    파일이 실제로 있을 때만 URL 을 주고 다운로드 횟수를 센다 — 없는 파일 404, 잘못된 이름 400."""
+    파일이 실제로 있을 때만 URL 을 주고 다운로드 횟수를 센다 — 없는 파일 404, 잘못된 이름 400.
+    모델이 속한 메뉴(OCI 허브 · MLflow 모델)가 막힌 역할은 403."""
+    await _require_model_menu(_user, session, model_name, download=True)
     try:
         result = await model_store.generate_download_url(model_name, version, filename)
     except ValueError as e:
@@ -251,7 +306,9 @@ async def get_download_urls(_user: CurrentUser,
     request: Request = None,
     session: AsyncSession = Depends(get_session),
 ):
-    """버전 내 모든 파일에 대해 presigned download URL 을 일괄 발급 (로그인 필요). 파일이 없으면 404."""
+    """버전 내 모든 파일에 대해 presigned download URL 을 일괄 발급 (로그인 필요). 파일이 없으면 404.
+    모델이 속한 메뉴가 막힌 역할은 403."""
+    await _require_model_menu(_user, session, model_name, download=True)
     try:
         urls = await model_store.generate_download_urls(model_name, version)
     except Exception as e:
@@ -355,10 +412,9 @@ def _check_local_dir(local_dir: str) -> None:
         logger.warning("로컬 반입 거부(디렉터리 없음): %s", local_dir)
         raise HTTPException(status_code=400,
                             detail=f"디렉터리가 없습니다(카탈로그 서버 기준 경로): {local_dir}")
-    # 숨김 파일(최상위 조각이 "." 으로 시작)이 아닌 파일이 하나라도 있으면 통과
-    for f in path.rglob("*"):
-        if f.is_file() and not str(f.relative_to(path)).startswith("."):
-            return
+    # 숨김 경로(어느 단계든 "." 으로 시작 — push 와 같은 규칙)가 아닌 파일이 하나라도 있으면 통과
+    if model_store.visible_files(path):
+        return
     logger.warning("로컬 반입 거부(가져올 파일 없음): %s", local_dir)
     raise HTTPException(status_code=400, detail=f"가져올 파일이 없습니다: {local_dir}")
 
@@ -372,7 +428,7 @@ async def browse_s3_download_link(user: CurrentUser,
 
     ``GET /browse/file?path=…&token=…`` 로 쓴다. 파일은 서버가 저장소에서 읽어 그대로 흘려보내므로
     저장소 주소가 브라우저에서 닿지 않아도(예: ``http://minio:9000``) 내려받을 수 있다."""
-    await _require_browse_scope(user, session, path)
+    await _require_browse_scope(user, session, path, download=True)
     await _head_or_http(path)
     logger.info("저장소 파일 다운로드 토큰 발급: path=%s user=%s", path, user.username)
     return {"token": download_link.issue("s3", path, user.sub), "expires_in": download_link.DEFAULT_TTL_SECONDS}
@@ -415,7 +471,7 @@ async def browse_s3_download(_user: CurrentUser,
 
     버킷 전체를 경로로 지정할 수 있어 모델 파일 자산이 그대로 노출되므로 익명 접근을 막는다.
     서명은 저장소에 묻지 않고 만들어지므로 먼저 파일을 확인한다 — 없으면 404, 저장소 장애면 503."""
-    await _require_browse_scope(_user, session, path)
+    await _require_browse_scope(_user, session, path, download=True)
     await _head_or_http(path)
     try:
         url = await model_store.generate_s3_download_url(path)
@@ -434,8 +490,10 @@ async def list_version_files(
     _user: CurrentUser,
     model_name: str,
     version: int,
+    session: AsyncSession = Depends(get_session),
 ):
-    """모델 버전의 전체 파일을 S3 에서 메타데이터와 함께 나열(로그인 사용자)."""
+    """모델 버전의 전체 파일을 S3 에서 메타데이터와 함께 나열(로그인 사용자, 모델이 속한 메뉴 권한 필요)."""
+    await _require_model_menu(_user, session, model_name)
     try:
         return await model_store.list_files(model_name, version)
     except Exception as e:
@@ -448,8 +506,10 @@ async def get_manifest(
     _user: CurrentUser,
     model_name: str,
     version: int,
+    session: AsyncSession = Depends(get_session),
 ):
-    """버전의 OCI ``manifest.json`` 을 조회(로그인 사용자). 없으면 404, 저장소에 닿지 않으면 503."""
+    """버전의 OCI ``manifest.json`` 을 조회(로그인 사용자, 모델이 속한 메뉴 권한 필요). 없으면 404, 저장소에 닿지 않으면 503."""
+    await _require_model_menu(_user, session, model_name)
     try:
         data = await model_store.download_file(model_name, version, "manifest.json")
         return json.loads(data)
@@ -591,7 +651,7 @@ async def finalize_version(current: CurrentUser,
 # ---------------------------------------------------------------------------
 
 @router.post("/import/huggingface", response_model=ImportResponse)
-async def import_huggingface(current: AdminUser,
+async def import_huggingface(current: ModelImporter,
     body: HuggingFaceImportRequest,
     session: AsyncSession = Depends(get_session),
 ):
@@ -720,14 +780,14 @@ async def import_huggingface(current: AdminUser,
 # ---------------------------------------------------------------------------
 
 @router.post("/import/local", response_model=ImportResponse)
-async def import_local(current: AdminUser,
+async def import_local(current: ModelImporter,
     body: LocalImportRequest,
     session: AsyncSession = Depends(get_session),
 ):
     """로컬 디렉토리(에어갭/사내 망) 에서 모델 파일을 S3 로 임포트.
 
-    에어갭 시나리오에서 사용한다: 먼저 USB/SCP 로 파일을 전송한 뒤,
-    로컬 파일시스템에서 MinIO 로 임포트한다. 경로가 없거나 파일이 없으면 400(아무것도 만들지 않음).
+    에어갭 시나리오에서 사용한다: 먼저 USB 등으로 파일을 서버로 옮긴 뒤,
+    로컬 파일시스템에서 MinIO 로 임포트한다(파일은 스트리밍 — 큰 모델도 메모리에 다 올리지 않음). 경로가 없거나 파일이 없으면 400(아무것도 만들지 않음).
     ``local_dir`` 은 카탈로그 서버 기준 경로이며 관리자만 호출할 수 있다.
     """
     logger.info("model-store 로컬 임포트 요청: dir=%s -> %s by %s", body.local_dir, body.model_name, current.username)

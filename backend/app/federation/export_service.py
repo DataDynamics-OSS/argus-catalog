@@ -122,6 +122,11 @@ _EXTENDED_FIELDS = (
     "view_count", "query_count", "last_accessed_at",
     # 품질
     "quality_score", "quality_status",
+    # AI-Ready (app/catalog/ai_ready.py — 값 그대로: 불리언은 "true"/"false", 이용 유형은 쉼표 문자열)
+    "legal_basis", "publisher", "landing_page", "contact_email", "data_language", "persistent_id",
+    "temporal_start", "temporal_end", "spatial_coverage", "data_version", "version_notes",
+    "license", "license_url", "rights", "allowed_uses", "contains_synthetic", "contains_machine_annotation",
+    "data_biases", "known_limitations", "missing_data_info", "missing_value_notation", "privacy_measures",
 )
 
 
@@ -137,7 +142,7 @@ async def _fetch_extended(session: AsyncSession, dataset_id: int) -> dict:
         v = getattr(row, f, None)
         if v is None or v == "":
             continue
-        if hasattr(v, "isoformat"):                # datetime → ISO 문자열
+        if hasattr(v, "isoformat"):                # datetime·date → ISO 문자열
             v = v.isoformat()
         out[f] = v
     return out

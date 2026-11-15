@@ -8,8 +8,9 @@
  */
 
 import { useEffect, useState } from "react"
-import { Loader2, Plus, Save } from "lucide-react"
+import { Loader2, Plus } from "lucide-react"
 import { notifyError, toast } from "@/lib/notify"
+import { FieldError } from "@/components/field-error"
 
 import { Button } from "@workspace/ui/components/button"
 import {
@@ -25,6 +26,14 @@ import type { McpDeploymentAgent, McpScopeInput } from "../../data/schema"
 import { OriginBadge } from "../mcp-badges"
 import { ScopeRow } from "./policy-panel"
 
+/** 규칙 행의 빈 필수 항목 문구(없으면 null) */
+function scopeRowError(s: McpScopeInput): string | null {
+  const parts: string[] = []
+  if (!s.resource_type.trim()) parts.push("리소스 유형")
+  if (!s.patterns.length) parts.push("패턴")
+  return parts.length ? `${parts.join("과 ")}이 비어 있습니다.` : null
+}
+
 export function AgentScopeDialog({ name, agent, onOpenChange, onSaved }: {
   name: string
   agent: McpDeploymentAgent | null
@@ -33,8 +42,12 @@ export function AgentScopeDialog({ name, agent, onOpenChange, onSaved }: {
 }) {
   const [scopes, setScopes] = useState<McpScopeInput[]>([])
   const [saving, setSaving] = useState(false)
+  // 저장을 눌러 검증에 걸린 뒤부터 빈 규칙 행 아래에 오류를 보인다(행을 채우면 그 행 오류는 사라진다)
+  const [showErrors, setShowErrors] = useState(false)
+  const hasInvalid = scopes.some((s) => scopeRowError(s) !== null)
 
   useEffect(() => {
+    setShowErrors(false)
     setScopes((agent?.resource_scopes ?? []).map((s) => ({
       resource_type: s.resource_type, action: s.action, effect: s.effect, patterns: s.patterns, match: s.match,
       description: s.description,
@@ -45,13 +58,14 @@ export function AgentScopeDialog({ name, agent, onOpenChange, onSaved }: {
     if (!agent) return
     const valid = scopes.filter((s) => s.resource_type.trim() && s.patterns.length)
     if (valid.length !== scopes.length) {
-      toast.error("리소스 유형과 패턴이 비어 있는 규칙이 있습니다")
+      setShowErrors(true)
       return
     }
+    setShowErrors(false)
     setSaving(true)
     try {
       await saveMcpAgentScopes(name, agent.link_id, valid.map((s) => ({ ...s, resource_type: s.resource_type.trim() })))
-      toast.success("에이전트 리소스 범위를 저장했습니다")
+      toast.success("에이전트 리소스 범위를 저장했습니다.")
       onSaved()
       onOpenChange(false)
     } catch (e) {
@@ -69,7 +83,7 @@ export function AgentScopeDialog({ name, agent, onOpenChange, onSaved }: {
             에이전트 리소스 범위 — {agent?.agent_display_name || agent?.agent_name} <OriginBadge origin="argus" />
           </DialogTitle>
         </DialogHeader>
-        <p className="text-xs text-muted-foreground">
+        <p className="text-xs">
           배포의 승인 리소스 범위 위에 이 에이전트에게만 추가로 적용되는 규칙입니다. 서버는 인스턴스 범위와 에이전트 범위를
           <b> 둘 다</b> 통과해야 허용합니다(protect &gt; deny &gt; allow 목록). allow 규칙을 두면 그 목록 밖은 거부됩니다.
           저장하면 정책 번들이 바뀌어 서버가 다음 갱신 때 받아 강제(enforce) 모드에서 집행합니다. policy_version 은 바뀌지 않습니다.
@@ -79,12 +93,14 @@ export function AgentScopeDialog({ name, agent, onOpenChange, onSaved }: {
             <p className="py-4 text-center text-sm text-muted-foreground">규칙이 없습니다 — 인스턴스 범위만 적용됩니다.</p>
           )}
           {scopes.map((s, i) => (
-            <ScopeRow
-              key={i}
-              value={s}
-              onChange={(v) => setScopes(scopes.map((x, j) => (j === i ? v : x)))}
-              onRemove={() => setScopes(scopes.filter((_, j) => j !== i))}
-            />
+            <div key={i} className="space-y-1">
+              <ScopeRow
+                value={s}
+                onChange={(v) => setScopes(scopes.map((x, j) => (j === i ? v : x)))}
+                onRemove={() => setScopes(scopes.filter((_, j) => j !== i))}
+              />
+              {showErrors && <FieldError>{scopeRowError(s)}</FieldError>}
+            </div>
           ))}
         </div>
         <div>
@@ -96,10 +112,11 @@ export function AgentScopeDialog({ name, agent, onOpenChange, onSaved }: {
             <Plus className="mr-1 h-4 w-4" /> 규칙 추가
           </Button>
         </div>
+        <FieldError>{showErrors && hasInvalid ? "리소스 유형과 패턴이 비어 있는 규칙이 있습니다." : null}</FieldError>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>취소</Button>
           <Button onClick={save} disabled={saving}>
-            {saving ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Save className="mr-1 h-4 w-4" />} 저장
+            {saving ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : null} 저장
           </Button>
         </DialogFooter>
       </DialogContent>

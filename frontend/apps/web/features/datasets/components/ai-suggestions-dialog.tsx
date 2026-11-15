@@ -142,7 +142,7 @@ export function AiSuggestionsButton({
       >
         <Sparkles className="h-3.5 w-3.5" />
         AI 제안
-        <Badge className="h-5 min-w-5 justify-center px-1.5 text-[10px]">{items.length}</Badge>
+        <Badge size="sm" className="min-w-4 justify-center">{items.length}</Badge>
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-5xl max-h-[80vh] overflow-y-auto">
@@ -182,18 +182,18 @@ export function AiSuggestionsButton({
                     </TableCell>
                     <TableCell className="align-top">
                       <Badge variant="secondary">{suggestionKindLabel(s)}</Badge>
-                      <div className="mt-1 font-mono text-xs text-muted-foreground break-all">{suggestionTarget(s)}</div>
+                      <div className="mt-1 font-mono text-xs break-all">{suggestionTarget(s)}</div>
                       {(duplicateKeys.get(dupKey) ?? 0) > 1 && (
-                        <div className="mt-1 text-[10px] text-amber-600">같은 대상 제안 여러 건</div>
+                        <div className="mt-1 text-[11px] text-amber-600">같은 대상 제안 여러 건</div>
                       )}
                     </TableCell>
                     <TableCell className="align-top text-sm whitespace-pre-wrap break-words">
                       <div className="max-h-40 overflow-y-auto">{formatSuggestedValue(s)}</div>
                     </TableCell>
-                    <TableCell className="align-top text-sm text-muted-foreground whitespace-pre-wrap break-words">
+                    <TableCell className="align-top text-sm whitespace-pre-wrap break-words">
                       <div className="max-h-40 overflow-y-auto">{formatCurrentValue(s)}</div>
                     </TableCell>
-                    <TableCell className="align-top text-xs text-muted-foreground">
+                    <TableCell className="align-top text-xs">
                       <div>{suggestionSource(s)}</div>
                       <div className="mt-1">{formatTime(s.created_at)}</div>
                     </TableCell>
@@ -221,7 +221,7 @@ export function AiSuggestionsButton({
             </TableBody>
           </Table>
           <div className="flex items-center justify-between gap-2">
-            <span className="text-xs text-muted-foreground">
+            <span className="text-xs">
               PII 를 승인하면 해당 컬럼의 PII 유형이 바뀝니다. 태그 승인 시 없는 태그는 새로 만듭니다.
             </span>
             <div className="flex gap-2">

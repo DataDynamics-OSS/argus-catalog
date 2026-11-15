@@ -9,14 +9,87 @@ reply_count 는 성능을 위해 비정규화된 "보이는 직접 답글 수" �
 
 import logging
 import re
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import case, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.comments.models import Comment
-from app.comments.schemas import CommentCreate, CommentResponse, CommentUpdate, PaginatedComments
+from app.comments.schemas import (
+    CommentCreate,
+    CommentResponse,
+    CommentUpdate,
+    PaginatedComments,
+    ReportItem,
+)
+from app.core.html_sanitize import html_to_plain
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# 오류 신고·개선 요청 처리 (TODO-096 4단계, 가이드라인 체크리스트 C31)
+# ---------------------------------------------------------------------------
+
+# 처리 대상 — 데이터셋의 최상위 댓글 중 이 분류. feature(기능 요청)는 카탈로그 기능에 대한 것이라 뺀다.
+REPORT_ENTITY_TYPES = frozenset({"dataset"})
+REPORT_CATEGORIES = frozenset({"bug", "suggestion"})
+REPORT_STATUSES = ("OPEN", "IN_PROGRESS", "RESOLVED", "REJECTED")
+OPEN_STATUSES = ("OPEN", "IN_PROGRESS")
+SETTING_DUE_DAYS = "ai_ready_report_due_days"
+DEFAULT_DUE_DAYS = 10  # 가이드라인 §3 "신고 후 10일 안에 수정 또는 소명"(기준 예시)
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _aware(v: datetime | None) -> datetime | None:
+    """SQLite 등 시간대 없이 돌려주는 값은 UTC 로 본다."""
+    if v is None:
+        return None
+    return v if v.tzinfo else v.replace(tzinfo=timezone.utc)
+
+
+def is_overdue(status: str | None, due_at: datetime | None, now: datetime | None = None) -> bool:
+    return status in OPEN_STATUSES and due_at is not None and _aware(due_at) < (now or _now())
+
+
+def is_report(entity_type: str, parent_id: int | None, category: str | None) -> bool:
+    return entity_type in REPORT_ENTITY_TYPES and parent_id is None and category in REPORT_CATEGORIES
+
+
+async def report_due_days(session: AsyncSession) -> int:
+    """설정 › AI-Ready 의 처리 기한(일). 비었거나 잘못되면 10."""
+    from app.settings.service import get_config_by_category
+
+    raw = (await get_config_by_category(session, "ai_ready")).get(SETTING_DUE_DAYS)
+    try:
+        days = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return DEFAULT_DUE_DAYS
+    return days if days > 0 else DEFAULT_DUE_DAYS
+
+
+async def _sync_report_state(session: AsyncSession, comment: Comment) -> None:
+    """분류에 맞춰 처리 상태를 붙이거나 뗀다 — 새로 처리 대상이 되면 접수(OPEN), 기한은 작성 시각 + 설정 일수."""
+    if is_report(comment.entity_type, comment.parent_id, comment.category):
+        if comment.status is None:
+            base = _aware(comment.created_at) or _now()
+            comment.status = "OPEN"
+            comment.due_at = base + timedelta(days=await report_due_days(session))
+    elif comment.status is not None:
+        comment.status = comment.due_at = comment.resolved_at = comment.resolution = comment.handled_by = None
+
+
+async def _notify_received(session: AsyncSession, comment: Comment) -> None:
+    """신고 접수 알림(``REPORT_RECEIVED`` 규칙) — 알림이 실패해도 댓글 저장은 막지 않는다."""
+    from app.catalog.ai_ready_alerts import notify_report_received
+
+    try:
+        async with session.begin_nested():
+            await notify_report_received(session, comment)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("신고 접수 알림 실패: comment_id=%s: %s", comment.id, e)
 
 
 def _to_response(comment: Comment) -> CommentResponse:
@@ -38,6 +111,12 @@ def _to_response(comment: Comment) -> CommentResponse:
         created_at=comment.created_at,
         updated_at=comment.updated_at,
         is_deleted=comment.is_deleted,
+        status=comment.status,
+        due_at=comment.due_at,
+        resolved_at=comment.resolved_at,
+        resolution=comment.resolution,
+        handled_by=comment.handled_by,
+        overdue=is_overdue(comment.status, comment.due_at),
     )
 
 
@@ -205,13 +284,20 @@ async def create_comment(
         root_id=root_id,
         depth=depth,
         content=req.content,
-        content_plain=req.content_plain,
+        # 평문을 보내지 않은 API 호출도 목록 · 신고 처리 · 알림 요약에 본문이 보이게 서버가 만든다(DEF-133)
+        content_plain=req.content_plain if (req.content_plain or "").strip() else html_to_plain(req.content),
         category=req.category,
         author_name=author_name_for(author) if author is not None else (req.author_name or "anonymous"),
         author_email=(author.email or None) if author is not None else req.author_email,
         author_avatar=None if author is not None else req.author_avatar,
     )
+    if is_report(req.entity_type, parent_id, req.category):
+        comment.status = "OPEN"
+        comment.due_at = _now() + timedelta(days=await report_due_days(session))
     session.add(comment)
+    if comment.status is not None:
+        await session.flush()
+        await _notify_received(session, comment)
     await session.commit()
     await session.refresh(comment)
 
@@ -234,10 +320,14 @@ async def update_comment(
         return None
 
     comment.content = req.content
-    if req.content_plain is not None:
-        comment.content_plain = req.content_plain
+    # 평문이 없으면 새 본문에서 만든다 — 예전 평문이 남아 바뀐 본문과 어긋나지 않게(DEF-133)
+    comment.content_plain = req.content_plain if (req.content_plain or "").strip() else html_to_plain(req.content)
     if req.category is not None:
         comment.category = req.category
+        was = comment.status
+        await _sync_report_state(session, comment)
+        if was is None and comment.status is not None:
+            await _notify_received(session, comment)
 
     await session.commit()
     await session.refresh(comment)
@@ -306,3 +396,116 @@ async def get_comment_count(
         )
     )
     return result.scalar() or 0
+
+
+# ---------------------------------------------------------------------------
+# 오류 신고·개선 요청 — 상태 변경, 목록, 집계
+# ---------------------------------------------------------------------------
+
+
+async def get_report(session: AsyncSession, comment_id: int) -> Comment | None:
+    """처리 대상 댓글(삭제되지 않음, 상태 있음). 아니면 None."""
+    c = await session.get(Comment, comment_id)
+    if not c or c.is_deleted or c.status is None:
+        return None
+    return c
+
+
+async def set_report_status(
+    session: AsyncSession, comment: Comment, status: str, resolution: str | None, actor: str,
+) -> CommentResponse:
+    """처리 상태를 바꾼다. 해결·소명은 처리 시각을 남기고, 다시 열면 지운다. 소명은 사유 필수(ValueError)."""
+    status = (status or "").strip().upper()
+    if status not in REPORT_STATUSES:
+        raise ValueError(f"처리 상태는 {', '.join(REPORT_STATUSES)} 중 하나입니다.")
+    text = (resolution or "").strip() or None
+    if status == "REJECTED" and not text:
+        raise ValueError("소명(반려)은 사유를 적어야 합니다.")
+    # updated_at 은 본문 수정 시각("수정됨" 표시) — 상태 변경으로 바뀌지 않게 둔다(onupdate 를 피해 UPDATE 로)
+    await session.execute(
+        update(Comment).where(Comment.id == comment.id).values(
+            status=status, resolution=text, handled_by=actor,
+            resolved_at=_now() if status in ("RESOLVED", "REJECTED") else None,
+            updated_at=Comment.updated_at,
+        )
+    )
+    await session.commit()
+    await session.refresh(comment)
+    logger.info("신고 처리 상태 변경: id=%d status=%s by=%s", comment.id, status, actor)
+    return _to_response(comment)
+
+
+def _report_filter(entity_type: str, entity_ids: list[str] | None):
+    conds = [Comment.entity_type == entity_type, Comment.parent_id.is_(None),
+             Comment.is_deleted == False, Comment.status.isnot(None)]  # noqa: E712
+    if entity_ids is not None:
+        conds.append(Comment.entity_id.in_(entity_ids))
+    return conds
+
+
+async def list_reports(
+    session: AsyncSession, *, entity_type: str = "dataset", entity_ids: list[str] | None = None,
+    state: str = "open", category: str | None = None, page: int = 1, page_size: int = 20,
+) -> tuple[list[ReportItem], int, dict[str, int]]:
+    """신고 목록 — state: open(접수·처리 중) · overdue(기한 넘김) · closed(해결·소명) · all.
+
+    정렬은 처리 중인 것은 기한 이른 순, 끝난 것은 처리 최근 순. counts 는 범위(entity_ids) 안의 상태별 수.
+    """
+    now = _now()
+    base = _report_filter(entity_type, entity_ids)
+    if category in REPORT_CATEGORIES:
+        base.append(Comment.category == category)
+
+    counts = {"open": 0, "overdue": 0, "closed": 0, "all": 0}
+    for st, n in (await session.execute(
+        select(Comment.status, func.count()).where(*base).group_by(Comment.status)
+    )).all():
+        counts["all"] += n
+        counts["open" if st in OPEN_STATUSES else "closed"] += n
+    counts["overdue"] = (await session.execute(
+        select(func.count()).where(*base, Comment.status.in_(OPEN_STATUSES), Comment.due_at < now)
+    )).scalar() or 0
+
+    conds = list(base)
+    if state == "open":
+        conds.append(Comment.status.in_(OPEN_STATUSES))
+        order = (Comment.due_at.asc(), Comment.id.asc())
+    elif state == "overdue":
+        conds += [Comment.status.in_(OPEN_STATUSES), Comment.due_at < now]
+        order = (Comment.due_at.asc(), Comment.id.asc())
+    elif state == "closed":
+        conds.append(Comment.status.in_(("RESOLVED", "REJECTED")))
+        order = (Comment.resolved_at.desc(), Comment.id.desc())
+    else:
+        order = (Comment.created_at.desc(), Comment.id.desc())
+    total = (await session.execute(select(func.count()).where(*conds))).scalar() or 0
+    rows = (await session.execute(
+        select(Comment).where(*conds).order_by(*order).offset((page - 1) * page_size).limit(page_size)
+    )).scalars().all()
+    items = [ReportItem(
+        id=c.id, entity_type=c.entity_type, entity_id=c.entity_id, category=c.category,
+        content_plain=(c.content_plain or "")[:300] or None, author_name=c.author_name, created_at=c.created_at,
+        status=c.status, due_at=c.due_at, resolved_at=c.resolved_at, resolution=c.resolution,
+        handled_by=c.handled_by, overdue=is_overdue(c.status, c.due_at, now), reply_count=c.reply_count,
+    ) for c in rows]
+    return items, total, counts
+
+
+async def report_stats(session: AsyncSession, entity_type: str, entity_ids: list[str]) -> dict[str, dict[str, int]]:
+    """엔티티별 신고 집계 {entity_id: {total, open, overdue, closed}} — AI-Ready 점검(C31)용 묶음 조회."""
+    out: dict[str, dict[str, int]] = {}
+    if not entity_ids:
+        return out
+    now = _now()
+    for eid, st, due in (await session.execute(
+        select(Comment.entity_id, Comment.status, Comment.due_at).where(*_report_filter(entity_type, entity_ids))
+    )).all():
+        s = out.setdefault(eid, {"total": 0, "open": 0, "overdue": 0, "closed": 0})
+        s["total"] += 1
+        if st in OPEN_STATUSES:
+            s["open"] += 1
+            if is_overdue(st, due, now):
+                s["overdue"] += 1
+        else:
+            s["closed"] += 1
+    return out

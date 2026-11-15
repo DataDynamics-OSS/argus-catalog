@@ -1,5 +1,6 @@
 "use client"
 
+import { Tip } from "@/components/tip"
 import { useCallback, useEffect, useState } from "react"
 import { Brain, Check, Eye, EyeOff, Loader2, Play, RefreshCw, Save, Trash2, X } from "lucide-react"
 
@@ -223,7 +224,7 @@ export function EmbeddingSettings() {
                 <div>
                   <span className="text-muted-foreground">제공자: </span>
                   <span className="font-semibold">{stats.provider} / {stats.model}</span>
-                  <span className="text-muted-foreground ml-1">({stats.dimension}차원)</span>
+                  <span className="ml-1">({stats.dimension}차원)</span>
                 </div>
               )}
             </div>
@@ -254,7 +255,7 @@ export function EmbeddingSettings() {
           <div className="flex items-center justify-between">
             <div>
               <Label>시맨틱 검색 활성화</Label>
-              <p className="text-xs text-muted-foreground mt-0.5">
+              <p className="text-xs mt-0.5">
                 활성화하면 임베딩 제공자가 초기화되어 시맨틱 검색(쿼리 임베딩)·백필에 사용됩니다.
               </p>
             </div>
@@ -265,7 +266,7 @@ export function EmbeddingSettings() {
           <div className="flex items-center justify-between">
             <div>
               <Label>쓰기 시 자동 임베딩</Label>
-              <p className="text-xs text-muted-foreground mt-0.5">
+              <p className="text-xs mt-0.5">
                 데이터셋 생성/수정/동기화마다 자동으로 임베딩합니다. 끄면 아래 백필로만 생성됩니다
                 (대량 동기화 시 모델 추론 부하 회피 — 기본 꺼짐).
               </p>
@@ -308,7 +309,7 @@ export function EmbeddingSettings() {
                 ))}
               </SelectContent>
             </Select>
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs">
               차원: {dimension}. 벡터 컬럼이 {SUPPORTED_DIMENSION}차원 고정이라 {SUPPORTED_DIMENSION}차원 모델만 저장할 수 있습니다.
             </p>
             {dimension !== SUPPORTED_DIMENSION && (
@@ -330,13 +331,13 @@ export function EmbeddingSettings() {
                   placeholder="sk-..."
                   className="pr-10"
                 />
-                <button
+                <Tip label={showApiKey ? "값 숨기기" : "값 보기"}><button aria-label={showApiKey ? "값 숨기기" : "값 보기"}
                   type="button"
                   className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground"
                   onClick={() => setShowApiKey(!showApiKey)}
                 >
                   {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </button>
+                </button></Tip>
               </div>
             </div>
           )}
@@ -379,14 +380,14 @@ export function EmbeddingSettings() {
           <div className="flex items-center gap-2">
             <Button variant="outline" onClick={handleBackfill} disabled={backfilling || !enabled}>
               {backfilling ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <RefreshCw className="h-4 w-4 mr-1" />}
-              {backfilling ? "백필 중..." : "전체 데이터셋 백필"}
+              {backfilling ? "백필 중…" : "전체 데이터셋 백필"}
             </Button>
             <Button variant="outline" onClick={handleClear} className="text-red-600 hover:text-red-700">
               <Trash2 className="h-4 w-4 mr-1" />
               모든 임베딩 삭제
             </Button>
           </div>
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs">
             백필은 임베딩이 없거나 원문·모델이 바뀐 데이터셋과 용어집·AI Agent·API·MCP 서버를 (다시) 임베딩합니다.
             모델을 바꿨으면 저장한 뒤 백필을 다시 실행하세요. 삭제는 모든 임베딩을 제거합니다.
           </p>

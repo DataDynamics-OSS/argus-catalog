@@ -24,7 +24,9 @@ HTTP 변환·예외 매핑만 담당한다.
 권한 정책:
     - 조회(GET 전체): 로그인 사용자 (소유자 픽커 등 비관리자 화면에서도 사용)
     - PUT /users/{id}: 관리자 또는 본인 (계정 설정의 자기 프로필 수정)
-    - 생성/삭제/역할 변경/활성·비활성: 관리자 전용
+    - 생성/삭제/활성·비활성/잠금 해제/비밀번호 재설정: 관리자, 또는 사용자 관리 위임 기능(``users.manage``,
+      명시 허용형)을 받은 역할(TODO-123). 위임받은 사람은 관리자 계정을 다루거나 관리자를 만들 수 없다(권한 상승 방지).
+    - 역할 변경: 관리자 전용
     - 본인 계정은 삭제·비활성화·역할 변경할 수 없다(다른 관리자가 처리 — 실수로 자기 권한을 잃지 않도록)
     - 아이디·이메일 중복(DB 고유 제약)은 409
     - 비관리자 조회에는 전화번호를 싣지 않고 전화번호 검색도 하지 않는다(소유자 선택 등에는
@@ -40,6 +42,7 @@ HTTP 변환·예외 매핑만 담당한다.
 """
 
 import logging
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.exc import IntegrityError
@@ -47,9 +50,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.service import record as audit_record
 from app.audit.service import secret_change
-from app.core.auth import AdminUser, CurrentUser, invalidate_account_cache
+from app.core.auth import AdminUser, CurrentUser, TokenUser, invalidate_account_cache
 from app.core.config import settings
 from app.core.database import get_session
+from app.permissions.router import check_feature_granted, require_feature_granted
 from app.usermgr import ownership, service
 from app.usermgr.schemas import (
     PaginatedUserResponse,
@@ -64,6 +68,11 @@ from app.usermgr.schemas import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/usermgr", tags=["usermgr"])
+
+# 사용자 관리 — 관리자, 또는 위임 기능 users.manage(명시 허용형)를 받은 역할(TODO-123)
+UserManager = Annotated[TokenUser, Depends(require_feature_granted("users.manage"))]
+ADMIN_ROLE = "argus-admin"
+ADMIN_TARGET_DETAIL = "관리자 계정은 관리자만 관리할 수 있습니다."
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +93,20 @@ async def _forbid_self(session: AsyncSession, current, user_id: int, action: str
     if await _is_self(session, current, user_id):
         logger.warning("본인 계정 %s 차단: actor=%s target=%d", action, current.username, user_id)
         raise HTTPException(status_code=400, detail=f"본인 계정은 {action}할 수 없습니다. 다른 관리자에게 요청하세요.")
+
+
+async def _forbid_admin_target(session: AsyncSession, current, user_id: int, action: str) -> None:
+    """위임받은 사람(관리자 아님)은 관리자 계정을 바꿀 수 없다 — 비밀번호 재설정으로 관리자가 되는 길을 막는다."""
+    if current.is_admin:
+        return
+    target = await service.get_user(session, user_id)
+    if target is not None and target.role == ADMIN_ROLE:
+        logger.warning("관리자 계정 %s 거부(위임 사용자): actor=%s target=%d", action, current.username, user_id)
+        raise HTTPException(status_code=403, detail=ADMIN_TARGET_DETAIL)
+
+
+async def _can_manage_users(session: AsyncSession, current) -> bool:
+    return current.is_admin or await check_feature_granted(session, current, "users.manage")
 
 
 KEYCLOAK_MANAGED = "Keycloak 인증 모드에서는 계정·역할·비밀번호·프로필을 Keycloak 에서 관리합니다."
@@ -121,7 +144,7 @@ def _conflict(e: IntegrityError) -> HTTPException:
 
 @router.get("/check-user")
 async def check_user_exists(
-    _admin: AdminUser,
+    _admin: UserManager,
     username: str | None = Query(None, description="Username to check"),
     email: str | None = Query(None, description="Email to check"),
     session: AsyncSession = Depends(get_session),
@@ -147,13 +170,16 @@ async def check_user_exists(
 
 
 @router.post("/users", response_model=UserResponse)
-async def add_user(req: UserAddRequest, _admin: AdminUser, session: AsyncSession = Depends(get_session)):
+async def add_user(req: UserAddRequest, _admin: UserManager, session: AsyncSession = Depends(get_session)):
     """새 사용자 생성.
 
     비밀번호는 저장 전 해시 처리한다. 지정한 역할이 DB 에 없으면 400.
-    신규 사용자는 ``active`` 상태로 생성된다.
+    신규 사용자는 ``active`` 상태로 생성된다. 위임받은 사람은 관리자를 만들 수 없다(403).
     """
     _forbid_keycloak("사용자 생성")
+    if not _admin.is_admin and req.role == ADMIN_ROLE:
+        logger.warning("관리자 계정 생성 거부(위임 사용자): actor=%s", _admin.username)
+        raise HTTPException(status_code=403, detail=ADMIN_TARGET_DETAIL)
     try:
         user = await service.add_user(session, req)
     except IntegrityError as e:
@@ -193,15 +219,16 @@ async def list_users(
     ``sort``/``order`` 로 정렬(기본 생성일 내림차순) 후 ``page``/``page_size`` 로 페이지네이션.
     잘못된 ``sort`` 는 400. 비관리자 응답은 본인 외 전화번호를 지운다.
     """
+    privileged = await _can_manage_users(session, current)  # 관리자 · 사용자 관리 위임은 전화번호도 본다
     try:
         result = await service.list_users(
             session, status=status, role=role, search=search, organization=organization,
-            page=page, page_size=page_size, include_private=current.is_admin, sort=sort, order=order,
+            page=page, page_size=page_size, include_private=privileged, sort=sort, order=order,
         )
     except ValueError as e:
         logger.warning("list_users 잘못된 정렬 기준: sort=%s", sort)
         raise HTTPException(status_code=400, detail=str(e))
-    if not current.is_admin:
+    if not privileged:
         result.items = [_mask_private(u, current) for u in result.items]
     logger.debug(
         # 검색어는 이름·이메일·전화번호일 수 있어 길이만 남긴다
@@ -227,11 +254,11 @@ async def get_user(user_id: int, current: CurrentUser, session: AsyncSession = D
     if not user:
         logger.warning("get_user 대상 없음: user_id=%d", user_id)
         raise HTTPException(status_code=404, detail="사용자을(를) 찾을 수 없습니다.")
-    return _mask_private(user, current)
+    return user if await _can_manage_users(session, current) else _mask_private(user, current)
 
 
 @router.get("/users/{user_id}/owned-assets")
-async def owned_assets(user_id: int, _admin: AdminUser, session: AsyncSession = Depends(get_session)):
+async def owned_assets(user_id: int, _admin: UserManager, session: AsyncSession = Depends(get_session)):
     """사용자가 소유한(편집 권한이 아이디로 묶인) 자산의 종류별 건수 — 삭제 전 이관 안내용."""
     user = await service.get_user(session, user_id)
     if not user:
@@ -252,9 +279,11 @@ async def modify_user(
 
     권한: 관리자 또는 본인(계정 설정의 자기 프로필 수정)만 허용.
     """
-    if not current.is_admin and current.sub != str(user_id):
-        logger.warning("modify_user 권한 없음: actor=%s target=%d", current.sub, user_id)
-        raise HTTPException(status_code=403, detail="본인 또는 관리자만 수정할 수 있습니다.")
+    if current.sub != str(user_id):
+        if not await _can_manage_users(session, current):
+            logger.warning("modify_user 권한 없음: actor=%s target=%d", current.sub, user_id)
+            raise HTTPException(status_code=403, detail="본인 또는 관리자만 수정할 수 있습니다.")
+        await _forbid_admin_target(session, current, user_id, "수정")
     if settings.auth_type != "local" and req.model_fields_set & _KEYCLOAK_SYNCED_FIELDS:
         logger.warning("keycloak 모드에서 동기화 필드 수정 거부: target=%d fields=%s",
                        user_id, sorted(req.model_fields_set & _KEYCLOAK_SYNCED_FIELDS))
@@ -282,7 +311,7 @@ async def modify_user(
 
 @router.delete("/users/{user_id}")
 async def delete_user(
-    user_id: int, admin: AdminUser,
+    user_id: int, admin: UserManager,
     transfer_to: str | None = Query(None, description="소유 자산을 넘겨받을 사용자 아이디"),
     session: AsyncSession = Depends(get_session),
 ):
@@ -292,6 +321,7 @@ async def delete_user(
     ``{"code": "owned_assets", "assets": [...]}``.
     """
     await _forbid_self(session, admin, user_id, "삭제")
+    await _forbid_admin_target(session, admin, user_id, "삭제")
     target = await service.get_user(session, user_id)
     owned = ([a for a in await ownership.count_owned(session, target.username) if a["count"]]
              if target else [])
@@ -323,7 +353,7 @@ async def change_role(
     """사용자 역할 변경. 알 수 없는 역할·본인 계정·마지막 활성 관리자 강등이면 400."""
     _forbid_keycloak("역할 변경")
     target = await service.get_user(session, user_id)
-    if target is not None and target.role != req.role.value:
+    if target is not None and target.role != req.role:
         await _forbid_self(session, admin, user_id, "역할 변경")
     try:
         user = await service.change_role(session, user_id, req)
@@ -344,7 +374,7 @@ async def change_role(
 
 @router.put("/users/{user_id}/password", response_model=UserResponse)
 async def set_password(
-    user_id: int, req: UserSetPasswordRequest, admin: AdminUser,
+    user_id: int, req: UserSetPasswordRequest, admin: UserManager,
     session: AsyncSession = Depends(get_session),
 ):
     """관리자가 대상 사용자의 비밀번호를 재설정한다(현재 비밀번호 불요).
@@ -352,6 +382,7 @@ async def set_password(
     로컬 인증 모드 전용 — Keycloak 등 외부 인증에서는 비밀번호가 외부에서 관리되므로 400.
     """
     _forbid_keycloak("비밀번호 재설정")
+    await _forbid_admin_target(session, admin, user_id, "비밀번호 재설정")
     must_change = req.must_change_password and not await _is_self(session, admin, user_id)
     try:
         user = await service.set_password(session, user_id, req.password, must_change_password=must_change)
@@ -369,8 +400,9 @@ async def set_password(
 
 
 @router.put("/users/{user_id}/activate", response_model=UserResponse)
-async def activate_user(user_id: int, _admin: AdminUser, session: AsyncSession = Depends(get_session)):
+async def activate_user(user_id: int, _admin: UserManager, session: AsyncSession = Depends(get_session)):
     """계정 상태를 ``active`` 로 변경한다."""
+    await _forbid_admin_target(session, _admin, user_id, "활성화")
     user = await service.activate_user(session, user_id)
     if not user:
         logger.warning("activate_user 대상 없음: user_id=%d", user_id)
@@ -381,8 +413,9 @@ async def activate_user(user_id: int, _admin: AdminUser, session: AsyncSession =
 
 
 @router.put("/users/{user_id}/unlock", response_model=UserResponse)
-async def unlock_user(user_id: int, admin: AdminUser, session: AsyncSession = Depends(get_session)):
+async def unlock_user(user_id: int, admin: UserManager, session: AsyncSession = Depends(get_session)):
     """로그인 실패 누적 잠금을 해제한다(실패 횟수 초기화)."""
+    await _forbid_admin_target(session, admin, user_id, "잠금 해제")
     user = await service.unlock_user(session, user_id)
     if not user:
         logger.warning("unlock_user 대상 없음: user_id=%d", user_id)
@@ -392,9 +425,10 @@ async def unlock_user(user_id: int, admin: AdminUser, session: AsyncSession = De
 
 
 @router.put("/users/{user_id}/deactivate", response_model=UserResponse)
-async def deactivate_user(user_id: int, admin: AdminUser, session: AsyncSession = Depends(get_session)):
+async def deactivate_user(user_id: int, admin: UserManager, session: AsyncSession = Depends(get_session)):
     """계정 상태를 ``inactive`` 로 변경한다(데이터 보존, 추후 재활성화 가능). 본인·마지막 활성 관리자는 차단."""
     await _forbid_self(session, admin, user_id, "비활성화")
+    await _forbid_admin_target(session, admin, user_id, "비활성화")
     try:
         user = await service.deactivate_user(session, user_id)
     except ValueError as e:

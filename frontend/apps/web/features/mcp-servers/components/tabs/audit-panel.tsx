@@ -8,14 +8,15 @@
  * 서비스 토큰은 enforce 모드의 정책 번들 pull 에도 쓴다(Phase 3).
  */
 
+import { Tip } from "@/components/tip"
+import { CodeEditor } from "@/components/code-editor"
 import { Fragment, useCallback, useEffect, useState } from "react"
 import { Copy, KeyRound, Loader2, RefreshCw, Trash2, Upload } from "lucide-react"
 import { notifyError, toast } from "@/lib/notify"
+import { FieldError } from "@/components/field-error"
 import { useConfirm } from "@/components/confirm-provider"
 
-import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@workspace/ui/components/card"
 import {
   Dialog,
   DialogContent,
@@ -39,7 +40,6 @@ import {
   TableHeader,
   TableRow,
 } from "@workspace/ui/components/table"
-import { Textarea } from "@workspace/ui/components/textarea"
 
 import {
   fetchMcpAuditEvents,
@@ -50,6 +50,9 @@ import {
 import type { McpAuditEvent, McpAuditIngestResult, McpDeploymentDetail } from "../../data/schema"
 import { DecisionBadge, OriginBadge, RiskBadge, fmtDate } from "../mcp-badges"
 import { JsonBlock } from "../mcp-server-detail"
+import { copyText } from "@/lib/clipboard"
+import { DetailSection } from "@/components/detail-section"
+import { StatusBadge } from "@workspace/ui/components/status-badge"
 
 const ALL = "__all__"
 const PAGE = 50
@@ -87,26 +90,22 @@ export function AuditPanel({ dep, onChanged, canEdit = true }: {
   }, [load])
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-6">
       {canEdit && <IngestTokenCard dep={dep} onChanged={onChanged} />}
 
-      <Card>
-        <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-2">
-          <div>
-            <CardTitle className="flex items-center gap-2 text-sm">변경 도구 호출 <OriginBadge origin="server_config" /></CardTitle>
-            <p className="text-xs text-muted-foreground">
+      <DetailSection
+        title={<>변경 도구 호출 <OriginBadge origin="server_config" /></>}
+        description={<>
               판정은 승인 리소스 범위(없으면 관측 범위) 기준입니다. “범위 밖”·“차단 도구” 호출은 최근 7일 기준 finding 이 됩니다.
               보존 기간: {dep.audit_retention_days}일.
-            </p>
-          </div>
-          <div className="flex gap-2">
+        </>}
+        actions={<>
             <Button size="sm" variant="outline" onClick={load}><RefreshCw className="mr-1 h-4 w-4" /> 새로고침</Button>
             {canEdit && (
               <Button size="sm" variant="outline" onClick={() => setUploadOpen(true)}><Upload className="mr-1 h-4 w-4" /> JSONL 업로드</Button>
             )}
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-3">
+        </>}
+      >
           <div className="flex flex-wrap items-center gap-2">
             <Input className="h-8 w-[180px]" placeholder="도구" value={tool} onChange={(e) => { setTool(e.target.value); setPage(1) }} />
             <Input className="h-8 w-[160px]" placeholder="사용자" value={user} onChange={(e) => { setUser(e.target.value); setPage(1) }} />
@@ -122,7 +121,7 @@ export function AuditPanel({ dep, onChanged, canEdit = true }: {
                 <SelectItem value="unknown">판정 불가</SelectItem>
               </SelectContent>
             </Select>
-            <span className="text-xs text-muted-foreground">{total}건</span>
+            <span className="text-xs">{total}건</span>
           </div>
           <AuditTable rows={rows} openId={openId} setOpenId={setOpenId} />
           {total > PAGE && (
@@ -132,8 +131,7 @@ export function AuditPanel({ dep, onChanged, canEdit = true }: {
               <Button size="sm" variant="outline" disabled={page * PAGE >= total} onClick={() => setPage(page + 1)}>다음</Button>
             </div>
           )}
-        </CardContent>
-      </Card>
+      </DetailSection>
 
       <UploadDialog open={uploadOpen} onOpenChange={setUploadOpen} name={dep.name}
         onDone={async () => { setPage(1); await load(); await onChanged() }} />
@@ -175,13 +173,13 @@ export function AuditTable({ rows, openId, setOpenId, showDeployment = false }: 
                 {showDeployment && <TableCell className="font-mono text-xs">{e.deployment_name}</TableCell>}
                 <TableCell>
                   <span className="font-mono text-xs">{e.tool_name}</span>
-                  <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                  <div className="flex items-center gap-1 text-[11px]">
                     {e.group_key ?? "미등록 도구"} {e.risk && <RiskBadge risk={e.risk} />}
                   </div>
                 </TableCell>
                 <TableCell className="text-xs">
                   {e.user_name ?? "-"}
-                  {e.agent_name && <div className="font-mono text-[11px] text-muted-foreground">{e.agent_name}</div>}
+                  {e.agent_name && <div className="font-mono text-[11px]">{e.agent_name}</div>}
                 </TableCell>
                 <TableCell>
                   <div className="flex flex-wrap gap-1">
@@ -193,14 +191,14 @@ export function AuditTable({ rows, openId, setOpenId, showDeployment = false }: 
                 <TableCell className="text-xs">{e.ok ? "성공" : <span className="text-destructive">실패</span>}</TableCell>
                 <TableCell>
                   {e.server_decision === "denied" ? (
-                    <Badge variant="outline" className="border-violet-300 text-[11px] text-violet-700 dark:text-violet-300" title="서버가 카탈로그 정책으로 거부(enforce)">
+                    <StatusBadge tone="warning" title="서버가 카탈로그 정책으로 거부(enforce)">
                       서버 거부
-                    </Badge>
+                    </StatusBadge>
                   ) : (
                     <DecisionBadge decision={e.policy_decision} />
                   )}
                 </TableCell>
-                <TableCell className="max-w-[260px] truncate text-xs text-muted-foreground" title={e.policy_reason ?? ""}>{e.policy_reason}</TableCell>
+                <TableCell className="max-w-[260px] truncate text-xs" title={e.policy_reason ?? ""}>{e.policy_reason}</TableCell>
               </TableRow>
               {openId === e.id && (
                 <TableRow>
@@ -252,15 +250,15 @@ function IngestTokenCard({ dep, onChanged }: { dep: McpDeploymentDetail; onChang
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-sm"><KeyRound className="h-4 w-4" /> 서비스 토큰 <OriginBadge origin="argus" /></CardTitle>
-        <p className="text-xs text-muted-foreground">
+    <DetailSection
+      icon={<KeyRound />}
+      title={<>서비스 토큰 <OriginBadge origin="argus" /></>}
+      description={<>
           이 배포 전용 토큰입니다 — 감사 로그 shipper 의 이벤트 전송과 서버의 정책 번들 pull(enforce)에 씁니다.
           원문은 발급 직후 한 번만 표시되고 해시만 저장됩니다.
-        </p>
-      </CardHeader>
-      <CardContent className="space-y-3 text-sm">
+      </>}
+      className="text-sm"
+    >
         <div className="flex flex-wrap items-center gap-2">
           {dep.has_ingest_token ? (
             <span className="text-xs">
@@ -304,19 +302,18 @@ function IngestTokenCard({ dep, onChanged }: { dep: McpDeploymentDetail; onChang
             <div className="mb-1 text-xs font-medium text-amber-800 dark:text-amber-300">지금 복사하세요 — 다시 볼 수 없습니다.</div>
             <div className="flex items-center gap-2">
               <code className="flex-1 break-all text-xs">{issued}</code>
-              <Button size="icon" variant="ghost" className="h-7 w-7" aria-label="복사"
-                onClick={() => navigator.clipboard.writeText(issued).then(() => toast.success("복사했습니다."))}>
+              <Tip label="복사"><Button size="icon" variant="ghost" className="h-7 w-7" aria-label="복사"
+                onClick={() => copyText(issued).then(() => toast.success("복사했습니다."), (e) => notifyError(e, "클립보드에 복사하지 못했습니다."))}>
                 <Copy className="h-4 w-4" />
-              </Button>
+              </Button></Tip>
             </div>
           </div>
         )}
         <div>
-          <div className="mb-1 text-xs text-muted-foreground">전송 예 (Forge <code>audit.path</code> 의 JSONL)</div>
+          <div className="mb-1 text-xs">전송 예 (Forge <code>audit.path</code> 의 JSONL)</div>
           <pre className="overflow-x-auto rounded bg-muted p-2 text-[11px]">{curl}</pre>
         </div>
-      </CardContent>
-    </Card>
+    </DetailSection>
   )
 }
 
@@ -329,14 +326,17 @@ function UploadDialog({ open, onOpenChange, name, onDone }: {
   const [text, setText] = useState("")
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<McpAuditIngestResult | null>(null)
+  // 파일 선택 검증 오류(크기 초과) — 파일 입력란 아래에 보인다
+  const [fileError, setFileError] = useState<string | null>(null)
   useEffect(() => {
-    if (open) setResult(null)
+    if (open) { setResult(null); setFileError(null) }
   }, [open])
 
   const onFile = async (file: File | undefined) => {
+    setFileError(null)
     if (!file) return
     if (file.size > 20_000_000) {
-      toast.error("20MB 이하 파일만 올릴 수 있습니다.")
+      setFileError("20MB 이하 파일만 올릴 수 있습니다.")
       return
     }
     setText(await file.text())
@@ -346,12 +346,15 @@ function UploadDialog({ open, onOpenChange, name, onDone }: {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-3xl">
         <DialogHeader><DialogTitle>감사 로그(JSONL) 업로드</DialogTitle></DialogHeader>
-        <p className="text-xs text-muted-foreground">
+        <p className="text-xs">
           한 줄에 이벤트 하나: <code>{`{"ts","session","tool","user","args","ok","error"?,"id"?}`}</code>.
           이미 받은 줄은 중복으로 건너뛰고, 보존 기간보다 오래된 줄은 받지 않습니다.
         </p>
-        <Input type="file" accept=".jsonl,.log,.txt,application/json" onChange={(e) => onFile(e.target.files?.[0])} />
-        <Textarea rows={10} className="font-mono text-xs" value={text} onChange={(e) => setText(e.target.value)}
+        <div className="space-y-1">
+          <Input type="file" accept=".jsonl,.log,.txt,application/json" aria-invalid={!!fileError || undefined} onChange={(e) => onFile(e.target.files?.[0])} />
+          <FieldError>{fileError}</FieldError>
+        </div>
+        <CodeEditor aria-label="감사 로그 줄(JSONL)" minHeight={200} value={text} onChange={setText}
           placeholder={'{"ts":"2026-10-21T11:15:30+0900","session":"…","tool":"create_topic","user":"…","args":{"topic":"orders"},"ok":true}'} />
         {result && (
           <div className="rounded-md border p-2 text-xs">

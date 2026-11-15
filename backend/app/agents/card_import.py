@@ -7,10 +7,17 @@
 설계: design/ai-agent-bulk-registration-design.md §5.3
 
 받는 형식
-- A2A 에이전트 카드: ``name, description, url, version, provider{organization}, capabilities{streaming},
-  skills[{id,name,tags}], securitySchemes | authentication{schemes}, preferredTransport``
-- 이 카탈로그가 내보내는 카드(``GET /ai-agents/{name}/card``): ``display_name, protocol, auth_method,
-  provider{organization, contact}, capabilities[], supported_languages[], skills[], streaming``
+- A2A 1.0 에이전트 카드: ``name, description, version, supportedInterfaces[{url, protocolBinding, protocolVersion}],
+  capabilities{streaming, extensions[]}, defaultInputModes, defaultOutputModes,
+  skills[{id, name, description, tags, examples, inputModes, outputModes}](→ ``spec.skills``), securitySchemes{<이름>: {apiKeySecurityScheme |
+  httpAuthSecurityScheme | oauth2SecurityScheme | openIdConnectSecurityScheme | mtlsSecurityScheme}}``
+- A2A 0.3 이하 카드: 호출 주소가 최상위 ``url``·``preferredTransport``, 인증은 ``securitySchemes{type, scheme}`` 또는 ``authentication{schemes}``
+- 이 카탈로그가 내보내는 카드(``GET /ai-agents/{name}/card``): A2A 1.0 형식이고, 식별 이름·소유자·부서·분류·인증 방식 등
+  카탈로그 정보를 ``capabilities.extensions`` 의 카탈로그 확장(``CATALOG_CARD_EXTENSION_URI``) ``params`` 로 싣는다.
+- 예전 이 카탈로그 카드: ``display_name, protocol, auth_method, provider{organization(=부서), contact(=소유자)},
+  capabilities[], supported_languages[], skills[], streaming``
+
+외부 카드의 ``provider.organization`` 은 카드를 제공한 조직이라 사내 부서로 옮기지 않는다(부서는 사용자가 채운다).
 
 보안(서버가 사용자 대신 외부 주소를 호출하므로)
 - 공용 외부 호출 정책(``app.core.outbound.check_url``)을 매 요청·리다이렉트마다 적용 — http/https 만, 루프백·링크로컬
@@ -34,6 +41,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.manifest import API_VERSION, AgentManifest, dump_yaml
 from app.agents.models import AIAgent
+from app.agents.schemas import CATALOG_CARD_EXTENSION_URI
 from app.core.outbound import OutboundBlockedError, OutboundResolveError, check_url
 
 logger = logging.getLogger(__name__)
@@ -179,18 +187,38 @@ def _str_list(v: Any, limit: int = 50) -> list[str]:
     return out[:limit]
 
 
+# A2A 1.0 SecurityScheme(oneOf 감싸기) 키 → 인증 방식 이름(0.3 ``type`` 값과 같은 표기)
+_SCHEME_KINDS = {
+    "apiKeySecurityScheme": "apikey",
+    "oauth2SecurityScheme": "oauth2",
+    "openIdConnectSecurityScheme": "openidconnect",
+    "mtlsSecurityScheme": "mutualtls",
+}
+
+
+def _scheme_kind(sc: dict) -> str | None:
+    """보안 스킴 하나의 인증 방식 — 1.0(``httpAuthSecurityScheme{scheme}`` 등 감싼 형식)과 0.3(``type``·``scheme``) 모두."""
+    http = sc.get("httpAuthSecurityScheme")
+    if isinstance(http, dict):
+        return _str(http.get("scheme"), 50)
+    for key, kind in _SCHEME_KINDS.items():
+        if isinstance(sc.get(key), dict):
+            return kind
+    return _str(sc.get("scheme"), 50) if sc.get("type") == "http" else _str(sc.get("type"), 50)
+
+
 def _auth_method(card: dict) -> str | None:
-    """인증 방식 추출 — 우선순위: 카탈로그 카드 ``auth_method`` → A2A ``securitySchemes`` 첫 항목
-    (http 면 scheme, 그 밖은 type) → 구형 ``authentication.schemes`` 첫 값."""
+    """인증 방식 추출 — 우선순위: 예전 카탈로그 카드 ``auth_method`` → A2A ``securitySchemes`` 첫 항목
+    (1.0 감싼 형식 또는 0.3 ``type``, http 면 scheme) → 구형 ``authentication.schemes`` 첫 값."""
     if _str(card.get("auth_method"), 50):
         return _str(card.get("auth_method"), 50)
     schemes = card.get("securitySchemes")
     if isinstance(schemes, dict):
         for sc in schemes.values():
             if isinstance(sc, dict):
-                kind = sc.get("scheme") if sc.get("type") == "http" else sc.get("type")
-                if _str(kind, 50):
-                    return _str(kind, 50).lower()
+                kind = _scheme_kind(sc)
+                if kind:
+                    return kind[:50].lower()
     auth = card.get("authentication")
     if isinstance(auth, dict):
         names = _str_list(auth.get("schemes"))
@@ -199,13 +227,71 @@ def _auth_method(card: dict) -> str | None:
     return None
 
 
+# 여러 호출 주소 중 고르는 순서 — A2A 의 기본 바인딩(JSON-RPC) 우선
+_BINDING_ORDER = ("JSONRPC", "HTTP+JSON", "GRPC")
+
+
+def _interface(card: dict) -> tuple[str | None, str | None]:
+    """(호출 주소, 프로토콜 바인딩). 1.0 ``supportedInterfaces`` 를 바인딩 순서로 고르고, 없으면 0.3 최상위 ``url``·``preferredTransport``."""
+    items = [i for i in card.get("supportedInterfaces") or [] if isinstance(i, dict) and _str(i.get("url"), 1000)] \
+        if isinstance(card.get("supportedInterfaces"), list) else []
+    if items:
+        def rank(i: dict) -> int:
+            b = (_str(i.get("protocolBinding"), 30) or "").upper()
+            return _BINDING_ORDER.index(b) if b in _BINDING_ORDER else len(_BINDING_ORDER)
+        best = min(items, key=rank)
+        return _str(best.get("url"), 1000), _str(best.get("protocolBinding"), 30)
+    return _str(card.get("url"), 1000), _str(card.get("preferredTransport"), 30)
+
+
+def _catalog_params(card: dict) -> dict:
+    """이 카탈로그가 내보낸 카드의 카탈로그 확장 ``params``(없으면 빈 dict)."""
+    caps = card.get("capabilities")
+    if not isinstance(caps, dict):
+        return {}
+    for ext in caps.get("extensions") or []:
+        if isinstance(ext, dict) and ext.get("uri") == CATALOG_CARD_EXTENSION_URI and isinstance(ext.get("params"), dict):
+            return ext["params"]
+    return {}
+
+
+_SKILL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
+
+
+def _skills(raw: list[dict]) -> list[dict]:
+    """카드 ``skills[]`` → 정의 파일 ``spec.skills[]`` (최대 50개). id 가 형식에 맞지 않으면 이름에서 새로 만든다."""
+    from app.agents.service import _card_skill_id
+
+    out: list[dict] = []
+    used: set[str] = set()
+    for sk in raw[:50]:
+        name = _str(sk.get("name"), 200) or _str(sk.get("id"), 200)
+        if not name:
+            continue
+        sid = _str(sk.get("id"), 100)
+        if sid and _SKILL_ID.match(sid) and sid not in used:
+            used.add(sid)
+        else:
+            sid = _card_skill_id(sid or name, used)
+        doc = {"id": sid, "name": name, "description": _str(sk.get("description"), 10_000),
+               "tags": _str_list(sk.get("tags"), 20) or None, "examples": _str_list(sk.get("examples"), 20) or None,
+               "inputModes": _str_list(sk.get("inputModes"), 20) or None,
+               "outputModes": _str_list(sk.get("outputModes"), 20) or None}
+        out.append({k: v for k, v in doc.items() if v is not None})
+    return out
+
+
 def card_to_doc(card: dict, source_url: str, *, name: str | None = None, owner: str | None = None,
                 department: str | None = None, category: str | None = None) -> tuple[dict, list[str]]:
     """소개 정보 → 정의 문서. (문서, 안내 문구). 소유자·부서·분류가 없으면 null 로 둔다(채워야 반영 가능)."""
     notes: list[str] = []
+    ext = _catalog_params(card)
+    # 예전 카탈로그 카드: provider.organization 이 부서, provider.contact 가 소유자였다
+    legacy_catalog = any(k in card for k in ("display_name", "auth_method"))
     raw_name = card["name"].strip()
-    agent_name = slugify(name or "") or slugify(raw_name) or slugify(urlsplit(source_url).hostname or "") or "agent"
-    if not name and agent_name != raw_name:
+    agent_name = (slugify(name or "") or slugify(_str(ext.get("name"), 255) or "") or slugify(raw_name)
+                  or slugify(urlsplit(source_url).hostname or "") or "agent")
+    if not name and not ext.get("name") and agent_name != raw_name:
         notes.append(f"이름 '{raw_name}' 을(를) 카탈로그 이름 형식에 맞춰 '{agent_name}' 로 바꿨습니다.")
 
     provider = card.get("provider") if isinstance(card.get("provider"), dict) else {}
@@ -213,35 +299,43 @@ def card_to_doc(card: dict, source_url: str, *, name: str | None = None, owner: 
     caps = card.get("capabilities")
     skills = [s for s in card.get("skills") or [] if isinstance(s, dict)] if isinstance(card.get("skills"), list) else []
 
-    capabilities = _str_list(caps) if isinstance(caps, list) else []
-    for s in skills:
-        label = _str(s.get("name"), 200) or _str(s.get("id"), 200)
-        if label and label not in capabilities:
-            capabilities.append(label)
-    tags: list[str] = []
-    for s in skills:
-        for t in _str_list(s.get("tags")):
+    # 예전 카탈로그 카드는 capabilities 가 기능 이름 목록이었다. 이 카탈로그 카드는 확장 params 에 싣는다
+    capabilities = _str_list(ext.get("capabilities")) or (_str_list(caps) if isinstance(caps, list) else [])
+    # 이 카탈로그가 스킬 없이 기능 목록에서 만든 skills 는 스킬로 다시 들이지 않는다(기능 목록으로 돌아감)
+    skill_docs = [] if ext.get("skillSource") == "capabilities" else _skills(skills)
+    tags: list[str] = _str_list(card.get("tags"), 20)
+    for sk in skills:  # 스킬 태그를 에이전트 태그로도 모은다(검색용)
+        for t in _str_list(sk.get("tags")):
             if t not in tags:
                 tags.append(t)
     streaming = caps.get("streaming") if isinstance(caps, dict) else card.get("streaming")
-    transport = _str(card.get("preferredTransport"), 30)
+    endpoint, binding = _interface(card)
     # A2A 카드 고유 키가 하나라도 있으면 protocol 을 a2a 로 추정
-    is_a2a = any(k in card for k in ("protocolVersion", "preferredTransport", "securitySchemes", "defaultInputModes"))
+    is_a2a = any(k in card for k in ("supportedInterfaces", "protocolVersion", "preferredTransport", "securitySchemes",
+                                     "defaultInputModes"))
 
     interface = {
-        "endpoint": _str(card.get("url"), 1000),
-        "protocol": _str(card.get("protocol"), 30) or ("a2a" if is_a2a else None),
-        "invocationMethod": transport.lower() if transport else None,
+        "endpoint": endpoint,
+        "protocol": _str(ext.get("protocol"), 30) or _str(card.get("protocol"), 30) or ("a2a" if is_a2a else None),
+        # 호출 방식(sync/async/streaming)은 카드에 없다 — 전송 바인딩(JSONRPC 등)과 다른 값이라 옮기지 않는다
+        "invocationMethod": _str(ext.get("invocationMethod"), 30),
         "streaming": bool(streaming),
-        "authMethod": _auth_method(card),
+        "authMethod": _str(ext.get("authMethod"), 50) or _auth_method(card),
     }
+    organization = _str(provider.get("organization"), 200)
     metadata = {
         "name": agent_name,
-        "displayName": _str(card.get("display_name"), 255) or raw_name[:255],
-        "owner": _str(owner, 200) or (contact if contact and "@" in contact else None),
-        "department": _str(department, 200) or _str(provider.get("organization"), 200),
-        "category": _str(category, 100),
+        "displayName": _str(ext.get("displayName"), 255) or _str(card.get("display_name"), 255) or raw_name[:255],
+        "owner": (_str(owner, 200) or _str(ext.get("owner"), 200)
+                  or (contact if contact and "@" in contact else None)),
+        "department": (_str(department, 200) or _str(ext.get("department"), 200)
+                       or (organization if legacy_catalog else None)),
+        "category": _str(category, 100) or _str(ext.get("category"), 100),
     }
+    if organization and not legacy_catalog and not ext and not department:
+        notes.append(f"제공 조직 '{organization}' 은(는) 카드를 제공한 외부 조직이라 부서로 옮기지 않았습니다. 부서를 직접 정해 주세요.")
+    if binding and not ext:
+        notes.append(f"전송 방식 '{binding}' 은(는) 호출 방식(sync/async/streaming)과 달라 옮기지 않았습니다. 필요하면 호출 방식을 직접 정해 주세요.")
     if tags:
         metadata["tags"] = tags[:20]
     spec: dict[str, Any] = {"description": _str(card.get("description"), 10_000)}
@@ -250,12 +344,25 @@ def card_to_doc(card: dict, source_url: str, *, name: str | None = None, owner: 
     spec["interface"] = {k: v for k, v in interface.items() if v is not None and v is not False}
     if capabilities:
         spec["capabilities"] = capabilities[:50]
-    langs = _str_list(card.get("supported_languages"))
+    if skill_docs:
+        spec["skills"] = skill_docs
+    modes_in = _str_list(card.get("defaultInputModes"), 20)
+    modes_out = _str_list(card.get("defaultOutputModes"), 20)
+    if modes_in:
+        spec["interface"]["inputModes"] = modes_in
+    if modes_out:
+        spec["interface"]["outputModes"] = modes_out
+    gov = {"riskTier": _str(ext.get("riskTier"), 20), "autonomyLevel": _str(ext.get("autonomyLevel"), 20)}
+    gov = {k: v for k, v in gov.items() if v}
+    if gov:
+        spec["governance"] = gov
+    langs = _str_list(ext.get("supportedLanguages")) or _str_list(card.get("supported_languages"))
     if langs:
         spec["supportedLanguages"] = langs
     spec["release"] = {"changelog": "소개 정보에서 가져옴", "source": source_url[:1000]}
-    if skills:
-        notes.append(f"기술 {len(skills)}개를 기능(capabilities) 목록으로 옮겼습니다. 도구·위험도는 직접 정해 주세요.")
+    if skill_docs and not ext:
+        notes.append(f"스킬 {len(skill_docs)}개를 옮겼습니다. 스킬은 외부에 알리는 기능이라 도구(tools)가 아닙니다 — "
+                     "에이전트가 호출하는 도구와 위험도는 직접 정해 주세요.")
 
     doc = {"apiVersion": API_VERSION, "kind": "Agent", "metadata": metadata, "spec": spec}
     # 필수 항목 외의 형식 문제를 미리 알려 준다(필수 항목은 임시 값으로 채워 검사)

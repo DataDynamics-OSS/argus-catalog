@@ -155,7 +155,7 @@ async def test_local_import_storage_failure_marks_version_failed(mapi, tmp_path,
     async def upload_down(*_a, **_kw):
         raise ConnectionError(DOWN)
 
-    monkeypatch.setattr(model_store, "upload_files", upload_down)
+    monkeypatch.setattr(model_store, "upload_paths", upload_down)
     r = await api.as_(ADMIN).req("POST", "/model-store/import/local",
                                  json={"local_dir": str(src), "model_name": "argus.it.local"})
     assert r.status_code == 503 and "연결할 수 없습니다" in r.json()["detail"]
@@ -170,7 +170,7 @@ async def test_local_import_storage_failure_marks_version_failed(mapi, tmp_path,
     async def upload_broken(*_a, **_kw):
         raise RuntimeError("bucket policy denied")
 
-    monkeypatch.setattr(model_store, "upload_files", upload_broken)
+    monkeypatch.setattr(model_store, "upload_paths", upload_broken)
     r = await api.req("POST", "/model-store/import/local", json={"local_dir": str(src), "model_name": "argus.it.local"})
     assert r.status_code == 500 and "로컬 반입 실패: bucket policy denied" in r.json()["detail"]
     async with api.factory() as db:
@@ -179,6 +179,57 @@ async def test_local_import_storage_failure_marks_version_failed(mapi, tmp_path,
             .where(RegisteredModel.name == "argus.it.local").order_by(ModelVersion.version)
         )).scalars().all()
     assert statuses == ["FAILED_REGISTRATION", "FAILED_REGISTRATION"]
+
+
+async def test_local_import_streams_files_and_skips_hidden_paths(tmp_path, monkeypatch):
+    """로컬 반입은 파일 경로로 스트리밍 업로드하고(내용을 메모리에 다 올리지 않음), 숨김 규칙은 push 와 같다."""
+    from contextlib import asynccontextmanager
+
+    src = tmp_path / "bert"
+    (src / "onnx").mkdir(parents=True)
+    (src / ".git").mkdir()
+    (src / "config.json").write_text("{}")
+    (src / "onnx" / "model.onnx").write_bytes(b"x" * 1000)
+    (src / "onnx" / ".DS_Store").write_text("junk")      # 하위 숨김 파일 — 예전에는 올라갔다
+    (src / ".git" / "HEAD").write_text("ref")
+
+    uploaded: list[tuple[str, str, dict]] = []
+
+    class _S3:
+        async def upload_file(self, filename, bucket, key, ExtraArgs=None):
+            uploaded.append((filename, key, ExtraArgs or {}))
+
+    @asynccontextmanager
+    async def client():
+        yield _S3()
+
+    async def no_bucket(*_a, **_kw):
+        return None
+
+    async def manifest(*_a, **_kw):
+        return {"layers": []}
+
+    monkeypatch.setattr(model_store, "get_s3_client", client)
+    monkeypatch.setattr(model_store, "ensure_bucket", no_bucket)
+    monkeypatch.setattr(model_store, "generate_manifest", manifest)
+    # 내용을 bytes 로 읽어 올리던 이전 경로를 쓰면 실패하게 한다
+    monkeypatch.setattr(model_store, "upload_file", None)
+
+    meta = await model_store.import_from_local_directory(src, "argus.it.bert", 3)
+    assert [k for _f, k, _x in uploaded] == ["argus.it.bert/v3/config.json", "argus.it.bert/v3/onnx/model.onnx"]
+    assert uploaded[1][0] == str(src / "onnx" / "model.onnx")          # 경로로 넘김(스트리밍)
+    assert len(uploaded[1][2]["Metadata"]["sha256"]) == 64
+    assert meta["file_count"] == 2 and meta["total_size"] == 1002
+
+
+async def test_local_import_dir_with_only_nested_hidden_files_is_400(mapi, tmp_path):
+    api = mapi
+    (tmp_path / "m" / "sub").mkdir(parents=True)
+    (tmp_path / "m" / "sub" / ".DS_Store").write_text("x")
+    r = await api.as_(ADMIN).req("POST", "/model-store/import/local",
+                                 json={"local_dir": str(tmp_path / "m"), "model_name": "argus.it.hidden"})
+    assert r.status_code == 400 and "가져올 파일이 없습니다" in r.json()["detail"]
+    assert "argus.it.hidden" not in await _models(api)
 
 
 # ---------------------------------------------------------------------------

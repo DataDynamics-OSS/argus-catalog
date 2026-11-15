@@ -8,7 +8,6 @@
 *** xref:catalog/schema.adoc[스키마]
 *** xref:catalog/lineage.adoc[리니지 & ERD]
 *** xref:catalog/quality.adoc[데이터 품질]
-**** xref:catalog/quality-batch.adoc[품질 배치]
 ** xref:catalog/platforms.adoc[데이터 소스]
 ** xref:catalog/taxonomies.adoc[분류 체계]
 ** xref:governance/change-management.adoc[변경 관리 · 내 결재함]
@@ -36,6 +35,8 @@
 ** xref:governance/glossary.adoc[용어집]
 ** xref:governance/tags.adoc[태그]
 ** xref:governance/alerts.adoc[알림]
+** xref:governance/ai-ready.adoc[AI-Ready 점검]
+** xref:governance/data-reports.adoc[오류 신고 처리]
 
 * 검색과 AI 도우미
 ** xref:ops/search.adoc[통합 검색]

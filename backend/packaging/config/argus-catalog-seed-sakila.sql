@@ -1137,48 +1137,69 @@ ON CONFLICT (term_id, schema_id) DO NOTHING;
 
 -- ---------------------------------------------------------------------------
 -- 6. 리니지 — Sakila 데이터 흐름 DAG
---    FK 참조 관계(조인 의존): REFERENCE — 그래프에서 점선·회색으로 표시
---    film → film_text(트리거 동기화 파생): TRANSFORM — 실제 데이터 흐름, 실선
+--    FK 참조 관계(조인 의존): relation_type=READ_WRITE, lineage_source=FK — metadata-sync 가 FK 를 등록하는 방식과
+--      같다(service.replace_fk_lineage_for_target). 그래프에서 점선·회색("기타"), ERD 는 FK 리니지로 관계를 보강한다.
+--    film → film_text(트리거 동기화 파생): relation_type=DERIVED, lineage_source=MANUAL — 실제 데이터 흐름, 실선
+--    relation_type 은 API enum(LineageRelationType)에 있는 값만 쓴다. 예전 시드의 REFERENCE·TRANSFORM 은
+--    API 로 만들 수 없는 값이라 아래 6.0 에서 바꾼다 (DEF-010)
 -- ---------------------------------------------------------------------------
+
+-- 6.0 예전 시드 값 변환(재실행·업그레이드 설치) — 같은 쌍에 바꿀 값의 행이 이미 있으면 그대로 둔다(ERD 는 REFERENCE 도 읽음)
+UPDATE argus_dataset_lineage l
+SET relation_type = 'READ_WRITE', lineage_source = 'FK'
+WHERE l.relation_type = 'REFERENCE' AND l.lineage_source = 'MANUAL'
+  AND l.source_dataset_id IN (SELECT id FROM catalog_datasets WHERE urn LIKE 'sakila-mysql.sakila.%')
+  AND NOT EXISTS (
+      SELECT 1 FROM argus_dataset_lineage x
+      WHERE x.source_dataset_id = l.source_dataset_id AND x.target_dataset_id = l.target_dataset_id
+        AND x.relation_type = 'READ_WRITE' AND x.lineage_source = 'FK');
+UPDATE argus_dataset_lineage l
+SET relation_type = 'DERIVED'
+WHERE l.relation_type = 'TRANSFORM' AND l.lineage_source = 'MANUAL'
+  AND l.source_dataset_id IN (SELECT id FROM catalog_datasets WHERE urn LIKE 'sakila-mysql.sakila.%')
+  AND NOT EXISTS (
+      SELECT 1 FROM argus_dataset_lineage x
+      WHERE x.source_dataset_id = l.source_dataset_id AND x.target_dataset_id = l.target_dataset_id
+        AND x.relation_type = 'DERIVED' AND x.lineage_source = 'MANUAL');
 
 INSERT INTO argus_dataset_lineage
     (source_dataset_id, target_dataset_id, relation_type, lineage_source, description, created_by, query_count)
-SELECT s.id, t.id, e.relation_type, 'MANUAL', e.description, 'admin', 0
+SELECT s.id, t.id, e.relation_type, e.lineage_source, e.description, 'admin', 0
 FROM (VALUES
     -- 주소 체계: country → city → address → (customer/staff/store)
-    ('sakila-mysql.sakila.country.dataset',   'sakila-mysql.sakila.city.dataset',          'REFERENCE', '도시가 국가를 참조 (country_id)'),
-    ('sakila-mysql.sakila.city.dataset',      'sakila-mysql.sakila.address.dataset',       'REFERENCE', '주소가 도시를 참조 (city_id)'),
-    ('sakila-mysql.sakila.address.dataset',   'sakila-mysql.sakila.customer.dataset',      'REFERENCE', '고객 주소 (address_id)'),
-    ('sakila-mysql.sakila.address.dataset',   'sakila-mysql.sakila.staff.dataset',         'REFERENCE', '직원 주소 (address_id)'),
-    ('sakila-mysql.sakila.address.dataset',   'sakila-mysql.sakila.store.dataset',         'REFERENCE', '점포 소재지 (address_id)'),
+    ('sakila-mysql.sakila.country.dataset',   'sakila-mysql.sakila.city.dataset',          'READ_WRITE', 'FK', '도시가 국가를 참조 (country_id)'),
+    ('sakila-mysql.sakila.city.dataset',      'sakila-mysql.sakila.address.dataset',       'READ_WRITE', 'FK', '주소가 도시를 참조 (city_id)'),
+    ('sakila-mysql.sakila.address.dataset',   'sakila-mysql.sakila.customer.dataset',      'READ_WRITE', 'FK', '고객 주소 (address_id)'),
+    ('sakila-mysql.sakila.address.dataset',   'sakila-mysql.sakila.staff.dataset',         'READ_WRITE', 'FK', '직원 주소 (address_id)'),
+    ('sakila-mysql.sakila.address.dataset',   'sakila-mysql.sakila.store.dataset',         'READ_WRITE', 'FK', '점포 소재지 (address_id)'),
     -- 조직: store ↔ staff
-    ('sakila-mysql.sakila.store.dataset',     'sakila-mysql.sakila.staff.dataset',         'REFERENCE', '직원 소속 점포 (store_id)'),
-    ('sakila-mysql.sakila.staff.dataset',     'sakila-mysql.sakila.store.dataset',         'REFERENCE', '점포 관리자 지정 (manager_staff_id)'),
-    ('sakila-mysql.sakila.store.dataset',     'sakila-mysql.sakila.customer.dataset',      'REFERENCE', '고객 주 거래 점포 (store_id)'),
+    ('sakila-mysql.sakila.store.dataset',     'sakila-mysql.sakila.staff.dataset',         'READ_WRITE', 'FK', '직원 소속 점포 (store_id)'),
+    ('sakila-mysql.sakila.staff.dataset',     'sakila-mysql.sakila.store.dataset',         'READ_WRITE', 'FK', '점포 관리자 지정 (manager_staff_id)'),
+    ('sakila-mysql.sakila.store.dataset',     'sakila-mysql.sakila.customer.dataset',      'READ_WRITE', 'FK', '고객 주 거래 점포 (store_id)'),
     -- 영화 카탈로그: language/actor/category → film 계열
-    ('sakila-mysql.sakila.language.dataset',  'sakila-mysql.sakila.film.dataset',          'REFERENCE', '영화 음성/원어 언어 (language_id, original_language_id)'),
-    ('sakila-mysql.sakila.actor.dataset',     'sakila-mysql.sakila.film_actor.dataset',    'REFERENCE', '출연 배우 매핑 (actor_id)'),
-    ('sakila-mysql.sakila.film.dataset',      'sakila-mysql.sakila.film_actor.dataset',    'REFERENCE', '출연 영화 매핑 (film_id)'),
-    ('sakila-mysql.sakila.film.dataset',      'sakila-mysql.sakila.film_category.dataset', 'REFERENCE', '영화-장르 매핑 (film_id)'),
-    ('sakila-mysql.sakila.category.dataset',  'sakila-mysql.sakila.film_category.dataset', 'REFERENCE', '장르 분류 매핑 (category_id)'),
-    ('sakila-mysql.sakila.film.dataset',      'sakila-mysql.sakila.film_text.dataset',     'TRANSFORM',    'film 의 제목·줄거리를 트리거로 동기화하는 전문 검색 파생 테이블'),
+    ('sakila-mysql.sakila.language.dataset',  'sakila-mysql.sakila.film.dataset',          'READ_WRITE', 'FK', '영화 음성/원어 언어 (language_id, original_language_id)'),
+    ('sakila-mysql.sakila.actor.dataset',     'sakila-mysql.sakila.film_actor.dataset',    'READ_WRITE', 'FK', '출연 배우 매핑 (actor_id)'),
+    ('sakila-mysql.sakila.film.dataset',      'sakila-mysql.sakila.film_actor.dataset',    'READ_WRITE', 'FK', '출연 영화 매핑 (film_id)'),
+    ('sakila-mysql.sakila.film.dataset',      'sakila-mysql.sakila.film_category.dataset', 'READ_WRITE', 'FK', '영화-장르 매핑 (film_id)'),
+    ('sakila-mysql.sakila.category.dataset',  'sakila-mysql.sakila.film_category.dataset', 'READ_WRITE', 'FK', '장르 분류 매핑 (category_id)'),
+    ('sakila-mysql.sakila.film.dataset',      'sakila-mysql.sakila.film_text.dataset',     'DERIVED', 'MANUAL', 'film 의 제목·줄거리를 트리거로 동기화하는 전문 검색 파생 테이블'),
     -- 재고/거래: film·store → inventory → rental → payment
-    ('sakila-mysql.sakila.film.dataset',      'sakila-mysql.sakila.inventory.dataset',     'REFERENCE', '재고가 보유 영화를 참조 (film_id)'),
-    ('sakila-mysql.sakila.store.dataset',     'sakila-mysql.sakila.inventory.dataset',     'REFERENCE', '재고 보유 점포 (store_id)'),
-    ('sakila-mysql.sakila.inventory.dataset', 'sakila-mysql.sakila.rental.dataset',        'REFERENCE', '대여 대상 재고 (inventory_id)'),
-    ('sakila-mysql.sakila.customer.dataset',  'sakila-mysql.sakila.rental.dataset',        'REFERENCE', '대여 고객 (customer_id)'),
-    ('sakila-mysql.sakila.staff.dataset',     'sakila-mysql.sakila.rental.dataset',        'REFERENCE', '대여 처리 직원 (staff_id)'),
-    ('sakila-mysql.sakila.rental.dataset',    'sakila-mysql.sakila.payment.dataset',       'REFERENCE', '대여 건에 대한 결제 (rental_id)'),
-    ('sakila-mysql.sakila.customer.dataset',  'sakila-mysql.sakila.payment.dataset',       'REFERENCE', '결제 고객 (customer_id)'),
-    ('sakila-mysql.sakila.staff.dataset',     'sakila-mysql.sakila.payment.dataset',       'REFERENCE', '결제 수납 직원 (staff_id)')
-) AS e(src_urn, tgt_urn, relation_type, description)
+    ('sakila-mysql.sakila.film.dataset',      'sakila-mysql.sakila.inventory.dataset',     'READ_WRITE', 'FK', '재고가 보유 영화를 참조 (film_id)'),
+    ('sakila-mysql.sakila.store.dataset',     'sakila-mysql.sakila.inventory.dataset',     'READ_WRITE', 'FK', '재고 보유 점포 (store_id)'),
+    ('sakila-mysql.sakila.inventory.dataset', 'sakila-mysql.sakila.rental.dataset',        'READ_WRITE', 'FK', '대여 대상 재고 (inventory_id)'),
+    ('sakila-mysql.sakila.customer.dataset',  'sakila-mysql.sakila.rental.dataset',        'READ_WRITE', 'FK', '대여 고객 (customer_id)'),
+    ('sakila-mysql.sakila.staff.dataset',     'sakila-mysql.sakila.rental.dataset',        'READ_WRITE', 'FK', '대여 처리 직원 (staff_id)'),
+    ('sakila-mysql.sakila.rental.dataset',    'sakila-mysql.sakila.payment.dataset',       'READ_WRITE', 'FK', '대여 건에 대한 결제 (rental_id)'),
+    ('sakila-mysql.sakila.customer.dataset',  'sakila-mysql.sakila.payment.dataset',       'READ_WRITE', 'FK', '결제 고객 (customer_id)'),
+    ('sakila-mysql.sakila.staff.dataset',     'sakila-mysql.sakila.payment.dataset',       'READ_WRITE', 'FK', '결제 수납 직원 (staff_id)')
+) AS e(src_urn, tgt_urn, relation_type, lineage_source, description)
 JOIN catalog_datasets s ON s.urn = e.src_urn
 JOIN catalog_datasets t ON t.urn = e.tgt_urn
 -- unique 키 구성이 DB 세대에 따라 3컬럼/4컬럼으로 갈려 ON CONFLICT 대신 NOT EXISTS 사용
 WHERE NOT EXISTS (
     SELECT 1 FROM argus_dataset_lineage l
     WHERE l.source_dataset_id = s.id AND l.target_dataset_id = t.id
-      AND l.relation_type = e.relation_type AND l.lineage_source = 'MANUAL'
+      AND l.relation_type = e.relation_type AND l.lineage_source = e.lineage_source
 );
 
 -- 6.1 컬럼 수준 매핑 (영향 분석용)
@@ -1214,7 +1235,7 @@ FROM (VALUES
 JOIN catalog_datasets s ON s.urn = m.src_urn
 JOIN catalog_datasets t ON t.urn = m.tgt_urn
 JOIN argus_dataset_lineage l
-  ON l.source_dataset_id = s.id AND l.target_dataset_id = t.id AND l.lineage_source = 'MANUAL'
+  ON l.source_dataset_id = s.id AND l.target_dataset_id = t.id AND l.lineage_source IN ('MANUAL', 'FK')
 ON CONFLICT (dataset_lineage_id, source_column, target_column) DO NOTHING;
 
 
@@ -1582,7 +1603,7 @@ WHERE d.urn = 'sakila-mysql.sakila.rental.dataset'
   );
 
 -- ---------------------------------------------------------------------------
--- 12. 수집된 품질 정보 스냅숏 (quality/python-quality.py 실측 결과를 시드화)
+-- 12. 수집된 품질 정보 스냅숏 (원본 전체 데이터 실측 결과를 시드화)
 --     데모 초기 상태에서 품질 탭에 점수·결과·프로파일이 바로 보이도록 한다.
 --     실데이터(MariaDB Sakila) 기준 실측값이며, 이미 수집 이력이 있는 DB 에는
 --     덮어쓰지 않는다 (데이터셋/규칙별 NOT EXISTS).
@@ -1955,12 +1976,12 @@ JOIN catalog_datasets s ON s.id = l.source_dataset_id AND s.urn = 'sakila-mysql.
 JOIN catalog_datasets t ON t.id = l.target_dataset_id AND t.urn = 'sakila-mysql.sakila.film_text.dataset'
 WHERE NOT EXISTS (SELECT 1 FROM argus_alert_rule r WHERE r.rule_name = 'film 검색 파생 매핑 감시');
 
--- 13.6 Sakila 품질 검증 실패 통지 — 검증/배치 반입 시 실패 규칙이 있으면 발동
+-- 13.6 Sakila 품질 검증 실패 통지 — 품질 진단에서 실패 규칙이 있으면 발동
 INSERT INTO argus_alert_rule
     (rule_name, description, scope_type, scope_id, trigger_type, trigger_config,
      severity_override, channels, notify_owners, subscribers, is_active, created_by)
 SELECT 'Sakila 품질 검증 실패 통지',
-       '품질 검증(서버 실행 또는 배치 반입)에서 실패한 규칙이 생기면 데이터 소유자와 운영 담당자에게 알린다.',
+       '품질 진단에서 실패한 규칙이 생기면 데이터 소유자와 운영 담당자에게 알린다.',
        'DATASOURCE', ds.id, 'QUALITY_FAILED', '{}',
        NULL, 'IN_APP', 'true', 'khshin@data-dynamics.io', 'true', 'admin'
 FROM catalog_datasources ds
@@ -1983,6 +2004,36 @@ WHERE d.urn = 'sakila-mysql.sakila.customer.dataset'
 -- 14. 소유권 보정 — 시드 자산의 생성자를 admin 으로 (행 단위 소유권 기본값)
 UPDATE catalog_datasets SET created_by = 'admin' WHERE created_by IS NULL;
 UPDATE catalog_oci_models SET created_by = 'admin' WHERE created_by IS NULL;
+
+-- ---------------------------------------------------------------------------
+-- 카탈로그 엔티티 — 자동 카탈로그 + SYNC 연결, 데이터셋 catalog_id (DEF-011)
+-- DDL 의 백필은 DDL 적용 시점에만 돌아 그 뒤에 넣은 시드 데이터 소스에는 카탈로그가 없다.
+-- 같은 규칙(argus-catalog-postgresql.sql "백필")을 시드 뒤에 다시 적용한다 — 이미 있으면 건너뜀.
+-- ---------------------------------------------------------------------------
+
+INSERT INTO catalog_catalogs (catalog_key, name, kind, source_type, auto_created, status)
+SELECT d.datasource_id, d.name, d.type, 'EXTERNAL', true, 'active'
+FROM catalog_datasources d
+WHERE (d.type NOT IN ('impala', 'trino')
+       OR EXISTS (SELECT 1 FROM catalog_datasets ds WHERE ds.datasource_id = d.id))
+  AND NOT EXISTS (SELECT 1 FROM catalog_catalogs c WHERE c.catalog_key = d.datasource_id)
+  AND NOT EXISTS (SELECT 1 FROM catalog_catalog_connections x WHERE x.datasource_id = d.id AND x.role = 'SYNC');
+
+INSERT INTO catalog_catalog_connections (catalog_id, datasource_id, role)
+SELECT c.id, d.id, 'SYNC'
+FROM catalog_datasources d
+JOIN catalog_catalogs c ON c.catalog_key = d.datasource_id
+WHERE NOT EXISTS (
+    SELECT 1 FROM catalog_catalog_connections x
+    WHERE x.datasource_id = d.id AND x.role = 'SYNC'
+);
+
+UPDATE catalog_datasets ds
+SET catalog_id = x.catalog_id
+FROM catalog_catalog_connections x
+WHERE ds.catalog_id IS NULL
+  AND x.datasource_id = ds.datasource_id
+  AND x.role = 'SYNC';
 
 COMMIT;
 

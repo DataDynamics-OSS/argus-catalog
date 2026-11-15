@@ -15,11 +15,11 @@ import { type ColumnDef } from "@tanstack/react-table"
 import { Lock } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
-import { Badge } from "@workspace/ui/components/badge"
+import { StatusBadge } from "@workspace/ui/components/status-badge"
 import { Checkbox } from "@workspace/ui/components/checkbox"
 import { DataTableColumnHeader } from "@/components/data-table/column-header"
 import { LongText } from "@/components/long-text"
-import { callTypes, roles, statusLabels } from "../data/data"
+import { USER_STATUS_TONE, roles, statusLabels } from "../data/data"
 import { type User } from "../data/schema"
 import { DataTableRowActions } from "./data-table-row-actions"
 
@@ -162,10 +162,7 @@ export const usersColumns: ColumnDef<User>[] = [
   /**
    * Status column.
    *
-   * Renders a colored Badge component showing "active" or "inactive".
-   * Badge color is determined by the `callTypes` map from `data.ts`:
-   *   - active   → primary color (blue/brand)
-   *   - inactive → destructive color (red)
+   * 활성 · 비활성을 `StatusBadge` 로 그린다. 톤은 `data.ts` 의 `USER_STATUS_TONE`(활성 초록 · 비활성 무채색, TODO-107).
    *
    * Supports faceted filtering: the toolbar can filter by selected status values.
    * Custom filterFn checks if the row's status is included in the selected values.
@@ -178,21 +175,17 @@ export const usersColumns: ColumnDef<User>[] = [
     ),
     cell: ({ row }) => {
       const { status, lockedUntil } = row.original
-      const badgeColor = callTypes.get(status)
       return (
         <div className="flex justify-center gap-1">
-          <Badge variant="outline" className={cn(badgeColor)}>
-            {statusLabels[status] ?? status}
-          </Badge>
+          <StatusBadge tone={USER_STATUS_TONE[status] ?? "neutral"} label={statusLabels[status] ?? status} />
           {lockedUntil && (
-            <Badge
-              variant="outline"
-              className="border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-300"
+            <StatusBadge
+              tone="warning"
+              icon={Lock}
               title={`로그인 실패가 반복되어 ${formatDateTime(lockedUntil)} 까지 잠겼습니다`}
             >
-              <Lock className="size-3" />
               잠김
-            </Badge>
+            </StatusBadge>
           )}
         </div>
       )
@@ -233,7 +226,7 @@ export const usersColumns: ColumnDef<User>[] = [
     cell: ({ row }) => {
       const date = row.original.lastLoginAt
       return (
-        <div className="text-center text-sm text-nowrap tabular-nums text-muted-foreground">
+        <div className="text-center text-sm text-nowrap tabular-nums">
           {date ? formatDateTime(date) : "-"}
         </div>
       )
@@ -257,15 +250,12 @@ export const usersColumns: ColumnDef<User>[] = [
     ),
     cell: ({ row }) => {
       const { role } = row.original
+      // 사용자 정의 역할(TODO-124)은 기본 목록에 없어 역할 코드를 그대로 보여 준다(이름은 필터 · 수정 화면에서)
       const userType = roles.find(({ value }) => value === role)
-
-      if (!userType) {
-        return null
-      }
 
       return (
         <div className="flex items-center justify-center">
-          <span className="text-sm">{userType.label}</span>
+          <span className="text-sm">{userType?.label ?? role}</span>
         </div>
       )
     },

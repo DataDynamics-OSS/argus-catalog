@@ -120,7 +120,7 @@ export function OciImportDialog({
               </span>
             </div>
             {job.status === "ready" && job.version_info && (
-              <p className="text-sm text-muted-foreground">
+              <p className="text-sm">
                 파일 {job.version_info.file_count}개 · {formatSize(job.version_info.total_size)}
               </p>
             )}
@@ -157,7 +157,7 @@ export function OciImportDialog({
               />
               {nameError
                 ? <p className="text-xs text-destructive">{nameError}</p>
-                : <p className="text-xs text-muted-foreground">같은 이름의 모델이 있으면 다음 버전으로 추가됩니다.</p>}
+                : <p className="text-xs">같은 이름의 모델이 있으면 다음 버전으로 추가됩니다.</p>}
             </div>
             {error && <p className="text-sm text-destructive">{error}</p>}
           </div>

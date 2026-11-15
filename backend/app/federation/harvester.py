@@ -19,6 +19,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.html_sanitize import sanitize_rich_html
 from app.embedding.registry import get_provider
 from app.federation import capabilities, samples
 from app.federation.models import (
@@ -467,7 +468,7 @@ async def _upsert_dataset(
     row.datasource_name = _clip(ds.datasource_name, 200)
     row.datasource_type = _clip(ds.datasource_type, 100)
     row.summary = _clip(ds.summary, 200)
-    row.description = ds.description
+    row.description = sanitize_rich_html(ds.description)  # 원격 카탈로그 내용 — 저장 전 정화(TODO-027)
     row.qualified_name = _clip(ds.qualified_name, 500)
     row.origin = _clip(ds.origin, 50)
     row.field_count = len(ds.fields)

@@ -56,6 +56,8 @@ _TABLES = [
     "catalog_ai_agent_tools",
     "catalog_ai_agent_mcp_servers",
     "catalog_ai_agent_lineage",
+    "catalog_ai_agent_skills",
+    "catalog_ai_agent_data_access",
     "catalog_ai_agent_versions",
     "catalog_ai_agent_status_history",
     "catalog_ai_agent_discoveries",
@@ -426,6 +428,14 @@ async def _run() -> None:
         upd = await agent_service.update_mcp_server(db, "data.analyst", link.id, agent_schemas.AIAgentMcpServerUpdate(
             allowed_groups=["read", "dml", "maintenance"]))
         assert upd.effective_tool_count == 3
+        # 에이전트 최고 위험도·완성도에 연결 MCP 도구 위험도가 들어간다(DEF-017) — 직접 도구가 없어도
+        from app.agents import governance
+        from app.agents.models import AIAgent
+        analyst = (await db.execute(select(AIAgent).where(AIAgent.name == "data.analyst"))).scalar_one()
+        mcp_risks = (await governance.mcp_tool_risks(db, [analyst.id]))[analyst.id]
+        assert len(mcp_risks) == 3 and "low" in mcp_risks
+        facts = (await governance.facts_for(db, [analyst]))[analyst.id]
+        assert facts.max_risk == governance.max_risk_of(mcp_risks) and facts.max_risk != "low"
         assert (await agent_service.get_policy_bundle(db, "data.analyst")).policy_version != v_before
 
         # blocked 배포는 정책에서 제외
@@ -738,6 +748,14 @@ async def _run_phase2() -> None:
         # 토큰 폐기
         await audit.revoke_token(db, dep_row)
         assert not audit.verify_token(dep_row, tok.token)
+
+        # DEF-042: enforce 모드이고 policy_updated_at 이 비어 있으면 finding 계산이 flush 로 만료된
+        # updated_at 을 읽는다 — 비동기 세션에서 지연 로딩(MissingGreenlet)으로 500 이 나면 안 된다.
+        dep_row.policy_mode = "enforce"
+        dep_row.policy_updated_at = None
+        await db.commit()
+        summary = await service.health_check(db, "kafka-mcp-prod", transport=_health_transport(503))
+        assert summary is not None and summary.health_status != "healthy"
 
 
 def test_audit_resource_extraction() -> None:

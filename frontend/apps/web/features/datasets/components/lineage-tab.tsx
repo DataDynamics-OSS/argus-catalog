@@ -3,6 +3,7 @@
 // Dataset 상세 페이지의 "리니지" 탭 — React Flow 기반 upstream/downstream 그래프를 그리고,
 // 엣지 클릭 시 컬럼 매핑/JOIN key 상세 패널을 노출. LineageAddDialog 를 호스팅한다.
 
+import { Tip } from "@/components/tip"
 import { useEffect, useMemo, useRef, useState, useCallback } from "react"
 import {
   ReactFlow,
@@ -25,10 +26,11 @@ import { Button } from "@workspace/ui/components/button"
 import { Separator } from "@workspace/ui/components/separator"
 import { Database, ArrowRight, X, Link2, Plus, Trash2, GitBranch } from "lucide-react"
 import Link from "next/link"
-import { useAuth } from "@/features/auth"
+import { usePermissions } from "@/features/permissions/use-permissions"
 import { authFetch, throwOnError } from "@/features/auth/auth-fetch"
 import { errorMessage, notifyError, toast } from "@/lib/notify"
 import { LineageAddDialog } from "./lineage-add-dialog"
+import { datasetHref } from "@/features/datasets/links"
 
 const BASE = "/api/v1/catalog"
 
@@ -142,7 +144,7 @@ function DatasetNode({ data }: { data: LineageNode }) {
       className={`relative px-4 py-3 rounded-lg border-2 min-w-[200px] ${emphasis}`}
     >
       {data.isCurrent && (
-        <span className="absolute -top-2.5 right-2 rounded-full bg-primary px-2 py-0.5 text-[10px] font-semibold text-primary-foreground shadow">
+        <span className="absolute -top-2.5 right-2 rounded-full bg-primary px-2 py-0.5 text-[11px] font-semibold text-primary-foreground shadow">
           현재
         </span>
       )}
@@ -160,17 +162,17 @@ function DatasetNode({ data }: { data: LineageNode }) {
           />
         )}
         <Link
-          href={`/dashboard/datasets/${data.id}`}
+          href={datasetHref(data.id, "lineage")}
           className="text-sm font-semibold text-foreground hover:underline truncate"
         >
           {data.name}
         </Link>
       </div>
       <div className="flex items-center gap-1.5">
-        <Badge className={`text-[10px] px-1.5 py-0 font-normal border-0 ${pc.badge}`}>
+        <Badge size="sm" className={`font-normal border-0 ${pc.badge}`}>
           {data.datasourceType}
         </Badge>
-        <span className="text-xs text-muted-foreground truncate">
+        <span className="text-xs truncate">
           {data.datasourceName}
         </span>
       </div>
@@ -189,17 +191,17 @@ const nodeTypes = { dataset: DatasetNode }
 function transformBadge(type: string) {
   switch (type) {
     case "DIRECT":
-      return <Badge variant="outline" className="text-[10px] px-1.5 py-0 font-normal">{type}</Badge>
+      return <Badge size="sm" variant="outline" className="font-normal">{type}</Badge>
     case "AGGREGATION":
-      return <Badge variant="secondary" className="text-[10px] px-1.5 py-0 font-normal bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200">{type}</Badge>
+      return <Badge size="sm" variant="secondary" className="font-normal bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200">{type}</Badge>
     case "JOIN_KEY":
-      return <Badge variant="secondary" className="text-[10px] px-1.5 py-0 font-normal bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200">{type}</Badge>
+      return <Badge size="sm" variant="secondary" className="font-normal bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200">{type}</Badge>
     case "EXPRESSION":
-      return <Badge variant="secondary" className="text-[10px] px-1.5 py-0 font-normal bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">{type}</Badge>
+      return <Badge size="sm" variant="secondary" className="font-normal bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">{type}</Badge>
     case "CAST":
-      return <Badge variant="secondary" className="text-[10px] px-1.5 py-0 font-normal bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200">{type}</Badge>
+      return <Badge size="sm" variant="secondary" className="font-normal bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200">{type}</Badge>
     default:
-      return <Badge variant="outline" className="text-[10px] px-1.5 py-0 font-normal">{type}</Badge>
+      return <Badge size="sm" variant="outline" className="font-normal">{type}</Badge>
   }
 }
 
@@ -211,19 +213,19 @@ function lineageSourceBadge(source: string | undefined) {
   switch (source) {
     case "MANUAL":
       return (
-        <Badge variant="secondary" className="text-[10px] px-1.5 py-0 font-normal bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">
+        <Badge size="sm" variant="secondary" className="font-normal bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">
           Manual
         </Badge>
       )
     case "PIPELINE":
       return (
-        <Badge variant="secondary" className="text-[10px] px-1.5 py-0 font-normal bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200">
+        <Badge size="sm" variant="secondary" className="font-normal bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200">
           Pipeline
         </Badge>
       )
     case "QUERY_AGGREGATED":
       return (
-        <Badge variant="outline" className="text-[10px] px-1.5 py-0 font-normal">
+        <Badge size="sm" variant="outline" className="font-normal">
           Auto
         </Badge>
       )
@@ -331,16 +333,16 @@ function EdgeDetailPanel({
               ))}
             </div>
             <div className="flex items-center gap-1">
-              <button
+              <Tip label="닫기"><button aria-label="닫기"
                 onClick={onClose}
                 onMouseDown={e => e.stopPropagation()}
                 className="text-muted-foreground hover:text-foreground p-0.5"
               >
                 <X className="h-4 w-4" />
-              </button>
+              </button></Tip>
             </div>
           </div>
-          <div className="flex items-center gap-2 text-sm text-muted-foreground mt-1">
+          <div className="flex items-center gap-2 text-sm mt-1">
             <span className="font-medium text-foreground">{info.sourceName}</span>
             <ArrowRight className="h-3 w-3" />
             <span className="font-medium text-foreground">{info.targetName}</span>
@@ -350,7 +352,7 @@ function EdgeDetailPanel({
         {/* Scrollable content — bucket(=lineage_source) 별로 섹션을 따로 렌더한다. */}
         <CardContent className="pt-0 space-y-4 overflow-auto flex-1 min-h-0">
           {info.buckets.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No lineage detail for this edge.</p>
+            <p className="text-sm">No lineage detail for this edge.</p>
           ) : (
             info.buckets.map((bucket, bi) => {
               const isManualBucket = bucket.lineageSource === "MANUAL" || bucket.lineageSource === "PIPELINE"
@@ -362,14 +364,14 @@ function EdgeDetailPanel({
                   <div className="flex items-center justify-between">
                     {lineageSourceBadge(bucket.lineageSource)}
                     {isManualBucket && bucket.lineageId && onDelete && (
-                      <button
+                      <Tip label="리니지 삭제"><button
                         onClick={() => onDelete(bucket.lineageId!)}
                         onMouseDown={e => e.stopPropagation()}
                         className="text-muted-foreground hover:text-destructive p-0.5"
-                        title="리니지 삭제"
+                        aria-label="리니지 삭제"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
-                      </button>
+                      </button></Tip>
                     )}
                   </div>
 
@@ -378,13 +380,13 @@ function EdgeDetailPanel({
                     <div className="space-y-1.5 text-sm">
                       {bucket.relationType && (
                         <div className="flex justify-between">
-                          <span className="text-muted-foreground">관계</span>
+                          <span >관계</span>
                           <span className="font-medium">{bucket.relationType}</span>
                         </div>
                       )}
                       {bucket.description && (
                         <div>
-                          <span className="text-muted-foreground">설명</span>
+                          <span >설명</span>
                           <p className="mt-0.5 text-foreground">{bucket.description}</p>
                         </div>
                       )}
@@ -407,7 +409,7 @@ function EdgeDetailPanel({
                             <code className="font-mono text-purple-700 dark:text-purple-300">
                               {jk.sourceColumn}
                             </code>
-                            <span className="text-muted-foreground">=</span>
+                            <span >=</span>
                             <code className="font-mono text-purple-700 dark:text-purple-300">
                               {jk.targetColumn}
                             </code>
@@ -448,7 +450,7 @@ function EdgeDetailPanel({
                   )}
 
                   {!hasAnyDetail && !isManualBucket && (
-                    <p className="text-sm text-muted-foreground">
+                    <p className="text-sm">
                       No column-level detail available.
                     </p>
                   )}
@@ -605,7 +607,7 @@ function LineageLegend() {
       {/* 데이터 흐름(파생/변환)만 표시 — FK 등 구조적 관계는 "관계" 탭에서 본다. */}
       <span className="inline-flex items-center gap-1.5">
         <span className="inline-block h-0.5 w-6 bg-foreground/70" />
-        <span className="text-muted-foreground font-medium">데이터 흐름</span>
+        <span className="font-medium">데이터 흐름</span>
       </span>
       <span className="text-muted-foreground/50">|</span>
       {Object.entries(LINEAGE_SOURCE_STYLES).map(([key, s]) => (
@@ -620,7 +622,7 @@ function LineageLegend() {
               backgroundColor: s.dashed ? "transparent" : s.color,
             }}
           />
-          <span className="text-muted-foreground">{s.label}</span>
+          <span >{s.label}</span>
         </span>
       ))}
     </div>
@@ -643,9 +645,9 @@ export function LineageTab({
   const [error, setError] = useState<string | null>(null)
   const [selectedEdge, setSelectedEdge] = useState<SelectedEdgeInfo | null>(null)
   const [addDialogOpen, setAddDialogOpen] = useState(false)
-  // 리니지 추가·삭제는 서버가 관리자 전용(POST/DELETE /catalog/lineage) — 같은 기준으로 노출
-  const { user } = useAuth()
-  const canEditLineage = !!user?.is_admin
+  // 리니지 추가·삭제는 명시 허용형 기능 권한 lineage.edit(미설정이면 관리자만) — 서버와 같은 기준(TODO-122)
+  const { canUseFeature } = usePermissions()
+  const canEditLineage = canUseFeature("lineage.edit")
 
   const loadLineage = useCallback(async () => {
     try {
@@ -869,36 +871,26 @@ export function LineageTab({
 
   if (loading) {
     return (
-      <Card>
-        <CardContent className="flex items-center justify-center py-12">
-          <p className="text-sm text-muted-foreground">리니지를 불러오는 중...</p>
-        </CardContent>
-      </Card>
+      <p className="py-12 text-center text-sm text-muted-foreground">리니지를 불러오는 중…</p>
     )
   }
 
   if (error) {
     return (
-      <Card>
-        <CardContent className="flex items-center justify-center py-12">
-          <p className="text-sm text-destructive">오류: {error}</p>
-        </CardContent>
-      </Card>
+      <p className="py-12 text-center text-sm text-destructive">오류: {error}</p>
     )
   }
 
   if (!lineageData || lineageData.nodes.length <= 1) {
     return (
       <>
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-12 gap-4">
+        <div className="flex flex-col items-center justify-center py-12 gap-4">
             <GitBranch className="h-10 w-10 text-muted-foreground/50" />
             <p className="text-sm text-muted-foreground">
               이 데이터셋에 사용 가능한 리니지 정보가 없습니다.
             </p>
             {addButton}
-          </CardContent>
-        </Card>
+        </div>
         <LineageAddDialog
           open={addDialogOpen}
           onOpenChange={setAddDialogOpen}
@@ -912,8 +904,8 @@ export function LineageTab({
 
   return (
     <>
-      <Card>
-        <CardContent className="p-0">
+      {/* 박스는 그래프 캔버스 하나(아래 안내 줄 포함) */}
+      <div className="overflow-hidden rounded-md border">
           <div style={{ height: 600 }} className="relative">
             {/* Floating toolbar */}
             <div className="absolute top-3 left-3 z-10 flex items-center gap-2">
@@ -951,7 +943,7 @@ export function LineageTab({
             )}
           </div>
 
-          <div className="px-4 py-2 border-t text-xs text-muted-foreground flex items-center gap-4">
+          <div className="px-4 py-2 border-t text-xs flex items-center gap-4">
             <span>엣지를 클릭하면 컬럼 매핑이 표시됩니다.</span>
             <span className="flex items-center gap-1.5">
               <span className="inline-block w-5 border-t-2 border-gray-400" style={{ borderStyle: "dashed" }} />
@@ -962,8 +954,7 @@ export function LineageTab({
               수동 / 파이프라인
             </span>
           </div>
-        </CardContent>
-      </Card>
+      </div>
 
       <LineageAddDialog
         open={addDialogOpen}

@@ -13,6 +13,7 @@ import re
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai import ai_ready_drafts
 from app.ai.models import AIGenerationLog
 from app.ai.prompts import (
     SYSTEM_PROMPT,
@@ -24,6 +25,7 @@ from app.ai.prompts import (
 )
 from app.ai.registry import get_provider
 from app.catalog.models import Dataset, DatasetLineage, DatasetSchema, DatasetTag, Datasource, Tag
+from app.core.html_sanitize import sanitize_rich_html
 
 logger = logging.getLogger(__name__)
 
@@ -503,7 +505,7 @@ async def generate_dataset_description(
         )
         ds = ds_result.scalars().first()
         if ds:
-            ds.description = description
+            ds.description = sanitize_rich_html(description)  # LLM 출력도 저장 전 정화(TODO-027)
 
     await session.commit()
     await session.refresh(log)
@@ -1018,7 +1020,11 @@ async def bulk_generate(
     if datasource_id:
         query = query.where(Dataset.datasource_id == datasource_id)
     if empty_only:
-        query = query.where((Dataset.description.is_(None)) | (Dataset.description == ""))
+        # 비어 있는 것 — 설명을 만들면 설명이 빈 데이터셋, AI-Ready 초안만 만들면 편향 · 한계 · 관련법령 중 하나가 빈 데이터셋
+        if types == ["ai_ready"]:
+            query = query.where(ai_ready_drafts.missing_filter())
+        else:
+            query = query.where((Dataset.description.is_(None)) | (Dataset.description == ""))
     query = query.order_by(Dataset.id)
 
     result = await session.execute(query)
@@ -1050,6 +1056,9 @@ async def bulk_generate(
                 ds_result["pii"] = await detect_pii(
                     session, ds_id, apply=apply, language=language
                 )
+            if "ai_ready" in types:
+                # 초안은 언제나 제안으로만 남긴다(apply 무시) — 서술형 항목은 담당자가 읽고 적용한다
+                ds_result["ai_ready"] = await ai_ready_drafts.generate_drafts(session, ds_id, language=language)
             results.append({"dataset_id": ds_id, **ds_result})
             processed += 1
         except Exception as e:
@@ -1139,6 +1148,8 @@ async def get_suggestions(session: AsyncSession, dataset_id: int) -> list[dict]:
             return ds.description
         if ds and log.generation_type == "summary":
             return ds.summary
+        if ds and log.generation_type == ai_ready_drafts.GENERATION_TYPE and log.field_name in ai_ready_drafts.FIELDS:
+            return getattr(ds, log.field_name)
         return None
 
     return [
@@ -1174,7 +1185,7 @@ async def _apply_log(session: AsyncSession, log: AIGenerationLog) -> bool:
         )
         ds = ds_result.scalars().first()
         if ds:
-            ds.description = log.generated_text
+            ds.description = sanitize_rich_html(log.generated_text)
 
     elif log.entity_type == "dataset" and log.generation_type == "summary":
         # 한 줄 요약 — 생성 때와 같이 200자로 자른다(DB 컬럼 길이)
@@ -1184,6 +1195,12 @@ async def _apply_log(session: AsyncSession, log: AIGenerationLog) -> bool:
         ds = ds_result.scalars().first()
         if ds:
             ds.summary = log.generated_text.strip()[:200]
+
+    elif log.generation_type == ai_ready_drafts.GENERATION_TYPE:
+        # AI-Ready 초안(편향 · 한계 · 관련법령) — 그 항목에 그대로 넣는다(TODO-096 6단계)
+        ds = (await session.execute(select(Dataset).where(Dataset.id == log.entity_id))).scalars().first()
+        if ds:
+            ai_ready_drafts.apply_draft(ds, log.field_name, log.generated_text)
 
     elif log.entity_type == "column" and log.generation_type == "description":
         schema_result = await session.execute(

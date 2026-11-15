@@ -1,5 +1,6 @@
 "use client"
 
+import { Tip } from "@/components/tip"
 import { Fragment, useCallback, useEffect, useState } from "react"
 import {
   ArrowLeft,
@@ -9,6 +10,7 @@ import {
   Download,
   FileJson,
   Loader2,
+  MoreHorizontal,
   Pencil,
   Plus,
   Server,
@@ -19,7 +21,13 @@ import { useConfirm } from "@/components/confirm-provider"
 
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@workspace/ui/components/card"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@workspace/ui/components/dropdown-menu"
 import {
   Dialog,
   DialogContent,
@@ -48,6 +56,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@workspace/ui/components/tabs"
 import { Textarea } from "@workspace/ui/components/textarea"
 
+import { DetailSection, LINE_TABS_LIST, LINE_TABS_TRIGGER } from "@/components/detail-section"
 import { useAuth } from "@/features/auth"
 import {
   addMcpPrompt,
@@ -66,6 +75,7 @@ import {
 } from "../api"
 import {
   ARGUS_META_NAMESPACE,
+  SERVER_FIELD_HELP,
   FRAMEWORK_LABEL,
   PROVIDER_LABEL,
   PROVIDER_TYPES,
@@ -79,6 +89,7 @@ import {
 } from "../data/schema"
 import {
   FieldRow,
+  FieldTable,
   OriginBadge,
   OriginLegend,
   RiskBadge,
@@ -91,21 +102,31 @@ import { useMcpServers } from "./mcp-provider"
 import { ManifestImportDialog } from "./tabs/manifest-dialog"
 import { VersionsPanel } from "./tabs/versions-panel"
 import { usePermissions } from "@/features/permissions/use-permissions"
+import { copyText } from "@/lib/clipboard"
+import { MutatingBadge } from "@/components/mutating-badge"
+import { FitCodeViewer } from "@/components/fit-code-viewer"
+import { StatusBadge as ToneBadge } from "@workspace/ui/components/status-badge"
+import { TagInput } from "@/components/tag-input"
 
-export function JsonBlock({ value }: { value: unknown }) {
+/**
+ * JSON 값 — text-sm Monaco 뷰어(JSON 강조 · 줄 번호 · 복사)로, 스크롤바 없이 내용 높이만큼 전부 보여 준다.
+ * packages · remotes · serverInfo · capabilities · inputSchema · server.json 등 MCP 화면의 JSON 은 모두 이것으로 그린다.
+ */
+export function JsonBlock({ value, copyable = true }: { value: unknown; copyable?: boolean }) {
   if (value === null || value === undefined) return <span className="text-muted-foreground">-</span>
-  return (
-    <pre className="max-h-80 overflow-auto rounded-md bg-muted/50 p-2 font-mono text-xs leading-relaxed">
-      {JSON.stringify(value, null, 2)}
-    </pre>
-  )
+  return <FitCodeViewer text={JSON.stringify(value, null, 2)} copyable={copyable} />
+}
+
+/** "사용자 · 시각" — 사용자가 기록되지 않았으면 시각만 */
+function byAt(by: string | null | undefined, at: string | null | undefined): string {
+  return by ? `${by} · ${fmtDate(at)}` : fmtDate(at)
 }
 
 function Tags({ items }: { items: string[] | null | undefined }) {
   if (!items || items.length === 0) return <span className="text-muted-foreground">-</span>
   return (
     <div className="flex flex-wrap gap-1">
-      {items.map((t) => <Badge key={t} variant="secondary" className="text-[11px]">{t}</Badge>)}
+      {items.map((t) => <Badge key={t} variant="secondary">{t}</Badge>)}
     </div>
   )
 }
@@ -120,7 +141,8 @@ function Link({ href }: { href: string | null }) {
 }
 
 export function McpServerDetail({ name }: { name: string }) {
-  const canRegisterDeployment = usePermissions().canUseFeature("mcp.register")
+  const { canUseFeature } = usePermissions()
+  const canRegisterDeployment = canUseFeature("mcp.register")
   const { setSelectedServer, setSelectedDeployment, setOpen, setAddDeploymentServer, reload, reloadKey } =
     useMcpServers()
   const askConfirm = useConfirm()
@@ -151,7 +173,7 @@ export function McpServerDetail({ name }: { name: string }) {
     return (
       <div className="space-y-3">
         <Button variant="ghost" size="sm" onClick={() => setSelectedServer(null)}>
-          <ArrowLeft className="mr-1 h-4 w-4" /> 목록
+          <ArrowLeft className="mr-1 h-4 w-4" /> 목록으로
         </Button>
         <p className="text-sm text-destructive">{error}</p>
       </div>
@@ -167,16 +189,20 @@ export function McpServerDetail({ name }: { name: string }) {
 
   const activeTools = server.tools.filter((t) => !t.removed_at)
   // 서버 정의 수정·폐기·도구/리소스/프롬프트 변경은 등록자·관리자만 — 서버(_guard_server)와 같은 기준
-  const canEdit = !!user && (user.is_admin || (!!server.created_by && server.created_by === user.username))
+  // 역할의 기능 권한(수정 mcp.edit · 폐기 mcp.delete · 매니페스트 가져오기 mcp.collect)도 함께 본다(TODO-122).
+  const isOwner = !!user && (user.is_admin || (!!server.created_by && server.created_by === user.username))
+  const canEdit = isOwner && canUseFeature("mcp.edit")
+  const canDelete = isOwner && canUseFeature("mcp.delete")
+  const canImportManifest = isOwner && canUseFeature("mcp.collect")
 
   return (
     <div className="flex flex-col gap-4">
       {/* 헤더 */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-start gap-2">
-          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setSelectedServer(null)} aria-label="목록">
+          <Tip label="목록"><Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setSelectedServer(null)} aria-label="목록">
             <ArrowLeft className="h-4 w-4" />
-          </Button>
+          </Button></Tip>
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <Server className="h-5 w-5 text-muted-foreground" />
@@ -185,19 +211,14 @@ export function McpServerDetail({ name }: { name: string }) {
               <Badge variant="outline">{FRAMEWORK_LABEL[server.framework] ?? server.framework}</Badge>
               <Badge variant="outline">v{server.version}</Badge>
             </div>
-            <div className="mt-0.5 font-mono text-xs text-muted-foreground">{server.urn}</div>
+            <div className="mt-0.5 font-mono text-xs">{server.urn}</div>
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
           {canEdit && (
-            <>
-              <Button size="sm" variant="outline" onClick={() => setEditOpen(true)}>
-                <Pencil className="mr-1 h-4 w-4" /> 편집
-              </Button>
-              <Button size="sm" variant="outline" onClick={() => setManifestOpen(true)}>
-                <FileJson className="mr-1 h-4 w-4" /> manifest
-              </Button>
-            </>
+            <Button size="sm" variant="outline" onClick={() => setEditOpen(true)}>
+              <Pencil className="mr-1 h-4 w-4" /> 편집
+            </Button>
           )}
           {canRegisterDeployment && (
           <Button
@@ -211,130 +232,129 @@ export function McpServerDetail({ name }: { name: string }) {
             <Plus className="mr-1 h-4 w-4" /> 배포 등록
           </Button>
           )}
-          {canEdit && (
-          <Button
-            size="sm"
-            variant="outline"
-            className="text-destructive"
-            disabled={server.status === "retired"}
-            onClick={async () => {
-              if (!(await askConfirm({
-                title: "서버 정의 폐기",
-                description: `'${server.name}' 서버 정의를 폐기할까요? (배포가 남아 있으면 거부됩니다)`,
-                confirmText: "폐기",
-                destructive: true,
-              }))) return
-              try {
-                await retireMcpServer(server.name)
-                toast.success("서버 정의를 폐기했습니다.")
-                reload()
-              } catch (e) {
-                notifyError(e, "서버 정의를 폐기하지 못했습니다.")
-              }
-            }}
-          >
-            <Trash2 className="mr-1 h-4 w-4" /> 폐기
-          </Button>
+          {/* 덜 쓰는 작업(매니페스트 가져오기 · 폐기)은 ⋯ 메뉴로 — 배포 상세와 같은 배치.
+              가져오기는 mcp.collect, 폐기는 mcp.delete 권한(TODO-122) */}
+          {(canImportManifest || canDelete) && (
+          <DropdownMenu>
+            <Tip label="더 보기"><DropdownMenuTrigger asChild>
+              <Button size="sm" variant="outline" className="w-8 px-0" aria-label="더 보기">
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger></Tip>
+            <DropdownMenuContent align="end" className="min-w-44">
+              {canImportManifest && (
+                <DropdownMenuItem onClick={() => setManifestOpen(true)}>
+                  <FileJson /> 매니페스트 가져오기
+                </DropdownMenuItem>
+              )}
+              {canImportManifest && canDelete && <DropdownMenuSeparator />}
+              {canDelete && (
+              <DropdownMenuItem
+                variant="destructive"
+                disabled={server.status === "retired"}
+                onClick={async () => {
+                  if (!(await askConfirm({
+                    title: "서버 정의 폐기",
+                    description: `'${server.name}' 서버 정의를 폐기할까요? (배포가 남아 있으면 거부됩니다)`,
+                    confirmText: "폐기",
+                    destructive: true,
+                  }))) return
+                  try {
+                    await retireMcpServer(server.name)
+                    toast.success("서버 정의를 폐기했습니다.")
+                    reload()
+                  } catch (e) {
+                    notifyError(e, "서버 정의를 폐기하지 못했습니다.")
+                  }
+                }}
+              >
+                <Trash2 /> 폐기
+              </DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
           )}
         </div>
       </div>
       <OriginLegend />
 
       <Tabs defaultValue="overview">
-        <TabsList>
-          <TabsTrigger value="overview">개요</TabsTrigger>
-          <TabsTrigger value="tools">도구 ({activeTools.length})</TabsTrigger>
-          <TabsTrigger value="resources">리소스·프롬프트</TabsTrigger>
-          <TabsTrigger value="deployments">배포 ({server.deployments.length})</TabsTrigger>
-          <TabsTrigger value="versions">버전 이력</TabsTrigger>
-          <TabsTrigger value="export">server.json</TabsTrigger>
-          <TabsTrigger value="history">이력</TabsTrigger>
+        <TabsList variant="line" className={LINE_TABS_LIST}>
+          <TabsTrigger value="overview" className={LINE_TABS_TRIGGER}>개요</TabsTrigger>
+          <TabsTrigger value="tools" className={LINE_TABS_TRIGGER}>도구 ({activeTools.length})</TabsTrigger>
+          <TabsTrigger value="resources" className={LINE_TABS_TRIGGER}>리소스·프롬프트</TabsTrigger>
+          <TabsTrigger value="deployments" className={LINE_TABS_TRIGGER}>배포 ({server.deployments.length})</TabsTrigger>
+          <TabsTrigger value="versions" className={LINE_TABS_TRIGGER}>버전 이력</TabsTrigger>
+          <TabsTrigger value="export" className={LINE_TABS_TRIGGER}>server.json</TabsTrigger>
+          <TabsTrigger value="history" className={LINE_TABS_TRIGGER}>이력</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="overview" className="mt-4 grid gap-4 lg:grid-cols-2">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-sm">
-                카탈로그 관리 정보 <OriginBadge origin="argus" />
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="divide-y">
-              <FieldRow label="이름" origin="argus"><span className="font-mono">{server.name}</span></FieldRow>
-              <FieldRow label="표시명" origin="argus">{server.display_name}</FieldRow>
-              <FieldRow label="상태" origin="argus"><StatusBadge status={server.status} /></FieldRow>
-              <FieldRow label="버전" origin="argus">{server.version}</FieldRow>
-              <FieldRow label="제공자 유형" origin="argus">{PROVIDER_LABEL[server.provider_type] ?? server.provider_type}</FieldRow>
-              <FieldRow label="벤더" origin="argus">{server.vendor}</FieldRow>
-              <FieldRow label="프레임워크" origin="argus">{FRAMEWORK_LABEL[server.framework] ?? server.framework}</FieldRow>
-              <FieldRow label="대상 플랫폼" origin="argus">{server.target_platform}</FieldRow>
-              <FieldRow label="소유자" origin="argus">{server.owner_email}</FieldRow>
-              <FieldRow label="부서" origin="argus">{server.department}</FieldRow>
-              <FieldRow label="카테고리" origin="argus">{server.category}</FieldRow>
-              <FieldRow label="태그" origin="argus"><Tags items={server.tags} /></FieldRow>
-              <FieldRow label="지원 전송" origin="argus"><Tags items={server.supported_transports} /></FieldRow>
-              <FieldRow label="소스 저장소" origin="argus">
-                {server.source_repo ? <span className="font-mono text-xs">{server.source_repo}{server.source_path ? ` · ${server.source_path}` : ""}</span> : null}
+        <TabsContent value="overview" className="mt-4 grid items-start gap-6 lg:grid-cols-2">
+          <DetailSection title={<>카탈로그 관리 정보 <OriginBadge origin="argus" /></>}>
+            <FieldTable>
+              <FieldRow label="이름" help={SERVER_FIELD_HELP["이름"]} origin="argus"><span className="font-mono">{server.name}</span></FieldRow>
+              <FieldRow label="표시명" help={SERVER_FIELD_HELP["표시명"]} origin="argus">{server.display_name}</FieldRow>
+              <FieldRow label="상태" help={SERVER_FIELD_HELP["상태"]} origin="argus"><StatusBadge status={server.status} /></FieldRow>
+              <FieldRow label="버전" help={SERVER_FIELD_HELP["버전"]} origin="argus">{server.version}</FieldRow>
+              <FieldRow label="제공자 유형" help={SERVER_FIELD_HELP["제공자 유형"]} origin="argus">{PROVIDER_LABEL[server.provider_type] ?? server.provider_type}</FieldRow>
+              <FieldRow label="벤더" help={SERVER_FIELD_HELP["벤더"]} origin="argus">{server.vendor}</FieldRow>
+              <FieldRow label="프레임워크" help={SERVER_FIELD_HELP["프레임워크"]} origin="argus">{FRAMEWORK_LABEL[server.framework] ?? server.framework}</FieldRow>
+              <FieldRow label="대상 플랫폼" help={SERVER_FIELD_HELP["대상 플랫폼"]} origin="argus">{server.target_platform}</FieldRow>
+              <FieldRow label="소유자" help={SERVER_FIELD_HELP["소유자"]} origin="argus">{server.owner_email}</FieldRow>
+              <FieldRow label="부서" help={SERVER_FIELD_HELP["부서"]} origin="argus">{server.department}</FieldRow>
+              <FieldRow label="카테고리" help={SERVER_FIELD_HELP["카테고리"]} origin="argus">{server.category}</FieldRow>
+              <FieldRow label="태그" help={SERVER_FIELD_HELP["태그"]} origin="argus"><Tags items={server.tags} /></FieldRow>
+              <FieldRow label="지원 전송" help={SERVER_FIELD_HELP["지원 전송"]} origin="argus"><Tags items={server.supported_transports} /></FieldRow>
+              <FieldRow label="소스 저장소" help={SERVER_FIELD_HELP["소스 저장소"]} origin="argus">
+                {server.source_repo ? <span className="break-all font-mono">{server.source_repo}{server.source_path ? ` · ${server.source_path}` : ""}</span> : null}
               </FieldRow>
-              <FieldRow label="패키지 체크섬" origin="argus">
-                {server.package_checksum ? <span className="font-mono text-xs">{server.package_checksum}</span> : null}
+              <FieldRow label="패키지 체크섬" help={SERVER_FIELD_HELP["패키지 체크섬"]} origin="argus">
+                {server.package_checksum ? <span className="break-all font-mono">{server.package_checksum}</span> : null}
               </FieldRow>
-              <FieldRow label="OCI 아티팩트" origin="argus">{server.oci_artifact_ref}</FieldRow>
-              <FieldRow label="최근 수집" origin="argus">{fmtDate(server.last_synced_at)}</FieldRow>
-              <FieldRow label="등록/수정" origin="argus">
-                <span className="text-xs text-muted-foreground">
-                  {server.created_by || "-"} · {fmtDate(server.created_at)} / {server.updated_by || "-"} · {fmtDate(server.updated_at)}
-                </span>
-              </FieldRow>
-            </CardContent>
-          </Card>
-          <div className="flex flex-col gap-4">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-sm">
-                  MCP Registry 메타데이터 <OriginBadge origin="registry" />
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="divide-y">
-                <FieldRow label="Registry 이름" origin="registry">
-                  {server.registry_name ? <span className="font-mono text-xs">{server.registry_name}</span> : null}
+              <FieldRow label="OCI 아티팩트" help={SERVER_FIELD_HELP["OCI 아티팩트"]} origin="argus">{server.oci_artifact_ref}</FieldRow>
+              <FieldRow label="최근 수집" help={SERVER_FIELD_HELP["최근 수집"]} origin="argus">{fmtDate(server.last_synced_at)}</FieldRow>
+              <FieldRow label="등록" help={SERVER_FIELD_HELP["등록"]} origin="argus">{byAt(server.created_by, server.created_at)}</FieldRow>
+              <FieldRow label="수정" help={SERVER_FIELD_HELP["수정"]} origin="argus">{byAt(server.updated_by, server.updated_at)}</FieldRow>
+            </FieldTable>
+          </DetailSection>
+          <div className="flex flex-col gap-6">
+            <DetailSection title={<>MCP Registry 메타데이터 <OriginBadge origin="registry" /></>}>
+              <FieldTable>
+                <FieldRow label="Registry 이름" help={SERVER_FIELD_HELP["Registry 이름"]} origin="registry">
+                  {server.registry_name ? <span className="break-all font-mono">{server.registry_name}</span> : null}
                 </FieldRow>
-                <FieldRow label="제목" origin="registry">{server.title}</FieldRow>
-                <FieldRow label="설명" origin="registry">
+                <FieldRow label="제목" help={SERVER_FIELD_HELP["제목"]} origin="registry">{server.title}</FieldRow>
+                <FieldRow label="설명" help={SERVER_FIELD_HELP["설명"]} origin="registry">
                   {server.description ? <span className="whitespace-pre-wrap">{server.description}</span> : null}
                 </FieldRow>
-                <FieldRow label="웹사이트" origin="registry"><Link href={server.website_url} /></FieldRow>
-                <FieldRow label="저장소" origin="registry"><Link href={server.repository_url} /></FieldRow>
-                <FieldRow label="라이선스" origin="registry">{server.license}</FieldRow>
-                <FieldRow label="packages" origin="registry">
+                <FieldRow label="웹사이트" help={SERVER_FIELD_HELP["웹사이트"]} origin="registry"><Link href={server.website_url} /></FieldRow>
+                <FieldRow label="저장소" help={SERVER_FIELD_HELP["저장소"]} origin="registry"><Link href={server.repository_url} /></FieldRow>
+                <FieldRow label="라이선스" help={SERVER_FIELD_HELP["라이선스"]} origin="registry">{server.license}</FieldRow>
+                <FieldRow label="packages" help={SERVER_FIELD_HELP["packages"]} origin="registry">
                   {server.packages?.length ? <JsonBlock value={server.packages} /> : null}
                 </FieldRow>
-                <FieldRow label="remotes" origin="registry">
+                <FieldRow label="remotes" help={SERVER_FIELD_HELP["remotes"]} origin="registry">
                   {server.remotes?.length ? <JsonBlock value={server.remotes} /> : null}
                 </FieldRow>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-sm">
-                  MCP 서버 보고값 (initialize) <OriginBadge origin="mcp" />
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="divide-y">
-                <FieldRow label="serverInfo" origin="mcp">
+              </FieldTable>
+            </DetailSection>
+            <DetailSection title={<>MCP 서버 보고값 (initialize) <OriginBadge origin="mcp" /></>}>
+              <FieldTable>
+                <FieldRow label="serverInfo" help={SERVER_FIELD_HELP["serverInfo"]} origin="mcp">
                   {server.server_info ? <JsonBlock value={server.server_info} /> : null}
                 </FieldRow>
-                <FieldRow label="프로토콜 버전" origin="mcp">{server.protocol_version}</FieldRow>
-                <FieldRow label="capabilities" origin="mcp">
+                <FieldRow label="프로토콜 버전" help={SERVER_FIELD_HELP["프로토콜 버전"]} origin="mcp">{server.protocol_version}</FieldRow>
+                <FieldRow label="capabilities" help={SERVER_FIELD_HELP["capabilities"]} origin="mcp">
                   {server.capabilities ? <JsonBlock value={server.capabilities} /> : null}
                 </FieldRow>
-                <FieldRow label="instructions" origin="mcp">
-                  {server.instructions ? <span className="whitespace-pre-wrap text-xs">{server.instructions}</span> : null}
+                <FieldRow label="instructions" help={SERVER_FIELD_HELP["instructions"]} origin="mcp">
+                  {server.instructions ? <span className="whitespace-pre-wrap">{server.instructions}</span> : null}
                 </FieldRow>
-                <FieldRow label="capability 해시" origin="argus">
-                  {server.capability_hash ? <span className="font-mono text-[11px]">{server.capability_hash.slice(0, 16)}…</span> : null}
+                <FieldRow label="capability 해시" help={SERVER_FIELD_HELP["capability 해시"]} origin="argus">
+                  {server.capability_hash ? <Tip label={server.capability_hash}><span className="font-mono">{server.capability_hash.slice(0, 16)}…</span></Tip> : null}
                 </FieldRow>
-              </CardContent>
-            </Card>
+              </FieldTable>
+            </DetailSection>
           </div>
         </TabsContent>
 
@@ -406,18 +426,15 @@ function ToolsPanel({ server, onChanged, canEdit }: { server: Detail; onChanged:
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-sm">
-            도구 그룹 ({groups.length}) <OriginBadge origin="argus" />
-          </CardTitle>
-          <p className="text-xs text-muted-foreground">
+    <div className="flex flex-col gap-6">
+      <DetailSection
+        title={<>도구 그룹 ({groups.length}) <OriginBadge origin="argus" /></>}
+        description={<>
             그룹은 서버가 도구를 켜고 끄는 단위입니다. Argus Forge 서버는 설정 키(<code>allow.*</code>)로 그룹 단위 등록 여부가 결정되며,
             일반 MCP 서버는 tool annotations(readOnlyHint / destructiveHint) 기준으로 자동 분류합니다.
-          </p>
-        </CardHeader>
-        <CardContent>
+        </>}
+      >
+        <div className="rounded-md border">
           <Table>
             <TableHeader>
               <TableRow>
@@ -436,10 +453,10 @@ function ToolsPanel({ server, onChanged, canEdit }: { server: Detail; onChanged:
                 <TableRow key={g.id}>
                   <TableCell>
                     <div className="font-medium">{g.label || g.key}</div>
-                    <div className="font-mono text-[11px] text-muted-foreground">{g.key}</div>
+                    <div className="font-mono text-[11px]">{g.key}</div>
                   </TableCell>
                   <TableCell className="font-mono text-xs">{g.config_key || "-"}</TableCell>
-                  <TableCell>{g.mutating ? <Badge variant="outline" className="border-orange-300 text-orange-700 dark:text-orange-300">변경</Badge> : <span className="text-xs text-muted-foreground">읽기</span>}</TableCell>
+                  <TableCell>{g.mutating ? <MutatingBadge /> : <span className="text-xs">읽기</span>}</TableCell>
                   <TableCell className="text-sm">{g.default_enabled ? "켜짐" : "꺼짐"}</TableCell>
                   <TableCell><RiskBadge risk={g.default_risk} /></TableCell>
                   <TableCell className="text-right">{g.tool_count}</TableCell>
@@ -447,24 +464,23 @@ function ToolsPanel({ server, onChanged, canEdit }: { server: Detail; onChanged:
               ))}
             </TableBody>
           </Table>
-        </CardContent>
-      </Card>
+        </div>
+      </DetailSection>
 
-      <Card>
-        <CardHeader>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <CardTitle className="text-sm">도구</CardTitle>
-            <label className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Switch checked={showRemoved} onCheckedChange={setShowRemoved} />
-              서버에서 사라진 도구 포함
-            </label>
-          </div>
-          <p className="text-xs text-muted-foreground">
+      <DetailSection
+        title="도구"
+        actions={
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Switch checked={showRemoved} onCheckedChange={setShowRemoved} />
+            서버에서 사라진 도구 포함
+          </label>
+        }
+        description={<>
             이름·설명·입력 스키마·annotations 는 MCP 서버가 보고한 값 <OriginBadge origin="mcp" className="align-middle" />,
             그룹·위험도·승인 필요·리소스 유형은 Argus 에서 관리하는 값 <OriginBadge origin="argus" className="align-middle" /> 입니다.
-          </p>
-        </CardHeader>
-        <CardContent>
+        </>}
+      >
+        <div className="rounded-md border">
           <Table>
             <TableHeader>
               <TableRow>
@@ -490,7 +506,7 @@ function ToolsPanel({ server, onChanged, canEdit }: { server: Detail; onChanged:
                   <Fragment key={t.id}>
                     <TableRow className={t.removed_at ? "opacity-50" : undefined}>
                       <TableCell>
-                        <button
+                        <Tip label="펼치기"><button
                           type="button"
                           aria-label="펼치기"
                           onClick={() => setExpanded((prev) => {
@@ -501,16 +517,16 @@ function ToolsPanel({ server, onChanged, canEdit }: { server: Detail; onChanged:
                           })}
                         >
                           {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                        </button>
+                        </button></Tip>
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-1.5">
                           <span className="font-mono text-sm">{t.name}</span>
-                          {t.mutating && <Badge variant="outline" className="h-4 border-orange-300 px-1 text-[10px] text-orange-700 dark:text-orange-300">변경</Badge>}
-                          {t.removed_at && <Badge variant="outline" className="h-4 px-1 text-[10px]">사라짐</Badge>}
+                          {t.mutating && <MutatingBadge />}
+                          {t.removed_at && <ToneBadge tone="muted" size="sm">사라짐</ToneBadge>}
                         </div>
                         {t.description && (
-                          <div className="line-clamp-1 max-w-xl text-xs text-muted-foreground">{t.description}</div>
+                          <div className="line-clamp-1 max-w-xl text-xs">{t.description}</div>
                         )}
                       </TableCell>
                       <TableCell>
@@ -540,7 +556,7 @@ function ToolsPanel({ server, onChanged, canEdit }: { server: Detail; onChanged:
                             </SelectContent>
                           </Select>
                           {!t.risk_confirmed && t.risk && (
-                            <span className="text-[10px] text-muted-foreground" title="그룹 기본값/annotations 로 추정된 위험도입니다. 선택하면 확정됩니다.">추정</span>
+                            <span className="text-[11px]" title="그룹 기본값/annotations 로 추정된 위험도입니다. 선택하면 확정됩니다.">추정</span>
                           )}
                         </div>
                       </TableCell>
@@ -554,7 +570,7 @@ function ToolsPanel({ server, onChanged, canEdit }: { server: Detail; onChanged:
                       <TableCell><RowSourceBadge source={t.source} /></TableCell>
                       <TableCell>
                         {canEdit && t.source === "manual" && (
-                          <Button
+                          <Tip label="삭제"><Button
                             variant="ghost"
                             size="icon"
                             className="h-7 w-7"
@@ -569,7 +585,7 @@ function ToolsPanel({ server, onChanged, canEdit }: { server: Detail; onChanged:
                             }}
                           >
                             <Trash2 className="h-4 w-4" />
-                          </Button>
+                          </Button></Tip>
                         )}
                       </TableCell>
                     </TableRow>
@@ -577,22 +593,22 @@ function ToolsPanel({ server, onChanged, canEdit }: { server: Detail; onChanged:
                       <TableRow className="hover:bg-transparent">
                         <TableCell />
                         <TableCell colSpan={6} className="space-y-1 bg-muted/20">
-                          <FieldRow label="title" origin="mcp">{t.title}</FieldRow>
-                          <FieldRow label="description" origin="mcp">
-                            {t.description ? <span className="whitespace-pre-wrap text-xs">{t.description}</span> : null}
+                          <FieldRow label="title" help={SERVER_FIELD_HELP["title"]} origin="mcp">{t.title}</FieldRow>
+                          <FieldRow label="description" help={SERVER_FIELD_HELP["description"]} origin="mcp">
+                            {t.description ? <span className="whitespace-pre-wrap">{t.description}</span> : null}
                           </FieldRow>
-                          <FieldRow label="annotations" origin="mcp">{t.annotations ? <JsonBlock value={t.annotations} /> : null}</FieldRow>
-                          <FieldRow label="inputSchema" origin="mcp">{t.input_schema ? <JsonBlock value={t.input_schema} /> : null}</FieldRow>
-                          <FieldRow label="outputSchema" origin="mcp">{t.output_schema ? <JsonBlock value={t.output_schema} /> : null}</FieldRow>
-                          <FieldRow label="리소스 유형" origin="argus">
+                          <FieldRow label="annotations" help={SERVER_FIELD_HELP["annotations"]} origin="mcp">{t.annotations ? <JsonBlock value={t.annotations} /> : null}</FieldRow>
+                          <FieldRow label="inputSchema" help={SERVER_FIELD_HELP["inputSchema"]} origin="mcp">{t.input_schema ? <JsonBlock value={t.input_schema} /> : null}</FieldRow>
+                          <FieldRow label="outputSchema" help={SERVER_FIELD_HELP["outputSchema"]} origin="mcp">{t.output_schema ? <JsonBlock value={t.output_schema} /> : null}</FieldRow>
+                          <FieldRow label="리소스 유형" help={SERVER_FIELD_HELP["리소스 유형"]} origin="argus">
                             <Tags items={t.resource_types} />
                           </FieldRow>
-                          <FieldRow label="메모" origin="argus">
+                          <FieldRow label="메모" help={SERVER_FIELD_HELP["메모"]} origin="argus">
                             {canEdit
                               ? <ToolNotes tool={t} onSave={(notes) => patch(t, { notes })} />
-                              : t.notes ? <span className="whitespace-pre-wrap text-xs">{t.notes}</span> : null}
+                              : t.notes ? <span className="whitespace-pre-wrap">{t.notes}</span> : null}
                           </FieldRow>
-                          {t.removed_at && <FieldRow label="사라진 시각" origin="argus">{fmtDate(t.removed_at)}</FieldRow>}
+                          {t.removed_at && <FieldRow label="사라진 시각" help={SERVER_FIELD_HELP["사라진 시각"]} origin="argus">{fmtDate(t.removed_at)}</FieldRow>}
                         </TableCell>
                       </TableRow>
                     )}
@@ -602,8 +618,8 @@ function ToolsPanel({ server, onChanged, canEdit }: { server: Detail; onChanged:
               {canEdit && <AddToolRow serverName={server.name} groups={groups.map((g) => g.key)} onAdded={onChanged} />}
             </TableBody>
           </Table>
-        </CardContent>
-      </Card>
+        </div>
+      </DetailSection>
     </div>
   )
 }
@@ -649,9 +665,9 @@ function AddToolRow({ serverName, groups, onAdded }: { serverName: string; group
           </SelectContent>
         </Select>
       </TableCell>
-      <TableCell colSpan={2} className="text-xs text-muted-foreground">수집 전 사전 등록용</TableCell>
+      <TableCell colSpan={2} className="text-xs">수집 전 사전 등록용</TableCell>
       <TableCell>
-        <Button
+        <Tip label="도구 추가"><Button
           size="icon"
           className="h-7 w-7"
           aria-label="도구 추가"
@@ -674,7 +690,7 @@ function AddToolRow({ serverName, groups, onAdded }: { serverName: string; group
           }}
         >
           <Plus className="h-4 w-4" />
-        </Button>
+        </Button></Tip>
       </TableCell>
     </TableRow>
   )
@@ -688,15 +704,13 @@ function ResourcesPanel({ server, onChanged, canEdit }: { server: Detail; onChan
   const [uri, setUri] = useState("")
   const [promptName, setPromptName] = useState("")
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-sm">
-            리소스 ({server.resources.length}) <OriginBadge origin="mcp" />
-          </CardTitle>
-          <p className="text-xs text-muted-foreground">resources/list · resources/templates/list 로 수집됩니다.</p>
-        </CardHeader>
-        <CardContent className="space-y-2">
+    <div className="grid items-start gap-6 lg:grid-cols-2">
+      <DetailSection
+        title={<>리소스 ({server.resources.length}) <OriginBadge origin="mcp" /></>}
+        description="resources/list · resources/templates/list 로 수집됩니다."
+        className="space-y-2"
+      >
+          <div className="rounded-md border">
           <Table>
             <TableHeader>
               <TableRow>
@@ -714,7 +728,7 @@ function ResourcesPanel({ server, onChanged, canEdit }: { server: Detail; onChan
                 <TableRow key={r.id} className={r.removed_at ? "opacity-50" : undefined}>
                   <TableCell className="break-all font-mono text-xs">
                     {r.uri}
-                    {r.is_template && <Badge variant="outline" className="ml-1 h-4 px-1 text-[10px]">template</Badge>}
+                    {r.is_template && <Badge size="sm" variant="outline" className="ml-1">template</Badge>}
                   </TableCell>
                   <TableCell className="text-sm">{r.title || r.name || "-"}</TableCell>
                   <TableCell className="text-xs">{r.mime_type || "-"}</TableCell>
@@ -722,7 +736,7 @@ function ResourcesPanel({ server, onChanged, canEdit }: { server: Detail; onChan
                   <TableCell>
                     {/* 수동 등록 행만 삭제 — 수집된 리소스는 다음 수집에서 다시 들어온다(도구와 같은 기준) */}
                     {canEdit && r.source === "manual" && (
-                      <Button
+                      <Tip label="삭제"><Button
                         variant="ghost"
                         size="icon"
                         className="h-7 w-7"
@@ -737,13 +751,14 @@ function ResourcesPanel({ server, onChanged, canEdit }: { server: Detail; onChan
                         }}
                       >
                         <Trash2 className="h-4 w-4" />
-                      </Button>
+                      </Button></Tip>
                     )}
                   </TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
+          </div>
           {canEdit && (
           <div className="flex gap-2">
             <Input placeholder="리소스 URI 수동 등록 (예: file:///logs/{date})" value={uri} onChange={(e) => setUri(e.target.value)} className="h-8" />
@@ -764,16 +779,13 @@ function ResourcesPanel({ server, onChanged, canEdit }: { server: Detail; onChan
             </Button>
           </div>
           )}
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-sm">
-            프롬프트 ({server.prompts.length}) <OriginBadge origin="mcp" />
-          </CardTitle>
-          <p className="text-xs text-muted-foreground">prompts/list 로 수집됩니다.</p>
-        </CardHeader>
-        <CardContent className="space-y-2">
+      </DetailSection>
+      <DetailSection
+        title={<>프롬프트 ({server.prompts.length}) <OriginBadge origin="mcp" /></>}
+        description="prompts/list 로 수집됩니다."
+        className="space-y-2"
+      >
+          <div className="rounded-md border">
           <Table>
             <TableHeader>
               <TableRow>
@@ -790,7 +802,7 @@ function ResourcesPanel({ server, onChanged, canEdit }: { server: Detail; onChan
               ) : server.prompts.map((p) => (
                 <TableRow key={p.id} className={p.removed_at ? "opacity-50" : undefined}>
                   <TableCell className="font-mono text-sm">{p.name}</TableCell>
-                  <TableCell className="text-xs text-muted-foreground">{p.description || "-"}</TableCell>
+                  <TableCell className="text-xs">{p.description || "-"}</TableCell>
                   <TableCell className="text-xs">
                     {(p.arguments ?? []).map((a) => String((a as { name?: string }).name ?? "")).filter(Boolean).join(", ") || "-"}
                   </TableCell>
@@ -798,7 +810,7 @@ function ResourcesPanel({ server, onChanged, canEdit }: { server: Detail; onChan
                   <TableCell>
                     {/* 수동 등록 행만 삭제 — 수집된 프롬프트는 다음 수집에서 다시 들어온다(도구와 같은 기준) */}
                     {canEdit && p.source === "manual" && (
-                      <Button
+                      <Tip label="삭제"><Button
                         variant="ghost"
                         size="icon"
                         className="h-7 w-7"
@@ -813,13 +825,14 @@ function ResourcesPanel({ server, onChanged, canEdit }: { server: Detail; onChan
                         }}
                       >
                         <Trash2 className="h-4 w-4" />
-                      </Button>
+                      </Button></Tip>
                     )}
                   </TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
+          </div>
           {canEdit && (
           <div className="flex gap-2">
             <Input placeholder="프롬프트 이름 수동 등록" value={promptName} onChange={(e) => setPromptName(e.target.value)} className="h-8" />
@@ -840,8 +853,7 @@ function ResourcesPanel({ server, onChanged, canEdit }: { server: Detail; onChan
             </Button>
           </div>
           )}
-        </CardContent>
-      </Card>
+      </DetailSection>
     </div>
   )
 }
@@ -858,18 +870,15 @@ function ServerJsonPanel({ name }: { name: string }) {
   }, [name])
   const text = doc ? JSON.stringify(doc, null, 2) : ""
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <CardTitle className="text-sm">MCP Registry server.json</CardTitle>
-          <div className="flex gap-2">
+    <DetailSection
+      title="MCP Registry server.json"
+      actions={<>
             <Button
               size="sm"
               variant="outline"
               disabled={!doc}
               onClick={() => {
-                navigator.clipboard.writeText(text)
-                toast.success("복사했습니다.")
+                copyText(text).then(() => toast.success("복사했습니다."), (e) => notifyError(e, "클립보드에 복사하지 못했습니다."))
               }}
             >
               <Copy className="mr-1 h-4 w-4" /> 복사
@@ -887,20 +896,18 @@ function ServerJsonPanel({ name }: { name: string }) {
                 URL.revokeObjectURL(a.href)
               }}
             >
-              <Download className="mr-1 h-4 w-4" /> 다운로드
+              <Download className="mr-1 h-4 w-4" /> 내려받기
             </Button>
-          </div>
-        </div>
-        <p className="text-xs text-muted-foreground">
+      </>}
+      description={<>
           표준 필드는 다른 MCP Registry·클라이언트와 그대로 호환됩니다. Argus 전용 관리 정보 <OriginBadge origin="argus" className="align-middle" />
           는 <code className="rounded bg-muted px-1">_meta[&quot;{ARGUS_META_NAMESPACE}&quot;]</code> 아래에만 포함되며,
           다시 가져오면 복원됩니다.
-        </p>
-      </CardHeader>
-      <CardContent>
-        {err ? <p className="text-sm text-destructive">{err}</p> : <JsonBlock value={doc} />}
-      </CardContent>
-    </Card>
+      </>}
+    >
+        {/* 문서 전체를 스크롤바 없이 펼쳐 보인다(복사 · 내려받기는 위 단추) */}
+        {err ? <p className="text-sm text-destructive">{err}</p> : doc ? <JsonBlock value={doc} copyable={false} /> : null}
+    </DetailSection>
   )
 }
 
@@ -927,7 +934,7 @@ export function StatusHistoryPanel({ load }: { load: () => Promise<McpStatusHist
         </TableHeader>
         <TableBody>
           {rows === null ? (
-            <TableRow><TableCell colSpan={4} className="h-14 text-center text-muted-foreground">불러오는 중...</TableCell></TableRow>
+            <TableRow><TableCell colSpan={4} className="h-14 text-center text-muted-foreground">불러오는 중…</TableCell></TableRow>
           ) : rows.length === 0 ? (
             <TableRow><TableCell colSpan={4} className="h-14 text-center text-muted-foreground">상태 변경 이력이 없습니다.</TableCell></TableRow>
           ) : rows.map((h) => (
@@ -937,7 +944,7 @@ export function StatusHistoryPanel({ load }: { load: () => Promise<McpStatusHist
                 {h.from_status ? <StatusBadge status={h.from_status} /> : "-"} → <StatusBadge status={h.to_status} />
               </TableCell>
               <TableCell className="text-sm">{h.note || "-"}</TableCell>
-              <TableCell className="text-xs text-muted-foreground">{h.changed_by || "-"}</TableCell>
+              <TableCell className="text-xs">{h.changed_by || "-"}</TableCell>
             </TableRow>
           ))}
         </TableBody>
@@ -958,7 +965,7 @@ type EditState = {
   owner_email: string
   department: string
   category: string
-  tags: string
+  tags: string[]
   provider_type: string
   vendor: string
   target_platform: string
@@ -979,7 +986,7 @@ function toEdit(s: Detail): EditState {
     owner_email: s.owner_email ?? "",
     department: s.department ?? "",
     category: s.category ?? "",
-    tags: (s.tags ?? []).join(", "),
+    tags: s.tags ?? [],
     provider_type: s.provider_type,
     vendor: s.vendor ?? "",
     target_platform: s.target_platform ?? "",
@@ -1024,7 +1031,7 @@ function ServerEditDialog({
         owner_email: n(f.owner_email),
         department: n(f.department),
         category: n(f.category),
-        tags: f.tags.split(",").map((t) => t.trim()).filter(Boolean),
+        tags: f.tags,
         provider_type: f.provider_type,
         vendor: n(f.vendor),
         target_platform: n(f.target_platform),
@@ -1083,8 +1090,8 @@ function ServerEditDialog({
           <div className="grid gap-1.5"><L origin="argus">카테고리</L><Input value={f.category} onChange={set("category")} /></div>
           <div className="grid gap-1.5"><L origin="argus">소유자 이메일</L><Input value={f.owner_email} onChange={set("owner_email")} /></div>
           <div className="grid gap-1.5"><L origin="argus">부서</L><Input value={f.department} onChange={set("department")} /></div>
-          <div className="grid gap-1.5 sm:col-span-2"><L origin="argus">태그 (쉼표 구분)</L><Input value={f.tags} onChange={set("tags")} /></div>
-          <div className="sm:col-span-2 border-t pt-2 text-xs font-medium text-muted-foreground">MCP Registry 표준 메타데이터</div>
+          <div className="grid gap-1.5 sm:col-span-2"><L origin="argus">태그</L><TagInput value={f.tags} onChange={(tags) => setF((p) => ({ ...p, tags }))} /></div>
+          <div className="sm:col-span-2 border-t pt-2 text-xs font-medium">MCP Registry 표준 메타데이터</div>
           <div className="grid gap-1.5"><L origin="registry">Registry 이름</L><Input value={f.registry_name} onChange={set("registry_name")} placeholder="io.github.org/server" /></div>
           <div className="grid gap-1.5"><L origin="registry">제목</L><Input value={f.title} onChange={set("title")} /></div>
           <div className="grid gap-1.5 sm:col-span-2"><L origin="registry">설명</L><Textarea value={f.description} onChange={set("description")} rows={3} /></div>
@@ -1094,7 +1101,7 @@ function ServerEditDialog({
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>취소</Button>
-          <Button onClick={save} disabled={saving}>{saving ? "저장 중..." : "저장"}</Button>
+          <Button onClick={save} disabled={saving}>{saving ? "저장 중…" : "저장"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

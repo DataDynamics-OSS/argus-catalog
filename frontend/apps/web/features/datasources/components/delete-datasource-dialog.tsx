@@ -92,18 +92,31 @@ export function DeleteDatasourceDialog({
         </DialogHeader>
         <div className="grid gap-4 py-2">
           {deleteImpactLoading && (
-            <p className="text-xs text-muted-foreground">삭제 영향 확인 중...</p>
+            <p className="text-xs text-muted-foreground">삭제 영향 확인 중…</p>
           )}
           {deleteImpactError && (
             <div className="rounded-md border border-destructive/40 bg-destructive/5 p-2.5 text-xs text-destructive">
               삭제 영향을 확인하지 못해 삭제할 수 없습니다: {deleteImpactError}
             </div>
           )}
+          {deleteImpact.active_sync_run_count > 0 && (
+            <div className="rounded-md border border-destructive/40 bg-destructive/5 p-2.5 text-xs text-destructive">
+              수집이 진행 중이라 삭제할 수 없습니다. 수집이 끝난 뒤 다시 삭제하세요.
+            </div>
+          )}
           {(deleteImpact.alert_rule_count > 0 ||
+            deleteImpact.sync_run_count > 0 ||
+            deleteImpact.sync_scheduled ||
             deleteImpact.change_request_count > 0 ||
             deleteImpact.model_count > 0 ||
             deleteImpact.mcp_deployment_count > 0) && (
-            <ul className="list-disc space-y-0.5 pl-4 text-xs text-muted-foreground">
+            <ul className="list-disc space-y-0.5 pl-4 text-xs">
+              {(deleteImpact.sync_run_count > 0 || deleteImpact.sync_scheduled) && (
+                <li>
+                  수집 범위{deleteImpact.sync_scheduled ? "·예약 수집" : ""} 설정
+                  {deleteImpact.sync_run_count > 0 ? `과 수집 이력 ${deleteImpact.sync_run_count}건` : ""}이 함께 삭제됩니다.
+                </li>
+              )}
               {deleteImpact.alert_rule_count > 0 && (
                 <li>이 데이터 소스·데이터셋 대상 알림 규칙 {deleteImpact.alert_rule_count}개가 삭제됩니다.</li>
               )}
@@ -124,7 +137,7 @@ export function DeleteDatasourceDialog({
             </p>
           )}
           {deleteImpact.removed_dataset_count > 0 && (
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs">
               원본에서 사라진(비활성) 데이터셋 {deleteImpact.removed_dataset_count}개도 함께 정리됩니다.
             </p>
           )}
@@ -154,10 +167,11 @@ export function DeleteDatasourceDialog({
                 deleting ||
                 deleteImpactLoading ||
                 deleteImpactError !== null ||
+                deleteImpact.active_sync_run_count > 0 ||
                 deleteConfirmInput !== deleteExpectedInput
               }
             >
-              {deleting ? "삭제 중..." : "삭제"}
+              {deleting ? "삭제 중…" : "삭제"}
             </Button>
           </div>
         </div>

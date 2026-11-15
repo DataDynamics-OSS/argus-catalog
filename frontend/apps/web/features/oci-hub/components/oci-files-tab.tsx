@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react"
 import { Download, Eye, Loader2 } from "lucide-react"
-import { errorMessage, toast } from "@/lib/notify"
+import { errorMessage, notifyError } from "@/lib/notify"
 
 import { Button } from "@workspace/ui/components/button"
 import {
@@ -47,9 +47,11 @@ async function directDownloadUrl(filePath: string): Promise<string> {
 
 /** 파일 탭 — 준비된(ready) 버전을 골라 그 버전의 파일을 탐색한다. */
 export function OciFilesTab({
-  modelName, versions, version, onVersionChange,
+  modelName, versions, version, onVersionChange, canDownload = true,
 }: {
   modelName: string
+  /** 내려받기 버튼을 보일지 — 역할의 기능 권한 oci.download(서버와 같은 기준, TODO-122). 보기는 그대로. */
+  canDownload?: boolean
   versions: OciModelVersion[]
   version: number | null
   onVersionChange: (v: number) => void
@@ -93,7 +95,7 @@ export function OciFilesTab({
       a.click()
       document.body.removeChild(a)
     } catch (e) {
-      toast.error(errorMessage(e) ?? "내려받지 못했습니다.")
+      notifyError(e, "파일을 내려받지 못했습니다.")
     }
   }, [])
 
@@ -121,9 +123,9 @@ export function OciFilesTab({
             ))}
           </SelectContent>
         </Select>
-        <span className="font-mono text-xs text-muted-foreground truncate">{currentPath}</span>
+        <span className="font-mono text-xs truncate">{currentPath}</span>
         {!loading && !error && (
-          <span className="ml-auto text-sm text-muted-foreground">
+          <span className="ml-auto text-sm">
             {folders.length > 0 && `폴더 ${folders.length}개, `}파일 {files.length}개
             {totalSize > 0 && ` · ${formatSize(totalSize)}`}
           </span>
@@ -167,13 +169,15 @@ export function OciFilesTab({
               {files.map((f) => (
                 <tr key={f.key} className="hover:bg-muted/30">
                   <td className="px-3 py-2">📄 {f.name}</td>
-                  <td className="px-3 py-2 text-right text-muted-foreground">{formatSize(f.size)}</td>
-                  <td className="px-3 py-2 text-muted-foreground text-xs">{f.last_modified ? formatDateTime(f.last_modified) : "-"}</td>
+                  <td className="px-3 py-2 text-right">{formatSize(f.size)}</td>
+                  <td className="px-3 py-2 text-xs">{f.last_modified ? formatDateTime(f.last_modified) : "-"}</td>
                   <td className="px-3 py-2 text-center">
                     <div className="inline-flex items-center gap-1">
-                      <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => download(f.key)}>
-                        <Download className="h-3 w-3 mr-1" />다운로드
-                      </Button>
+                      {canDownload && (
+                        <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => download(f.key)}>
+                          <Download className="h-3 w-3 mr-1" />내려받기
+                        </Button>
+                      )}
                       {canPreview(f.name) && (
                         <Button
                           variant="ghost" size="sm" className="h-6 text-xs"

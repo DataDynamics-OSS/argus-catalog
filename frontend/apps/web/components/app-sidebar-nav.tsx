@@ -1,5 +1,6 @@
 "use client"
 
+import { Tip } from "@/components/tip"
 import { useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
@@ -18,7 +19,7 @@ import {
 import { cn } from "@workspace/ui/lib/utils"
 import { getIcon } from "@/lib/icon-map"
 import { usePermissions } from "@/features/permissions/use-permissions"
-import { urlToMenuKey } from "@/lib/permission-registry"
+import { menuGrantedByFeature, urlToMenuKey } from "@/lib/permission-registry"
 import { getMyInboxCount } from "@/features/change-mgmt/api"
 import { useAuth } from "@/features/auth"
 import type { MenuGroup } from "@/types/menu"
@@ -57,7 +58,7 @@ function isActive(pathname: string, url: string) {
 
 export function AppSidebarNav({ groups }: AppSidebarNavProps) {
   const pathname = usePathname()
-  const { isMenuAllowed } = usePermissions()
+  const { isMenuAllowed, canUseFeature } = usePermissions()
   const { user } = useAuth()
   const { state, open, openMobile, isMobile, setOpen, setOpenMobile } = useSidebar()
   // 아이콘 모드(데스크톱 접힘)에서는 검색·그룹 라벨이 숨겨지므로 그룹 접기도 적용하지 않는다.
@@ -124,18 +125,21 @@ export function AppSidebarNav({ groups }: AppSidebarNavProps) {
   const visibleGroups = useMemo(() => {
     const q = query.trim().toLowerCase()
     return groups
-      .filter((group) => group.id !== "admin" || user?.is_admin) // 관리 그룹은 관리자만
       .map((group) => ({
         ...group,
         // 권한 매트릭스(권한 관리 메뉴)에서 내 역할이 차단된 메뉴는 숨김.
         // open-by-default — 설정 없는 메뉴는 항상 통과한다.
         items: group.items
-          .filter((item) => !item.adminOnly || user?.is_admin)
+          // 관리 그룹은 관리자만 — 단 기능 권한으로 여는 메뉴(메타데이터 수집 ← datasources.sync)는 허용받은 사람에게도(TODO-074)
+          .filter((item) => user?.is_admin || group.id !== "admin" ||
+            menuGrantedByFeature(urlToMenuKey(item.url), canUseFeature))
+          // 관리자 전용 메뉴(MLflow · OCI 파일, 플러그인 관리자 메뉴) — 플러그인 메뉴는 grantedBy 기능을 받으면 연다(TODO-123)
+          .filter((item) => !item.adminOnly || user?.is_admin || menuGrantedByFeature(urlToMenuKey(item.url), canUseFeature))
           .filter((item) => isMenuAllowed(urlToMenuKey(item.url)))
           .filter((item) => !q || item.title.toLowerCase().includes(q)),
       }))
       .filter((group) => group.items.length > 0)
-  }, [groups, user?.is_admin, isMenuAllowed, query])
+  }, [groups, user?.is_admin, isMenuAllowed, canUseFeature, query])
 
   const isSearching = query.trim().length > 0
 
@@ -158,13 +162,13 @@ export function AppSidebarNav({ groups }: AppSidebarNavProps) {
                 searchInputRef.current?.blur()
               }
             }}
-            placeholder="메뉴 검색"
+            placeholder="메뉴 검색…"
             aria-label="메뉴 검색"
             // 기본 SidebarInput(흰 배경) 대신 사이드바 톤 — 평소엔 accent 반투명, 포커스 시 진하게
             className="border-transparent bg-sidebar-accent/40 pr-7 pl-7 text-sm text-sidebar-accent-foreground placeholder:text-sidebar-foreground/60 focus-visible:border-sidebar-border focus-visible:bg-sidebar-accent/60 focus-visible:ring-0 dark:bg-sidebar-accent/40"
           />
           {query ? (
-            <button
+            <Tip label="검색 지우기"><button
               type="button"
               onClick={() => {
                 setQuery("")
@@ -174,9 +178,9 @@ export function AppSidebarNav({ groups }: AppSidebarNavProps) {
               className="absolute top-1/2 right-1 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
             >
               <X className="size-3.5" />
-            </button>
+            </button></Tip>
           ) : (
-            <kbd className="pointer-events-none absolute top-1/2 right-2 -translate-y-1/2 rounded border border-sidebar-border px-1 py-0.5 font-mono text-[10px] leading-none text-sidebar-foreground/60">
+            <kbd className="pointer-events-none absolute top-1/2 right-2 -translate-y-1/2 rounded border border-sidebar-border px-1 py-0.5 font-mono text-[11px] leading-none text-sidebar-foreground/60">
               Ctrl /
             </kbd>
           )}

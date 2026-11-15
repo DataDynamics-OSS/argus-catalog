@@ -14,6 +14,9 @@ import {
   CardTitle,
 } from "@workspace/ui/components/card"
 import { useAuth } from "@/features/auth"
+import { useBranding } from "@/features/branding/use-branding"
+import { DEFAULT_BRANDING, fetchPublicBranding } from "@/features/settings/api"
+import { afterLoginPath } from "@/lib/navigation"
 import { errorMessage } from "@/lib/notify"
 
 export default function LoginPage() {
@@ -23,12 +26,17 @@ export default function LoginPage() {
   const [password, setPassword] = useState("")
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
+  // 제목은 설정 > 사이드바 표시의 제품명(TODO-146) — 로그인 전이라 공개 조회
+  const brand = useBranding(fetchPublicBranding)
 
   // If already authenticated, redirect (강제 변경 대상은 변경 화면으로)
+  // 돌아갈 주소(?next=)가 내부 경로면 그곳으로, 아니면 대시보드로(DEF-063)
   useEffect(() => {
     if (isAuthenticated) {
       router.replace(
-        user?.must_change_password ? "/change-password-required" : "/dashboard"
+        user?.must_change_password
+          ? "/change-password-required"
+          : afterLoginPath(window.location.search)
       )
     }
   }, [isAuthenticated, user, router])
@@ -39,9 +47,11 @@ export default function LoginPage() {
     setLoading(true)
     try {
       const userInfo = await login(username, password)
-      // 강제 비밀번호 변경 대상이면 변경 화면으로, 아니면 대시보드로
+      // 강제 비밀번호 변경 대상이면 변경 화면으로, 아니면 원래 화면(?next=) 또는 대시보드로
       router.replace(
-        userInfo.must_change_password ? "/change-password-required" : "/dashboard"
+        userInfo.must_change_password
+          ? "/change-password-required"
+          : afterLoginPath(window.location.search)
       )
     } catch (err) {
       setError(errorMessage(err) ?? "로그인하지 못했습니다.")
@@ -54,7 +64,7 @@ export default function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-muted/40">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
-          <CardTitle className="text-2xl font-bold">Argus Catalog</CardTitle>
+          <CardTitle className="text-2xl font-bold">{brand.title || DEFAULT_BRANDING.title}</CardTitle>
           <CardDescription>계정으로 로그인하세요</CardDescription>
         </CardHeader>
         <CardContent>
@@ -96,7 +106,7 @@ export default function LoginPage() {
             (라이선스가 부여하는 광범위한 권리와 상충하는 인상을 주므로). */}
         {/* -mb-6: Card 자체의 하단 패딩(py-6)을 상쇄해 푸터가 카드 바닥에 붙도록 */}
         <div className="border-t border-border px-6 py-3 -mb-6">
-          <p className="text-center text-xs text-muted-foreground">
+          <p className="text-center text-xs">
             Copyright © {new Date().getFullYear()} Data Dynamics Inc.
           </p>
         </div>

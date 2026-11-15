@@ -18,16 +18,27 @@ logger = logging.getLogger(__name__)
 
 
 class CatalogClient:
-    """Argus Catalog API 의 최소 클라이언트 (로그인 토큰 자동 첨부)."""
+    """Argus Catalog API 의 최소 클라이언트 — API 키(기본) 또는 로그인 토큰(이전 방식)을 첨부한다."""
 
-    def __init__(self, base_url: str, username: str, password: str) -> None:
+    def __init__(self, base_url: str, username: str = "", password: str = "", timeout: float = 30,
+                 *, api_key: str = "") -> None:
         self.base = base_url.rstrip("/") + "/api/v1"
+        self.timeout = timeout  # 응답 없는 API 에 무한정 매달리지 않도록 (DEF-038)
+        # API 키는 만료·갱신이 없어 그대로 Bearer 로 보낸다(로그인 없음, TODO-056)
+        self._api_key = api_key
+        # 토큰 만료(로컬 8시간) 뒤 다시 로그인하려고 자격 증명을 들고 있는다 (DEF-036)
+        self._username = username
+        self._password = password
         self.token: str | None = None
-        self.token = self._login(username, password)
+        self.token = api_key or self._login(username, password)
 
     # ------------------------------------------------------------------ 공통
-    def _request(self, method: str, path: str, payload: dict | None = None):
-        """JSON 요청/응답. HTTP 오류는 본문을 붙여 RuntimeError 로 승격."""
+    def _request(self, method: str, path: str, payload: dict | None = None, *, _retry: bool = True):
+        """JSON 요청/응답. HTTP 오류는 본문을 붙여 RuntimeError 로 승격.
+
+        로그인 뒤 요청이 401 이면 토큰이 만료된 것으로 보고 한 번 다시 로그인해 재시도한다
+        (worker 처럼 오래 도는 프로세스, DEF-036).
+        """
         req = urllib.request.Request(
             self.base + path,
             data=json.dumps(payload).encode() if payload is not None else None,
@@ -38,12 +49,20 @@ class CatalogClient:
             method=method,
         )
         try:
-            with urllib.request.urlopen(req) as resp:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 body = resp.read()
                 return json.loads(body) if body else {}
         except urllib.error.HTTPError as e:
+            if e.code == 401 and _retry and self.token and not self._api_key and path != "/auth/login":
+                logger.info("카탈로그 토큰 만료로 보임(401) — 다시 로그인 후 재시도: %s %s", method, path)
+                self.token = None
+                self.token = self._login(self._username, self._password)
+                return self._request(method, path, payload, _retry=False)
             detail = e.read().decode(errors="replace")[:400]
             raise RuntimeError(f"API 오류 {e.code} {method} {path}: {detail}") from e
+        except (urllib.error.URLError, OSError) as e:
+            # 연결 실패·타임아웃도 호출부가 다루는 RuntimeError 로 맞춘다
+            raise RuntimeError(f"API 연결 실패 {method} {path}: {e}") from e
 
     def _login(self, username: str, password: str) -> str:
         """``/auth/login`` 으로 로그인해 access token 을 받는다.
@@ -108,6 +127,11 @@ class CatalogClient:
             # 용어집이 비어 있거나 조회 실패해도 생성은 계속한다 (컨텍스트만 누락)
             logger.warning("용어집 조회 실패 — 용어 컨텍스트 없이 진행: %s", e)
             return []
+
+    def list_pending_suggestions(self, dataset_id: int) -> list[dict]:
+        """데이터셋의 미적용 AI 제안 목록 — worker 가 중복 반입을 피하는 데 쓴다 (DEF-037)."""
+        data = self._request("GET", f"/ai/datasets/{dataset_id}/suggestions")
+        return data if isinstance(data, list) else []
 
     # ------------------------------------------------------- 결과 쓰기
     def import_suggestions(self, dataset_id: int, items: list[dict],

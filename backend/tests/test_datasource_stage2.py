@@ -42,6 +42,8 @@ _CATALOG_TABLES = [
     "catalog_schema_snapshots", "argus_data_pipeline", "argus_dataset_lineage",
     "catalog_datasource_data_types", "catalog_datasource_table_types",
     "catalog_datasource_storage_formats", "catalog_datasource_features",
+    # 삭제 영향·삭제 가드가 수집 설정·실행을 본다(DEF-051)
+    "catalog_datasource_sync_settings", "catalog_datasource_sync_runs",
 ]
 
 
@@ -61,7 +63,8 @@ async def _make_session():
             await conn.run_sync(lambda sc, m=model: m.__table__.create(sc, checkfirst=True))
         # ORM 모델이 없는 원시 테이블(운영 DDL 의 필요한 컬럼만)
         await conn.execute(text(
-            "CREATE TABLE argus_query_lineage (id INTEGER PRIMARY KEY, source_table TEXT,"
+            "CREATE TABLE argus_query_lineage (id INTEGER PRIMARY KEY, datasource_id TEXT NOT NULL DEFAULT '',"
+            " source_catalog TEXT NOT NULL DEFAULT '', source_table TEXT, target_catalog TEXT NOT NULL DEFAULT '',"
             " target_table TEXT, source_dataset_id INT, target_dataset_id INT)"))
         await conn.execute(text(
             "CREATE TABLE relationship_observations (id INTEGER PRIMARY KEY,"
@@ -159,7 +162,8 @@ def _test_validation() -> None:
 
 
 async def _test_connection_test_unsupported_and_validation() -> None:
-    r = await service.test_datasource_connection("hive", {"host": "h"})
+    # 백엔드도 metadata-sync 도 연결 테스트를 못 하는 유형(hive 등은 이제 metadata-sync /v2/test 로 간다)
+    r = await service.test_datasource_connection("impala", {"host": "h"})
     assert r["ok"] is False and r.get("unsupported") is True
     r = await service.test_datasource_connection("postgresql", {"host": "/var/run/postgresql"})
     assert r["ok"] is False and "호스트" in r["message"]

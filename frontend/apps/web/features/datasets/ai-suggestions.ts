@@ -7,8 +7,16 @@
 //   - 태그: 서버 생성은 {"tags": [...], "new_tags": [{name, description}]}, enrich 는 ["a", "b"]
 //     현재 값은 현재 태그 이름 배열
 //   - PII: [{"name", "pii_type", ...}] — 현재 값은 같은 컬럼들의 [{"name", "pii_type"}]
+//   - AI-Ready 초안(generation_type "ai_ready", field_name 이 항목): 평문 — 관련법령은 법령명을 쉼표로
 
-import type { SuggestionItem } from "./ai-api"
+import type { AiReadyDraftResult, SuggestionItem } from "./ai-api"
+
+/** AI-Ready 초안 항목 이름 — 서버 app/ai/ai_ready_drafts.py FIELDS 와 같다. */
+export const AI_READY_DRAFT_LABEL: Record<string, string> = {
+  data_biases: "알려진 편향",
+  known_limitations: "한계 · 유의사항",
+  legal_basis: "관련법령",
+}
 
 type SuggestionLike = Pick<SuggestionItem, "entity_type" | "generation_type" | "field_name" | "generated_text"> & {
   current_text?: string | null
@@ -19,6 +27,7 @@ export function suggestionKindLabel(s: SuggestionLike): string {
   if (s.generation_type === "tag_suggestion") return "태그"
   if (s.generation_type === "pii_detection") return "PII"
   if (s.generation_type === "summary") return "요약"
+  if (s.generation_type === "ai_ready") return `AI-Ready · ${AI_READY_DRAFT_LABEL[s.field_name ?? ""] ?? s.field_name ?? "항목"}`
   if (s.generation_type === "description") return s.entity_type === "column" ? "컬럼 설명" : "설명"
   return s.generation_type
 }
@@ -93,6 +102,25 @@ export function formatCurrentValue(s: SuggestionLike): string {
     return cols.length ? cols.map((c) => `${c.name}: ${c.piiType ?? "-"}`).join(", ") : "(없음)"
   }
   return cur && cur.trim() ? cur : "(없음)"
+}
+
+/**
+ * AI-Ready 초안 결과 → 알림 문구. ``hint`` 는 이미 값이 있어 건너뛴 항목을 다시 쓰는 방법(화면마다 다름).
+ */
+export function draftResultMessage(
+  res: Pick<AiReadyDraftResult, "drafts" | "skipped" | "legal_reason">, hint?: string,
+): { ok: boolean; title: string; description: string } {
+  const lines = res.skipped.map((s) => `${s.label}: ${s.reason}`)
+  if (hint && res.skipped.some((s) => s.reason.startsWith("이미 값이 있습니다"))) lines.push(hint)
+  if (res.legal_reason) lines.unshift(`관련법령 근거: ${res.legal_reason}`)
+  if (res.drafts.length === 0) {
+    return { ok: false, title: "새로 만든 초안이 없습니다.", description: lines.join(" / ") }
+  }
+  return {
+    ok: true,
+    title: `초안 ${res.drafts.length}개(${res.drafts.map((d) => d.label).join(" · ")})를 만들었습니다 — 머리글의 AI 제안에서 읽고 적용하세요.`,
+    description: lines.join(" / "),
+  }
 }
 
 /** 생성 출처 — AI 서비스 enrich 는 provider "agent" 로 반입한다. */

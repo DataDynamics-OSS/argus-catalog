@@ -1,5 +1,6 @@
 "use client"
 
+import { Tip } from "@/components/tip"
 import { useCallback, useRef, useState } from "react"
 import { Upload, X, File as FileIcon } from "lucide-react"
 
@@ -111,7 +112,7 @@ export function UploadDialog({
             }}
           />
           <Upload className="h-8 w-8 mx-auto mb-3 text-muted-foreground" />
-          <p className="text-sm text-muted-foreground">
+          <p className="text-sm">
             파일을 드래그하거나{" "}
             <span className="text-primary font-medium">클릭해 선택</span>하세요
           </p>
@@ -127,10 +128,10 @@ export function UploadDialog({
               >
                 <FileIcon className="h-4 w-4 text-muted-foreground shrink-0" />
                 <span className="flex-1 truncate">{file.name}</span>
-                <span className="text-muted-foreground tabular-nums shrink-0">
+                <span className="tabular-nums shrink-0">
                   {formatBytes(file.size)}
                 </span>
-                <button
+                <Tip label={`${file.name} 빼기`}><button aria-label={`${file.name} 빼기`}
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation()
@@ -139,10 +140,10 @@ export function UploadDialog({
                   className="text-muted-foreground hover:text-foreground"
                 >
                   <X className="h-3.5 w-3.5" />
-                </button>
+                </button></Tip>
               </div>
             ))}
-            <div className="text-xs text-muted-foreground px-3 pt-1">
+            <div className="text-xs px-3 pt-1">
               파일 {files.length}개 &middot;{" "}
               총 {formatBytes(totalSize)}
             </div>
@@ -162,7 +163,7 @@ export function UploadDialog({
             disabled={files.length === 0 || isLoading}
           >
             {isLoading
-              ? "업로드 중..."
+              ? "업로드 중…"
               : `업로드 ${files.length > 0 ? `(${files.length})` : ""}`}
           </Button>
         </DialogFooter>

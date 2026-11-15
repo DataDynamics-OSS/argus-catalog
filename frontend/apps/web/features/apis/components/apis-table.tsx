@@ -1,20 +1,31 @@
 "use client"
 
-import { useEffect, useRef, useState, type ReactNode } from "react"
+import { Tip } from "@/components/tip"
+import { useEffect, useRef, useState } from "react"
 import {
-  ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Copy, ExternalLink, FileCode2, Globe,
-  LayoutGrid, Link2, List, MoreHorizontal, Plus, Radio, Search, Share2, Webhook, X, Zap,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  FileCode2,
+  Globe,
+  LayoutGrid,
+  List,
+  MoreHorizontal,
+  Plus,
+  Radio,
+  Share2,
+  Webhook,
+  X,
+  Zap,
   type LucideIcon,
 } from "lucide-react"
-import { toast } from "@/lib/notify"
 
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@workspace/ui/components/card"
 import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+  DropdownMenu, DropdownMenuContent, DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
-import { Input } from "@workspace/ui/components/input"
 import { Skeleton } from "@workspace/ui/components/skeleton"
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -22,17 +33,21 @@ import {
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@workspace/ui/components/table"
+import { StatusBadge, type StatusTone } from "@workspace/ui/components/status-badge"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { type ApiSort, type ApiSummary } from "../api"
 import { OwnerValue } from "./api-owner"
 import {
-  API_STATUS_LABEL, API_STATUS_VARIANTS, CERT_LABEL, SPEC_FORMAT_LABEL, STATUS_ORDER, TIER_LABEL, protocolLabel,
+  API_STATUS_LABEL, apiStatus, CERT_LABEL, SPEC_FORMAT_LABEL, STATUS_ORDER, TIER_LABEL, protocolLabel,
 } from "./apis-constants"
 import { TabError } from "./apis-detail-shared"
+import { LinkMenuItems } from "@/components/link-menu-items"
+import { EntityCard, EntityCardGrid, EntityCardRaised, EntityCardText } from "@/components/entity-card"
 import { useApis } from "./apis-provider"
 import { PAGE_SIZE_OPTIONS, hasActiveFilters } from "./apis-url-state"
 import { usePermissions } from "@/features/permissions/use-permissions"
+import { SearchInput } from "@/components/search-input"
 
 // 프로토콜 아이콘 — 표·카드에서 프로토콜을 한눈에 구분(미지정/기타는 Webhook).
 const PROTOCOL_ICON: Record<string, LucideIcon> = {
@@ -40,11 +55,13 @@ const PROTOCOL_ICON: Record<string, LucideIcon> = {
 }
 
 // 인증 상태·등급 배지 색상 (라벨은 apis-constants)
-const CERT_BADGE: Record<string, string> = {
-  CERTIFIED: "border-emerald-600/40 text-emerald-700",
-  IN_REVIEW: "border-sky-600/40 text-sky-700",
-  DEPRECATED: "border-amber-600/40 text-amber-700",
+/** 인증 상태 톤(TODO-109) — 인증됨 성공 · 검토 중 진행 · 사용 중단 주의 */
+const CERT_TONE: Record<string, StatusTone> = {
+  CERTIFIED: "success",
+  IN_REVIEW: "info",
+  DEPRECATED: "warning",
 }
+/** 등급은 메달 색 자체가 뜻이라 팔레트 색 그대로 */
 const TIER_BADGE: Record<string, string> = {
   GOLD: "border-yellow-500/50 bg-yellow-50 text-yellow-800",
   SILVER: "border-slate-400/50 bg-slate-50 text-slate-700",
@@ -54,8 +71,6 @@ const TIER_BADGE: Record<string, string> = {
 const SORT_LABEL: Record<ApiSort, string> = { updated: "최근 수정순", created: "최근 등록순", name: "이름순" }
 const ALL = "__all__"  // Select 의 "전체" 값(빈 문자열은 Radix Select 값으로 쓸 수 없음)
 const SEARCH_DEBOUNCE_MS = 400
-
-const CARD_GRID = "grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-3"
 
 /** 날짜를 'yyyy-MM-dd' 로 포맷. */
 function fmtDate(value: string | null | undefined): string | null {
@@ -86,21 +101,17 @@ function ProtocolIcon({ protocol, size = "md" }: { protocol: string | null; size
   )
 }
 
-export function StatusBadge({ status, className }: { status: string; className?: string }) {
-  return (
-    <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium", API_STATUS_VARIANTS[status] ?? API_STATUS_VARIANTS.draft, className)}>
-      {API_STATUS_LABEL[status] ?? status}
-    </span>
-  )
+export function ApiStatusBadge({ status, className }: { status: string; className?: string }) {
+  return <StatusBadge {...apiStatus(status)} className={className} />
 }
 
-function QualityBadges({ api: a, className }: { api: ApiSummary; className?: string }) {
+function QualityBadges({ api: a, size }: { api: ApiSummary; size?: "default" | "sm" }) {
   return (
     <>
       {a.certification && a.certification !== "NONE" && (
-        <Badge variant="outline" className={cn(className, CERT_BADGE[a.certification])}>{CERT_LABEL[a.certification] ?? a.certification}</Badge>
+        <StatusBadge tone={CERT_TONE[a.certification] ?? "neutral"} size={size} label={CERT_LABEL[a.certification] ?? a.certification} />
       )}
-      {a.tier && <Badge variant="outline" className={cn(className, TIER_BADGE[a.tier])}>{TIER_LABEL[a.tier] ?? a.tier}</Badge>}
+      {a.tier && <Badge variant="outline" size={size} className={TIER_BADGE[a.tier]}>{TIER_LABEL[a.tier] ?? a.tier}</Badge>}
     </>
   )
 }
@@ -113,23 +124,13 @@ function getPageNumbers(current: number, totalPages: number): (number | "...")[]
 }
 
 /** 상세 화면 주소 — 주소에 ?api= 가 있으면 상세가 열린다. */
-function detailUrl(name: string): string {
-  return `${window.location.origin}${window.location.pathname}?api=${encodeURIComponent(name)}`
-}
 
-// what 은 조사까지 포함해 넘긴다(예: "링크를", "URN을")
-async function copyText(text: string, what: string) {
-  try {
-    await navigator.clipboard.writeText(text)
-    toast.success(`${what} 복사했습니다.`)
-  } catch { toast.error("클립보드에 복사하지 못했습니다.") }
-}
 
 // 행·카드 공용 "…" 메뉴 — 행을 누르면 상세가 열리므로 메뉴에는 그 외 동작만 둔다.
 function ApiItemMenu({ api: a }: { api: ApiSummary }) {
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
+      <Tip label={`${a.display_name || a.name} 메뉴`}><DropdownMenuTrigger asChild>
         <Button
           variant="ghost"
           className="h-7 w-7 p-0"
@@ -139,21 +140,64 @@ function ApiItemMenu({ api: a }: { api: ApiSummary }) {
         >
           <MoreHorizontal className="h-4 w-4" />
         </Button>
-      </DropdownMenuTrigger>
+      </DropdownMenuTrigger></Tip>
       <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
-        {/* noopener 를 쓰지 않는다 — 로그인 토큰이 sessionStorage(탭 단위)에 있어, opener 관계로 열어야
-            브라우저가 새 탭에 sessionStorage 를 복사해 다시 로그인하지 않는다(같은 사이트 주소라 opener 노출 위험 없음). */}
-        <DropdownMenuItem onSelect={() => window.open(detailUrl(a.name), "_blank")}>
-          <ExternalLink className="mr-2 h-4 w-4" /> 새 탭에서 열기
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => copyText(detailUrl(a.name), "링크를")}>
-          <Link2 className="mr-2 h-4 w-4" /> 링크 복사
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => copyText(a.urn, "URN을")}>
-          <Copy className="mr-2 h-4 w-4" /> URN 복사
-        </DropdownMenuItem>
+        <LinkMenuItems href={`${window.location.pathname}?api=${encodeURIComponent(a.name)}`} urn={a.urn} />
       </DropdownMenuContent>
     </DropdownMenu>
+  )
+}
+
+/**
+ * API 카드(TODO-116) — 데이터셋 · AI 에이전트 · MCP 카드와 같은 틀(`EntityCard`).
+ * 배지 줄: 상태(게시가 아닐 때) · 인증 · 등급, 그 옆 포맷 · 버전 글자. 설명 두 줄, 기본 주소, 바닥 줄에 엔드포인트 수 · 소유자 · 수정일.
+ */
+export function ApiCard({ api: a, onOpen }: { api: ApiSummary; onOpen: () => void }) {
+  const named = a.display_name && a.display_name !== a.name ? a.display_name : null
+  const title = named || a.name
+  const crumb = [a.department, a.category].filter(Boolean).join(" › ")
+  const meta = [formatLabel(a), a.version && `v${a.version.replace(/^v/i, "")}`].filter((v) => v && v !== "-").join(" · ")
+  const baseUrl = a.base_url_overridden || a.base_url
+  const updated = fmtDate(a.updated_at)
+  const Icon = PROTOCOL_ICON[(a.protocol ?? "").toLowerCase()] ?? Webhook
+  return (
+    <EntityCard
+      crumb={crumb || null}
+      title={title}
+      prominent={!!named}
+      identifier={named ? a.name : null}
+      onOpen={onOpen}
+      menuLabel={`${title} 메뉴`}
+      menu={<LinkMenuItems href={`${window.location.pathname}?api=${encodeURIComponent(a.name)}`} urn={a.urn} />}
+      footer={
+        <>
+          <span className="flex min-w-0 items-center gap-1">
+            <span className="shrink-0 tabular-nums">엔드포인트 {a.endpoint_count}</span>
+            {a.owner_email && (
+              <>
+                <span aria-hidden="true">·</span>
+                <EntityCardRaised className="min-w-0 truncate"><OwnerValue email={a.owner_email} owner={a.owner} /></EntityCardRaised>
+              </>
+            )}
+          </span>
+          {updated && <span className="ml-auto shrink-0 tabular-nums">수정 {updated}</span>}
+        </>
+      }
+    >
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+        {a.status !== "published" && <ApiStatusBadge status={a.status} />}
+        <QualityBadges api={a} size="sm" />
+        {meta && <span>{meta}</span>}
+      </div>
+
+      <EntityCardText text={a.description} />
+
+      {/* 기본 주소 — 프로토콜 아이콘과 함께 */}
+      <div className="flex min-w-0 items-center gap-1.5 text-xs" title={protocolLabel(a.protocol) ?? "프로토콜 미지정"}>
+        <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-label={protocolLabel(a.protocol) ?? "프로토콜 미지정"} />
+        {baseUrl ? <span className="truncate font-mono">{baseUrl}</span> : <span >주소 미지정</span>}
+      </div>
+    </EntityCard>
   )
 }
 
@@ -260,18 +304,15 @@ export function ApisTable() {
       {/* Toolbar */}
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div className="flex flex-1 flex-wrap items-center gap-2">
-          <div className="relative w-full max-w-sm sm:w-72">
-            <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              placeholder="이름·설명·태그·카테고리·소유자 검색"
-              aria-label="API 검색"
-              title="이름·표시명·설명·카테고리·태그·소유자(이름·username·이메일)에서 찾습니다."
-              value={query}
-              onChange={(e) => handleSearchChange(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && applySearchNow()}
-              className="h-9 pl-8"
-            />
-          </div>
+          <SearchInput
+            className="w-full max-w-sm sm:w-72"
+            placeholder="이름·설명·태그·카테고리·소유자 검색…"
+            aria-label="API 검색"
+            title="이름·표시명·설명·카테고리·태그·소유자(이름·username·이메일)에서 찾습니다."
+            value={query}
+            onValueChange={handleSearchChange}
+            onSearch={applySearchNow}
+          />
           <FilterSelect
             ariaLabel="상태"
             value={filters.status}
@@ -302,11 +343,11 @@ export function ApisTable() {
             options={["CERTIFIED", "IN_REVIEW", "DEPRECATED", "NONE"].map((c) => ({ value: c, label: CERT_LABEL[c] ?? c }))}
           />
           {chips.map((c) => (
-            <Badge key={c.key} variant="secondary" className="h-8 gap-1 pl-2.5 pr-1 text-xs">
+            <Badge key={c.key} variant="secondary" className="h-8 gap-1 pl-2.5 pr-1">
               {c.label}
-              <button type="button" onClick={c.clear} className="rounded p-0.5 hover:bg-muted-foreground/20" aria-label={`${c.label} 조건 해제`}>
+              <Tip label={`${c.label} 조건 해제`}><button type="button" onClick={c.clear} className="rounded p-0.5 hover:bg-muted-foreground/20" aria-label={`${c.label} 조건 해제`}>
                 <X className="h-3 w-3" />
-              </button>
+              </button></Tip>
             </Badge>
           ))}
           {filtered && (
@@ -323,8 +364,8 @@ export function ApisTable() {
             </SelectContent>
           </Select>
           <div className="flex items-center rounded-md border p-0.5">
-            <Button size="icon" variant={view === "table" ? "secondary" : "ghost"} className="h-7 w-7" onClick={() => setView("table")} title="테이블 보기" aria-label="테이블 보기" aria-pressed={view === "table"}><List className="h-4 w-4" /></Button>
-            <Button size="icon" variant={view === "card" ? "secondary" : "ghost"} className="h-7 w-7" onClick={() => setView("card")} title="카드 보기" aria-label="카드 보기" aria-pressed={view === "card"}><LayoutGrid className="h-4 w-4" /></Button>
+            <Tip label="테이블 보기"><Button size="icon" variant={view === "table" ? "secondary" : "ghost"} className="h-7 w-7" onClick={() => setView("table")} aria-label="테이블 보기" aria-pressed={view === "table"}><List className="h-4 w-4" /></Button></Tip>
+            <Tip label="카드 보기"><Button size="icon" variant={view === "card" ? "secondary" : "ghost"} className="h-7 w-7" onClick={() => setView("card")} aria-label="카드 보기" aria-pressed={view === "card"}><LayoutGrid className="h-4 w-4" /></Button></Tip>
           </div>
           {canRegister && <Button size="sm" onClick={() => setOpen("add")}><Plus className="mr-1 h-4 w-4" /> API 등록</Button>}
         </div>
@@ -377,19 +418,19 @@ export function ApisTable() {
                           <div className="flex min-w-0 flex-col">
                             <span className="flex flex-wrap items-center gap-1.5">
                               <span className="font-medium">{a.display_name || a.name}</span>
-                              <QualityBadges api={a} className="px-1.5 py-0 text-[11px]" />
+                              <QualityBadges api={a} size="sm" />
                             </span>
-                            {a.display_name && a.display_name !== a.name && <span className="text-xs text-muted-foreground">{a.name}</span>}
+                            {a.display_name && a.display_name !== a.name && <span className="text-xs">{a.name}</span>}
                           </div>
                         </div>
                       </TableCell>
-                      <TableCell><StatusBadge status={a.status} className="text-sm" /></TableCell>
+                      <TableCell><ApiStatusBadge status={a.status} /></TableCell>
                       <TableCell className="text-sm">{a.version}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{formatLabel(a)}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{a.category || "-"}</TableCell>
+                      <TableCell className="text-sm">{formatLabel(a)}</TableCell>
+                      <TableCell className="text-sm">{a.category || "-"}</TableCell>
                       <TableCell className="text-right text-sm tabular-nums">{a.endpoint_count}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground"><OwnerValue email={a.owner_email} owner={a.owner} /></TableCell>
-                      <TableCell className="text-sm text-muted-foreground tabular-nums">{fmtDate(a.updated_at) ?? "-"}</TableCell>
+                      <TableCell className="text-sm"><OwnerValue email={a.owner_email} owner={a.owner} /></TableCell>
+                      <TableCell className="text-sm tabular-nums">{fmtDate(a.updated_at) ?? "-"}</TableCell>
                       <TableCell className="text-right"><ApiItemMenu api={a} /></TableCell>
                     </TableRow>
                   ))
@@ -399,87 +440,25 @@ export function ApisTable() {
           </div>
         ) : initialLoading ? (
           // 로딩 — 카드 모양 스켈레톤(로딩 전후 레이아웃 흔들림 최소화)
-          <div className={CARD_GRID} aria-label="불러오는 중">
-            {Array.from({ length: 6 }, (_, i) => (
-              <Card key={i} className="gap-4">
-                <CardHeader className="pb-2">
-                  <div className="flex items-start gap-2">
-                    <Skeleton className="h-8 w-8 shrink-0" />
-                    <div className="flex-1 space-y-2">
-                      <Skeleton className="h-4 w-2/3" />
-                      <Skeleton className="h-3 w-1/2" />
-                      <Skeleton className="h-3 w-full" />
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-2 pt-0">
-                  <div className="flex gap-1.5">
-                    <Skeleton className="h-5 w-12" /><Skeleton className="h-5 w-12" /><Skeleton className="h-5 w-20" />
-                  </div>
-                  <Skeleton className="h-3 w-3/4" />
-                </CardContent>
-              </Card>
-            ))}
+          <div aria-label="불러오는 중">
+            <EntityCardGrid>
+              {Array.from({ length: 6 }, (_, i) => (
+                <div key={i} className="flex h-full flex-col gap-3 rounded-xl border bg-card p-4">
+                  <Skeleton className="h-3 w-1/3" />
+                  <Skeleton className="h-5 w-2/3" />
+                  <div className="flex gap-1.5"><Skeleton className="h-5 w-12" /><Skeleton className="h-5 w-20" /></div>
+                  <Skeleton className="h-10 w-full" />
+                  <Skeleton className="mt-auto h-4 w-3/4" />
+                </div>
+              ))}
+            </EntityCardGrid>
           </div>
         ) : data.length === 0 ? (
           <div className="flex min-h-24 items-center justify-center rounded-md border py-6 text-sm text-muted-foreground">{error ? "목록을 표시할 수 없습니다." : emptyContent}</div>
         ) : (
-          // 고정 폭(flex-wrap) 대신 auto-fill grid — 화면 폭을 균등하게 채우고 같은 행 카드 높이를 맞춘다.
-          <div className={CARD_GRID}>
-            {data.map((a) => (
-              // 카드 전체가 상세로 이동. hover 는 배경 대신 테두리·그림자 강조(배경을 칠하면 옅은 ring 테두리와 구분이 사라짐).
-              <Card
-                key={a.id}
-                role="button"
-                tabIndex={0}
-                aria-label={`${a.display_name || a.name} 상세 보기`}
-                onClick={() => open(a)}
-                onKeyDown={(e) => openOnKey(e, () => open(a))}
-                className="flex max-h-[300px] cursor-pointer flex-col overflow-hidden outline-none transition-shadow hover:shadow-md hover:ring-primary/40 focus-visible:ring-2 focus-visible:ring-primary"
-              >
-                <CardHeader className="pb-2">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex min-w-0 items-start gap-2">
-                      <ProtocolIcon protocol={a.protocol} />
-                      <div className="min-w-0">
-                        <CardTitle className="truncate text-sm group-hover/card:underline" title={a.display_name || a.name}>
-                          {a.display_name || a.name}
-                        </CardTitle>
-                        {a.display_name && a.display_name !== a.name && (
-                          <p className="mt-0.5 truncate text-sm text-muted-foreground" title={a.name}>{a.name}</p>
-                        )}
-                        {a.description && <p className="mt-0.5 line-clamp-4 text-sm text-muted-foreground break-words">{a.description}</p>}
-                      </div>
-                    </div>
-                    <ApiItemMenu api={a} />
-                  </div>
-                </CardHeader>
-                <CardContent className="mt-auto space-y-2 pt-0">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <StatusBadge status={a.status} className="text-sm" />
-                    <Badge variant="outline" className="text-sm">{a.version}</Badge>
-                    <Badge variant="outline" className="text-sm">{formatLabel(a)}</Badge>
-                    <Badge variant="secondary" className="text-sm">엔드포인트 {a.endpoint_count}</Badge>
-                    <QualityBadges api={a} className="text-sm" />
-                  </div>
-                  {(() => {
-                    // 하단 메타 — 카테고리 · 소유자 · 수정일 (값 있는 항목만)
-                    const updated = fmtDate(a.updated_at)
-                    const items: ReactNode[] = []
-                    if (a.category) items.push(<span key="category">{a.category}</span>)
-                    if (a.owner_email) items.push(<OwnerValue key="owner" email={a.owner_email} owner={a.owner} />)
-                    if (updated) items.push(<span key="updated">수정 {updated}</span>)
-                    if (items.length === 0) return null
-                    return (
-                      <p className="truncate text-xs text-muted-foreground">
-                        {items.flatMap((el, i) => (i === 0 ? [el] : [<span key={`sep-${i}`} aria-hidden="true"> · </span>, el]))}
-                      </p>
-                    )
-                  })()}
-                </CardContent>
-              </Card>
-            ))}
-          </div>
+          <EntityCardGrid>
+            {data.map((a) => <ApiCard key={a.id} api={a} onOpen={() => open(a)} />)}
+          </EntityCardGrid>
         )}
       </div>
 
@@ -491,21 +470,21 @@ export function ApisTable() {
             <SelectContent side="top">{PAGE_SIZE_OPTIONS.map((s) => <SelectItem key={s} value={`${s}`}>{s}</SelectItem>)}</SelectContent>
           </Select>
           <p className="hidden text-sm font-medium sm:block">{view === "card" ? "페이지당 항목 수" : "페이지당 행 수"}</p>
-          <span className="text-sm text-muted-foreground">· 총 {total}개</span>
+          <span className="text-sm">· 총 {total}개</span>
         </div>
         <div className="flex items-center space-x-2">
           <div className="flex w-[100px] items-center justify-center text-sm font-medium">{page} / {totalPages} 페이지</div>
-          <Button variant="outline" className="size-8 p-0" onClick={() => setPage(1)} disabled={page <= 1} aria-label="첫 페이지"><ChevronsLeft className="h-4 w-4" /></Button>
-          <Button variant="outline" className="size-8 p-0" onClick={() => setPage(page - 1)} disabled={page <= 1} aria-label="이전 페이지"><ChevronLeft className="h-4 w-4" /></Button>
+          <Tip label="첫 페이지"><Button variant="outline" className="size-8 p-0" onClick={() => setPage(1)} disabled={page <= 1} aria-label="첫 페이지"><ChevronsLeft className="h-4 w-4" /></Button></Tip>
+          <Tip label="이전 페이지"><Button variant="outline" className="size-8 p-0" onClick={() => setPage(page - 1)} disabled={page <= 1} aria-label="이전 페이지"><ChevronLeft className="h-4 w-4" /></Button></Tip>
           {getPageNumbers(page, totalPages).map((n, i) => (
             <div key={`${n}-${i}`} className="flex items-center">
-              {n === "..." ? <span className="px-1 text-sm text-muted-foreground">...</span> : (
+              {n === "..." ? <span className="px-1 text-sm">...</span> : (
                 <Button variant={page === n ? "default" : "outline"} className="h-8 min-w-8 px-2" onClick={() => setPage(n as number)} aria-current={page === n ? "page" : undefined}>{n}</Button>
               )}
             </div>
           ))}
-          <Button variant="outline" className="size-8 p-0" onClick={() => setPage(page + 1)} disabled={page >= totalPages} aria-label="다음 페이지"><ChevronRight className="h-4 w-4" /></Button>
-          <Button variant="outline" className="size-8 p-0" onClick={() => setPage(totalPages)} disabled={page >= totalPages} aria-label="마지막 페이지"><ChevronsRight className="h-4 w-4" /></Button>
+          <Tip label="다음 페이지"><Button variant="outline" className="size-8 p-0" onClick={() => setPage(page + 1)} disabled={page >= totalPages} aria-label="다음 페이지"><ChevronRight className="h-4 w-4" /></Button></Tip>
+          <Tip label="마지막 페이지"><Button variant="outline" className="size-8 p-0" onClick={() => setPage(totalPages)} disabled={page >= totalPages} aria-label="마지막 페이지"><ChevronsRight className="h-4 w-4" /></Button></Tip>
         </div>
       </div>
     </div>

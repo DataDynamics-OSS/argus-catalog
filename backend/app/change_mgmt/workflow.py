@@ -7,8 +7,10 @@
        - 단계 중 REJECTED → 워크플로우 종료, CR 상태 REJECTED
        - 7일 내 결정 없음 → CR 상태 REJECTED, 결과 "TIMEOUT"
        - APPROVED / DELEGATED → 다음 단계로 (모든 단계 통과 시 CR 상태 APPROVED)
-    3) 사전 통지: T-7 / T-1 (단순화) — scheduled_at 기준 (scheduled_at 이 없으면 생략)
+    3) 예정 시각이 남아 있으면 CR 상태 SCHEDULED, 사전 통지: T-7 / T-1 (단순화) — scheduled_at 기준 (없으면 생략)
     4) 예정 시각까지 대기 후 apply_change (scheduled_at 이 없으면 즉시)
+       - 사전 통지를 보낸 CR(scheduled_at 있음)은 적용 직전에 소비자 ACK 를 집계해, 미확인 소비자가 있으면
+         요청자·결재자에게 에스컬레이션하고 예정대로 적용한다(DEF-004 — 적용을 막지 않음)
     5) 변경 직후 통지(APPLIED)
 
 워크플로우는 반드시 결정적(deterministic) 이어야 하므로 I/O 는 모두 액티비티로 분리한다.
@@ -28,6 +30,7 @@ with workflow.unsafe.imports_passed_through():
         NotifyInput,
         analyze_impact,
         apply_change,
+        escalate_unacked_consumers,
         record_decision,
         send_notifications,
         update_cr_status,
@@ -40,7 +43,7 @@ class WorkflowInput:
     cr_id: int
     approver_chain: list[str]                    # 결재 순서대로
     scheduled_at_iso: str | None = None          # ISO8601 문자열
-    notify_channels: list[str] = field(default_factory=lambda: ["EMAIL", "IN_APP"])
+    notify_channels: list[str] = field(default_factory=lambda: ["WEBHOOK", "EMAIL"])
 
 
 @dataclass
@@ -143,6 +146,12 @@ class ChangeApprovalWorkflow:
             scheduled = datetime.fromisoformat(input.scheduled_at_iso)
             if scheduled.tzinfo is None:
                 scheduled = scheduled.replace(tzinfo=timezone.utc)
+            # 예정 시각이 남아 있으면 "적용 예정(SCHEDULED)" 으로 — 예전에는 적용될 때까지 APPROVED 로 남았다(TODO-009).
+            # patched: 이 코드 배포 전에 시작한 워크플로우의 재생(replay)이 어긋나지 않게 한다.
+            if scheduled > workflow.now() and workflow.patched("scheduled-status-v1"):
+                await workflow.execute_activity(
+                    update_cr_status, args=[input.cr_id, "SCHEDULED"], **_ACTIVITY_OPTS
+                )
             if await self._notify_phased(input, scheduled):
                 return await self._finish_cancelled(input)
 
@@ -155,6 +164,10 @@ class ChangeApprovalWorkflow:
         #    SUBMITTED·APPROVING·APPROVED·SCHEDULED 에서만 취소를 받는다)
         if self._cancelled:
             return await self._finish_cancelled(input)
+        # 미확인 소비자 에스컬레이션 — 사전 통지를 보낸 CR 만. patched: 이 코드 배포 전에 시작해 예정 시각을
+        # 기다리던 워크플로우도 재생(replay)이 어긋나지 않게 한다(그 이력에는 이 액티비티가 없다).
+        if input.scheduled_at_iso and workflow.patched("ack-escalation-v1"):
+            await workflow.execute_activity(escalate_unacked_consumers, input.cr_id, **_ACTIVITY_OPTS)
         await workflow.execute_activity(
             apply_change, ApplyInput(cr_id=input.cr_id), **_ACTIVITY_OPTS
         )

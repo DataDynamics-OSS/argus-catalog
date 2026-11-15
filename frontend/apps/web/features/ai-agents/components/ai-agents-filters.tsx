@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import { Bookmark, Save, Trash2, X } from "lucide-react"
-import { errorMessage, toast } from "@/lib/notify"
+import { toast, notifyError } from "@/lib/notify"
 
 import { Button } from "@workspace/ui/components/button"
 import { Checkbox } from "@workspace/ui/components/checkbox"
@@ -41,7 +41,10 @@ import {
   type AgentView,
 } from "../api"
 import { AGENT_STATUS_LABEL, MANAGED_BY_LABEL, OWNER_STATE_LABEL, RISK_LABEL } from "../data/schema"
+import { AUTONOMY_LABEL, RISK_TIER_LABEL } from "./ai-agents-skills-data"
 import { useAIAgents } from "./ai-agents-provider"
+import { TagInput } from "@/components/tag-input"
+import { decodeList, encodeList } from "@/lib/text-list"
 
 const ALL = "__all__"
 const SORT_LABEL: Record<string, string> = {
@@ -148,7 +151,7 @@ export function AIAgentsFilters() {
       applyQuery(query, null)
       loadViews()
     } catch (e) {
-      toast.error(errorMessage(e) ?? String(e))
+      notifyError(e, "보기를 삭제하지 못했습니다.")
     }
   }
 
@@ -209,7 +212,9 @@ export function AIAgentsFilters() {
           placeholder="전체 상태"
           options={Object.entries(AGENT_STATUS_LABEL)}
         />
-        <FilterInput value={query.department ?? ""} placeholder="부서(쉼표로 여러 개)" onCommit={(v) => set({ department: v })} />
+        {/* 부서 · 태그는 배지로 여러 개 — 질의에는 JSON 배열 문자열(값 안의 쉼표 보존, 예전 쉼표 질의도 읽음, TODO-144) */}
+        <TagInput size="sm" className="w-[200px]" aria-label="부서" placeholder="부서 입력 후 Enter"
+          value={decodeList(query.department)} onChange={(v) => set({ department: encodeList(v) ?? undefined })} />
         <div className="flex items-center gap-1">
           <FilterInput
             value={query.owner === "me" ? "" : (query.owner ?? "")}
@@ -223,12 +228,26 @@ export function AIAgentsFilters() {
             </label>
           )}
         </div>
-        <FilterInput value={query.tag ?? ""} placeholder="태그(쉼표, 모두 포함)" onCommit={(v) => set({ tag: v })} />
+        <TagInput size="sm" className="w-[200px]" aria-label="태그(모두 포함)" placeholder="태그 입력 후 Enter"
+          value={decodeList(query.tag)} onChange={(v) => set({ tag: encodeList(v) ?? undefined })} />
         <SmallSelect
           value={query.risk}
           onChange={(v) => set({ risk: v as AgentListQuery["risk"] })}
           placeholder="위험도 전체"
           options={Object.entries(RISK_LABEL).map(([k, l]) => [k, `${l} 이상`])}
+        />
+        <SmallSelect
+          value={query.risk_tier}
+          onChange={(v) => set({ risk_tier: v })}
+          placeholder="위험 등급 전체"
+          options={[...Object.entries(RISK_TIER_LABEL), ["none", "등급 미지정"] as [string, string]]}
+        />
+        <SmallSelect
+          value={query.autonomy_level}
+          onChange={(v) => set({ autonomy_level: v })}
+          placeholder="자율 수준 전체"
+          width="w-[150px]"
+          options={[...Object.entries(AUTONOMY_LABEL), ["none", "미지정"] as [string, string]]}
         />
         <SmallSelect
           value={query.managed_by}
@@ -305,7 +324,7 @@ function SaveViewDialog({
       onOpenChange(false)
       onSaved(v)
     } catch (e) {
-      toast.error(errorMessage(e) ?? String(e))
+      notifyError(e, "보기를 저장하지 못했습니다.")
     } finally {
       setBusy(false)
     }

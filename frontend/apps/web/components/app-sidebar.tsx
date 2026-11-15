@@ -6,13 +6,12 @@ import {
   SidebarFooter, // Added for SSO AUTH
   SidebarHeader,
   SidebarMenu,
-  SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
 } from "@workspace/ui/components/sidebar"
 import { Separator } from "@workspace/ui/components/separator"
 import { AppSidebarNav } from "@/components/app-sidebar-nav"
-import { Logo } from "@/components/logo"
+import { SidebarBrand } from "@/components/sidebar-brand"
 import { SidebarCollapseButton } from "@/components/sidebar-collapse-button"
 import { SidebarUser } from "@/components/sidebar-user" // Added for SSO AUTH
 import { getMenu } from "@/lib/menu"
@@ -26,23 +25,8 @@ export async function AppSidebar() {
         {/* relative — 펼침 상태의 접기 버튼(‹)이 브랜드 행 오른쪽에 absolute 로 붙는다 */}
         <SidebarMenu className="relative">
           <SidebarMenuItem>
-            <SidebarMenuButton size="lg" asChild className="pr-6 group-data-[collapsible=icon]:pr-0">
-              {/* 브랜드 클릭 → 회사 사이트(새 탭). 대시보드 이동은 메뉴로 충분. */}
-              <a href="https://www.data-dynamics.io" target="_blank" rel="noopener noreferrer">
-                <div className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground group-data-[collapsible=icon]:flex">
-                  <Logo className="size-5" />
-                </div>
-                {/* 자매 제품(RAG Studio 등) 헤더와 같은 2줄 구성 — 브랜드 글꼴(Roboto Condensed) 제품명 + 회사명 */}
-                <div className="flex min-w-0 flex-col group-data-[collapsible=icon]:hidden">
-                  <span className="font-display truncate text-xl font-semibold leading-none tracking-wide text-sidebar-accent-foreground">
-                    Argus Catalog
-                  </span>
-                  <span className="mt-1 truncate text-xs text-sidebar-foreground/60">
-                    Data Dynamics Inc
-                  </span>
-                </div>
-              </a>
-            </SidebarMenuButton>
+            {/* 제품명 · 회사명 · 링크는 설정 > 사이드바 표시 */}
+            <SidebarBrand />
           </SidebarMenuItem>
           {/* 사이드바 접기/펼치기 — 펼침: 브랜드 옆 ‹, 접힘: 로고 아래 › */}
           <SidebarCollapseButton />

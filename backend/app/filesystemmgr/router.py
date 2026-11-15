@@ -65,7 +65,7 @@ MODEL_FILES_ROOT = "model-artifacts"
 
 
 async def _require_read_scope(
-    user: TokenUser, session: AsyncSession, path: str, root_sub: str | None,
+    user: TokenUser, session: AsyncSession, path: str, root_sub: str | None, download: bool = False,
 ) -> None:
     """조회 범위 — 관리자는 전체, 그 밖의 사용자는 등록된 MLflow 모델 한 개의 디렉터리 안에서만.
 
@@ -92,6 +92,13 @@ async def _require_read_scope(
             status_code=403,
             detail="등록된 MLflow 모델의 파일만 볼 수 있습니다(전체 탐색은 관리자 전용).",
         )
+    # 파일 내려받기는 MLflow 모델 내려받기 권한도 본다(TODO-122)
+    if download:
+        from app.permissions.router import check_feature
+
+        if not await check_feature(session, user, "models.download"):
+            logger.warning("모델 파일 내려받기 거부(기능 권한 models.download): user=%s path=%s", user.username, path)
+            raise HTTPException(status_code=403, detail="기능 권한이 없습니다: models.download")
 
 
 async def _guard_registered_model_paths(
@@ -210,7 +217,7 @@ async def create_download_link(
     """브라우저가 링크로 바로 내려받을 수 있는 짧은 토큰을 발급한다(조회 범위 안의 파일만).
 
     ``GET /download?path=…&root_sub=…&token=…`` 로 쓰며, 토큰은 이 파일에만 유효하고 곧 만료된다."""
-    await _require_read_scope(user, session, path, root_sub)
+    await _require_read_scope(user, session, path, root_sub, download=True)
     _resolve_or_http(path, root_sub)  # 없는 파일·허용 안 된 경로는 발급 단계에서 알린다
     logger.info("파일 다운로드 토큰 발급: path=%s root_sub=%s user=%s", path, root_sub, user.username)
     return {"token": download_link.issue(_fs_kind(root_sub), path, user.sub),
@@ -236,7 +243,7 @@ async def download_file(
             raise HTTPException(status_code=401, detail="인증이 필요합니다.")
         download_link.verify(token, _fs_kind(root_sub), path)  # 링크는 조회 범위를 검사한 뒤에만 발급한다
     else:
-        await _require_read_scope(user, session, path, root_sub)
+        await _require_read_scope(user, session, path, root_sub, download=True)
     resolved = _resolve_or_http(path, root_sub)
     logger.debug("파일 다운로드: path=%s root_sub=%s inline=%s", path, root_sub, inline)
     content_type = mimetypes.guess_type(resolved.name)[0] or "application/octet-stream"

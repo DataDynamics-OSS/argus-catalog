@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import { ChevronRight, Settings2 } from "lucide-react"
-import { Card, CardContent, CardHeader, CardTitle } from "@workspace/ui/components/card"
+import { DetailSection } from "@/components/detail-section"
 
 // ---------------------------------------------------------------------------
 // Collapsible section
@@ -304,11 +304,11 @@ export function DatasourceSpecificCard({ datasourceType, properties, datasetProp
   const isMySQL = datasourceType === "mysql"
   const isPostgres = datasourceType === "postgresql"
   const isHiveImpala = datasourceType === "hive" || datasourceType === "impala"
-  const isIcebergRest = datasourceType === "iceberg-rest"
+  const isIceberg = datasourceType === "iceberg-rest" || datasourceType === "iceberg-hadoop"
 
-  // Iceberg REST Catalog 분기 — Hive/Impala 와 같은 패턴으로 모든 ``iceberg.*`` 키를
+  // Iceberg(REST·Hadoop Catalog) 분기 — Hive/Impala 와 같은 패턴으로 모든 ``iceberg.*`` 키를
   // 한 그리드(Key/Value)로 통째 노출. 별도 상단 박스를 두지 않는다.
-  if (isIcebergRest) {
+  if (isIceberg) {
     const icebergProps: Record<string, string> = {}
     for (const p of datasetProperties ?? []) {
       if (!p.property_key.startsWith("iceberg.")) continue
@@ -319,17 +319,9 @@ export function DatasourceSpecificCard({ datasourceType, properties, datasetProp
       return null
     }
     return (
-      <Card>
-        <CardHeader className="py-3">
-          <CardTitle className="text-base flex items-center gap-2">
-            <Settings2 className="h-4 w-4" />
-            Datasource Specific (Iceberg)
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <TblPropertiesGrid tblProperties={icebergProps} />
-        </CardContent>
-      </Card>
+      <DetailSection title="데이터 소스 고유 속성 (Iceberg)" icon={<Settings2 />}>
+        <TblPropertiesGrid tblProperties={icebergProps} />
+      </DetailSection>
     )
   }
 
@@ -411,14 +403,7 @@ export function DatasourceSpecificCard({ datasourceType, properties, datasetProp
   }
 
   return (
-    <Card>
-      <CardHeader className="py-3">
-        <CardTitle className="text-base flex items-center gap-2">
-          <Settings2 className="h-4 w-4" />
-          Datasource Specific
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
+    <DetailSection title="데이터 소스 고유 속성" icon={<Settings2 />}>
         {/* Table-level properties — MySQL/PostgreSQL. Hive/Impala/Iceberg 와 동일하게
             AG Grid Key/Value 표로 통일해 긴 value 가 layout 을 깨지 않도록 한다. */}
         {!isHiveImpala && tableProps.length > 0 && (
@@ -435,7 +420,6 @@ export function DatasourceSpecificCard({ datasourceType, properties, datasetProp
 
         {/* TABLE PROPERTIES (AG Grid) — Hive/Impala */}
         {isHiveImpala && <TblPropertiesGrid tblProperties={tblProperties} />}
-      </CardContent>
-    </Card>
+    </DetailSection>
   )
 }

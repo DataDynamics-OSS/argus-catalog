@@ -112,7 +112,7 @@ export function GridPagination({
         {pageNumbers.map((n, i) => (
           <div key={`${n}-${i}`} className="flex items-center">
             {n === "..." ? (
-              <span className="px-1 text-sm text-muted-foreground">...</span>
+              <span className="px-1 text-sm">...</span>
             ) : (
               <Button
                 variant={currentPage === n ? "default" : "outline"}

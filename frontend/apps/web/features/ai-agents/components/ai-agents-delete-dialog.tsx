@@ -60,7 +60,7 @@ export function AIAgentsDeleteDialog() {
         <AlertDialogFooter>
           <AlertDialogCancel disabled={deleting}>취소</AlertDialogCancel>
           <Button variant="destructive" onClick={handleDelete} disabled={deleting}>
-            {deleting ? "삭제 중..." : "삭제"}
+            {deleting ? "삭제 중…" : "삭제"}
           </Button>
         </AlertDialogFooter>
       </AlertDialogContent>

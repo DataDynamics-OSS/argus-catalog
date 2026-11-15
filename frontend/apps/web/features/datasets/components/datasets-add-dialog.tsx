@@ -101,7 +101,7 @@ export function DatasetsAddDialog() {
         <div className="grid gap-4 py-2">
           <div className="grid gap-2">
             <Label htmlFor="ds-name">
-              물리명 <span className="text-xs text-muted-foreground">(테이블명)</span>
+              물리명 <span className="text-xs">(테이블명)</span>
             </Label>
             <Input
               id="ds-name"
@@ -112,7 +112,7 @@ export function DatasetsAddDialog() {
           </div>
           <div className="grid gap-2">
             <Label htmlFor="ds-display-name">
-              논리명 <span className="text-xs text-muted-foreground">(선택, 표시용)</span>
+              논리명 <span className="text-xs">(선택, 표시용)</span>
             </Label>
             <Input
               id="ds-display-name"
@@ -133,7 +133,7 @@ export function DatasetsAddDialog() {
                   <SelectItem key={p.id} value={String(p.id)}>
                     <span className="inline-flex items-center gap-2">
                       <span>{p.name}</span>
-                      <span className={`text-[10px] font-mono font-semibold ${originColor(p.origin)}`}>
+                      <span className={`text-[11px] font-mono font-semibold ${originColor(p.origin)}`}>
                         {p.origin || "DEV"}
                       </span>
                     </span>
@@ -143,7 +143,7 @@ export function DatasetsAddDialog() {
             </Select>
             {/* 데이터셋 환경은 데이터 소스의 환경을 그대로 따른다 — 별도 입력 없이 표시만. */}
             {selectedDatasource && (
-              <p className="text-xs text-muted-foreground">
+              <p className="text-xs">
                 환경은 데이터 소스의 값
                 <span className={`ml-1 font-mono font-semibold ${originColor(effectiveOrigin)}`}>
                   {effectiveOrigin}
@@ -154,7 +154,7 @@ export function DatasetsAddDialog() {
           </div>
           <div className="grid gap-2">
             <Label htmlFor="ds-summary">
-              요약 <span className="text-xs text-muted-foreground">(한 줄, 최대 200자)</span>
+              요약 <span className="text-xs">(한 줄, 최대 200자)</span>
             </Label>
             <Input
               id="ds-summary"
@@ -187,7 +187,7 @@ export function DatasetsAddDialog() {
               onClick={handleSubmit}
               disabled={saving || !name.trim() || !datasourceId}
             >
-              {saving ? "생성 중..." : "생성"}
+              {saving ? "추가 중…" : "추가"}
             </Button>
           </div>
         </div>

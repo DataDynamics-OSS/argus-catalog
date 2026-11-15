@@ -302,6 +302,9 @@ async def _login_keycloak(req: LoginRequest, session: AsyncSession) -> TokenResp
     # JWT 에서 argus-* realm role 보유 여부 검증
     payload = jose_jwt.get_unverified_claims(data["access_token"])
     token_user = _build_token_user(payload)
+    # Keycloak realm 역할이 사용자 정의 역할뿐이어도 기반 역할로 로그인할 수 있게(TODO-124)
+    from app.permissions.roles import apply_custom_role
+    await apply_custom_role(token_user)
     if not token_user.has_argus_role:
         # 역할 없는 사용자가 받아 간 refresh token 즉시 회수
         await _revoke_keycloak_refresh(data["refresh_token"])
@@ -330,6 +333,7 @@ async def _login_keycloak(req: LoginRequest, session: AsyncSession) -> TokenResp
         from app.usermgr.service import upsert_external_user
         role_code = (
             settings.auth_keycloak_admin_role if token_user.is_admin
+            else token_user.custom_role if token_user.custom_role
             else settings.auth_keycloak_superuser_role if token_user.is_superuser
             else settings.auth_keycloak_user_role
         )

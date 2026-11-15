@@ -99,9 +99,37 @@ export type SuggestionItem = {
   current_text?: string | null
 }
 
+/** AI-Ready 초안 항목 — 편향 · 한계 · 관련법령 (TODO-096 6단계) */
+export type AiReadyDraftField = "data_biases" | "known_limitations" | "legal_basis"
+
+export type AiReadyDraftResult = {
+  dataset_id: number
+  /** 만든 초안 — 적용 대기 제안(AI 제안 목록에서 적용) */
+  drafts: { field: AiReadyDraftField; label: string; text: string; log_id: number }[]
+  /** 만들지 않은 항목과 사유(이미 값 있음 · 법령 목록 없음 · 해당 법령 없음) */
+  skipped: { field: AiReadyDraftField; label: string; reason: string }[]
+  /** 관련법령을 고른 근거 */
+  legal_reason: string | null
+  confidence: number | null
+}
+
 // ---------------------------------------------------------------------------
 // API functions
 // ---------------------------------------------------------------------------
+
+/** 편향 · 한계 · 관련법령 초안 — force 면 값이 있는 항목도 다시 쓴다. 결과는 제안으로만 남는다. */
+export async function generateAiReadyDrafts(
+  datasetId: number,
+  req: { fields?: AiReadyDraftField[]; force?: boolean } = {},
+): Promise<AiReadyDraftResult> {
+  const res = await authFetch(`${BASE}/datasets/${datasetId}/ai-ready-drafts`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  })
+  if (!res.ok) await throwOnError(res, "AI-Ready 초안을 만들지 못했습니다.")
+  return res.json()
+}
 
 export async function generateDescription(
   datasetId: number,

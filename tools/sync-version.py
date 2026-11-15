@@ -63,6 +63,8 @@ def _read_version() -> str:
 # 제품 버전과 무관한 시험용 데이터(외부 프로젝트 예시 등) — 경로 접두사로 제외
 _EXCLUDE_PREFIXES = (
     "design/integration-test/scripts/extensions-it/data/",
+    # 다른 브랜치의 git 워크트리(Claude Code 작업 공간) — 각자 자기 VERSION 을 따른다
+    ".claude/",
 )
 
 

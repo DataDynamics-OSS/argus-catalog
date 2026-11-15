@@ -42,6 +42,83 @@ pre.hljs code {
 }
 
 /* ---------------------------------------------------------------------------
+ * 코드 블록 줄 번호 — 편집기 NodeView(code-block.tsx)와 뷰어가 같은 구조
+ * ``pre.code-block > .code-gutter + code`` 를 만든다. gutter 와 code 가 같은 폰트·줄 높이를
+ * 공유해야 정렬되므로 둘 다 pre 에서 상속받고, 가로 스크롤은 code 에만 줘서 gutter 는 제자리에 남는다.
+ * --------------------------------------------------------------------------- */
+
+pre.code-block {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  overflow-x: visible;
+}
+
+pre.code-block > code {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+/* 줄 번호 — 텍스트("1\a 2\a 3")라 code 와 줄 높이가 같고, 복사 시 선택되지 않는다. */
+pre.code-block > .code-gutter {
+  flex: 0 0 auto;
+  min-width: 2ch;
+  margin-right: 0.9em;
+  padding-right: 0.7em;
+  border-right: 1px solid #d0d7de;
+  color: #8c959f;
+  text-align: right;
+  white-space: pre;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* 언어 선택(편집기) — 블록에 마우스를 올리거나 포커스될 때만 보인다. */
+pre.code-block > .code-lang {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  height: 22px;
+  padding: 0 4px;
+  border: 1px solid #d0d7de;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #57606a;
+  font-family: var(--font-sans, system-ui, sans-serif);
+  font-size: 11px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+pre.code-block:hover > .code-lang,
+pre.code-block > .code-lang:focus {
+  opacity: 1;
+}
+
+/* 언어 표시(뷰어) — 같은 자리에 hover 시 라벨. */
+pre.code-block-static[data-language]:not([data-language=""])::after {
+  content: attr(data-language);
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #ffffff;
+  border: 1px solid #d0d7de;
+  color: #57606a;
+  font-family: var(--font-sans, system-ui, sans-serif);
+  font-size: 11px;
+  opacity: 0;
+  transition: opacity 0.12s;
+  pointer-events: none;
+}
+pre.code-block-static[data-language]:not([data-language=""]):hover::after {
+  opacity: 1;
+}
+
+/* ---------------------------------------------------------------------------
  * TipTap 표 — column resize 활성화 + 셀 보더·헤더 스타일.
  *
  * ``.ProseMirror`` 는 TipTap 이 editor root element 에 자동으로 부여하는

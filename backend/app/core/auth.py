@@ -3,7 +3,7 @@
 
 JWT 토큰 검증과 FastAPI 의존성(dependency) 함수를 제공한다.
 auth_type 이 "keycloak" 이면 Keycloak 의 JWKS 엔드포인트로 검증하고,
-auth_type 이 "local" 이면 로컬 HMAC 비밀키로 검증한다.
+auth_type 이 "local" 이면 로컬 HMAC 비밀키로 검증한다. 두 모드 모두 프로그램용 API 키(``X-API-Key`` 또는 ``Bearer argus_sk_…``)도 받는다.
 """
 
 import hashlib
@@ -18,7 +18,7 @@ from fastapi import Depends, HTTPException, Request, status
 from jose import JWTError, jwt
 
 from app.core.config import settings
-from app.core.secrets import DEV_JWT_SECRET, resolve_secret
+from app.core.secrets import resolve_jwt_secret
 
 logger = logging.getLogger(__name__)
 
@@ -34,13 +34,13 @@ LOCAL_JWT_EXPIRE_MINUTES = 480  # 8시간
 TOKEN_TYPE_ACCESS = "access"
 TOKEN_TYPE_REFRESH = "refresh"
 
-# 서명키는 환경변수 ARGUS_JWT_SECRET 를 우선 사용한다. 미설정 시 개발용 기본키로
-# fallback 하되(기존 배포 호환 — 발급된 토큰 무효화 없음) 경고를 남긴다.
-# 운영에서는 반드시 ARGUS_JWT_SECRET 를 설정할 것 — ARGUS_REQUIRE_SECRETS=true 이면
-# 미설정·기본값·짧은 값일 때 여기서(모듈 로드 시) 예외로 기동을 멈춘다(app.core.secrets).
-LOCAL_JWT_SECRET_KEY = resolve_secret("ARGUS_JWT_SECRET")
-if LOCAL_JWT_SECRET_KEY == DEV_JWT_SECRET:
-    logger.warning("ARGUS_JWT_SECRET 미설정 — 개발용 기본 JWT 서명키 사용(운영 비권장).")
+# 서명키는 환경변수 ARGUS_JWT_SECRET 를 우선 사용한다. 미설정이면 데이터 디렉터리의 ``.jwt-secret``
+# (없으면 임의 키를 만들어 저장)을 쓰고, 그 파일도 쓸 수 없을 때만 공개된 개발용 키로 대체한다(DEF-001).
+# 서버를 여러 대 두고 토큰을 공유하려면 ARGUS_JWT_SECRET 로 같은 값을 준다.
+# ARGUS_REQUIRE_SECRETS=true 이면 미설정·기본값·짧은 값일 때 여기서(모듈 로드 시) 예외로 기동을 멈춘다.
+LOCAL_JWT_SECRET_KEY, LOCAL_JWT_SECRET_SOURCE = resolve_jwt_secret(settings.data_dir)
+if LOCAL_JWT_SECRET_SOURCE == "dev":
+    logger.warning("ARGUS_JWT_SECRET 미설정이고 서명키 파일도 만들 수 없어 개발용 기본 JWT 서명키 사용(운영 금지).")
 
 
 # ---------------------------------------------------------------------------
@@ -62,6 +62,14 @@ class TokenUser:
     realm_roles: list[str] = field(default_factory=list)
     # True 면 최초 로그인 후 비밀번호 변경 전까지 일반 API 접근을 차단한다(게이트).
     must_change_password: bool = False
+    # API 키로 인증했으면 키 id (사람 계정이 아님 — sub 는 ``apikey:<id>``, username 은 ``apikey#<id>``)
+    api_key_id: int | None = None
+    # 사용자 정의 역할(TODO-124) — 권한 표는 이 역할 열로 판정한다. roles 에는 기반 역할도 함께 들어 있다
+    custom_role: str | None = None
+
+    @property
+    def is_api_key(self) -> bool:
+        return self.api_key_id is not None
 
     @property
     def _all_roles(self) -> list[str]:
@@ -424,13 +432,19 @@ async def check_account_state(user: TokenUser, payload: dict) -> TokenUser:
             logger.warning("인증 거부(비밀번호 변경 후 이전 토큰): username=%s", user.username)
             raise _unauthorized("비밀번호가 변경되어 다시 로그인해야 합니다.")
         user.roles = [role_code]
-        return user
+        return await _apply_custom_role(user)
     if user.username:
         account = await _load_account(("keycloak", user.username))
         if account is not None and account[0] != "active":
             logger.warning("인증 거부(로컬에서 비활성화된 Keycloak 계정): username=%s", user.username)
             raise _unauthorized("비활성화된 계정입니다.")
-    return user
+    return await _apply_custom_role(user)
+
+
+async def _apply_custom_role(user: TokenUser) -> TokenUser:
+    """사용자 정의 역할이면 기반 역할을 더한다(TODO-124, :mod:`app.permissions.roles`)."""
+    from app.permissions.roles import apply_custom_role
+    return await apply_custom_role(user)
 
 
 # ---------------------------------------------------------------------------
@@ -449,12 +463,110 @@ def _extract_bearer_token(request: Request) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# API 키 (TODO-056) — 프로그램용 장기 자격
+# ---------------------------------------------------------------------------
+
+API_KEY_PREFIX = "argus_sk_"   # app.apikeys.service.KEY_PREFIX 와 같다(순환 임포트를 피해 상수로 둔다)
+
+
+def extract_api_key(request: Request) -> str | None:
+    """``X-API-Key`` 헤더, 또는 ``Authorization: Bearer argus_sk_…`` 의 키."""
+    key = request.headers.get("X-API-Key")
+    if key:
+        return key.strip()
+    token = _extract_bearer_token(request)
+    if token and token.startswith(API_KEY_PREFIX):
+        return token
+    return None
+
+
+def _client_ip(request: Request) -> str | None:
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else None
+
+
+async def authenticate_api_key(raw_key: str, request: Request) -> TokenUser:
+    """API 키 → 사용자. 키가 무효면 401, 범위·역할 밖이면 403.
+
+    검증 결과는 ``app.apikeys.service`` 가 짧게 기억하므로 요청마다 DB 를 보지 않는다.
+    """
+    from app.apikeys import service as keys
+
+    if not settings.api_keys_enabled:
+        raise _unauthorized("API 키 인증이 꺼져 있습니다.")
+    info = await keys.lookup(raw_key) if raw_key.startswith(API_KEY_PREFIX) else None
+    reason = keys.unusable_reason(info)
+    if reason:
+        logger.warning("API 키 인증 거부: %s prefix=%s path=%s", reason, raw_key[:16], request.url.path)
+        raise _unauthorized(reason)
+    path, method = request.url.path, request.method
+    if not keys.allows(info.scopes, method, path):
+        logger.warning("API 키 범위 밖 요청 거부: key=%s scopes=%s %s %s",
+                       info.id, ",".join(sorted(info.scopes)), method, path)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=("API 키로는 계정·키 관리 API 를 부를 수 없습니다." if path.startswith(keys.KEY_FORBIDDEN_PREFIXES)
+                    else f"API 키 범위({', '.join(sorted(info.scopes))})로는 이 요청({method} {path})을 할 수 없습니다."),
+        )
+    user = TokenUser(sub=f"apikey:{info.id}", username=keys.owner_identity(info.id), first_name=info.name,
+                     roles=[info.role], api_key_id=info.id)
+    await _apply_custom_role(user)
+    if not user.has_argus_role:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="API 키에 역할이 없습니다.")
+    keys.touch(info.id, _client_ip(request))
+    return user
+
+
+# ---------------------------------------------------------------------------
+# 요청 범위 인증 캐시 (TODO-086)
+# ---------------------------------------------------------------------------
+# 한 요청에서 로그인 게이트(미들웨어)·비밀번호 변경 게이트·핸들러 의존성이 같은 토큰을 각각 검증하던 것을
+# 한 번으로 줄인다. ASGI ``scope`` 는 요청마다 새로 만들어지고 미들웨어·라우터·핸들러가 같은 dict 를 보므로
+# 여기에 둔 결과는 그 요청 안에서만 쓰인다. 성공한 결과만 담는다(실패는 매번 같은 예외를 다시 만든다).
+
+_REQUEST_AUTH_KEY = "argus.auth"
+
+
+def _request_cache(request: Request) -> dict | None:
+    scope = getattr(request, "scope", None)
+    if not isinstance(scope, dict):
+        return None
+    return scope.setdefault(_REQUEST_AUTH_KEY, {})
+
+
+def verify_local_token_cached(request: Request, token: str) -> dict:
+    """``_verify_token_local``(access) 결과를 요청 범위에 기억한다 — 비밀번호 변경 게이트와 인증이 함께 쓴다."""
+    cache = _request_cache(request)
+    if cache is not None and ("jwt", token) in cache:
+        return cache[("jwt", token)]
+    payload = _verify_token_local(token)
+    if cache is not None:
+        cache[("jwt", token)] = payload
+    return payload
+
+
+# ---------------------------------------------------------------------------
 # FastAPI dependencies
 # ---------------------------------------------------------------------------
 
 async def get_current_user(request: Request) -> TokenUser:
-    """FastAPI 의존성: JWT 토큰에서 현재 사용자를 추출·검증한다."""
-    token = _extract_bearer_token(request)
+    """FastAPI 의존성: API 키 또는 JWT 토큰에서 현재 사용자를 추출·검증한다.
+
+    같은 요청에서 다시 부르면(로그인 게이트 → 핸들러 의존성) 요청 범위에 기억한 결과를 돌려준다.
+    """
+    raw_key = extract_api_key(request)
+    token = None if raw_key else _extract_bearer_token(request)
+    cache = _request_cache(request)
+    cache_key = ("user", raw_key or token)
+    if cache is not None and (raw_key or token) and cache_key in cache:
+        return cache[cache_key]
+    if raw_key:
+        user = await authenticate_api_key(raw_key, request)
+        if cache is not None:
+            cache[cache_key] = user
+        return user
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -463,7 +575,7 @@ async def get_current_user(request: Request) -> TokenUser:
         )
 
     if settings.auth_type == "local":
-        payload = _verify_token_local(token)
+        payload = verify_local_token_cached(request, token)
     else:
         payload = await _verify_token_keycloak(token)
 
@@ -474,17 +586,31 @@ async def get_current_user(request: Request) -> TokenUser:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="역할이 할당되지 않았습니다. 관리자에게 문의하십시오.",
         )
+    if cache is not None:
+        cache[cache_key] = user
     return user
 
 
 async def get_optional_user(request: Request) -> TokenUser | None:
     """FastAPI 의존성: 토큰이 있으면 사용자를 추출하고, 없으면 None 을 반환한다."""
+    cache = _request_cache(request)
+    if cache is not None:
+        cred = extract_api_key(request) or _extract_bearer_token(request)
+        if cred and ("user", cred) in cache:
+            return cache[("user", cred)]
+    raw_key = extract_api_key(request)
+    if raw_key:
+        try:
+            return await authenticate_api_key(raw_key, request)
+        except HTTPException as e:
+            logger.debug("선택 인증 API 키 무효 → 익명 처리: %s", e.detail)
+            return None
     token = _extract_bearer_token(request)
     if not token:
         return None
     try:
         if settings.auth_type == "local":
-            payload = _verify_token_local(token)
+            payload = verify_local_token_cached(request, token)
         else:
             payload = await _verify_token_keycloak(token)
         return await check_account_state(_build_token_user(payload), payload)

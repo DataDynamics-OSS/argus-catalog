@@ -2,19 +2,25 @@
 
 import { useCallback, useEffect, useState } from "react"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
-import { AlertTriangle, ArrowLeft, Check, Loader2, Search, Trash2 } from "lucide-react"
+import { AlertTriangle, ArrowLeft, Check, Eye, Loader2, MoreHorizontal, Trash2 } from "lucide-react"
 import { errorMessage, notifyError, toast } from "@/lib/notify"
 import { useConfirm } from "@/components/confirm-provider"
+import { LINE_TABS_LIST, LINE_TABS_TRIGGER } from "@/components/detail-section"
+import { Tip } from "@/components/tip"
 
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@workspace/ui/components/dialog"
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@workspace/ui/components/dropdown-menu"
 import { Label } from "@workspace/ui/components/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@workspace/ui/components/select"
+import { Select, SelectContent, SelectItem, SelectTrigger } from "@workspace/ui/components/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@workspace/ui/components/tabs"
 import { Textarea } from "@workspace/ui/components/textarea"
+import { StatusBadge } from "@workspace/ui/components/status-badge"
 import { cn } from "@workspace/ui/lib/utils"
 
 import {
@@ -22,7 +28,7 @@ import {
   ApiRequestError, acknowledgeApiAlert, deleteApi, fetchApiAlerts, fetchApiCredentials, fetchApiDetail, fetchApiLineage, fetchApiStatusHistory, updateApi,
 } from "../api"
 import { useApis } from "./apis-provider"
-import { API_STATUS_LABEL, API_STATUS_VARIANTS, SPEC_FORMAT_LABEL, STATUS_ORDER, protocolLabel } from "./apis-constants"
+import { API_STATUS_LABEL, apiStatus, SPEC_FORMAT_LABEL, STATUS_ORDER, protocolLabel } from "./apis-constants"
 import { TabError, TabLoading, fmtDateTime } from "./apis-detail-shared"
 import { AuthTab } from "./auth-tab"
 import { EndpointsTab } from "./endpoints-tab"
@@ -36,7 +42,9 @@ import { UsageTab } from "./usage-tab"
 /** 자격증명 목록 조회 결과 — 권한 없음(403)·오류를 0건과 구분해 안내한다. */
 export type CredentialsAccess = "ok" | "forbidden" | "error"
 
-const NO_PERMISSIONS: ApiPermissions = { can_edit: false, can_admin: false }
+const NO_PERMISSIONS: ApiPermissions = {
+  can_edit: false, can_delete: false, can_view_usage: false, can_edit_lineage: false, can_admin: false,
+}
 
 // 부가 데이터 로더 — 초기 로드와 개별 새로고침이 같은 함수를 쓴다(실패 시 빈 목록).
 const loadHistory = (name: string) => fetchApiStatusHistory(name).catch((): ApiStatusHistory[] => [])
@@ -198,7 +206,7 @@ export function ApisDetail({ name }: { name: string }) {
   }
 
   const backButton = (
-    <Button variant="ghost" size="sm" className="w-fit" onClick={() => { void backToList() }}><ArrowLeft className="mr-1 h-4 w-4" /> API 목록으로</Button>
+    <Button variant="ghost" size="sm" className="w-fit" onClick={() => { void backToList() }}><ArrowLeft className="mr-1 h-4 w-4" /> 목록으로</Button>
   )
   if (error) {
     return <div className="flex flex-col gap-4">{backButton}<TabError message={error} onRetry={retry} /></div>
@@ -218,22 +226,36 @@ export function ApisDetail({ name }: { name: string }) {
             <h2 className="text-xl font-semibold">{api.display_name || api.name}</h2>
             {perm.can_edit ? (
               <Select value={api.status} onValueChange={changeStatus} disabled={changingStatus}>
-                <SelectTrigger className={cn("h-auto w-auto gap-1 rounded-md border-0 px-2 py-1 text-sm font-medium shadow-none focus:ring-0", API_STATUS_VARIANTS[api.status] ?? API_STATUS_VARIANTS.draft)} title="상태 변경">
-                  <SelectValue />
+                <SelectTrigger className="h-auto w-auto gap-1 border-0 bg-transparent p-0 shadow-none focus:ring-0 dark:bg-transparent" title="상태 변경" aria-label={`상태: ${apiStatus(api.status).label} — 변경`}>
+                  <StatusBadge {...apiStatus(api.status)} />
                 </SelectTrigger>
                 <SelectContent>{STATUS_ORDER.map((s) => <SelectItem key={s} value={s}>{API_STATUS_LABEL[s]}</SelectItem>)}</SelectContent>
               </Select>
             ) : (
-              <span className={cn("rounded-md px-2 py-1 text-sm font-medium", API_STATUS_VARIANTS[api.status] ?? API_STATUS_VARIANTS.draft)}>{API_STATUS_LABEL[api.status] ?? api.status}</span>
+              <StatusBadge {...apiStatus(api.status)} />
             )}
-            <Badge variant="outline" className="text-sm">{api.version}</Badge>
-            {api.protocol && <Badge variant="outline" className="text-sm">{protocolLabel(api.protocol)}</Badge>}
-            {api.spec_format && <Badge variant="outline" className="text-sm">{SPEC_FORMAT_LABEL[api.spec_format] ?? api.spec_format}</Badge>}
+            <Badge variant="outline">{api.version}</Badge>
+            {api.protocol && <Badge variant="outline">{protocolLabel(api.protocol)}</Badge>}
+            {api.spec_format && <Badge variant="outline">{SPEC_FORMAT_LABEL[api.spec_format] ?? api.spec_format}</Badge>}
           </div>
-          <p className="font-mono text-xs text-muted-foreground">{api.urn}</p>
-          {api.description && <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{api.description}</p>}
+          <p className="font-mono text-xs">{api.urn}</p>
+          {api.description && <p className="mt-1 max-w-3xl text-sm">{api.description}</p>}
         </div>
-        {perm.can_edit && <Button variant="destructive" size="sm" onClick={handleDelete}><Trash2 className="mr-1 h-4 w-4" /> 삭제</Button>}
+        {/* 덜 쓰는 작업(삭제)은 ⋯ 메뉴로 — MCP · AI 에이전트 상세와 같은 배치(TODO-133) */}
+        {perm.can_delete && (
+          <DropdownMenu>
+            <Tip label="더 보기"><DropdownMenuTrigger asChild>
+              <Button size="sm" variant="outline" className="w-8 shrink-0 px-0" aria-label="더 보기">
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger></Tip>
+            <DropdownMenuContent align="end" className="min-w-44">
+              <DropdownMenuItem variant="destructive" onClick={() => { void handleDelete() }}>
+                <Trash2 /> 삭제
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </div>
 
       {alerts.length > 0 && (
@@ -244,14 +266,14 @@ export function ApisDetail({ name }: { name: string }) {
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
                 <div className="text-sm">
                   <span className="font-medium text-destructive">Breaking 변경 감지</span>
-                  <span className="ml-2 text-muted-foreground">{fmtDateTime(al.created_at)}</span>
+                  <span className="ml-2">{fmtDateTime(al.created_at)}</span>
                   <p className="mt-0.5 text-foreground">{al.summary}</p>
                 </div>
               </div>
               <div className="flex shrink-0 gap-2">
                 {al.from_spec_id != null && al.to_spec_id != null && (
                   <Button size="sm" variant="outline" onClick={() => showAlertDiff(al)}>
-                    <Search className="mr-1 h-4 w-4" /> 자세히
+                    <Eye className="mr-1 h-4 w-4" /> 자세히
                   </Button>
                 )}
                 {/* 알림 확인 처리는 소유자·관리자만(서버도 같은 기준) */}
@@ -267,15 +289,15 @@ export function ApisDetail({ name }: { name: string }) {
       )}
 
       <Tabs value={tab} onValueChange={changeTab}>
-        <TabsList className="flex-wrap">
-          <TabsTrigger value="overview">개요</TabsTrigger>
-          <TabsTrigger value="endpoints">엔드포인트 ({api.endpoints.length})</TabsTrigger>
-          <TabsTrigger value="auth">인증 ({api.security_schemes.length})</TabsTrigger>
-          <TabsTrigger value="lineage">리니지 ({lineage.length})</TabsTrigger>
-          <TabsTrigger value="usage">관측</TabsTrigger>
-          <TabsTrigger value="lint">린팅</TabsTrigger>
-          <TabsTrigger value="spec">원본</TabsTrigger>
-          <TabsTrigger value="history">이력</TabsTrigger>
+        <TabsList variant="line" className={LINE_TABS_LIST}>
+          <TabsTrigger value="overview" className={LINE_TABS_TRIGGER}>개요</TabsTrigger>
+          <TabsTrigger value="endpoints" className={LINE_TABS_TRIGGER}>엔드포인트 ({api.endpoints.length})</TabsTrigger>
+          <TabsTrigger value="auth" className={LINE_TABS_TRIGGER}>인증 ({api.security_schemes.length})</TabsTrigger>
+          <TabsTrigger value="lineage" className={LINE_TABS_TRIGGER}>리니지 ({lineage.length})</TabsTrigger>
+          <TabsTrigger value="usage" className={LINE_TABS_TRIGGER}>관측</TabsTrigger>
+          <TabsTrigger value="lint" className={LINE_TABS_TRIGGER}>린팅</TabsTrigger>
+          <TabsTrigger value="spec" className={LINE_TABS_TRIGGER}>원본</TabsTrigger>
+          <TabsTrigger value="history" className={LINE_TABS_TRIGGER}>이력</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" forceMount className={cn("mt-4", KEEP_MOUNTED)}>
@@ -296,7 +318,7 @@ export function ApisDetail({ name }: { name: string }) {
         </TabsContent>
 
         <TabsContent value="lineage" forceMount className={cn("mt-4", KEEP_MOUNTED)}>
-          <LineageTab apiName={api.name} lineage={lineage} canAdmin={perm.can_admin} onChanged={reloadLineage} />
+          <LineageTab apiName={api.name} lineage={lineage} canAdmin={perm.can_edit_lineage} onChanged={reloadLineage} />
         </TabsContent>
 
         <TabsContent value="usage" className="mt-4">
@@ -308,7 +330,7 @@ export function ApisDetail({ name }: { name: string }) {
         </TabsContent>
 
         {/* 수동 API 는 계약 문서 편집 폼이 있어 마운트 유지(스펙 API 는 코드 뷰어만이라 필요할 때만) */}
-        <TabsContent value="spec" forceMount={api.source === "manual" || undefined} className={cn("mt-4 space-y-4", KEEP_MOUNTED)}>
+        <TabsContent value="spec" forceMount={api.source === "manual" || undefined} className={cn("mt-4 space-y-6", KEEP_MOUNTED)}>
           <SpecTab
             api={api}
             canEdit={perm.can_edit}
@@ -316,7 +338,7 @@ export function ApisDetail({ name }: { name: string }) {
           />
         </TabsContent>
 
-        <TabsContent value="history" className="mt-4 space-y-4">
+        <TabsContent value="history" className="mt-4 space-y-6">
           <HistoryTab apiName={api.name} history={history} specs={api.specs} diffRequest={diffRequest} />
         </TabsContent>
       </Tabs>

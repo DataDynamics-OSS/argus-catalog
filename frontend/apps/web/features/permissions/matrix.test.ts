@@ -15,6 +15,18 @@ describe("initDraft", () => {
     expect(d["datasources.manage"]!.size).toBe(0)
     expect(d.apis!.size).toBe(0)
   })
+
+  it("사용자 정의 역할 열을 받고, 보기 전용 표는 미설정이면 빈 집합", () => {
+    const roles = [SU, U, "steward"]
+    const d = initDraft(["datasets", "apis"], { apis: [U, "steward", "gone"] }, roles)
+    expect([...d.datasets!]).toEqual(roles)
+    expect([...d.apis!]).toEqual([U, "steward"])
+    const v = initDraft(["datasets", "apis"], { apis: ["steward"] }, roles, true)
+    expect(v.datasets!.size).toBe(0)
+    expect([...v.apis!]).toEqual(["steward"])
+    expect(countChanges(m({ a: [] }), m({ a: ["steward"] }), NONE, roles)).toBe(1)
+    expect(countChanges(m({ a: [] }), m({ a: ["steward"] }), NONE)).toBe(0)
+  })
 })
 
 describe("countChanges / draftToPayload", () => {
@@ -66,5 +78,35 @@ describe("previewRole", () => {
     expect(u.unreachableFeatures.map((x) => x.key)).toEqual(["datasets.sample-view", "datasets.ddl-view"])
     // AI 어시스턴트는 대시보드 메뉴가 막혀도 쓸 수 있다
     expect(u.allowedFeatures.map((x) => x.key)).toEqual(["ai.assistant"])
+  })
+
+  it("기능 권한으로 여는 관리 메뉴(메타데이터 수집)는 그 기능을 허용받은 역할에게만 보인다", () => {
+    const withSync: MenuEntry[] = [
+      ...menus,
+      { key: "sync-runs", label: "메타데이터 수집", group: "관리", url: "/dashboard/sync-runs", adminOnly: true, grantedBy: ["datasources.sync"] },
+    ]
+    const featDraft = m({ "datasources.sync": [U] })
+    expect(previewRole(U, m({}), featDraft, withSync, []).visibleMenus.map((x) => x.key)).toEqual(["sync-runs"])
+    expect(previewRole(SU, m({}), featDraft, withSync, []).visibleMenus.map((x) => x.key)).toEqual([])
+  })
+  it("보기 전용 메뉴의 편집 기능은 못 쓰고, 조회 기능(view)과 위임 키는 그대로", () => {
+    const vMenus: MenuEntry[] = [
+      { key: "datasets", label: "데이터셋", group: "g", url: "/dashboard/datasets" },
+      { key: "quality-runs", label: "데이터 품질", group: "관리", url: "/dashboard/quality-runs", adminOnly: true, grantedBy: ["quality.manage"] },
+    ]
+    const vFeatures: FeatureEntry[] = [
+      { key: "datasets.sample-view", label: "샘플", menuKey: "datasets", description: "", view: true },
+      { key: "datasets.edit", label: "수정", menuKey: "datasets", description: "" },
+      { key: "quality.manage", label: "품질 관리", menuKey: "datasets", description: "", defaultDeny: true },
+    ]
+    const feat = m({ "datasets.sample-view": [U], "datasets.edit": [U], "quality.manage": [U] })
+    const p = previewRole(U, m({ datasets: [U] }), feat, vMenus, vFeatures, m({ datasets: [U] }))
+    expect(p.readonlyMenus.map((x) => x.key)).toEqual(["datasets"])
+    expect(p.viewBlockedFeatures.map((x) => x.key)).toEqual(["datasets.edit"])
+    expect(p.allowedFeatures.map((x) => x.key)).toEqual(["datasets.sample-view", "quality.manage"])
+    // 메뉴가 막혀도 위임 키는 관리 메뉴를 열기 때문에 '메뉴 막힘'으로 보지 않는다
+    const blocked = previewRole(U, m({ datasets: [] }), feat, vMenus, vFeatures)
+    expect(blocked.unreachableFeatures.map((x) => x.key)).toEqual(["datasets.sample-view", "datasets.edit"])
+    expect(blocked.visibleMenus.map((x) => x.key)).toEqual(["quality-runs"])
   })
 })

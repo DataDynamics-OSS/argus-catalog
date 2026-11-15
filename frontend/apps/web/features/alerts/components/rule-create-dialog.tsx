@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@workspace/ui/components/dialog"
 import { Button } from "@workspace/ui/components/button"
+import { DisabledReason } from "@/components/tip"
 import { Input } from "@workspace/ui/components/input"
 import { Label } from "@workspace/ui/components/label"
 import { Textarea } from "@workspace/ui/components/textarea"
@@ -18,8 +19,20 @@ import { Badge } from "@workspace/ui/components/badge"
 import { Separator } from "@workspace/ui/components/separator"
 import { Check, ChevronsUpDown } from "lucide-react"
 import { authFetch, throwOnError } from "@/features/auth/auth-fetch"
-import { MCP_TRIGGERS, SCOPE_LABEL, SEVERITY_LABEL, TRIGGER_LABEL, labelOf } from "@/features/alerts/labels"
+import {
+  AI_READY_CONDITION_LABEL,
+  AI_READY_TRIGGERS,
+  MCP_TRIGGERS,
+  REPORT_CATEGORY_LABEL,
+  SCOPE_LABEL,
+  SEVERITY_LABEL,
+  SYNC_TRIGGERS,
+  TRIGGER_LABEL,
+  labelOf,
+} from "@/features/alerts/labels"
 import { errorMessage } from "@/lib/notify"
+import { TagInput } from "@/components/tag-input"
+import { splitCsv } from "@/lib/text-list"
 
 const BASE = "/api/v1"
 
@@ -85,18 +98,25 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
   const [scopeId, setScopeId] = useState<number | null>(null)
   const [triggerType, setTriggerType] = useState("ANY")
   const [changeTypes, setChangeTypes] = useState<string[]>(["DROP", "MODIFY"])
-  const [watchColumns, setWatchColumns] = useState("")
+  const [watchColumns, setWatchColumns] = useState<string[]>([])
   // MCP_POLICY_DRIFT / MCP_SECURITY_WARNING 조건
   const [mcpMinSeverity, setMcpMinSeverity] = useState("medium")
   const [mcpEnvs, setMcpEnvs] = useState<string[]>([])
   // QUALITY_FAILED 조건
   const [qualityMinSeverity, setQualityMinSeverity] = useState("INFO")
+  // SYNC_FAILED / SYNC_STALE 조건
+  const [syncIncludePartial, setSyncIncludePartial] = useState(true)
+  const [syncStaleHours, setSyncStaleHours] = useState("")  // 빈 값 = 예약 주기의 2배
+  // AI_READY_UNMET / REPORT_RECEIVED / REPORT_DUE 조건
+  const [aiConditions, setAiConditions] = useState<string[]>(Object.keys(AI_READY_CONDITION_LABEL))
+  const [reportCategories, setReportCategories] = useState<string[]>(Object.keys(REPORT_CATEGORY_LABEL))
+  const [dueDaysBefore, setDueDaysBefore] = useState("2")
   const [severityOverride, setSeverityOverride] = useState("auto")
 
   // Step 2
   const [channels, setChannels] = useState<string[]>(["IN_APP"])
   const [webhookUrl, setWebhookUrl] = useState("")
-  const [subscribers, setSubscribers] = useState("")
+  const [subscribers, setSubscribers] = useState<string[]>([])
   const [notifyOwners, setNotifyOwners] = useState(true)
   const [description, setDescription] = useState("")
 
@@ -124,16 +144,21 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
       const config = parseConfig(editRule.trigger_config)
       const isMcp = MCP_TRIGGERS.has(editRule.trigger_type)
       setChangeTypes(strList(config.change_types) ?? ["DROP", "MODIFY", "ADD"])
-      setWatchColumns((strList(config.columns) ?? []).join(", "))
+      setWatchColumns(strList(config.columns) ?? [])
       setMcpMinSeverity(isMcp && typeof config.min_severity === "string" ? config.min_severity : "medium")
       setMcpEnvs(strList(config.environments) ?? [])
       setQualityMinSeverity(!isMcp && typeof config.min_severity === "string" ? config.min_severity : "INFO")
+      setSyncIncludePartial(config.include_partial !== false)
+      setSyncStaleHours(typeof config.stale_hours === "number" ? String(config.stale_hours) : "")
+      setAiConditions(strList(config.conditions) ?? Object.keys(AI_READY_CONDITION_LABEL))
+      setReportCategories(strList(config.categories) ?? Object.keys(REPORT_CATEGORY_LABEL))
+      setDueDaysBefore(typeof config.days_before === "number" ? String(config.days_before) : "2")
       setSeverityOverride(editRule.severity_override || "auto")
       // 지원하지 않는 채널(과거 EMAIL 등)은 빼고 불러온다
       const chans = (editRule.channels || "").split(",").map(c => c.trim()).filter(c => c === "IN_APP" || c === "WEBHOOK")
       setChannels(chans.length ? chans : ["IN_APP"])
       setWebhookUrl(editRule.webhook_url || "")
-      setSubscribers(editRule.subscribers || "")
+      setSubscribers(splitCsv(editRule.subscribers)) // 서버는 사용자 이름을 쉼표로 이어 저장
       setNotifyOwners(editRule.notify_owners === "true")
       setDescription(editRule.description || "")
     } else {
@@ -142,14 +167,16 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
       setScopeId(presetScope?.id || null)
       setTriggerType(presetScope?.type === "LINEAGE" ? "MAPPING_BROKEN" : "ANY")
       setChangeTypes(["DROP", "MODIFY"])
-      setWatchColumns("")
+      setWatchColumns([])
       setMcpMinSeverity("medium")
       setMcpEnvs([])
       setQualityMinSeverity("INFO")
+      setSyncIncludePartial(true)
+      setSyncStaleHours("24")
       setSeverityOverride("auto")
       setChannels(["IN_APP"])
       setWebhookUrl("")
-      setSubscribers("")
+      setSubscribers([])
       setNotifyOwners(true)
       setDescription("")
     }
@@ -216,17 +243,30 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
       const p = datasources.find(p => p.id === scopeId)
       return p ? `데이터 소스: ${p.name}` : editName ? `데이터 소스: ${editName}` : `데이터 소스 ID: ${scopeId}`
     }
-    return "선택..."
+    return "선택…"
   }, [scopeType, scopeId, tags, datasets, lineages, datasources, editRule])
 
   const isMcpTrigger = MCP_TRIGGERS.has(triggerType)
+  const isSyncTrigger = SYNC_TRIGGERS.has(triggerType)
+  // 전체·데이터 소스 범위만 의미가 있는 트리거
+  const limitedScope = isMcpTrigger || isSyncTrigger
+  const staleAuto = syncStaleHours.trim() === ""
+  const staleHours = Number(syncStaleHours)
+  const dueDays = dueDaysBefore.trim() === "" ? NaN : Number(dueDaysBefore)
   const usesChangeTypes = triggerType === "SCHEMA_CHANGE" || triggerType === "COLUMN_WATCH"
-  const watchList = watchColumns.split(",").map(c => c.trim()).filter(Boolean)
+  const watchList = watchColumns
 
   // 단계별 검증 — 버튼 옆에 이유를 보여준다
   const step1Problem = !ruleName.trim() ? "규칙 이름을 입력하세요."
     : scopeType !== "ALL" && !scopeId ? "감시 대상을 선택하세요."
-    : isMcpTrigger && scopeType !== "ALL" && scopeType !== "DATASOURCE" ? "MCP 트리거는 범위를 '전체' 또는 '데이터 소스'로만 지정할 수 있습니다."
+    : limitedScope && scopeType !== "ALL" && scopeType !== "DATASOURCE"
+      ? `${isMcpTrigger ? "MCP" : "수집"} 트리거는 범위를 '전체' 또는 '데이터 소스'로만 지정할 수 있습니다.`
+    : triggerType === "SYNC_STALE" && !staleAuto && !(Number.isInteger(staleHours) && staleHours >= 1 && staleHours <= 720)
+      ? "기준 시간은 1~720 사이의 정수(시간)로 입력하거나 비워 두세요(예약 주기의 2배)."
+    : triggerType === "AI_READY_UNMET" && aiConditions.length === 0 ? "최소 요건 조건을 하나 이상 선택하세요."
+    : triggerType === "REPORT_RECEIVED" && reportCategories.length === 0 ? "분류를 하나 이상 선택하세요."
+    : triggerType === "REPORT_DUE" && !(Number.isInteger(dueDays) && dueDays >= 0 && dueDays <= 30)
+      ? "임박 기준은 0~30 사이의 정수(일)로 입력하세요."
     : usesChangeTypes && changeTypes.length === 0 ? "변경 유형을 하나 이상 선택하세요."
     : triggerType === "COLUMN_WATCH" && watchList.length === 0 ? "감시할 컬럼을 하나 이상 입력하세요."
     : null
@@ -237,7 +277,7 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
   const changeTrigger = (t: string) => {
     setTriggerType(t)
     // MCP 트리거로 바꾸면 의미 없는 범위(데이터셋·태그·리니지)는 전체로 되돌린다
-    if (MCP_TRIGGERS.has(t) && scopeType !== "ALL" && scopeType !== "DATASOURCE") {
+    if ((MCP_TRIGGERS.has(t) || SYNC_TRIGGERS.has(t)) && scopeType !== "ALL" && scopeType !== "DATASOURCE") {
       setScopeType("ALL")
       setScopeId(null)
     }
@@ -259,6 +299,16 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
       triggerConfig.change_types = changeTypes
     } else if (triggerType === "QUALITY_FAILED") {
       triggerConfig.min_severity = qualityMinSeverity
+    } else if (triggerType === "SYNC_FAILED") {
+      triggerConfig.include_partial = syncIncludePartial
+    } else if (triggerType === "SYNC_STALE") {
+      if (!staleAuto) triggerConfig.stale_hours = staleHours
+    } else if (triggerType === "AI_READY_UNMET") {
+      triggerConfig.conditions = aiConditions
+    } else if (triggerType === "REPORT_RECEIVED") {
+      triggerConfig.categories = reportCategories
+    } else if (triggerType === "REPORT_DUE") {
+      triggerConfig.days_before = dueDays
     } else if (isMcpTrigger) {
       triggerConfig.min_severity = mcpMinSeverity
       if (mcpEnvs.length) triggerConfig.environments = mcpEnvs
@@ -275,7 +325,7 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
       channels: channels.join(","),
       notify_owners: notifyOwners ? "true" : "false",
       webhook_url: channels.includes("WEBHOOK") ? webhookUrl.trim() || null : null,
-      subscribers: subscribers || null,
+      subscribers: subscribers.length ? subscribers : null,
     }
 
     try {
@@ -333,24 +383,22 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
             {/* 대상 유형 버튼 */}
             <div className="flex gap-1.5 flex-wrap">
               {["DATASET", "TAG", "LINEAGE", "DATASOURCE", "ALL"].map(t => (
-                <Button
-                  key={t}
+                <DisabledReason key={t} reason={limitedScope && t !== "ALL" && t !== "DATASOURCE" ? "이 트리거는 전체·데이터 소스 범위만 지원합니다" : undefined}><Button
                   variant={scopeType === t ? "default" : "outline"}
                   size="sm"
                   className="text-sm h-8"
-                  disabled={isMcpTrigger && t !== "ALL" && t !== "DATASOURCE"}
-                  title={isMcpTrigger && t !== "ALL" && t !== "DATASOURCE" ? "MCP 트리거는 전체·데이터 소스 범위만 지원합니다" : undefined}
+                  disabled={limitedScope && t !== "ALL" && t !== "DATASOURCE"}
                   onClick={() => { setScopeType(t); setScopeId(null) }}
                 >
                   {SCOPE_LABEL[t]}
-                </Button>
+                </Button></DisabledReason>
               ))}
             </div>
 
             {/* 대상 항목 선택기 */}
             {scopeType === "TAG" && (
               <Select value={scopeId ? String(scopeId) : ""} onValueChange={v => setScopeId(Number(v))}>
-                <SelectTrigger className="h-9"><SelectValue placeholder="태그 선택..." /></SelectTrigger>
+                <SelectTrigger className="h-9"><SelectValue placeholder="태그 선택…" /></SelectTrigger>
                 <SelectContent>
                   {tags.map(t => (
                     <SelectItem key={t.id} value={String(t.id)}>
@@ -364,7 +412,7 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
 
             {scopeType === "DATASOURCE" && (
               <Select value={scopeId ? String(scopeId) : ""} onValueChange={v => setScopeId(Number(v))}>
-                <SelectTrigger className="h-9"><SelectValue placeholder="데이터 소스 선택..." /></SelectTrigger>
+                <SelectTrigger className="h-9"><SelectValue placeholder="데이터 소스 선택…" /></SelectTrigger>
                 <SelectContent>
                   {datasources.map(p => (
                     <SelectItem key={p.id} value={String(p.id)}>{p.name} ({p.type})</SelectItem>
@@ -377,20 +425,20 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
               <Popover open={scopePopoverOpen} onOpenChange={setScopePopoverOpen}>
                 <PopoverTrigger asChild>
                   <Button variant="outline" className="w-full justify-between h-9 font-normal text-sm">
-                    {scopeId ? scopeDisplayName() : "데이터셋 검색·선택..."}
+                    {scopeId ? scopeDisplayName() : "데이터셋 검색·선택…"}
                     <ChevronsUpDown className="ml-2 h-3.5 w-3.5 opacity-50" />
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-[480px] p-0" align="start">
                   <Command shouldFilter={false}>
-                    <CommandInput placeholder="검색..." value={scopeSearch} onValueChange={setScopeSearch} />
+                    <CommandInput placeholder="검색…" value={scopeSearch} onValueChange={setScopeSearch} />
                     <CommandList>
                       <CommandEmpty>데이터셋이 없습니다.</CommandEmpty>
                       <CommandGroup>
                         {datasets.map(d => (
                           <CommandItem key={d.id} value={String(d.id)} onSelect={() => { setScopeId(d.id); setScopePopoverOpen(false) }}>
                             <Check className={`mr-2 h-3.5 w-3.5 ${scopeId === d.id ? "opacity-100" : "opacity-0"}`} />
-                            <Badge variant="outline" className="mr-1.5 text-[9px] px-1 py-0">{d.datasource_type}</Badge>
+                            <Badge size="sm" variant="outline" className="mr-1.5">{d.datasource_type}</Badge>
                             <span className="truncate">{d.name}</span>
                           </CommandItem>
                         ))}
@@ -403,7 +451,7 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
 
             {scopeType === "LINEAGE" && (
               <Select value={scopeId ? String(scopeId) : ""} onValueChange={v => setScopeId(Number(v))}>
-                <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="리니지 선택..." /></SelectTrigger>
+                <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="리니지 선택…" /></SelectTrigger>
                 <SelectContent>
                   {lineages.map(l => (
                     <SelectItem key={l.id} value={String(l.id)} className="text-sm">
@@ -424,15 +472,99 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
                 <SelectItem value="SCHEMA_CHANGE">스키마 변경 (변경 유형 선택)</SelectItem>
                 <SelectItem value="COLUMN_WATCH">컬럼 감시 (특정 컬럼)</SelectItem>
                 <SelectItem value="MAPPING_BROKEN">매핑 깨짐 (매핑 컬럼 변경)</SelectItem>
-                <SelectItem value="QUALITY_FAILED">품질 검증 실패</SelectItem>
+                <SelectItem value="QUALITY_FAILED">품질 진단 실패</SelectItem>
                 <SelectItem value="MCP_POLICY_DRIFT">MCP 배포 정책 위반·드리프트</SelectItem>
                 <SelectItem value="MCP_SECURITY_WARNING">MCP 배포 보안 경고</SelectItem>
+                <SelectItem value="SYNC_FAILED">수집 실패 (데이터 소스 수집)</SelectItem>
+                <SelectItem value="SYNC_STALE">수집 지연 (정해진 시간 안에 성공한 수집 없음)</SelectItem>
+                <SelectItem value="AI_READY_UNMET">AI-Ready 공유 최소 요건 미충족</SelectItem>
+                <SelectItem value="REPORT_RECEIVED">오류 신고·개선 요청 접수</SelectItem>
+                <SelectItem value="REPORT_DUE">신고 처리 기한 임박·넘김</SelectItem>
               </SelectContent>
             </Select>
 
-            {isMcpTrigger && (
+            {triggerType === "AI_READY_UNMET" && (
+              <div className="space-y-2 rounded-md border p-3">
+                <p className="text-xs">
+                  1시간마다 범위 안 데이터셋의 공유 최소 요건(AI-Ready 탭)을 보고, 고른 조건 중 하나라도 미충족이면 발행됩니다.
+                  판정할 수 없는 조건(프로파일 없음, 실시간·수동 갱신)은 미충족으로 보지 않습니다. 요건을 충족하면 알림이 자동으로 해결되고,
+                  그 전에는 같은 데이터셋에 다시 알리지 않습니다(무시해도 같음). 기준값은 설정 › AI-Ready 에서 바꿉니다.
+                </p>
+                <div className="flex flex-wrap gap-4">
+                  {Object.entries(AI_READY_CONDITION_LABEL).map(([k, label]) => (
+                    <label key={k} className="flex items-center gap-2 text-sm">
+                      <Checkbox checked={aiConditions.includes(k)}
+                        onCheckedChange={(v) => setAiConditions((cs) => v === true ? [...cs, k] : cs.filter((c) => c !== k))} />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {triggerType === "REPORT_RECEIVED" && (
+              <div className="space-y-2 rounded-md border p-3">
+                <p className="text-xs">
+                  범위 안 데이터셋에 댓글로 오류 신고·개선 요청이 접수되면(다른 분류에서 바꾼 경우 포함) 바로 발행됩니다.
+                </p>
+                <div className="flex flex-wrap gap-4">
+                  {Object.entries(REPORT_CATEGORY_LABEL).map(([k, label]) => (
+                    <label key={k} className="flex items-center gap-2 text-sm">
+                      <Checkbox checked={reportCategories.includes(k)}
+                        onCheckedChange={(v) => setReportCategories((cs) => v === true ? [...cs, k] : cs.filter((c) => c !== k))} />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {triggerType === "REPORT_DUE" && (
+              <div className="space-y-2 rounded-md border p-3">
+                <p className="text-xs">
+                  1시간마다 처리 중인 오류 신고·개선 요청의 기한을 보고, 기한이 임박하면 경고, 넘기면 치명으로 발행됩니다(신고마다 단계별 한 번).
+                  신고를 해결·소명하면 알림이 자동으로 해결됩니다. 기한 일수는 설정 › AI-Ready › 오류 신고 처리 기한입니다.
+                </p>
+                <div className="flex items-center gap-2">
+                  <Label className="text-sm text-muted-foreground">임박 기준</Label>
+                  <Input type="number" min={0} max={30} value={dueDaysBefore}
+                    onChange={(e) => setDueDaysBefore(e.target.value)} className="h-8 w-20" />
+                  <span className="text-sm">일 전부터 (0 이면 넘겼을 때만)</span>
+                </div>
+              </div>
+            )}
+
+            {triggerType === "SYNC_FAILED" && (
               <div className="space-y-2 rounded-md border p-3">
                 <p className="text-xs text-muted-foreground">
+                  데이터 소스 수집이 실패로 끝나면 발행됩니다(응답 없음으로 중단된 경우 포함).
+                </p>
+                <label className="flex items-center gap-2 text-sm">
+                  <Checkbox checked={syncIncludePartial} onCheckedChange={(v) => setSyncIncludePartial(v === true)} />
+                  일부 테이블만 실패한 수집도 알림
+                </label>
+              </div>
+            )}
+
+            {triggerType === "SYNC_STALE" && (
+              <div className="space-y-2 rounded-md border p-3">
+                <p className="text-xs">
+                  예약 수집이 켜진 데이터 소스가 기준 시간 넘게 성공한 수집이 없으면 발행됩니다(10분마다 확인).
+                  기준 시간을 비워 두면 데이터 소스마다 예약 주기의 2배(최소 1시간)를 씁니다.
+                  같은 데이터 소스의 알림이 열려 있는 동안에는 다시 만들지 않습니다.
+                </p>
+                <div className="flex items-center gap-2">
+                  <Label className="text-sm text-muted-foreground">기준 시간</Label>
+                  <Input type="number" min={1} max={720} value={syncStaleHours} placeholder="자동"
+                    onChange={(e) => setSyncStaleHours(e.target.value)} className="h-8 w-24" />
+                  <span className="text-sm">시간</span>
+                </div>
+              </div>
+            )}
+
+            {isMcpTrigger && (
+              <div className="space-y-2 rounded-md border p-3">
+                <p className="text-xs">
                   MCP 배포의 finding 이 새로 열리거나 재오픈될 때 발행됩니다. 범위는 “전체” 또는 “데이터 소스”(배포에 연결된 데이터 소스)만 적용됩니다.
                   배포 소유자는 “소유자 알림”이 켜져 있으면 함께 받습니다.
                 </p>
@@ -473,7 +605,7 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
                   <SelectContent>
                     <SelectItem value="INFO">정보 이상(전체)</SelectItem>
                     <SelectItem value="WARNING">경고 이상</SelectItem>
-                    <SelectItem value="BREAKING">심각만</SelectItem>
+                    <SelectItem value="BREAKING">치명만</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -496,13 +628,8 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
 
             {triggerType === "COLUMN_WATCH" && (
               <div className="space-y-1.5">
-                <Label className="text-sm">감시 컬럼 (콤마 구분)</Label>
-                <Input
-                  value={watchColumns}
-                  onChange={e => setWatchColumns(e.target.value)}
-                  placeholder="amount, currency, status"
-                  className="h-9 text-sm"
-                />
+                <Label className="text-sm">감시 컬럼</Label>
+                <TagInput mono value={watchColumns} onChange={setWatchColumns} placeholder="예: amount 입력 후 Enter" />
               </div>
             )}
 
@@ -512,7 +639,7 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
                 <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="auto">자동 판정</SelectItem>
-                  <SelectItem value="BREAKING">심각 (강제)</SelectItem>
+                  <SelectItem value="BREAKING">치명 (강제)</SelectItem>
                   <SelectItem value="WARNING">경고 (강제)</SelectItem>
                   <SelectItem value="INFO">정보 (강제)</SelectItem>
                 </SelectContent>
@@ -520,7 +647,7 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
             </div>
 
             <div className="flex items-center justify-end gap-3">
-              {step1Problem && <span className="text-sm text-muted-foreground">{step1Problem}</span>}
+              {step1Problem && <span className="text-sm">{step1Problem}</span>}
               <Button onClick={() => { setError(null); setStep(2) }} disabled={!!step1Problem}>
                 다음
               </Button>
@@ -534,7 +661,7 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
             {/* 요약 */}
             <div className="rounded-lg border px-4 py-3 bg-muted/30 text-sm">
               <p className="font-medium">{ruleName}</p>
-              <p className="text-sm text-muted-foreground mt-1">
+              <p className="text-sm mt-1">
                 대상: {scopeDisplayName()} | 트리거: {labelOf(TRIGGER_LABEL, triggerType)}
                 {severityOverride !== "auto" && ` | 심각도: ${labelOf(SEVERITY_LABEL, severityOverride)}(강제)`}
               </p>
@@ -563,21 +690,15 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
                   placeholder="https://hooks.slack.com/services/..."
                   className="h-9 text-sm"
                 />
-                <p className="text-sm text-muted-foreground">
+                <p className="text-sm">
                   알림마다 JSON 을 POST 합니다(Slack 호환 <code>text</code> 필드 포함). 전송 결과는 기록됩니다.
                 </p>
               </div>
             )}
 
             <div className="space-y-1.5">
-              <Label className="text-sm">구독자 (사용자 이름, 콤마 구분)</Label>
-              <Textarea
-                value={subscribers}
-                onChange={e => setSubscribers(e.target.value)}
-                placeholder="alice, security-team"
-                rows={2}
-                className="text-sm"
-              />
+              <Label className="text-sm">구독자 (사용자 이름)</Label>
+              <TagInput commaSeparates value={subscribers} onChange={setSubscribers} placeholder="예: alice 입력 후 Enter" />
             </div>
 
             <label className="flex items-center gap-2 text-sm">
@@ -585,7 +706,7 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
                 checked={notifyOwners}
                 onCheckedChange={(v) => setNotifyOwners(!!v)}
               />
-              {isMcpTrigger ? "MCP 배포 소유자에게도 알림" : "데이터셋 소유자에게도 알림"}
+              {isMcpTrigger ? "MCP 배포 소유자에게도 알림" : isSyncTrigger ? "소유자에게도 알림 (수집 알림은 해당 없음)" : AI_READY_TRIGGERS.has(triggerType) ? "데이터셋 소유자·생성자에게도 알림" : "데이터셋 소유자에게도 알림"}
             </label>
 
             <div className="space-y-1.5">
@@ -593,7 +714,7 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
               <Textarea
                 value={description}
                 onChange={e => setDescription(e.target.value)}
-                placeholder="이 규칙의 목적을 설명하세요..."
+                placeholder="이 규칙의 목적을 설명하세요…"
                 rows={2}
                 className="text-sm"
               />
@@ -602,9 +723,9 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
             <Separator />
             <div className="flex items-center justify-between gap-3">
               <Button variant="outline" onClick={() => setStep(1)}>이전</Button>
-              {step2Problem && <span className="ml-auto text-sm text-muted-foreground">{step2Problem}</span>}
+              {step2Problem && <span className="ml-auto text-sm">{step2Problem}</span>}
               <Button onClick={handleSave} disabled={saving || !!step2Problem}>
-                {saving ? "저장 중..." : isEdit ? "규칙 수정" : "규칙 저장"}
+                {saving ? "저장 중…" : isEdit ? "저장" : "규칙 추가"}
               </Button>
             </div>
           </div>
@@ -619,7 +740,7 @@ function StepDot({ n, label, current }: { n: number; label: string; current: num
   const active = current === n
   return (
     <div className="flex items-center gap-1.5">
-      <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-medium ${
+      <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-medium ${
         done || active ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
       }`}>
         {done ? <Check className="h-3 w-3" /> : n}

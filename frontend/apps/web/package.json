@@ -1,6 +1,6 @@
 {
   "name": "web",
-  "version": "0.5.0",
+  "version": "0.8.0",
   "type": "module",
   "private": true,
   "scripts": {
@@ -10,7 +10,8 @@
     "lint": "eslint",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "manual": "../../../docs/tools/build-web-manual.sh public/manual"
   },
   "dependencies": {
     "@dicebear/core": "^10.1.0",
@@ -43,8 +44,7 @@
     "@xyflow/react": "^12.11.0",
     "ag-grid-community": "^35.3.1",
     "ag-grid-react": "^35.3.1",
-    "highcharts": "^12.6.0",
-    "highcharts-react-official": "^3.2.3",
+    "dompurify": "^3.2.7",
     "highlight.js": "^11.11.1",
     "lowlight": "^3.3.0",
     "lucide-react": "^0.577.0",

@@ -708,11 +708,30 @@ async def test_file_browser_protection_keeps_soft_deleted_model_files(api, data_
 
 
 async def test_download_stats_unknown_or_deleted_model_is_404(api):
-    assert (await api.as_(None).req("GET", "/models/argus.it.none/download")).status_code == 404
+    assert (await api.as_(BOB).req("GET", "/models/argus.it.none/download")).status_code == 404
     await _create(api, "argus.it.user")
-    assert (await api.as_(None).req("GET", "/models/argus.it.user/download")).status_code == 200
+    assert (await api.as_(BOB).req("GET", "/models/argus.it.user/download")).status_code == 200
     await api.as_(ADMIN).req("DELETE", "/models/argus.it.user")
-    assert (await api.as_(None).req("GET", "/models/argus.it.user/download")).status_code == 404
+    assert (await api.as_(BOB).req("GET", "/models/argus.it.user/download")).status_code == 404
+
+
+async def test_download_stats_hide_client_ip_from_others(api):
+    """접속 IP · User-Agent 는 관리자와 모델 등록자 · 소유자에게만 보인다(DEF-120)."""
+    await _create(api, "argus.it.ip", user=ALICE)
+    async with api.factory() as db:
+        db.add(mm.ModelDownloadLog(model_name="argus.it.ip", version=1, download_type="pull",
+                                   client_ip="10.1.2.3", user_agent="curl/8"))
+        await db.commit()
+
+    def _log(r):
+        assert r.status_code == 200, r.text
+        return r.json()["recent_logs"][0]
+
+    other = _log(await api.as_(BOB).req("GET", "/models/argus.it.ip/download"))
+    assert other["client_ip"] is None and other["user_agent"] is None and other["download_type"] == "pull"
+    for who in (ALICE, ADMIN):
+        log = _log(await api.as_(who).req("GET", "/models/argus.it.ip/download"))
+        assert log["client_ip"] == "10.1.2.3" and log["user_agent"] == "curl/8"
 
 
 async def test_finalize_unknown_model_or_version_is_404(api):

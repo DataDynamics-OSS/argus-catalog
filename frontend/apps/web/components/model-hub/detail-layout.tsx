@@ -4,7 +4,6 @@ import Link from "next/link"
 import { ArrowLeft } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@workspace/ui/components/card"
 import { cn } from "@workspace/ui/lib/utils"
 
 /** 상세 화면 상단 "목록으로" 링크. */
@@ -40,16 +39,16 @@ export function DetailHeader({
       <div className="flex flex-wrap items-center gap-2">
         {icon}
         <h1 className="text-xl font-bold leading-tight">{title}</h1>
-        {subtitle && <span className="font-mono text-xs text-muted-foreground">{subtitle}</span>}
+        {subtitle && <span className="font-mono text-xs">{subtitle}</span>}
         {badges}
         {actions && <div className="ml-auto flex items-center gap-2">{actions}</div>}
       </div>
-      {description && <p className="max-w-4xl text-sm text-muted-foreground line-clamp-2" title={description}>{description}</p>}
+      {description && <p className="max-w-4xl text-sm line-clamp-2" title={description}>{description}</p>}
     </div>
   )
 }
 
-/** 개요 사이드바 카드. */
+/** 개요 사이드바 한 묶음 — 상자 없이 제목 + 내용, 묶음 사이는 가는 선(박스는 한 겹 — 상세 화면 공통 규칙, TODO-140). */
 export function SideCard({ title, action, children, className }: {
   title: string
   action?: React.ReactNode
@@ -57,13 +56,13 @@ export function SideCard({ title, action, children, className }: {
   className?: string
 }) {
   return (
-    <Card className={cn("gap-3 py-4", className)}>
-      <CardHeader className="flex flex-row items-center justify-between px-4 pb-0">
-        <CardTitle className="text-sm font-medium">{title}</CardTitle>
+    <section className={cn("space-y-3 border-t pt-4 first:border-t-0 first:pt-0", className)}>
+      <div className="flex min-h-6 items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold">{title}</h3>
         {action}
-      </CardHeader>
-      <CardContent className="px-4">{children}</CardContent>
-    </Card>
+      </div>
+      {children}
+    </section>
   )
 }
 
@@ -90,7 +89,7 @@ export function EmptyState({ icon: Icon, text, action }: {
   action?: React.ReactNode
 }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed py-12 text-center text-sm text-muted-foreground">
+    <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed py-12 text-center text-sm">
       {Icon && <Icon className="h-8 w-8 text-muted-foreground/40" />}
       <div>{text}</div>
       {action}

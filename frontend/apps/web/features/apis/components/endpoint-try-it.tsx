@@ -1,12 +1,14 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
-import { AlertTriangle, Loader2, Minus, Play, Plus, RotateCcw, Wand2 } from "lucide-react"
+import { AlertTriangle, History, Loader2, Minus, Play, Plus, Wand2 } from "lucide-react"
 import { notifyError, toast } from "@/lib/notify"
 import { useConfirm } from "@/components/confirm-provider"
+import { FieldError } from "@/components/field-error"
 
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
+import { DisabledReason, Tip } from "@/components/tip"
 import { Input } from "@workspace/ui/components/input"
 import { Tabs, TabsList, TabsTrigger } from "@workspace/ui/components/tabs"
 import { cn } from "@workspace/ui/lib/utils"
@@ -58,11 +60,14 @@ function HeaderRowsInput({ rows, onChange, invalid, hint }: {
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between">
-        <p className="text-xs font-medium text-muted-foreground">헤더 {hint ?? "(인증 토큰 등)"}</p>
-        <Button size="sm" variant="outline" className="h-7" title="헤더 추가" aria-label="헤더 추가" onClick={() => onChange([...rows, EMPTY_HEADER_ROW])}><Plus className="h-3.5 w-3.5" /></Button>
+        <p className="text-xs font-medium">헤더 {hint ?? "(인증 토큰 등)"}</p>
+        <Tip label="헤더 추가"><Button size="sm" variant="outline" className="h-7" aria-label="헤더 추가" onClick={() => onChange([...rows, EMPTY_HEADER_ROW])}><Plus className="h-3.5 w-3.5" /></Button></Tip>
       </div>
-      {rows.map((row, i) => (
-        <div key={i} className="flex items-center gap-2">
+      {rows.map((row, i) => {
+        const rowInvalid = !!invalid?.has(row.key.trim()) && !row.value.trim()
+        return (
+        <div key={i} className="space-y-1">
+        <div className="flex items-center gap-2">
           <div className="relative w-full">
             <Input className={cn("h-8 text-sm", row.required && "pr-5")} placeholder="헤더 이름 (예: Authorization)" value={row.key} onChange={(e) => set(i, { key: e.target.value })} title={row.description || undefined} />
             {row.required && <span className="absolute right-2 top-1/2 -translate-y-1/2 text-red-600" title="필수">*</span>}
@@ -71,12 +76,15 @@ function HeaderRowsInput({ rows, onChange, invalid, hint }: {
             className="h-8 text-sm"
             placeholder={row.description || "값"}
             value={row.value}
-            aria-invalid={invalid?.has(row.key.trim()) && !row.value.trim() ? true : undefined}
+            aria-invalid={rowInvalid || undefined}
             onChange={(e) => set(i, { value: e.target.value })}
           />
-          <Button size="icon" variant="ghost" className="h-8 w-8 shrink-0" onClick={() => onChange(rows.length > 1 ? rows.filter((_, j) => j !== i) : [EMPTY_HEADER_ROW])} title="삭제" aria-label="헤더 삭제"><Minus className="h-4 w-4" /></Button>
+          <Tip label="헤더 삭제"><Button size="icon" variant="ghost" className="h-8 w-8 shrink-0" onClick={() => onChange(rows.length > 1 ? rows.filter((_, j) => j !== i) : [EMPTY_HEADER_ROW])} aria-label="헤더 삭제"><Minus className="h-4 w-4" /></Button></Tip>
         </div>
-      ))}
+        {rowInvalid && <FieldError>필수 값입니다.</FieldError>}
+        </div>
+        )
+      })}
     </div>
   )
 }
@@ -137,7 +145,7 @@ function SnippetView({ method, url, headers, bodyText, authNote }: {
         <TabsList>{SNIPPET_LANGS.map((l) => <TabsTrigger key={l} value={l} className="text-sm">{SNIPPET_LABEL[l]}</TabsTrigger>)}</TabsList>
       </Tabs>
       {authNote && (
-        <p className="text-xs text-muted-foreground">※ 저장된 자격증명을 선택한 경우, 시크릿은 서버에서만 주입되어 스니펫에는 포함되지 않습니다. 직접 호출 시 인증 헤더를 추가하세요.</p>
+        <p className="text-xs">※ 저장된 자격증명을 선택한 경우, 시크릿은 서버에서만 주입되어 스니펫에는 포함되지 않습니다. 직접 호출 시 인증 헤더를 추가하세요.</p>
       )}
       <CodeViewer text={code} language={SNIPPET_MONACO_LANG[lang]} />
     </div>
@@ -161,6 +169,8 @@ export function EndpointTryIt({ api, endpoint, server, credId }: {
   const [bodyText, setBodyText] = useState(() => (example && endpoint.method !== "DELETE" ? example.text : ""))
   // 필수 값이 비어 실행을 막았을 때 표시할 항목(위치:이름)
   const [missing, setMissing] = useState<Set<string>>(new Set())
+  // 호출 버튼 옆에 보일 검증 오류(서버 미선택 등)
+  const [runError, setRunError] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
   const [result, setResult] = useState<InvokeResult | null>(null)
   const [history, setHistory] = useState<ApiInvocationRecord[]>([])
@@ -210,7 +220,8 @@ export function EndpointTryIt({ api, endpoint, server, credId }: {
   }, [endpoint, pathP, queryP, pathParams, queryParams, server])
 
   const run = async () => {
-    if (!server) { toast.error("상단에서 서버(Base URL)를 선택/입력하세요."); return }
+    if (!server) { setRunError("상단에서 서버(Base URL)를 선택/입력하세요."); return }
+    setRunError(null)
     // 필수 값 확인 — 경로 파라미터는 항상 필수(비면 빈 경로 조각이 된다)
     const miss = new Set<string>()
     for (const p of pathP) { const nm = (p as { name?: string }).name ?? ""; if (!(pathParams[nm] ?? "").trim()) miss.add(`path:${nm}`) }
@@ -220,10 +231,8 @@ export function EndpointTryIt({ api, endpoint, server, credId }: {
     }
     for (const r of headerRows) if (r.required && r.key.trim() && !r.value.trim()) miss.add(`header:${r.key.trim()}`)
     setMissing(miss)
-    if (miss.size > 0) {
-      toast.error(`필수 값을 입력하세요: ${[...miss].map((k) => k.slice(k.indexOf(":") + 1)).join(", ")}`)
-      return
-    }
+    // 빠진 값은 각 입력란 아래에 "필수 값입니다." 로 표시된다
+    if (miss.size > 0) return
     const headers: Record<string, string> = headersObj()
     let body: unknown
     if (isWrite && bodyText.trim()) {
@@ -249,7 +258,7 @@ export function EndpointTryIt({ api, endpoint, server, credId }: {
     <div className="grid gap-3">
       {[...pathP, ...queryP].length > 0 && (
         <div className="space-y-1.5">
-          <p className="text-xs font-medium text-muted-foreground">파라미터</p>
+          <p className="text-xs font-medium">파라미터</p>
           <div className="overflow-hidden rounded-md border">
             <table className="w-full text-sm">
               <thead className="bg-muted/40"><tr>
@@ -272,10 +281,13 @@ export function EndpointTryIt({ api, endpoint, server, credId }: {
                   return (
                     <tr key={`${where}:${nm}`} className="border-t align-top">
                       <td className="px-3 py-2"><span className="font-mono text-sm text-black">{nm}</span>{(pp.required || isPath) && <span className="ml-1 text-red-600" title="필수">*</span>}</td>
-                      <td className="px-3 py-2"><Input className="h-8 w-full text-sm" placeholder={nm} value={val} aria-invalid={invalid ? true : undefined} onChange={(e) => setVal(e.target.value)} /></td>
-                      <td className="px-3 py-2 text-sm text-muted-foreground">{pp.description || "-"}</td>
-                      <td className="px-3 py-2"><Badge variant="outline" className="text-sm">{where || "-"}</Badge></td>
-                      <td className="px-3 py-2 font-mono text-sm text-muted-foreground">{dataType}</td>
+                      <td className="space-y-1 px-3 py-2">
+                        <Input className="h-8 w-full text-sm" placeholder={nm} value={val} aria-invalid={invalid || undefined} onChange={(e) => setVal(e.target.value)} />
+                        {invalid && <FieldError>필수 값입니다.</FieldError>}
+                      </td>
+                      <td className="px-3 py-2 text-sm">{pp.description || "-"}</td>
+                      <td className="px-3 py-2"><Badge variant="outline">{where || "-"}</Badge></td>
+                      <td className="px-3 py-2 font-mono text-sm">{dataType}</td>
                     </tr>
                   )
                 })}
@@ -292,7 +304,7 @@ export function EndpointTryIt({ api, endpoint, server, credId }: {
       {isWrite && (
         <div className="space-y-1.5">
           <div className="flex items-center justify-between gap-2">
-            <p className="text-xs font-medium text-muted-foreground">
+            <p className="text-xs font-medium">
               요청 바디 ({example?.mime ?? "JSON"}){example && endpoint.method !== "DELETE" ? " — 스펙 예시로 미리 채움" : ""}
             </p>
             {example && (
@@ -336,9 +348,10 @@ export function EndpointTryIt({ api, endpoint, server, credId }: {
           {running ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Play className="mr-1 h-4 w-4" />} 호출
         </Button>
       </div>
+      <FieldError>{server ? null : runError}</FieldError>
 
       <div className="space-y-1.5">
-        <p className="text-xs font-medium text-muted-foreground">코드 스니펫</p>
+        <p className="text-xs font-medium">코드 스니펫</p>
         <SnippetView
           method={endpoint.method}
           url={buildUrl()}
@@ -352,7 +365,7 @@ export function EndpointTryIt({ api, endpoint, server, credId }: {
 
       {history.length > 0 && (
         <div className="space-y-1.5">
-          <p className="text-xs font-medium text-muted-foreground">최근 호출 이력 (내 호출, 입력 파라미터 포함)</p>
+          <p className="text-xs font-medium">최근 호출 이력 (내 호출, 입력 파라미터 포함)</p>
           <div className="overflow-hidden rounded-md border">
             <table className="w-full text-sm">
               <thead className="bg-muted/40"><tr>
@@ -368,11 +381,11 @@ export function EndpointTryIt({ api, endpoint, server, credId }: {
                   const summary = [...Object.entries(pp), ...Object.entries(qp)].map(([k, v]) => `${k}=${v}`).join(", ")
                   return (
                     <tr key={h.id} className="border-t align-top">
-                      <td className="px-3 py-2 text-xs text-muted-foreground">{fmtDateTime(h.created_at)}</td>
+                      <td className="px-3 py-2 text-xs">{fmtDateTime(h.created_at)}</td>
                       <td className="px-3 py-2"><span className={cn("text-sm", h.ok ? "text-emerald-600" : "text-red-600")}>{h.status_code || "ERR"}</span></td>
                       <td className="px-3 py-2 text-sm break-all">{summary || <span className="text-muted-foreground">-</span>}</td>
                       <td className="px-3 py-2 text-right">
-                        <Button size="sm" variant="ghost" className="h-7" onClick={() => loadFromHistory(h)} title="입력값 불러오기"><RotateCcw className="mr-1 h-3.5 w-3.5" /> 불러오기</Button>
+                        <Button size="sm" variant="ghost" className="h-7" onClick={() => loadFromHistory(h)} title="입력값 불러오기"><History className="mr-1 h-3.5 w-3.5" /> 불러오기</Button>
                       </td>
                     </tr>
                   )
@@ -405,6 +418,9 @@ export function GraphQLTryIt({ api, endpoint, server, credId }: {
   const skeleton = `${endpoint.method} {\n  ${endpoint.path}${argInline} {\n    \n  }\n}\n`
   const [query, setQuery] = useState(skeleton)
   const [vars, setVars] = useState("")
+  // 변수 JSON 입력란 아래·실행 버튼 옆에 보일 검증 오류
+  const [varsError, setVarsError] = useState<string | null>(null)
+  const [runError, setRunError] = useState<string | null>(null)
   const [headerRows, setHeaderRows] = useState<HeaderRow[]>([EMPTY_HEADER_ROW])
   const [running, setRunning] = useState(false)
   const [result, setResult] = useState<InvokeResult | null>(null)
@@ -425,6 +441,7 @@ export function GraphQLTryIt({ api, endpoint, server, credId }: {
     for (const n of names) merged[n] = (n in existing) ? existing[n] : defaultForGqlType(types[n] ?? "")
     for (const k of Object.keys(existing)) if (!(k in merged)) merged[k] = existing[k]
     setVars(JSON.stringify(merged, null, 2))
+    setVarsError(null)
     toast.success(`변수 ${names.length}개를 구성했습니다.`)
   }
 
@@ -432,9 +449,11 @@ export function GraphQLTryIt({ api, endpoint, server, credId }: {
 
   const run = async () => {
     if (isSubscription) { toast.error("구독(subscription)은 WebSocket 기반이라 이 콘솔에서 실행할 수 없습니다."); return }
-    if (!server) { toast.error("상단에서 서버(Base URL)를 선택/입력하세요."); return }
+    if (!server) { setRunError("상단에서 서버(Base URL)를 선택/입력하세요."); return }
+    setRunError(null)
     let variables: unknown
-    if (vars.trim()) { try { variables = JSON.parse(vars) } catch { toast.error("변수(variables)가 올바른 JSON이 아닙니다."); return } }
+    if (vars.trim()) { try { variables = JSON.parse(vars) } catch { setVarsError("변수(variables)가 올바른 JSON이 아닙니다."); return } }
+    setVarsError(null)
     setRunning(true)
     try {
       setResult(await invokeApi({
@@ -456,10 +475,10 @@ export function GraphQLTryIt({ api, endpoint, server, credId }: {
           <span>구독(subscription)은 <b>WebSocket 기반</b>(graphql-ws 등)이라 이 HTTP 콘솔에서는 <b>실행할 수 없습니다</b>. 아래 쿼리는 문서·복사용이며, 실제 구독은 GraphQL 클라이언트(WebSocket)로 연결하세요.</span>
         </div>
       ) : (
-        <p className="text-xs text-muted-foreground">GraphQL 은 단일 엔드포인트(POST {server || "<Base URL>"})로 쿼리를 전송합니다. 반환 필드를 선택해 채운 뒤 실행하세요.</p>
+        <p className="text-xs">GraphQL 은 단일 엔드포인트(POST {server || "<Base URL>"})로 쿼리를 전송합니다. 반환 필드를 선택해 채운 뒤 실행하세요.</p>
       )}
       <div className="space-y-1">
-        <p className="text-xs font-medium text-muted-foreground">쿼리</p>
+        <p className="text-xs font-medium">쿼리</p>
         <div className="resize-y overflow-hidden rounded-md border" style={{ height: 200, minHeight: 120, maxHeight: 600 }}>
           <MonacoEditor
             height="100%" language="graphql" theme="light" value={query} onChange={(v) => setQuery(v ?? "")}
@@ -469,21 +488,23 @@ export function GraphQLTryIt({ api, endpoint, server, credId }: {
       </div>
       <div className="space-y-1">
         <div className="flex items-center justify-between">
-          <p className="text-xs font-medium text-muted-foreground">변수 (variables, JSON · 선택)</p>
-          <Button size="sm" variant="outline" className="h-7" onClick={autoVars}><RotateCcw className="mr-1 h-3.5 w-3.5" /> 쿼리 변수 → JSON 구성</Button>
+          <p className="text-xs font-medium">변수 (variables, JSON · 선택)</p>
+          <Button size="sm" variant="outline" className="h-7" onClick={autoVars}><Wand2 className="mr-1 h-3.5 w-3.5" /> 쿼리 변수로 채우기</Button>
         </div>
-        <div className="resize-y overflow-hidden rounded-md border" style={{ height: 120, minHeight: 72, maxHeight: 400 }}>
+        <div className={cn("resize-y overflow-hidden rounded-md border", varsError && "border-destructive")} style={{ height: 120, minHeight: 72, maxHeight: 400 }}>
           <MonacoEditor
-            height="100%" language="json" theme="light" value={vars} onChange={(v) => setVars(v ?? "")}
+            height="100%" language="json" theme="light" value={vars} onChange={(v) => { setVars(v ?? ""); setVarsError(null) }}
             options={{ minimap: { enabled: false }, fontSize: MONACO_FONT_SIZE, lineNumbers: "on", scrollBeyondLastLine: false, automaticLayout: true, tabSize: 2, wordWrap: "on", padding: { top: 6, bottom: 6 } }}
           />
         </div>
+        <FieldError>{varsError}</FieldError>
       </div>
       {!isSubscription && <HeaderRowsInput rows={headerRows} onChange={setHeaderRows} hint="(인증 토큰 등 · Content-Type 은 application/json 기본)" />}
       <div className="flex items-center gap-2">
         <code className="flex-1 truncate rounded bg-muted px-2 py-1 text-sm" title={server}>POST {server || "<Base URL>"}</code>
-        <Button size="sm" onClick={run} disabled={running || !server || isSubscription} title={isSubscription ? "구독은 WebSocket 기반이라 실행 불가" : undefined}>{running ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Play className="mr-1 h-4 w-4" />} 실행</Button>
+        <DisabledReason reason={isSubscription ? "구독은 WebSocket 기반이라 실행 불가" : undefined}><Button size="sm" onClick={run} disabled={running || !server || isSubscription}>{running ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Play className="mr-1 h-4 w-4" />} 실행</Button></DisabledReason>
       </div>
+      <FieldError>{server ? null : runError}</FieldError>
       {result && <InvokeResultPanel result={result} />}
     </div>
   )
@@ -499,11 +520,13 @@ export function SoapTryIt({ api, endpoint, server, credId }: {
   const skeleton = `<?xml version="1.0" encoding="UTF-8"?>\n<soap:Envelope xmlns:soap="${ns}">\n  <soap:Body>\n    <!-- ${endpoint.path} 요청 메시지 -->\n  </soap:Body>\n</soap:Envelope>\n`
   const [body, setBody] = useState(skeleton)
   const [headerRows, setHeaderRows] = useState<HeaderRow[]>([EMPTY_HEADER_ROW])
+  const [runError, setRunError] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
   const [result, setResult] = useState<InvokeResult | null>(null)
 
   const run = async () => {
-    if (!server) { toast.error("상단에서 서버(Base URL)를 선택/입력하세요."); return }
+    if (!server) { setRunError("상단에서 서버(Base URL)를 선택/입력하세요."); return }
+    setRunError(null)
     const custom = headerRowsToObject(headerRows)
     const headers: Record<string, string> = {}
     // 직접 입력한 Content-Type·SOAPAction 이 있으면 그것을 쓴다
@@ -523,9 +546,9 @@ export function SoapTryIt({ api, endpoint, server, credId }: {
 
   return (
     <div className="grid gap-3">
-      <p className="text-xs text-muted-foreground">SOAP {ex.soap_version || "1.1"} — 단일 엔드포인트(POST {server || "<Base URL>"})로 XML Envelope 를 전송합니다.{ex.soap_action ? ` SOAPAction: ${ex.soap_action}` : ""}</p>
+      <p className="text-xs">SOAP {ex.soap_version || "1.1"} — 단일 엔드포인트(POST {server || "<Base URL>"})로 XML Envelope 를 전송합니다.{ex.soap_action ? ` SOAPAction: ${ex.soap_action}` : ""}</p>
       <div className="space-y-1">
-        <p className="text-xs font-medium text-muted-foreground">요청 XML (SOAP Envelope)</p>
+        <p className="text-xs font-medium">요청 XML (SOAP Envelope)</p>
         <div className="resize-y overflow-hidden rounded-md border" style={{ height: 220, minHeight: 120, maxHeight: 600 }}>
           <MonacoEditor
             height="100%" language="xml" theme="light" value={body} onChange={(v) => setBody(v ?? "")}
@@ -538,6 +561,7 @@ export function SoapTryIt({ api, endpoint, server, credId }: {
         <code className="flex-1 truncate rounded bg-muted px-2 py-1 text-sm" title={server}>POST {server || "<Base URL>"}</code>
         <Button size="sm" onClick={run} disabled={running || !server}>{running ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Play className="mr-1 h-4 w-4" />} 실행</Button>
       </div>
+      <FieldError>{server ? null : runError}</FieldError>
       {result && <InvokeResultPanel result={result} />}
     </div>
   )

@@ -23,7 +23,7 @@ import { FederationExportPolicyPanel } from "@/features/federation/export-policy
 import { FederationInstancesPanel } from "@/features/federation/instances-panel"
 import { FederationObservabilityPanel } from "@/features/federation/observability-panel"
 import { FederationSearchPanel } from "@/features/federation/search-panel"
-import { useAuth } from "@/features/auth"
+import { usePermissions } from "@/features/permissions/use-permissions"
 
 const PUBLIC_TABS = ["search", "browse"]
 const ADMIN_TABS = ["instances", "observability", "export-policy"]
@@ -33,12 +33,14 @@ const ADMIN_TABS = ["instances", "observability", "export-policy"]
  * 공유 시에도 같은 탭과 검색 결과로 돌아온다.
  */
 function FederationTabs() {
-  const { user } = useAuth()
+  // 인스턴스 관리 · 관측성 · 노출 설정은 명시 허용형 federation.manage(미설정이면 관리자만, TODO-122)
+  const { canUseFeature } = usePermissions()
+  const canManage = canUseFeature("federation.manage")
   const router = useRouter()
   const pathname = usePathname()
   const params = useSearchParams()
 
-  const allowed = user?.is_admin ? [...PUBLIC_TABS, ...ADMIN_TABS] : PUBLIC_TABS
+  const allowed = canManage ? [...PUBLIC_TABS, ...ADMIN_TABS] : PUBLIC_TABS
   const requested = params.get("tab") ?? "search"
   const tab = allowed.includes(requested) ? requested : "search"
   const q = params.get("q") ?? ""
@@ -69,17 +71,17 @@ function FederationTabs() {
         <TabsTrigger value="browse">
           <FolderTree className="mr-1 h-3.5 w-3.5" /> 탐색
         </TabsTrigger>
-        {user?.is_admin && (
+        {canManage && (
           <TabsTrigger value="instances">
             <Network className="mr-1 h-3.5 w-3.5" /> 인스턴스 관리
           </TabsTrigger>
         )}
-        {user?.is_admin && (
+        {canManage && (
           <TabsTrigger value="observability">
             <Activity className="mr-1 h-3.5 w-3.5" /> 관측성
           </TabsTrigger>
         )}
-        {user?.is_admin && (
+        {canManage && (
           <TabsTrigger value="export-policy">
             <Share2 className="mr-1 h-3.5 w-3.5" /> 노출 설정
           </TabsTrigger>
@@ -94,7 +96,7 @@ function FederationTabs() {
       <TabsContent value="browse" className="mt-4 flex min-h-0 flex-1 flex-col">
         <FederationBrowsePanel />
       </TabsContent>
-      {user?.is_admin && (
+      {canManage && (
         <TabsContent
           value="instances"
           className="mt-4 flex min-h-0 flex-1 flex-col"
@@ -102,7 +104,7 @@ function FederationTabs() {
           <FederationInstancesPanel />
         </TabsContent>
       )}
-      {user?.is_admin && (
+      {canManage && (
         <TabsContent
           value="observability"
           className="mt-4 flex min-h-0 flex-1 flex-col"
@@ -110,7 +112,7 @@ function FederationTabs() {
           <FederationObservabilityPanel />
         </TabsContent>
       )}
-      {user?.is_admin && (
+      {canManage && (
         <TabsContent
           value="export-policy"
           className="mt-4 flex min-h-0 flex-1 flex-col"
@@ -130,7 +132,7 @@ export default function FederationPage() {
         <Suspense
           fallback={
             <div className="flex items-center gap-2 py-16 text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" /> 불러오는 중...
+              <Loader2 className="h-4 w-4 animate-spin" /> 불러오는 중…
             </div>
           }
         >

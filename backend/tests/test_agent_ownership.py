@@ -117,7 +117,14 @@ async def test_owner_states_filter_detail_and_stats(api):
     assert sorted(await names(api, "?owner_state=attention")) == ["a.inactive", "a.missing", "a.unknown"]
     assert sorted(await names(api, "?owner_state=missing,inactive")) == ["a.inactive", "a.missing"]
     assert (await api.client.get(f"{BASE}?owner_state=bogus")).status_code == 422
+    # 목록 카드·표가 이메일 대신 이름을 보이도록 등록 사용자 정보를 함께 준다(대소문자 무시, 미등록·미지정은 None)
+    assert items["a.ok"]["owner"]["username"] == "alice" and items["a.ok"]["owner"]["last_name"] == "k"
+    assert items["a.unknown"]["owner"] is None and items["a.missing"]["owner"] is None
     assert (await api.get("/a.unknown")).json()["owner_state"] == "unknown"
+    # 상세도 목록과 같은 기준으로 owner 를 채운다 — owner_email 대소문자가 달라도(DEF-084)
+    detail = (await api.get("/a.ok")).json()
+    assert detail["owner_email"] == "Alice@corp.example" and detail["owner"]["username"] == "alice"
+    assert (await api.get("/a.unknown")).json()["owner"] is None
 
     st = (await api.get("/stats")).json()
     assert st["owner_attention_count"] == 3

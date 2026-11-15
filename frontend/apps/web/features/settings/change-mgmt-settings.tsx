@@ -91,7 +91,7 @@ export function ChangeMgmtSettings() {
           <div className="flex items-center justify-between">
             <div>
               <Label>참조자 통지 활성화</Label>
-              <p className="text-xs text-muted-foreground mt-0.5">비활성화 시 참조자에게 통지를 발송하지 않습니다.</p>
+              <p className="text-xs mt-0.5">비활성화 시 참조자에게 통지를 발송하지 않습니다.</p>
             </div>
             <Switch
               checked={cfg.notify_enabled}
@@ -113,7 +113,7 @@ export function ChangeMgmtSettings() {
                 ))}
               </SelectContent>
             </Select>
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs">
               Slack·Mattermost Webhook 은 「알림」 탭에서 설정합니다.
             </p>
           </div>

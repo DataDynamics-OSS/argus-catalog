@@ -17,9 +17,12 @@ from app.comments.schemas import (
     CommentResponse,
     CommentUpdate,
     PaginatedComments,
+    ReportPage,
+    ReportStatusUpdate,
 )
-from app.core.auth import CurrentUser, assert_owner_or_admin
+from app.core.auth import CurrentUser, OptionalUser, assert_owner_or_admin
 from app.core.database import get_session
+from app.permissions.router import require_feature
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +42,7 @@ async def list_comments(
     return await service.list_comments(session, entity_type, entity_id, page, page_size)
 
 
-@router.post("", response_model=CommentResponse)
+@router.post("", response_model=CommentResponse, dependencies=[Depends(require_feature("comments.write"))])
 async def create_comment(current: CurrentUser,
     req: CommentCreate,
     session: AsyncSession = Depends(get_session),
@@ -66,7 +69,7 @@ async def _require_comment_author(current, session: AsyncSession, comment_id: in
     assert_owner_or_admin(current, author, "댓글")
 
 
-@router.put("/{comment_id}", response_model=CommentResponse)
+@router.put("/{comment_id}", response_model=CommentResponse, dependencies=[Depends(require_feature("comments.write"))])
 async def update_comment(current: CurrentUser,
     comment_id: int,
     req: CommentUpdate,
@@ -107,3 +110,62 @@ async def get_comment_count(
     count = await service.get_comment_count(session, entity_type, entity_id)
     logger.debug("댓글 수 조회: entity=%s/%s count=%d", entity_type, entity_id, count)
     return {"count": count}
+
+
+# ---------------------------------------------------------------------------
+# 오류 신고·개선 요청 처리 (TODO-096 4단계) — 데이터셋 댓글 중 분류가 오류 신고(bug)·개선 요청(suggestion)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/reports", response_model=ReportPage)
+async def list_reports(
+    _user: OptionalUser,
+    dataset_id: int | None = Query(None, description="한 데이터셋만"),
+    state: str = Query("open", pattern="^(open|overdue|closed|all)$"),
+    category: str | None = Query(None, pattern="^(bug|suggestion)$"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    session: AsyncSession = Depends(get_session),
+):
+    """데이터셋 오류 신고·개선 요청 목록 — 처리 중은 기한 이른 순, 끝난 것은 처리 최근 순. 데이터셋 경로를 붙인다."""
+    from sqlalchemy import select
+
+    from app.catalog.ai_ready_check import split_path
+    from app.catalog.models import Dataset, Datasource
+
+    ids = [str(dataset_id)] if dataset_id is not None else None
+    items, total, counts = await service.list_reports(
+        session, entity_ids=ids, state=state, category=category, page=page, page_size=page_size)
+    ds_ids = {int(i.entity_id) for i in items if i.entity_id.isdigit()}
+    if ds_ids:
+        names = {}
+        for did, name, display, urn, dkey in (await session.execute(
+            select(Dataset.id, Dataset.name, Dataset.display_name, Dataset.urn, Datasource.datasource_id)
+            .outerjoin(Datasource, Datasource.id == Dataset.datasource_id).where(Dataset.id.in_(ds_ids))
+        )).all():
+            db, table = split_path(urn or "", dkey)
+            names[str(did)] = (display or name, f"{db}.{table}" if db else table)
+        for i in items:
+            i.entity_name, i.entity_path = names.get(i.entity_id, (None, None))
+    return ReportPage(items=items, total=total, page=page, page_size=page_size, counts=counts)
+
+
+@router.put("/{comment_id}/status", response_model=CommentResponse, dependencies=[Depends(require_feature("data-reports.handle"))])
+async def update_report_status(current: CurrentUser,
+    comment_id: int,
+    req: ReportStatusUpdate,
+    session: AsyncSession = Depends(get_session),
+):
+    """오류 신고·개선 요청의 처리 상태를 바꾼다 — 그 데이터셋의 소유자(생성자) 또는 관리자."""
+    from app.catalog import service as catalog_service
+
+    report = await service.get_report(session, comment_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="처리할 오류 신고·개선 요청을 찾을 수 없습니다.")
+    created_by = (await catalog_service.get_dataset_created_by(session, int(report.entity_id))
+                  if report.entity_id.isdigit() else None)
+    assert_owner_or_admin(current, created_by, "데이터셋")
+    try:
+        return await service.set_report_status(session, report, req.status, req.resolution, current.username)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e

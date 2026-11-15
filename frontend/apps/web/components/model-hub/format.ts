@@ -9,15 +9,6 @@ export function formatBytes(bytes: number | null | undefined): string {
   return `${(bytes / 1024 ** 4).toFixed(1)} TB`
 }
 
-/** 차트 축 라벨용 약식 크기 — 소수점 없이 "512M / 2G" 식. */
-export function formatBytesAxis(bytes: number): string {
-  if (bytes < 1024) return `${Math.round(bytes)}B`
-  if (bytes < 1024 ** 2) return `${Math.round(bytes / 1024)}K`
-  if (bytes < 1024 ** 3) return `${Math.round(bytes / 1024 ** 2)}M`
-  if (bytes < 1024 ** 4) return `${Math.round(bytes / 1024 ** 3)}G`
-  return `${Math.round(bytes / 1024 ** 4)}T`
-}
-
 /** ISO → `yyyy-MM-dd HH:mm` (로컬 시간대). 공백 구분 naive 값은 UTC 로 해석한다. */
 export function formatDateTime(iso: string | null | undefined, withSeconds = false): string {
   if (!iso) return ""

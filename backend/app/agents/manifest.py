@@ -9,7 +9,7 @@
 반영 규칙
 - 정의 파일이 그 에이전트의 기준이다. 파일에 없는 기본 항목(설명·호출 주소 등)은 비운다.
   단 ``status``·``version`` 을 생략하면 현재 값을 유지한다(화면에서 바꾼 상태를 의도치 않게 되돌리지 않도록).
-- 하위 항목(``tools``·``mcpServers``·``lineage``)은 키가 있으면 "이 목록이 전부"로 맞추고(없는 항목 삭제),
+- 하위 항목(``tools``·``mcpServers``·``lineage``·``skills``·``dataAccess``)은 키가 있으면 "이 목록이 전부"로 맞추고(없는 항목 삭제),
   키를 생략하면 기존 항목을 건드리지 않는다.
 - ``version`` 이 바뀌거나 새로 만들 때 버전 기록을 하나 남긴다.
 - 실제 DB 값과 비교해 변경 여부를 판단하므로, 화면에서 고친 값도 다음 반영 때 정의 파일 기준으로 돌아간다.
@@ -28,6 +28,7 @@ import datetime as _dt
 import json
 import logging
 import re
+from datetime import date
 from typing import Any
 
 import yaml
@@ -37,13 +38,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.models import (
     AIAgent,
+    AIAgentDataAccess,
     AIAgentLineage,
     AIAgentMcpServer,
+    AIAgentSkill,
     AIAgentStatusHistory,
     AIAgentTool,
     AIAgentVersion,
 )
-from app.agents.schemas import BUDGET_LIMIT_MAX, AgentStatus
+from app.agents.schemas import (
+    BUDGET_LIMIT_MAX,
+    LOG_RETENTION_MAX,
+    AgentStatus,
+    AutonomyLevel,
+    DataAccessMode,
+    IdentityType,
+    ImpactResult,
+    RiskTier,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +117,46 @@ class _Interface(_Strict):
     invocation_method: str | None = Field(None, alias="invocationMethod", max_length=30)
     streaming: bool = False
     auth_method: str | None = Field(None, alias="authMethod", max_length=50)
+    # 기본 입출력 MIME 형식 (A2A defaultInputModes/defaultOutputModes)
+    input_modes: list[str] | None = Field(None, alias="inputModes")
+    output_modes: list[str] | None = Field(None, alias="outputModes")
+
+
+class _ImpactAssessment(_Strict):
+    assessed_at: date | None = Field(None, alias="assessedAt")
+    result: ImpactResult | None = None
+    ref: str | None = Field(None, max_length=1000)
+
+
+class _Identity(_Strict):
+    """에이전트가 실행할 때 쓰는 신원·권한 (TODO-021)."""
+
+    type: IdentityType | None = None
+    principal: str | None = Field(None, max_length=255)
+    provider: str | None = Field(None, max_length=100)
+    scopes: list[str] | None = None
+    on_behalf_of: bool = Field(False, alias="onBehalfOf")
+
+
+class _Skill(_Strict):
+    """외부에 내세우는 스킬 (A2A AgentSkill). ``id`` 를 생략하면 이름에서 만든다."""
+
+    id: str | None = Field(None, max_length=100, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    name: str = Field(..., min_length=1, max_length=200)
+    description: str | None = None
+    tags: list[str] | None = None
+    examples: list[str] | None = None
+    input_modes: list[str] | None = Field(None, alias="inputModes")
+    output_modes: list[str] | None = Field(None, alias="outputModes")
+
+
+class _DataAccess(_Strict):
+    """에이전트가 읽거나 쓰는 데이터. ``dataset``(URN) 과 ``datasource``(이름 또는 식별 ID) 중 하나."""
+
+    dataset: str | None = Field(None, max_length=500)
+    datasource: str | None = Field(None, max_length=200)
+    access: DataAccessMode = "read"
+    description: str | None = None
 
 
 class _Governance(_Strict):
@@ -117,6 +169,13 @@ class _Governance(_Strict):
     network_allowlist: list[str] | None = Field(None, alias="networkAllowlist")
     dlp_policies: list[str] | None = Field(None, alias="dlpPolicies")
     guardrails: dict[str, Any] | None = None
+    # 위험 등급·규제 준수 (TODO-020)
+    risk_tier: RiskTier | None = Field(None, alias="riskTier")
+    risk_rationale: str | None = Field(None, alias="riskRationale")
+    impact_assessment: _ImpactAssessment | None = Field(None, alias="impactAssessment")
+    compliance: list[str] | None = None
+    log_retention_days: int | None = Field(None, alias="logRetentionDays", ge=1, le=LOG_RETENTION_MAX)
+    autonomy_level: AutonomyLevel | None = Field(None, alias="autonomyLevel")
 
 
 class _Tool(_Strict):
@@ -180,6 +239,9 @@ class _Spec(_Strict):
     tools: list[_Tool] | None = None
     mcp_servers: list[_McpServer] | None = Field(None, alias="mcpServers")
     lineage: list[_Lineage] | None = None
+    identity: _Identity | None = None
+    skills: list[_Skill] | None = None
+    data_access: list[_DataAccess] | None = Field(None, alias="dataAccess")
     release: _Release | None = None
 
 
@@ -212,6 +274,8 @@ class AgentManifest(_Strict):
         rt = s.runtime or _Runtime()
         itf = s.interface or _Interface()
         gov = s.governance or _Governance()
+        ia = gov.impact_assessment or _ImpactAssessment()
+        ident = s.identity or _Identity()
         return {
             "display_name": m.display_name,
             "owner_email": m.owner,
@@ -249,6 +313,21 @@ class AgentManifest(_Strict):
             "output_schema": s.output_schema,
             "inference_params": s.inference_params,
             "rag_config": s.rag_config,
+            "default_input_modes": itf.input_modes,
+            "default_output_modes": itf.output_modes,
+            "risk_tier": gov.risk_tier,
+            "risk_rationale": gov.risk_rationale,
+            "impact_assessed_at": ia.assessed_at,
+            "impact_assessment_result": ia.result,
+            "impact_assessment_ref": ia.ref,
+            "compliance": gov.compliance,
+            "log_retention_days": gov.log_retention_days,
+            "autonomy_level": gov.autonomy_level,
+            "identity_type": ident.type,
+            "identity_principal": ident.principal,
+            "identity_provider": ident.provider,
+            "granted_scopes": ident.scopes,
+            "on_behalf_of": ident.on_behalf_of,
         }
 
 
@@ -459,6 +538,90 @@ async def _sync_lineage(session, agent: AIAgent, desired: list[_Lineage], change
             changes.append(f"lineage: ~{x.target_ref}({x.relation})")
 
 
+async def _sync_skills(session, agent: AIAgent, desired: list[_Skill], changes: list[str]) -> None:
+    """스킬을 ``desired`` 와 같게 맞춘다(스킬 ID 기준, 목록 순서가 표시 순서). 정책 번들과 무관해 반환값 없음."""
+    from app.agents.service import _card_skill_id
+
+    used: set[str] = {x.id for x in desired if x.id}
+    keys = []
+    for x in desired:
+        keys.append(x.id or _card_skill_id(x.name, used))
+    if len(keys) != len(set(keys)):
+        raise ValueError("skills: 같은 id 의 스킬이 두 번 이상 있습니다.")
+    rows = (await session.execute(select(AIAgentSkill).where(AIAgentSkill.agent_id == agent.id))).scalars().all()
+    current = {}
+    for r in rows:
+        if r.skill_key in current or r.skill_key not in keys:
+            await session.delete(r)
+            changes.append(f"skills: -{r.skill_key}")
+        else:
+            current[r.skill_key] = r
+    if any(r.skill_key not in keys for r in rows):
+        await session.flush()  # 같은 키로 다시 넣을 때 고유 제약에 걸리지 않게 삭제를 먼저 반영
+    for order, (x, key) in enumerate(zip(desired, keys)):
+        want = {"name": x.name, "description": x.description, "tags": x.tags, "examples": x.examples,
+                "input_modes": x.input_modes, "output_modes": x.output_modes, "sort_order": order}
+        row = current.get(key)
+        if row is None:
+            session.add(AIAgentSkill(agent_id=agent.id, skill_key=key, **want))
+            changes.append(f"skills: +{key}")
+            continue
+        diff = [k for k, v in want.items() if _norm(getattr(row, k)) != _norm(v)]
+        if diff:
+            for k in diff:
+                setattr(row, k, want[k])
+            changes.append(f"skills: ~{key} ({', '.join(diff)})")
+
+
+async def _sync_data_access(session, agent: AIAgent, desired: list[_DataAccess], changes: list[str]) -> bool:
+    """데이터 접근을 ``desired`` 와 같게 맞춘다(대상 기준). 바뀌었으면 True(정책 번들에 실리므로).
+
+    대상(데이터셋 URN·데이터 소스 이름 또는 식별 ID)을 찾지 못하거나 겹치면 ValueError.
+    """
+    from app.agents.schemas import AIAgentDataAccessCreate
+    from app.agents.service import _resolve_data_target
+
+    resolved: list[tuple[tuple[int | None, int | None], _DataAccess, str]] = []
+    for x in desired:
+        if bool(x.dataset) == bool(x.datasource):
+            raise ValueError("dataAccess: dataset 과 datasource 중 하나만 지정하세요.")
+        req = AIAgentDataAccessCreate(dataset_urn=x.dataset, datasource_name=x.datasource, access=x.access)
+        try:
+            target = await _resolve_data_target(session, req)
+        except ValueError as e:
+            raise ValueError(f"dataAccess: {e}") from None
+        resolved.append((target, x, x.dataset or x.datasource))
+    keys = [t for t, _, _ in resolved]
+    if len(keys) != len(set(keys)):
+        raise ValueError("dataAccess: 같은 대상이 두 번 이상 있습니다.")
+    rows = (await session.execute(
+        select(AIAgentDataAccess).where(AIAgentDataAccess.agent_id == agent.id))).scalars().all()
+    current = {}
+    changed = False
+    for r in rows:
+        k = (r.datasource_id, r.dataset_id)
+        if k in current or k not in keys:
+            await session.delete(r)
+            changes.append(f"dataAccess: -{r.dataset_id and f'dataset#{r.dataset_id}' or f'datasource#{r.datasource_id}'}")
+            changed = True
+        else:
+            current[k] = r
+    for (src_id, ds_id), x, label in resolved:
+        row = current.get((src_id, ds_id))
+        if row is None:
+            session.add(AIAgentDataAccess(agent_id=agent.id, datasource_id=src_id, dataset_id=ds_id,
+                                          access=x.access, description=x.description))
+            changes.append(f"dataAccess: +{label}({x.access})")
+            changed = True
+            continue
+        diff = [k for k, v in (("access", x.access), ("description", x.description)) if _norm(getattr(row, k)) != _norm(v)]
+        if diff:
+            row.access, row.description = x.access, x.description
+            changes.append(f"dataAccess: ~{label} ({', '.join(diff)})")
+            changed = True
+    return changed
+
+
 async def _apply_one(session: AsyncSession, man: AgentManifest, user, source_ref: str | None) -> dict:
     """문서 하나를 반영한다(커밋·롤백은 호출 측). 결과 ``{name, action, changes, agent_id}``.
 
@@ -489,6 +652,10 @@ async def _apply_one(session: AsyncSession, man: AgentManifest, user, source_ref
     else:
         if not _can_edit(agent, user):
             raise PermissionError("이 에이전트의 소유자·등록자 또는 관리자만 반영할 수 있습니다.")
+        from app.permissions.router import check_feature
+
+        if not await check_feature(session, user, "agents.edit"):
+            raise PermissionError("기능 권한이 없습니다: agents.edit")
         if want_status and want_status != agent.status and AgentStatus.BLOCKED.value in (want_status, agent.status) \
                 and not user.is_admin:
             raise PermissionError("blocked 상태로 바꾸거나 해제하는 것은 관리자만 할 수 있습니다.")
@@ -527,6 +694,10 @@ async def _apply_one(session: AsyncSession, man: AgentManifest, user, source_ref
         policy_changed |= await _sync_mcp(session, agent, man.spec.mcp_servers, changes)
     if man.spec.lineage is not None:
         await _sync_lineage(session, agent, man.spec.lineage, changes)
+    if man.spec.skills is not None:
+        await _sync_skills(session, agent, man.spec.skills, changes)
+    if man.spec.data_access is not None:
+        policy_changed |= await _sync_data_access(session, agent, man.spec.data_access, changes)
 
     # 관리 방식 (변경 여부와 무관한 기록 항목은 비교 대상에서 뺀다)
     if agent.managed_by != "manifest":
@@ -605,6 +776,12 @@ async def export_manifest(session: AsyncSession, name: str) -> dict | None:
     lineage = (await session.execute(
         select(AIAgentLineage).where(AIAgentLineage.agent_id == a.id).order_by(AIAgentLineage.id)
     )).scalars().all()
+    skills = (await session.execute(
+        select(AIAgentSkill).where(AIAgentSkill.agent_id == a.id).order_by(AIAgentSkill.sort_order, AIAgentSkill.id)
+    )).scalars().all()
+    from app.agents.service import _list_data_access
+
+    data_access = await _list_data_access(session, a.id)
 
     def mcp_doc(m: AIAgentMcpServer) -> dict:
         if m.mcp_deployment_id:
@@ -623,12 +800,19 @@ async def export_manifest(session: AsyncSession, name: str) -> dict | None:
         "runtime": {"framework": a.framework, "executionPolicy": a.execution_policy, "maxSteps": a.max_steps,
                     "memoryType": a.memory_type, "multiAgent": a.is_multi_agent or None, "subAgents": a.sub_agents},
         "interface": {"endpoint": a.endpoint, "protocol": a.protocol, "invocationMethod": a.invocation_method,
-                      "streaming": a.streaming or None, "authMethod": a.auth_method},
+                      "streaming": a.streaming or None, "authMethod": a.auth_method,
+                      "inputModes": a.default_input_modes, "outputModes": a.default_output_modes},
         "governance": {"piiHandling": a.pii_handling, "dataResidency": a.data_residency,
                        "budgetLimit": _num(a.budget_limit), "hitlRequired": a.hitl_required or None,
                        "hitlConfig": a.hitl_config, "auditLogRef": a.audit_log_ref,
                        "networkAllowlist": a.network_allowlist, "dlpPolicies": a.dlp_policies,
-                       "guardrails": a.guardrails},
+                       "guardrails": a.guardrails, "riskTier": a.risk_tier, "riskRationale": a.risk_rationale,
+                       "impactAssessment": {"assessedAt": a.impact_assessed_at,
+                                            "result": a.impact_assessment_result, "ref": a.impact_assessment_ref},
+                       "compliance": a.compliance, "logRetentionDays": a.log_retention_days,
+                       "autonomyLevel": a.autonomy_level},
+        "identity": {"type": a.identity_type, "principal": a.identity_principal, "provider": a.identity_provider,
+                     "scopes": a.granted_scopes, "onBehalfOf": a.on_behalf_of or None},
         "capabilities": a.capabilities,
         "supportedLanguages": a.supported_languages,
         "useCases": a.use_cases,
@@ -645,6 +829,12 @@ async def export_manifest(session: AsyncSession, name: str) -> dict | None:
     spec["mcpServers"] = [mcp_doc(m) for m in mcps]
     spec["lineage"] = [_drop_empty({"targetType": x.target_type, "targetRef": x.target_ref, "relation": x.relation,
                                     "description": x.description}) for x in lineage]
+    spec["skills"] = [_drop_empty({"id": k.skill_key, "name": k.name, "description": k.description, "tags": k.tags,
+                                   "examples": k.examples, "inputModes": k.input_modes,
+                                   "outputModes": k.output_modes}) for k in skills]
+    spec["dataAccess"] = [_drop_empty({"dataset": d.target_urn if d.target_type == "dataset" else None,
+                                       "datasource": d.target_urn if d.target_type == "datasource" else None,
+                                       "access": d.access, "description": d.description}) for d in data_access]
     metadata = {"name": a.name, "displayName": a.display_name, "owner": a.owner_email,
                 "department": a.department, "category": a.category, "tags": a.tags}
     metadata = {k: v for k, v in metadata.items() if v is not None or k in ("owner", "department", "category")}

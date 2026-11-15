@@ -13,30 +13,33 @@ import { notifyError, toast } from "@/lib/notify"
 
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@workspace/ui/components/card"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@workspace/ui/components/dialog"
 import { cn } from "@workspace/ui/lib/utils"
+
+import { StatusBadge, type StatusTone } from "@workspace/ui/components/status-badge"
 
 import { fetchMcpPolicyBundle } from "../../api"
 import { PULL_STATE_LABEL, type McpDeploymentPolicy, type McpPolicyBundle } from "../../data/schema"
 import { OriginBadge, fmtDate } from "../mcp-badges"
 import { JsonBlock } from "../mcp-server-detail"
+import { copyText } from "@/lib/clipboard"
+import { DetailSection } from "@/components/detail-section"
 
-const STATE_TONE: Record<string, string> = {
-  applied: "border-emerald-300 text-emerald-700 dark:text-emerald-300",
-  outdated: "border-amber-300 text-amber-700 dark:text-amber-300",
-  stale: "border-red-300 text-red-700 dark:text-red-400",
-  never: "border-red-300 text-red-700 dark:text-red-400",
+const STATE_TONE: Record<string, StatusTone> = {
+  applied: "success",
+  outdated: "warning",
+  stale: "danger",
+  never: "danger",
 }
 
 export function PullStateBadge({ state }: { state: string | null }) {
   if (!state) return null
-  const Icon = state === "applied" ? CheckCircle2 : AlertTriangle
   return (
-    <Badge variant="outline" className={cn("gap-1 text-[11px]", STATE_TONE[state])}>
-      <Icon className="h-3 w-3" />
-      {PULL_STATE_LABEL[state] ?? state}
-    </Badge>
+    <StatusBadge
+      tone={STATE_TONE[state] ?? "neutral"}
+      icon={state === "applied" ? CheckCircle2 : AlertTriangle}
+      label={PULL_STATE_LABEL[state] ?? state}
+    />
   )
 }
 
@@ -87,20 +90,17 @@ export function EnforcementCard({ name, policy, mode, canEdit = true }: {
   const snippet = forgeSnippet(name)
 
   return (
-    <Card className={cn(enforce && policy.pull_state !== "applied" && "border-amber-300 dark:border-amber-800")}>
-      <CardHeader className="flex flex-row items-start justify-between gap-2">
-        <div className="space-y-1">
-          <CardTitle className="flex items-center gap-2 text-sm">
-            정책 집행 <OriginBadge origin="argus" />
-            {enforce ? <PullStateBadge state={policy.pull_state} /> : <Badge variant="outline" className="text-[11px]">관측만</Badge>}
-          </CardTitle>
-          <p className="text-xs text-muted-foreground">
+    <DetailSection
+      title={<>
+        정책 집행 <OriginBadge origin="argus" />
+        {enforce ? <PullStateBadge state={policy.pull_state} /> : <Badge size="sm" variant="outline">관측만</Badge>}
+      </>}
+      description={<>
             {enforce
               ? "서버가 정책 번들을 주기적으로 받아 도구 호출 직전에 차단 도구·꺼진 그룹·사람 승인 도구·승인 리소스 범위·에이전트별 허용 범위를 집행합니다. 로컬 설정보다 넓힐 수는 없습니다."
               : "관측 모드에서는 서버가 번들을 받아도 집행하지 않습니다. 강제(enforce)로 바꾸면 서버가 다음 갱신(기본 60초) 때부터 집행합니다."}
-          </p>
-        </div>
-        <div className="flex shrink-0 gap-2">
+      </>}
+      actions={<>
           {canEdit && (
           <Button size="sm" variant="outline" onClick={openBundle}>
             <Braces className="mr-1 h-4 w-4" /> 번들 미리보기
@@ -109,9 +109,13 @@ export function EnforcementCard({ name, policy, mode, canEdit = true }: {
           <Button size="sm" variant="outline" onClick={() => setSnippetOpen(true)}>
             <FileCode2 className="mr-1 h-4 w-4" /> 서버 설정
           </Button>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-2 text-sm">
+      </>}
+    >
+      <div className={cn(
+        "space-y-2 rounded-md border p-3 text-sm",
+        // 강제 모드인데 서버가 번들을 아직 적용하지 않았으면 주황 테두리로 알린다
+        enforce && policy.pull_state !== "applied" && "border-amber-300 dark:border-amber-800",
+      )}>
         {!policy.has_service_token && (
           <p className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-400">
             <ShieldAlert className="h-3.5 w-3.5" />
@@ -137,14 +141,14 @@ export function EnforcementCard({ name, policy, mode, canEdit = true }: {
           <dt className="text-muted-foreground">연결 에이전트</dt>
           <dd>{policy.agent_count}개 (에이전트별 허용 그룹·도구·리소스 범위 포함)</dd>
         </dl>
-      </CardContent>
+      </div>
 
       <Dialog open={bundleOpen} onOpenChange={setBundleOpen}>
         <DialogContent className="max-w-3xl">
           <DialogHeader>
             <DialogTitle>정책 번들 — {name}</DialogTitle>
           </DialogHeader>
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs">
             서버가 <code>GET /api/v1/mcp-deployments/{name}/policy-bundle</code> 로 받는 문서입니다(미리보기는 pull 기록을 남기지 않음).
           </p>
           {loading || !bundle ? (
@@ -161,17 +165,17 @@ export function EnforcementCard({ name, policy, mode, canEdit = true }: {
             <DialogTitle>서버 설정 — 카탈로그 정책 pull</DialogTitle>
           </DialogHeader>
           <pre className="overflow-x-auto rounded-md bg-muted p-3 text-xs">{snippet}</pre>
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs">
             카탈로그에 닿지 못하면 마지막 번들(<code>run/catalog-policy.json</code>)로 동작합니다. 에이전트별 제한은 세션 토큰의
             <code> agent</code> 클레임 또는 <code>X-Argus-Agent</code> 헤더로 적용됩니다.
           </p>
           <div className="flex justify-end">
-            <Button size="sm" variant="outline" onClick={() => navigator.clipboard.writeText(snippet).then(() => toast.success("복사했습니다"))}>
+            <Button size="sm" variant="outline" onClick={() => copyText(snippet).then(() => toast.success("복사했습니다."), (e) => notifyError(e, "클립보드에 복사하지 못했습니다."))}>
               <Copy className="mr-1 h-4 w-4" /> 복사
             </Button>
           </div>
         </DialogContent>
       </Dialog>
-    </Card>
+    </DetailSection>
   )
 }

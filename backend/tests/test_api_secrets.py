@@ -86,6 +86,42 @@ def test_required_accepts_good_values(monkeypatch):
     assert crypto.decrypt(crypto.encrypt("hello")) == "hello"
 
 
+def test_jwt_secret_generated_once_and_reused(tmp_path, monkeypatch):
+    """ARGUS_JWT_SECRET 미설정 → 데이터 디렉터리에 임의 키를 만들어(0600) 다음 기동에도 같은 키 (DEF-001)."""
+    value, source = secrets.resolve_jwt_secret(tmp_path)
+    assert source == "generated" and value != secrets.DEV_JWT_SECRET and len(value) >= 32
+    path = tmp_path / secrets.JWT_SECRET_FILE
+    assert path.read_text() == value and (path.stat().st_mode & 0o777) == 0o600
+    assert secrets.resolve_jwt_secret(tmp_path) == (value, "file")
+    # 설치마다 다른 키
+    other, _ = secrets.resolve_jwt_secret(tmp_path / "other")
+    assert other != value
+    # 환경변수가 우선
+    monkeypatch.setenv("ARGUS_JWT_SECRET", GOOD_KEY)
+    assert secrets.resolve_jwt_secret(tmp_path) == (GOOD_KEY, "env")
+
+
+def test_jwt_secret_falls_back_to_dev_when_unwritable(tmp_path):
+    blocker = tmp_path / "file-not-dir"
+    blocker.write_text("x")
+    assert secrets.resolve_jwt_secret(blocker / "data") == (secrets.DEV_JWT_SECRET, "dev")
+    assert secrets.resolve_jwt_secret(None) == (secrets.DEV_JWT_SECRET, "dev")
+
+
+def test_jwt_secret_short_file_is_replaced(tmp_path):
+    (tmp_path / secrets.JWT_SECRET_FILE).write_text("short")
+    value, source = secrets.resolve_jwt_secret(tmp_path)
+    assert source == "generated" and value != "short"
+    assert (tmp_path / secrets.JWT_SECRET_FILE).read_text() == value
+
+
+def test_jwt_secret_required_mode_rejects_missing(tmp_path, monkeypatch):
+    monkeypatch.setenv(secrets.REQUIRE_ENV, "true")
+    with pytest.raises(secrets.InsecureSecretError):
+        secrets.resolve_jwt_secret(tmp_path)
+    assert not (tmp_path / secrets.JWT_SECRET_FILE).exists()
+
+
 def test_value_is_not_stripped(monkeypatch):
     # 값을 가공하면 기존 암호문의 키가 달라진다 — 공백도 키의 일부로 그대로 사용
     monkeypatch.setenv("ARGUS_SECRET_KEY", GOOD_KEY + " ")

@@ -11,12 +11,13 @@ finalize, import) 은 INFO 로 영향을 받은 이름·식별자를 함께 기�
 """
 
 import logging
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import AdminUser, CurrentUser, TokenUser
+from app.core.auth import CurrentUser, TokenUser
 from app.core.database import get_session
 from app.models.store_router import _s3_http_error
 from app.oci_hub import service
@@ -33,7 +34,7 @@ from app.oci_hub.schemas import (
     OciModelVersionResponse,
     PaginatedOciModels,
 )
-from app.permissions.router import require_feature
+from app.permissions.router import check_feature, require_feature, require_feature_granted
 
 logger = logging.getLogger(__name__)
 
@@ -63,16 +64,20 @@ async def get_server_info(request: Request):
     }
 
 
-async def assert_oci_editor(current: TokenUser, session: AsyncSession, name: str):
+async def assert_oci_editor(current: TokenUser, session: AsyncSession, name: str, feature: str = "oci.edit"):
     """OCI 모델 쓰기 가드 — 관리자, 생성자(created_by), 소유자(owner) 통과. 없으면 404, 아니면 403."""
     model = await service.get_oci_model(session, name)
     if not model:
         logger.warning("OCI 모델 쓰기 대상 없음: %s (요청자 %s)", name, current.username)
         raise HTTPException(status_code=404, detail=f"모델 '{name}'을(를) 찾을 수 없습니다.")
-    if current.is_admin or current.username in {model.created_by, model.owner} - {None, ""}:
-        return model
-    logger.warning("OCI 모델 쓰기 거부: %s (요청자 %s)", name, current.username)
-    raise HTTPException(status_code=403, detail="OCI 모델의 소유자 또는 관리자만 수행할 수 있습니다.")
+    if not (current.is_admin or current.username in {model.created_by, model.owner} - {None, ""}):
+        logger.warning("OCI 모델 쓰기 거부: %s (요청자 %s)", name, current.username)
+        raise HTTPException(status_code=403, detail="OCI 모델의 소유자 또는 관리자만 수행할 수 있습니다.")
+    # 역할의 기능 권한(수정 oci.edit · 삭제 oci.delete, 기본 허용형)도 본다(TODO-122)
+    if not await check_feature(session, current, feature):
+        logger.warning("OCI 모델 쓰기 거부(기능 권한 %s): %s (요청자 %s)", feature, name, current.username)
+        raise HTTPException(status_code=403, detail=f"기능 권한이 없습니다: {feature}")
+    return model
 
 
 def _assert_status_allowed(current: TokenUser, status: str | None) -> None:
@@ -179,7 +184,7 @@ async def delete_model(current: CurrentUser,
 
     가져오는 중인 버전이 있으면 409."""
     logger.info("DELETE /oci-models/%s", name)
-    await assert_oci_editor(current, session, name)
+    await assert_oci_editor(current, session, name, feature="oci.delete")
     try:
         if not await service.delete_model(session, name):
             raise HTTPException(status_code=404, detail=f"모델 '{name}'을(를) 찾을 수 없습니다.")
@@ -320,7 +325,7 @@ async def delete_version(current: CurrentUser,
 
     가져오는 중인 버전은 409. 모델·버전이 없으면 404."""
     logger.info("DELETE /oci-models/%s/versions/%d by %s", name, version, current.username)
-    await assert_oci_editor(current, session, name)
+    await assert_oci_editor(current, session, name, feature="oci.delete")
     try:
         ok = await service.delete_version(session, name, version)
     except service.OciConflictError as e:
@@ -371,7 +376,8 @@ async def finalize_version(current: CurrentUser,
 
 @router.post("/import/huggingface", response_model=ImportResponse, status_code=202)
 async def import_huggingface(
-    req: HuggingFaceImportRequest, current: AdminUser, session: AsyncSession = Depends(get_session),
+    req: HuggingFaceImportRequest, current: Annotated[TokenUser, Depends(require_feature_granted("oci.import-hf"))],
+    session: AsyncSession = Depends(get_session),
 ):
     """HuggingFace Hub 모델 가져오기 접수(관리자). 즉시 202 를 돌려주고 백그라운드에서 받아온다.
 

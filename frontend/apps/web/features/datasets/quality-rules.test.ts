@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest"
 
-import { isBinaryColumnType, ruleListMeta } from "./quality-rules"
+import {
+  DATE_FORMAT_CHOICES, domainOptions, domainToSave, isBinaryColumnType, listedDateFormat, ruleListMeta,
+} from "./quality-rules"
 
 describe("ruleListMeta", () => {
   it("is_active 가 \"true\" 가 아니면 비활성 — 검사·점수에서 빠지는 규칙을 목록에서 구분 (DQ-T17)", () => {
@@ -29,5 +31,47 @@ describe("isBinaryColumnType", () => {
     for (const t of ["OBJECT", "STR", "STRING", "INT64", "DATETIME64[US]", "NUMBER", null, ""]) {
       expect(isBinaryColumnType(t)).toBe(false)
     }
+  })
+})
+
+describe("규칙의 도메인(품질 지표) 선택지", () => {
+  const indicators = [
+    { key: "REQUIRED", name: "필수값", check_types: ["NOT_NULL"], domain: null },
+    { key: "YN", name: "여부", check_types: ["ACCEPTED_VALUES"], domain: "YN" },
+    { key: "CODE", name: "코드", check_types: ["ACCEPTED_VALUES"], domain: "CODE" },
+    { key: "AMOUNT", name: "금액", check_types: ["MIN_VALUE", "MAX_VALUE"], domain: "AMOUNT" },
+    { key: "RATE", name: "율", check_types: ["MIN_VALUE", "MAX_VALUE"], domain: "RATE" },
+    { key: "DATE", name: "날짜", check_types: ["DATE_FORMAT"], domain: "DATE" },
+  ]
+
+  it("같은 유형을 나눠 갖는 지표만 선택지가 된다", () => {
+    expect(domainOptions("ACCEPTED_VALUES", indicators)).toEqual([
+      { value: "YN", label: "여부" }, { value: "CODE", label: "코드" }])
+    expect(domainOptions("MAX_VALUE", indicators)).toEqual([
+      { value: "AMOUNT", label: "금액" }, { value: "RATE", label: "율" }])
+    expect(domainOptions("DATE_FORMAT", indicators)).toEqual([])  // 분류가 하나뿐이면 고를 것이 없다
+    expect(domainOptions("NOT_NULL", indicators)).toEqual([])
+    expect(domainOptions("ACCEPTED_VALUES", [])).toEqual([])
+  })
+
+  it("자동이거나 이 유형의 선택지가 아니면 저장하지 않는다(null)", () => {
+    expect(domainToSave("ACCEPTED_VALUES", "YN", indicators)).toBe("YN")
+    expect(domainToSave("ACCEPTED_VALUES", "", indicators)).toBeNull()
+    expect(domainToSave("MIN_VALUE", "YN", indicators)).toBeNull()  // 유형을 바꾸기 전에 고른 값
+    expect(domainToSave("NOT_NULL", "YN", indicators)).toBeNull()
+  })
+})
+
+describe("날짜 형식 선택지", () => {
+  it("목록에 있는 형식은 대소문자·앞뒤 공백을 다듬어 찾고, 없으면 직접 입력(null)", () => {
+    expect(listedDateFormat(" yyyy-mm-dd ")).toBe("YYYY-MM-DD")
+    expect(listedDateFormat("YYYYMMDD")).toBe("YYYYMMDD")
+    expect(listedDateFormat("DD/MM/YYYY")).toBeNull()
+    expect(listedDateFormat("")).toBeNull()
+  })
+
+  it("형식마다 그 형식의 값 예가 있고 겹치지 않는다", () => {
+    expect(new Set(DATE_FORMAT_CHOICES.map((c) => c.value)).size).toBe(DATE_FORMAT_CHOICES.length)
+    expect(DATE_FORMAT_CHOICES.every((c) => c.example.length > 0)).toBe(true)
   })
 })

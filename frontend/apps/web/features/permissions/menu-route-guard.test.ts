@@ -5,7 +5,7 @@ vi.mock("@/components/dashboard-header", () => ({ DashboardHeader: () => null })
 vi.mock("@/features/auth", () => ({ useAuth: () => ({}) }))
 vi.mock("@/features/permissions/use-permissions", () => ({ usePermissions: () => ({}) }))
 
-import { guardedMenuKey } from "./menu-route-guard"
+import { alternateMenuKeys, guardedMenuKey } from "./menu-route-guard"
 
 describe("guardedMenuKey", () => {
   it("메뉴 페이지와 그 하위 경로는 메뉴 key", () => {
@@ -21,5 +21,18 @@ describe("guardedMenuKey", () => {
 
   it("플러그인 화면은 호스트 라우트가 검사", () => {
     expect(guardedMenuKey("/dashboard/x/acme/report")).toBeNull()
+  })
+})
+
+describe("alternateMenuKeys", () => {
+  it("변경 요청 상세는 내 결재함 메뉴로도 열린다(DEF-064)", () => {
+    expect(guardedMenuKey("/dashboard/changes/42")).toBe("changes")
+    expect(alternateMenuKeys("/dashboard/changes/42")).toEqual(["my-approvals"])
+  })
+
+  it("새 요청·목록은 변경 관리 메뉴만", () => {
+    expect(alternateMenuKeys("/dashboard/changes/new")).toEqual([])
+    expect(alternateMenuKeys("/dashboard/changes")).toEqual([])
+    expect(alternateMenuKeys("/dashboard/datasets/12")).toEqual([])
   })
 })

@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
-import { AlertTriangle, CheckCircle2, Loader2, RefreshCw, Save } from "lucide-react"
+import { AlertTriangle, CheckCircle2, Loader2, Save } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import { Card, CardContent } from "@workspace/ui/components/card"
@@ -56,7 +56,7 @@ export function FederationExportPolicyPanel() {
   if (loading) {
     return (
       <div className="flex items-center gap-2 py-16 text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" /> 불러오는 중...
+        <Loader2 className="h-4 w-4 animate-spin" /> 불러오는 중…
       </div>
     )
   }
@@ -71,7 +71,7 @@ export function FederationExportPolicyPanel() {
           노출 정책을 불러오지 못했습니다{error ? `: ${error}` : "."}
         </div>
         <Button variant="outline" size="sm" onClick={load}>
-          <RefreshCw className="mr-1 h-4 w-4" /> 다시 시도
+          다시 시도
         </Button>
       </div>
     )
@@ -79,7 +79,7 @@ export function FederationExportPolicyPanel() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
-      <p className="text-sm text-muted-foreground">
+      <p className="text-sm">
         이 인스턴스가 다른 허브(소비자)에 <strong>API로 제공할 정보 항목</strong>을
         선택합니다. 체크 해제한 항목은 페더레이션 목록·검색·상세·샘플·리니지에서 제외됩니다.
       </p>
@@ -118,7 +118,7 @@ export function FederationExportPolicyPanel() {
           )}
           저장
         </Button>
-        <span className="text-xs text-muted-foreground">
+        <span className="text-xs">
           {selected.length}개 항목 노출
         </span>
       </div>

@@ -103,7 +103,7 @@ openssl rand -base64 36                   # ARGUS_SECRET_KEY / ARGUS_JWT_SECRET 
 | 변수 | 용도 | 주입 경로 |
 |------|------|-----------|
 | `ARGUS_SECRET_KEY` | 외부 연동 자격증명 암호화 키 | 백엔드 **환경변수** |
-| `ARGUS_JWT_SECRET` | 로컬 JWT 서명키 | 백엔드 **환경변수** |
+| `ARGUS_JWT_SECRET` | 로컬 JWT 서명키 (미설정이면 데이터 디렉터리의 `.jwt-secret` 임의 키 — 백엔드를 여러 대 두면 같은 값 지정) | 백엔드 **환경변수** |
 | `DB_PASSWORD` | catalog-postgres 비밀번호 | 컨테이너 env |
 | `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | MinIO 키 | 컨테이너 env |
 | `TEMPORAL_DB_PASSWORD` | Temporal 메타 DB | 컨테이너 env |

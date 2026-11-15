@@ -3,6 +3,7 @@
 // Dataset 상세 페이지 "리니지" 탭에서 호출되는 3-step 다이얼로그 — 방향 → 데이터셋 선택 →
 // 컬럼 매핑 순으로 수동 리니지를 등록한다.
 
+import { Tip } from "@/components/tip"
 import { useCallback, useEffect, useState } from "react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@workspace/ui/components/dialog"
 import { Button } from "@workspace/ui/components/button"
@@ -308,7 +309,7 @@ export function LineageAddDialog({
           <div className="space-y-4">
             <div className="rounded-lg border px-4 py-3 bg-muted/30">
               <p className="text-sm font-medium">{datasetName}</p>
-              <p className="text-sm text-muted-foreground">현재 데이터셋</p>
+              <p className="text-sm">현재 데이터셋</p>
             </div>
 
             <Label className="text-sm font-medium">이 데이터셋의 역할:</Label>
@@ -327,7 +328,7 @@ export function LineageAddDialog({
                   <ArrowDown className="h-5 w-5 text-blue-500" />
                   <span className="font-medium text-sm">소스 (상위)</span>
                 </div>
-                <p className="text-sm text-muted-foreground">
+                <p className="text-sm">
                   이 데이터셋이 다른 데이터셋에 데이터를 제공합니다
                 </p>
               </button>
@@ -345,7 +346,7 @@ export function LineageAddDialog({
                   <ArrowUp className="h-5 w-5 text-green-500" />
                   <span className="font-medium text-sm">타겟 (하위)</span>
                 </div>
-                <p className="text-sm text-muted-foreground">
+                <p className="text-sm">
                   이 데이터셋이 다른 데이터셋으로부터 데이터를 받습니다
                 </p>
               </button>
@@ -366,11 +367,11 @@ export function LineageAddDialog({
                 <>
                   <span className="font-medium">{datasetName}</span>
                   <ArrowRight className="h-4 w-4 text-muted-foreground" />
-                  <span className="text-muted-foreground">?</span>
+                  <span >?</span>
                 </>
               ) : (
                 <>
-                  <span className="text-muted-foreground">?</span>
+                  <span >?</span>
                   <ArrowRight className="h-4 w-4 text-muted-foreground" />
                   <span className="font-medium">{datasetName}</span>
                 </>
@@ -409,14 +410,14 @@ export function LineageAddDialog({
                   >
                     {selectedDataset
                       ? `${selectedDataset.datasource_type} > ${selectedDataset.name}`
-                      : "데이터셋 검색 후 선택..."}
+                      : "데이터셋 검색 후 선택…"}
                     <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-[560px] p-0" align="start">
                   <Command shouldFilter={false}>
                     <CommandInput
-                      placeholder="데이터셋 검색..."
+                      placeholder="데이터셋 검색…"
                       value={searchQuery}
                       onValueChange={setSearchQuery}
                     />
@@ -437,11 +438,11 @@ export function LineageAddDialog({
                                 selectedDatasetId === d.id ? "opacity-100" : "opacity-0"
                               }`}
                             />
-                            <Badge variant="outline" className="mr-2 text-sm px-1.5 py-0">
+                            <Badge variant="outline" className="mr-2">
                               {d.datasource_type}
                             </Badge>
                             <span className="truncate">{d.name}</span>
-                            <span className="ml-auto text-sm text-muted-foreground truncate">
+                            <span className="ml-auto text-sm truncate">
                               {d.datasource_name}
                             </span>
                           </CommandItem>
@@ -527,7 +528,7 @@ export function LineageAddDialog({
             <div className="flex items-center justify-between">
               <Label className="text-sm font-medium">
                 컬럼 매핑
-                <span className="text-sm text-muted-foreground font-normal ml-2">
+                <span className="text-sm font-normal ml-2">
                   (선택 — 영향 분석에 사용)
                 </span>
               </Label>
@@ -540,7 +541,7 @@ export function LineageAddDialog({
             {columnMappings.length > 0 && (
               <div className="space-y-2">
                 {/* Header */}
-                <div className="grid grid-cols-[1fr_auto_1fr_100px_32px] gap-2 items-center text-sm text-muted-foreground px-1">
+                <div className="grid grid-cols-[1fr_auto_1fr_100px_32px] gap-2 items-center text-sm px-1">
                   <span>소스 컬럼</span>
                   <span />
                   <span>타겟 컬럼</span>
@@ -559,13 +560,13 @@ export function LineageAddDialog({
                       onValueChange={v => updateMapping(i, "source_column", v)}
                     >
                       <SelectTrigger className="h-9 text-sm">
-                        <SelectValue placeholder="선택..." />
+                        <SelectValue placeholder="선택…" />
                       </SelectTrigger>
                       <SelectContent>
                         {sourceFields.map(f => (
                           <SelectItem key={f.field_path} value={f.field_path}>
                             {f.field_path}
-                            <span className="text-muted-foreground ml-1">({f.field_type})</span>
+                            <span className="ml-1">({f.field_type})</span>
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -579,13 +580,13 @@ export function LineageAddDialog({
                       onValueChange={v => updateMapping(i, "target_column", v)}
                     >
                       <SelectTrigger className="h-9 text-sm">
-                        <SelectValue placeholder="선택..." />
+                        <SelectValue placeholder="선택…" />
                       </SelectTrigger>
                       <SelectContent>
                         {targetFields.map(f => (
                           <SelectItem key={f.field_path} value={f.field_path}>
                             {f.field_path}
-                            <span className="text-muted-foreground ml-1">({f.field_type})</span>
+                            <span className="ml-1">({f.field_type})</span>
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -608,14 +609,14 @@ export function LineageAddDialog({
                     </Select>
 
                     {/* Delete */}
-                    <Button
+                    <Tip label="매핑 삭제"><Button aria-label="매핑 삭제"
                       variant="ghost"
                       size="icon"
                       className="h-8 w-8"
                       onClick={() => removeMapping(i)}
                     >
                       <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
-                    </Button>
+                    </Button></Tip>
                   </div>
                 ))}
               </div>
@@ -644,7 +645,7 @@ export function LineageAddDialog({
                   건너뛰고 저장
                 </Button>
                 <Button onClick={handleSave} disabled={saving}>
-                  {saving ? "저장 중..." : "저장"}
+                  {saving ? "저장 중…" : "저장"}
                 </Button>
               </div>
             </div>

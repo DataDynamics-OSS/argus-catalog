@@ -53,7 +53,11 @@ export function RelationshipSettings() {
     try {
       const r = await resolveLineage()
       notifySuccess("쿼리 lineage 를 해석했습니다.", {
-        description: `${r.resolved}건 데이터셋 연결, 미해석 ${r.remaining_unresolved}건 남음`,
+        description:
+          `${r.resolved}건 데이터셋 연결, 미해석 ${r.remaining_unresolved}건 남음` +
+          (r.unresolved_catalog
+            ? ` (카탈로그 연결이 없어 해석하지 못한 테이블 ${r.unresolved_catalog}건 — 데이터 소스의 카탈로그 연결과 엔진 이름을 확인하세요)`
+            : ""),
       })
     } catch (e) {
       console.error("Failed to resolve lineage", e)
@@ -80,9 +84,9 @@ export function RelationshipSettings() {
         <CardContent className="space-y-3">
           <Button variant="outline" onClick={handleRecompute} disabled={running}>
             {running ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <RefreshCw className="h-4 w-4 mr-1" />}
-            {running ? "재계산 중..." : "전체 재계산"}
+            {running ? "재계산 중…" : "전체 재계산"}
           </Button>
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs">
             수집된 모든 쿼리 이력(Trino/Hive/Impala/StarRocks)을 다시 분석해 관계를 재구축합니다.
             파서 개선이나 기능 도입 이전 이력을 일괄 반영할 때 사용하세요. 평소에는 쿼리 수집 시 자동으로 갱신됩니다.
           </p>
@@ -104,9 +108,9 @@ export function RelationshipSettings() {
         <CardContent className="space-y-3">
           <Button variant="outline" onClick={handleResolveLineage} disabled={linRunning}>
             {linRunning ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <RefreshCw className="h-4 w-4 mr-1" />}
-            {linRunning ? "해석 중..." : "lineage 전체 해석"}
+            {linRunning ? "해석 중…" : "lineage 전체 해석"}
           </Button>
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs">
             데이터셋 생성 시 자동으로도 점증 해석되며, 이 버튼은 과거 이력을 일괄 백필합니다.
           </p>
         </CardContent>

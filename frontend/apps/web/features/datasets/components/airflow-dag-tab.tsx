@@ -1,88 +1,63 @@
 "use client"
 
+/**
+ * Airflow DAG 탭 — RDBMS → S3 데이터레이크 적재 DAG 자동 생성.
+ *
+ * 하위 탭: Basic(JDBC → CSV) · PySpark(PySpark 탭 스크립트를 spark-submit) · Incremental(일자 CSV) ·
+ * Hive(PySpark 가 쓴 Parquet 을 HiveServer2 로 외부 테이블 · 파티션 등록) · Trino(Trino 가 원본을 읽어 데이터레이크 테이블에 적재).
+ * 원본 이름 · JDBC · 방언별 SQL 조각은 features/datasets/transfer-code.ts 를 함께 쓴다.
+ */
+
 import { useMemo } from "react"
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@workspace/ui/components/card"
+import { DetailSection } from "@/components/detail-section"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@workspace/ui/components/tabs"
 import type { DatasetDetail } from "@/features/datasets/data/schema"
 import { CodeViewer } from "@/components/code-viewer"
+import {
+  DATALAKE_BUCKET,
+  airflowConnId,
+  hiveSql,
+  incrementalColumn,
+  indent,
+  jdbcInfo,
+  sourceColumns,
+  sourceDayStart,
+  sourceIdent,
+  transferTarget,
+  trinoSql,
+} from "@/features/datasets/transfer-code"
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function getJdbcConnId(datasourceType: string): string {
-  switch (datasourceType) {
-    case "mysql": case "mariadb": return "mysql_default"
-    case "mssql": case "sqlserver": return "mssql_default"
-    case "postgresql": case "greenplum": return "postgres_default"
-    case "starrocks": return "starrocks_default"
-    case "trino": return "trino_default"
-    case "oracle": return "oracle_default"
-    default: return `${datasourceType}_default`
-  }
+function dagBase(dataset: DatasetDetail): string {
+  const t = transferTarget(dataset)
+  return `ingest_${t.secretPrefix.toLowerCase()}_${t.slug}`
 }
 
-function getJdbcUrl(datasourceType: string): { url: string; driver: string } {
-  switch (datasourceType) {
-    case "mysql": case "mariadb": return { url: "jdbc:mysql://<HOST>:<PORT>/<DATABASE>", driver: "com.mysql.cj.jdbc.Driver" }
-    case "mssql": case "sqlserver": return { url: "jdbc:sqlserver://<HOST>:<PORT>;databaseName=<DATABASE>;encrypt=false", driver: "com.microsoft.sqlserver.jdbc.SQLServerDriver" }
-    case "postgresql": case "greenplum": return { url: "jdbc:postgresql://<HOST>:<PORT>/<DATABASE>", driver: "org.postgresql.Driver" }
-    case "starrocks": return { url: "jdbc:mysql://<HOST>:<PORT>/<DATABASE>", driver: "com.mysql.cj.jdbc.Driver" }
-    case "trino": return { url: "jdbc:trino://<HOST>:<PORT>/<CATALOG>/<SCHEMA>", driver: "io.trino.jdbc.TrinoDriver" }
-    case "oracle": return { url: "jdbc:oracle:thin:@<HOST>:<PORT>:<SID>", driver: "oracle.jdbc.OracleDriver" }
-    default: return { url: `jdbc:${datasourceType}://<HOST>:<PORT>/<DATABASE>`, driver: "<DRIVER_CLASS>" }
-  }
+/** CSV 머리글 — 파이썬 리스트 리터럴. */
+function csvHeader(dataset: DatasetDetail): string {
+  return dataset.schema_fields.map((f) => JSON.stringify(f.field_path)).join(", ")
 }
 
-// 잘 알려진 수정시각 컬럼 → 시간성 이름 패턴 → DATE 타입 순으로 증분 기준 후보를 찾는다.
-// (테이블마다 다르므로 생성된 코드의 주석에서 담당자 확인을 안내한다)
-const KNOWN_UPDATE_COLUMNS = ["last_update", "updated_at", "update_dt", "modified_at", "last_modified"]
-const TIME_NAME_PATTERN = /(_date|_dt|_at|_time|_timestamp)$/i
-
-function guessIncrementalColumn(dataset: DatasetDetail): string {
-  const fields = dataset.schema_fields
-  for (const known of KNOWN_UPDATE_COLUMNS) {
-    const f = fields.find(x => x.field_path.toLowerCase() === known)
-    if (f) return f.field_path
-  }
-  const byName = fields.find(f => TIME_NAME_PATTERN.test(f.field_path))
-  if (byName) return byName.field_path
-  const byType = fields.find(f => f.field_type === "DATE")
-  return byType?.field_path || "<INCREMENTAL_COLUMN>"
-}
-
-function getDatasetParts(dataset: DatasetDetail) {
-  const parts = dataset.name.split(".")
-  const dbName = parts.length > 1 ? parts[0] : "<database>"
-  const tblName = parts.length > 1 ? parts[1] : parts[0]
-  const datasourceType = dataset.datasource.type
-  const datasourceId = dataset.datasource.datasource_id
-  const connId = getJdbcConnId(datasourceType)
-  const jdbc = getJdbcUrl(datasourceType)
-  // 데이터레이크 표준 경로 — PySpark/Kestra 탭과 동일 규칙
-  const s3Bucket = "<DATALAKE_BUCKET>"
-  const s3Prefix = `raw/${datasourceId}/${dbName}/${tblName}`
-  const s3aBase = `s3a://${s3Bucket}/${s3Prefix}`
-  const columns = dataset.schema_fields.map(f => f.field_path).join(", ")
-  const dagId = `ingest_${datasourceId.replace(/-/g, "_")}_${dbName}_${tblName}`
-  const pkColumn = dataset.schema_fields.find(f => f.is_primary_key === "true")?.field_path || "id"
-  const incrementalColumn = guessIncrementalColumn(dataset)
-  return { dbName, tblName, datasourceType, datasourceId, connId, jdbc, s3Bucket, s3Prefix, s3aBase, columns, dagId, pkColumn, incrementalColumn }
+/** 파이썬 3중 따옴표 문자열 안에 넣을 SQL — 역슬래시만 막는다. */
+function py(sql: string): string {
+  return sql.replace(/\\/g, "\\\\").replace(/"""/g, '\\"\\"\\"')
 }
 
 // ---------------------------------------------------------------------------
 // DAG generators
 // ---------------------------------------------------------------------------
 
-function generateBasicDag(dataset: DatasetDetail): string {
-  const { dbName, tblName, datasourceType, datasourceId, connId, s3Bucket, s3Prefix, columns, dagId } = getDatasetParts(dataset)
+export function generateBasicDag(dataset: DatasetDetail): string {
+  const t = transferTarget(dataset)
+  const columns = sourceColumns(dataset).join(", ")
 
   return `"""
-Airflow DAG: Basic JDBC Extract → S3 Load
-Source: ${dataset.datasource.name} (${datasourceId})
-Table: ${dbName}.${tblName}
+Airflow DAG: Basic JDBC Extract → S3 Load (CSV, 전체 스냅숏)
+Source: ${dataset.datasource.name} (${t.datasourceId})
+Table: ${dataset.name}
 Generated by Argus Catalog
+
+추출 결과를 XCom 으로 넘기므로 작은 테이블(수만 행 이하)용이다. 큰 테이블은 PySpark 하위 탭을 쓴다.
 """
 
 from airflow import DAG
@@ -90,9 +65,9 @@ from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator
 from airflow.operators.python import PythonOperator
 from datetime import datetime, timedelta
-import tempfile
 import csv
 import os
+import tempfile
 
 default_args = {
     "owner": "argus-catalog",
@@ -102,45 +77,41 @@ default_args = {
     "email_on_failure": False,
 }
 
-S3_BUCKET = "${s3Bucket}"
-S3_PREFIX = "${s3Prefix}"
+S3_BUCKET = "${DATALAKE_BUCKET}"
+S3_PREFIX = "${t.s3Prefix}"
 
 
 def _upload_to_s3(**context):
     """추출 결과를 CSV 로 저장해 S3 데이터레이크에 업로드한다."""
-    ti = context["ti"]
-    rows = ti.xcom_pull(task_ids="extract")
+    rows = context["ti"].xcom_pull(task_ids="extract") or []
 
-    # Write to temp CSV
-    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False)
-    writer = csv.writer(tmp)
-    writer.writerow([${columns.split(", ").map(c => `"${c}"`).join(", ")}])
-    for row in rows:
-        writer.writerow(row)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline="") as tmp:
+        writer = csv.writer(tmp)
+        writer.writerow([${csvHeader(dataset)}])
+        writer.writerows(rows)
 
     # Airflow 커넥션(aws_default)의 자격증명 사용 — MinIO 등은 커넥션 Extra 에 endpoint_url 지정
     s3 = S3Hook(aws_conn_id="aws_default")
-    key = f"{S3_PREFIX}/data.csv"
+    key = f"{S3_PREFIX}/snapshot/data.csv"
     s3.load_file(filename=tmp.name, key=key, bucket_name=S3_BUCKET, replace=True)
     os.unlink(tmp.name)
     print(f"Uploaded {len(rows)} rows to s3://{S3_BUCKET}/{key}")
 
 
 with DAG(
-    dag_id="${dagId}",
+    dag_id="${dagBase(dataset)}",
     default_args=default_args,
-    description="Ingest ${dbName}.${tblName} from ${datasourceType} to S3",
+    description="Ingest ${dataset.name} from ${t.type} to S3",
     schedule="0 2 * * *",
     start_date=datetime(2026, 1, 1),
     catchup=False,
-    tags=["argus-catalog", "${datasourceType}", "${dbName}"],
+    tags=["argus-catalog", "${t.type}"],
 ) as dag:
 
     extract = SQLExecuteQueryOperator(
         task_id="extract",
-        conn_id="${connId}",
-        sql="SELECT ${columns} FROM ${dbName}.${tblName}",
+        conn_id="${airflowConnId(t.type)}",
+        sql="""SELECT ${py(columns)} FROM ${py(t.sourceTable)}""",
         do_xcom_push=True,
     )
 
@@ -153,22 +124,23 @@ with DAG(
 `
 }
 
-function generateSparkDag(dataset: DatasetDetail): string {
-  const { dbName, tblName, datasourceType, datasourceId, jdbc, s3aBase, dagId, incrementalColumn } = getDatasetParts(dataset)
+export function generateSparkDag(dataset: DatasetDetail): string {
+  const t = transferTarget(dataset)
+  const jdbc = jdbcInfo(t.type)
 
   return `"""
 Airflow DAG: PySpark Partitioned Load
-Source: ${dataset.datasource.name} (${datasourceId})
-Table: ${dbName}.${tblName}
+Source: ${dataset.datasource.name} (${t.datasourceId})
+Table: ${dataset.name}
 Generated by Argus Catalog
+
+데이터셋 상세 > PySpark 탭의 '일단위 증분' 스크립트를 파일(ingest_${t.slug}.py)로 저장해
+모든 Airflow 워커와 Spark 가 읽을 수 있는 곳(DAGs 폴더 아래 등)에 두고 spark-submit 한다.
 """
 
 from airflow import DAG
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
-from airflow.operators.python import PythonOperator
 from datetime import datetime, timedelta
-import tempfile
-import os
 
 default_args = {
     "owner": "argus-catalog",
@@ -177,189 +149,120 @@ default_args = {
     "retry_delay": timedelta(minutes=5),
 }
 
-PYSPARK_SCRIPT = """
-from datetime import datetime, timedelta
-import sys
-
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import lit
-
-target_date = sys.argv[1]
-next_date = (datetime.strptime(target_date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
-
-spark = SparkSession.builder \\\\
-    .appName("airflow-${datasourceId}-${tblName}") \\\\
-    .getOrCreate()
-# S3A 접속 설정(IAM Role 권장, MinIO 는 endpoint 지정) — 데이터셋 상세 > PySpark 탭 주석 참고
-
-# [필수 확인] 일단위 증분 기준 컬럼 — 테이블마다 달라 담당자 확인 필요.
-# 카탈로그 스키마 기준 추정값: ${incrementalColumn}
-# (후보 목록·주의사항은 데이터셋 상세 > PySpark 탭의 주석 참고)
-incremental_column = "${incrementalColumn}"
-
-# 반개구간 비교로 원본 인덱스를 활용 (DATE(컬럼) = '...' 비교는 인덱스를 못 탄다)
-pushdown = (
-    "(SELECT * FROM ${dbName}.${tblName} "
-    "WHERE {0} >= '{1} 00:00:00' AND {0} < '{2} 00:00:00') AS t"
-).format(incremental_column, target_date, next_date)
-
-df = spark.read \\\\
-    .format("jdbc") \\\\
-    .option("url", "${jdbc.url}") \\\\
-    .option("driver", "${jdbc.driver}") \\\\
-    .option("dbtable", pushdown) \\\\
-    .option("user", "<USERNAME>") \\\\
-    .option("password", "<PASSWORD>") \\\\
-    .option("fetchsize", "10000") \\\\
-    .load()
-
-print(f"Read {df.count()} rows for {target_date}")
-
-# 일자 파티션 경로를 직접 지정 + overwrite → 같은 날짜 재실행에 멱등
-target_path = "${s3aBase}/dt=" + target_date
-df.withColumn("dt", lit(target_date)) \\\\
-    .write \\\\
-    .mode("overwrite") \\\\
-    .parquet(target_path)
-
-print(f"Written to {target_path}")
-spark.stop()
-"""
-
-
-def _write_spark_script(**context):
-    """Write PySpark script to a temp file for SparkSubmitOperator."""
-    f = tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, dir="/tmp")
-    f.write(PYSPARK_SCRIPT)
-    f.close()
-    context["ti"].xcom_push(key="script_path", value=f.name)
-
-
-def _cleanup_script(**context):
-    path = context["ti"].xcom_pull(task_ids="write_script", key="script_path")
-    if path and os.path.exists(path):
-        os.unlink(path)
-
+# [필수 확인] PySpark 탭에서 저장한 스크립트와 JDBC 드라이버 jar 의 경로
+SCRIPT_PATH = "/opt/airflow/dags/scripts/ingest_${t.slug}.py"
+JDBC_JAR = "/opt/airflow/jars/${jdbc.jar}"
 
 with DAG(
-    dag_id="${dagId}_spark",
+    dag_id="${dagBase(dataset)}_spark",
     default_args=default_args,
-    description="PySpark partitioned ingest ${dbName}.${tblName}",
+    description="PySpark partitioned ingest ${dataset.name}",
     schedule="0 3 * * *",
     start_date=datetime(2026, 1, 1),
     catchup=False,
-    tags=["argus-catalog", "${datasourceType}", "${dbName}", "spark"],
+    tags=["argus-catalog", "${t.type}", "spark"],
 ) as dag:
 
-    write_script = PythonOperator(
-        task_id="write_script",
-        python_callable=_write_spark_script,
-    )
-
-    spark_submit = SparkSubmitOperator(
+    # {{ ds }} = 데이터 구간의 시작일(일 배치면 전일) — 그날 하루치를 ${t.partition}={{ ds }} 에 쓴다
+    spark_load = SparkSubmitOperator(
         task_id="spark_partitioned_load",
-        application="{{ ti.xcom_pull(task_ids='write_script', key='script_path') }}",
+        application=SCRIPT_PATH,
         conn_id="spark_default",
-        application_args=["{{ ds }}"],
+        jars=JDBC_JAR,
+        application_args=["--target-date", "{{ ds }}"],
+        # 원본 자격 증명 — 스크립트가 환경변수로 읽는다(Airflow Variable/Secret Backend 로 주입)
+        env_vars={
+            "${t.secretPrefix}_USERNAME": "{{ var.value.${t.secretPrefix.toLowerCase()}_username }}",
+            "${t.secretPrefix}_PASSWORD": "{{ var.value.${t.secretPrefix.toLowerCase()}_password }}",
+        },
         conf={
             "spark.executor.memory": "2g",
             "spark.executor.cores": "2",
             "spark.dynamicAllocation.enabled": "true",
         },
     )
-
-    cleanup = PythonOperator(
-        task_id="cleanup",
-        python_callable=_cleanup_script,
-        trigger_rule="all_done",
-    )
-
-    write_script >> spark_submit >> cleanup
 `
 }
 
-function generateIncrementalDag(dataset: DatasetDetail): string {
-  const { dbName, tblName, datasourceType, datasourceId, connId, s3Bucket, s3Prefix, columns, dagId, incrementalColumn } = getDatasetParts(dataset)
+export function generateIncrementalDag(dataset: DatasetDetail): string {
+  const t = transferTarget(dataset)
+  const columns = sourceColumns(dataset).join(", ")
+  const inc = incrementalColumn(dataset)
+  const incExpr = sourceIdent(t.type, inc)
 
   return `"""
-Airflow DAG: Incremental Date-based Load
-Source: ${dataset.datasource.name} (${datasourceId})
-Table: ${dbName}.${tblName}
+Airflow DAG: Incremental Date-based Load (CSV)
+Source: ${dataset.datasource.name} (${t.datasourceId})
+Table: ${dataset.name}
 Generated by Argus Catalog
 
-Uses Airflow's Jinja templating ({{ ds }}) for date-based extraction.
-The '{{ ds }}' macro resolves to the logical execution date (YYYY-MM-DD).
+'{{ ds }}' 는 데이터 구간의 시작일(YYYY-MM-DD) — 일 배치면 전일 하루치를 추출한다.
+결과는 XCom 으로 넘기므로 하루치가 작은 테이블용이다. 큰 테이블은 PySpark 하위 탭을 쓴다.
 """
 
 from airflow import DAG
+from airflow.exceptions import AirflowSkipException
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator
-from airflow.operators.bash import BashOperator
 from airflow.operators.python import PythonOperator
 from datetime import datetime, timedelta
-import tempfile
 import csv
 import os
+import tempfile
 
 default_args = {
     "owner": "argus-catalog",
-    "depends_on_past": True,  # Ensure sequential date processing
+    "depends_on_past": True,  # 날짜 순서대로 처리
     "retries": 3,
     "retry_delay": timedelta(minutes=10),
 }
 
-S3_BUCKET = "${s3Bucket}"
-S3_PREFIX = "${s3Prefix}"
+S3_BUCKET = "${DATALAKE_BUCKET}"
+S3_PREFIX = "${t.s3Prefix}"
 
 
 def _save_and_upload(**context):
     """추출 결과를 CSV 로 저장해 S3 일자 파티션 경로에 업로드한다."""
-    ti = context["ti"]
-    ds = context["ds"]  # Execution date: YYYY-MM-DD
-    rows = ti.xcom_pull(task_ids="extract_daily")
-
+    ds = context["ds"]
+    rows = context["ti"].xcom_pull(task_ids="extract_daily") or []
     if not rows:
-        print(f"No data for {ds}, skipping upload.")
-        return
+        raise AirflowSkipException(f"No data for {ds}")
 
-    # Write temp file
-    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False)
-    writer = csv.writer(tmp)
-    writer.writerow([${columns.split(", ").map(c => `"${c}"`).join(", ")}])
-    for row in rows:
-        writer.writerow(row)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline="") as tmp:
+        writer = csv.writer(tmp)
+        writer.writerow([${csvHeader(dataset)}])
+        writer.writerows(rows)
 
-    # S3 일자 파티션 업로드 — 같은 날짜 재실행 시 같은 키를 덮어써 멱등.
-    # (Airflow 커넥션 aws_default 사용, MinIO 등은 커넥션 Extra 에 endpoint_url 지정)
+    # 같은 날짜 재실행 시 같은 키를 덮어써 멱등 (aws_default 커넥션, MinIO 등은 Extra 에 endpoint_url)
     s3 = S3Hook(aws_conn_id="aws_default")
-    key = f"{S3_PREFIX}/dt={ds}/${tblName}.csv"
+    key = f"{S3_PREFIX}/csv/${t.partition}={ds}/${t.slug}.csv"
     s3.load_file(filename=tmp.name, key=key, bucket_name=S3_BUCKET, replace=True)
     os.unlink(tmp.name)
+    if not s3.check_for_key(key, bucket_name=S3_BUCKET):
+        raise RuntimeError(f"upload not found: s3://{S3_BUCKET}/{key}")
     print(f"Uploaded {len(rows)} rows to s3://{S3_BUCKET}/{key}")
 
 
 with DAG(
-    dag_id="${dagId}_incremental",
+    dag_id="${dagBase(dataset)}_incremental",
     default_args=default_args,
-    description="Incremental daily ingest ${dbName}.${tblName}",
+    description="Incremental daily ingest ${dataset.name}",
     schedule="0 2 * * *",
     start_date=datetime(2026, 1, 1),
     catchup=False,
-    tags=["argus-catalog", "${datasourceType}", "${dbName}", "incremental"],
+    tags=["argus-catalog", "${t.type}", "incremental"],
 ) as dag:
 
-    # 실행 일자({{ ds }}) 하루치만 추출.
-    # [필수 확인] 증분 기준 컬럼(${incrementalColumn})은 테이블마다 다름 — 담당자 확인 필요.
+    # [필수 확인] 증분 기준 컬럼(${inc})은 테이블마다 다름 — 담당자 확인 필요.
     # 반개구간 비교로 원본 인덱스 활용 ({{ macros.ds_add(ds, 1) }} = 익일).
     extract_daily = SQLExecuteQueryOperator(
         task_id="extract_daily",
-        conn_id="${connId}",
+        conn_id="${airflowConnId(t.type)}",
         sql="""
-            SELECT ${columns}
-            FROM ${dbName}.${tblName}
-            WHERE ${incrementalColumn} >= '{{ ds }} 00:00:00'
-              AND ${incrementalColumn} <  '{{ macros.ds_add(ds, 1) }} 00:00:00'
+            SELECT ${py(columns)}
+            FROM ${py(t.sourceTable)}
+            WHERE ${py(incExpr)} >= ${sourceDayStart(t.type, "{{ ds }}")}
+              AND ${py(incExpr)} <  ${sourceDayStart(t.type, "{{ macros.ds_add(ds, 1) }}")}
         """,
         do_xcom_push=True,
     )
@@ -369,32 +272,115 @@ with DAG(
         python_callable=_save_and_upload,
     )
 
-    verify = BashOperator(
-        task_id="verify_partition",
-        bash_command="aws s3 ls s3://${s3Bucket}/${s3Prefix}/dt={{ ds }}/ && echo 'Partition verified'",
-    )
-
-    extract_daily >> upload >> verify
+    extract_daily >> upload
 `
 }
 
-function generateSqlDag(dataset: DatasetDetail): string {
-  const { dbName, tblName, datasourceType, datasourceId, s3aBase, dagId, incrementalColumn } = getDatasetParts(dataset)
-  const fields = dataset.schema_fields
+export function generateHiveDag(dataset: DatasetDetail): string {
+  const t = transferTarget(dataset)
+  const sql = hiveSql(dataset, "{{ ds }}")
 
   return `"""
-Airflow DAG: Hive/Trino SQL Pipeline
-Source: ${dataset.datasource.name} (${datasourceId})
-Table: ${dbName}.${tblName}
+Airflow DAG: Hive 외부 테이블 · 일자 파티션 등록
+Source: ${dataset.datasource.name} (${t.datasourceId})
+Table: ${dataset.name}
 Generated by Argus Catalog
 
-Uses Trino/Hive SQL operators to create external tables,
-manage partitions, and load data via INSERT INTO.
+PySpark 하위 탭 DAG(${dagBase(dataset)}_spark)가 ${sql.location}/${t.partition}=YYYY-MM-DD/ 에 쓴
+Parquet 을 HiveServer2 로 외부 테이블 ${sql.table} 에 등록한다. Hive 는 원본 DB 를 읽지 않는다.
+
+[필수 확인]
+  - 컬럼 타입은 원본 타입으로 추정한 Spark(JDBC) 기준값이다 — Parquet 파일의 타입과 다르면 조회가 실패하므로
+    첫 적재 뒤 파일 스키마(parquet-tools schema 등)와 맞춰 본다.
+  - hiveserver2_default 커넥션(apache-airflow-providers-apache-hive), Hive 에서 s3a 접근 설정.
 """
 
 from airflow import DAG
 from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator
-from airflow.operators.bash import BashOperator
+from airflow.sensors.external_task import ExternalTaskSensor
+from datetime import datetime, timedelta
+
+default_args = {
+    "owner": "argus-catalog",
+    "depends_on_past": False,
+    "retries": 2,
+    "retry_delay": timedelta(minutes=5),
+}
+
+HIVE_CONN_ID = "hiveserver2_default"
+
+with DAG(
+    dag_id="${dagBase(dataset)}_hive",
+    default_args=default_args,
+    description="Register ${dataset.name} Parquet partitions in Hive",
+    schedule="0 3 * * *",  # PySpark DAG 와 같은 주기 — 같은 {{ ds }} 를 기다린다
+    start_date=datetime(2026, 1, 1),
+    catchup=False,
+    tags=["argus-catalog", "${t.type}", "hive"],
+) as dag:
+
+    wait_spark = ExternalTaskSensor(
+        task_id="wait_spark_load",
+        external_dag_id="${dagBase(dataset)}_spark",
+        external_task_id="spark_partitioned_load",
+        mode="reschedule",
+        timeout=6 * 60 * 60,
+    )
+
+    # 한 번 만들면 그대로 둔다(IF NOT EXISTS) — 컬럼이 바뀌면 ALTER TABLE 로 맞춘다
+    create_table = SQLExecuteQueryOperator(
+        task_id="create_external_table",
+        conn_id=HIVE_CONN_ID,
+        sql=[
+            """${py(sql.createDatabase)}""",
+            """
+${indent(py(sql.create), 12)}
+            """,
+        ],
+    )
+
+    add_partition = SQLExecuteQueryOperator(
+        task_id="add_partition",
+        conn_id=HIVE_CONN_ID,
+        sql="""
+${indent(py(sql.addPartition), 12)}
+        """,
+    )
+
+    verify = SQLExecuteQueryOperator(
+        task_id="verify_count",
+        conn_id=HIVE_CONN_ID,
+        sql="""${py(sql.verify)}""",
+        do_xcom_push=True,
+    )
+
+    wait_spark >> create_table >> add_partition >> verify
+`
+}
+
+export function generateTrinoDag(dataset: DatasetDetail): string {
+  const t = transferTarget(dataset)
+  const sql = trinoSql(dataset, "{{ ds }}")
+  const inc = incrementalColumn(dataset)
+
+  return `"""
+Airflow DAG: Trino 적재 (원본 → 데이터레이크 테이블)
+Source: ${dataset.datasource.name} (${t.datasourceId})
+Table: ${dataset.name}
+Generated by Argus Catalog
+
+Trino 가 원본을 커넥터 카탈로그로 읽어 데이터레이크(Hive 커넥터) 카탈로그의 일자 파티션 테이블에 넣는다.
+Spark 없이 SQL 만으로 옮길 때 쓴다. 테이블은 원본 타입 그대로 만든다(CTAS ... WITH NO DATA).
+
+[필수 확인]
+  - <SOURCE_CATALOG>: 이 원본을 읽는 Trino 카탈로그 — 카탈로그의 데이터 소스 > 카탈로그 연결의 원격 이름
+  - <LAKE_CATALOG>: 데이터레이크 Hive 커넥터 카탈로그(쓰기 가능 — 파티션 컬럼만 조건으로 한 DELETE 는 파티션을 통째로 지운다)
+  - 증분 기준 컬럼(${inc})은 테이블마다 다름 — 날짜 · 시각 타입이어야 한다
+  - trino_default 커넥션(apache-airflow-providers-trino)
+"""
+
+from airflow import DAG
+from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator
 from datetime import datetime, timedelta
 
 default_args = {
@@ -405,76 +391,54 @@ default_args = {
 }
 
 TRINO_CONN_ID = "trino_default"
-CATALOG_SCHEMA = "catalog_${datasourceId.replace(/-/g, "_")}"
 
 with DAG(
-    dag_id="${dagId}_sql",
+    dag_id="${dagBase(dataset)}_trino",
     default_args=default_args,
-    description="SQL-based partitioned ingest ${dbName}.${tblName}",
+    description="Trino SQL ingest ${dataset.name}",
     schedule="0 4 * * *",
     start_date=datetime(2026, 1, 1),
     catchup=False,
-    tags=["argus-catalog", "${datasourceType}", "${dbName}", "sql", "trino"],
+    tags=["argus-catalog", "${t.type}", "trino"],
 ) as dag:
 
-    # Step 1: Create external table (run once, then disable)
+    # 처음 한 번 스키마 · 테이블을 만든다(IF NOT EXISTS — 다시 돌려도 그대로)
     create_table = SQLExecuteQueryOperator(
-        task_id="create_external_table",
+        task_id="create_table",
         conn_id=TRINO_CONN_ID,
-        sql="""
-            CREATE TABLE IF NOT EXISTS {schema}.${tblName} (
-                ${fields.map(f => `${f.field_path} VARCHAR`).join(",\\n                ")}
-            )
-            WITH (
-                format = 'PARQUET',
-                partitioned_by = ARRAY['dt'],
-                external_location = '${s3aBase}'
-            )
-        """.format(schema=CATALOG_SCHEMA),
+        sql=[
+            """
+${indent(py(sql.createSchema), 12)}
+            """,
+            """
+${indent(py(sql.create), 12)}
+            """,
+        ],
     )
 
-    # Step 2: Insert data for the execution date
+    # 같은 날짜를 다시 돌리면 그 파티션을 지우고 다시 넣는다(멱등)
+    delete_partition = SQLExecuteQueryOperator(
+        task_id="delete_partition",
+        conn_id=TRINO_CONN_ID,
+        sql="""${py(sql.deletePartition)}""",
+    )
+
     insert_data = SQLExecuteQueryOperator(
         task_id="insert_daily_data",
         conn_id=TRINO_CONN_ID,
         sql="""
-            INSERT INTO {schema}.${tblName}
-            SELECT
-                ${fields.map(f => `CAST(${f.field_path} AS VARCHAR)`).join(",\\n                ")},
-                '{{{{ ds }}}}' AS dt
-            FROM ${datasourceType}.${dbName}.${tblName}
-            -- [필수 확인] 증분 기준 컬럼(${incrementalColumn})은 테이블마다 다름 — 담당자 확인 필요.
-            WHERE ${incrementalColumn} >= TIMESTAMP '{{{{ ds }}}}' + INTERVAL '0' DAY
-              AND ${incrementalColumn} <  TIMESTAMP '{{{{ ds }}}}' + INTERVAL '1' DAY
-        """.format(schema=CATALOG_SCHEMA),
+${indent(py(sql.insert), 12)}
+        """,
     )
 
-    # Step 3: Sync partition metadata
-    sync_partitions = SQLExecuteQueryOperator(
-        task_id="sync_partitions",
-        conn_id=TRINO_CONN_ID,
-        sql="""
-            CALL system.sync_partition_metadata(
-                schema_name => '{schema}',
-                table_name => '${tblName}',
-                mode => 'ADD'
-            )
-        """.format(schema=CATALOG_SCHEMA),
-    )
-
-    # Step 4: Verify row count
     verify = SQLExecuteQueryOperator(
         task_id="verify_count",
         conn_id=TRINO_CONN_ID,
-        sql="""
-            SELECT count(*) AS row_count
-            FROM {schema}.${tblName}
-            WHERE dt = '{{{{ ds }}}}'
-        """.format(schema=CATALOG_SCHEMA),
+        sql="""${py(sql.verify)}""",
         do_xcom_push=True,
     )
 
-    create_table >> insert_data >> sync_partitions >> verify
+    create_table >> delete_partition >> insert_data >> verify
 `
 }
 
@@ -482,14 +446,16 @@ with DAG(
 // Code viewer
 // ---------------------------------------------------------------------------
 
-function PythonViewer({ code, copyLabel = "Airflow DAG" }: { code: string; copyLabel?: string }) {
+function PythonViewer({ code }: { code: string }) {
   const lineCount = useMemo(() => code.split("\n").length, [code])
   return (
     <CodeViewer
       code={code}
       language="python"
       height={Math.min(lineCount * 20 + 20, 600)}
-      copyLabel={copyLabel}
+      copyLabel="Airflow DAG"
+      border
+      className="py-2"
     />
   )
 }
@@ -498,50 +464,38 @@ function PythonViewer({ code, copyLabel = "Airflow DAG" }: { code: string; copyL
 // Main component
 // ---------------------------------------------------------------------------
 
-type AirflowDagTabProps = {
-  dataset: DatasetDetail
-}
+const VARIANTS = [
+  { value: "basic", label: "Basic", make: generateBasicDag },
+  { value: "spark", label: "PySpark", make: generateSparkDag },
+  { value: "incremental", label: "Incremental", make: generateIncrementalDag },
+  { value: "hive", label: "Hive", make: generateHiveDag },
+  { value: "trino", label: "Trino", make: generateTrinoDag },
+] as const
 
-export function AirflowDagTab({ dataset }: AirflowDagTabProps) {
-  const basicDag = useMemo(() => generateBasicDag(dataset), [dataset])
-  const sparkDag = useMemo(() => generateSparkDag(dataset), [dataset])
-  const incrementalDag = useMemo(() => generateIncrementalDag(dataset), [dataset])
-  const sqlDag = useMemo(() => generateSqlDag(dataset), [dataset])
+export function AirflowDagTab({ dataset }: { dataset: DatasetDetail }) {
+  const codes = useMemo(() => VARIANTS.map((v) => v.make(dataset)), [dataset])
 
   return (
-    <Card>
-      <CardHeader className="py-3">
-        <CardTitle className="text-base">Airflow DAG</CardTitle>
-        <CardDescription className="text-xs mt-1">
-          {dataset.datasource.type.toUpperCase()} → S3 데이터레이크 적재용 Airflow DAG 를 자동 생성합니다.
-          .py 파일로 저장해 Airflow DAGs 폴더에 배포하세요. 증분 기준 컬럼은 코드 주석의 안내에 따라 담당자 확인이 필요합니다.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="p-0">
+    <DetailSection
+      title="Airflow DAG"
+      description={<>
+            {dataset.datasource.type.toUpperCase()} → S3 데이터레이크 적재용 Airflow DAG 를 자동 생성합니다.
+            .py 파일로 저장해 Airflow DAGs 폴더에 배포하세요. Hive 는 PySpark 가 쓴 파일을 테이블로 등록하고, Trino 는 Spark 없이
+            Trino 로 원본을 읽어 적재합니다. 증분 기준 컬럼 · 자리표시자(&lt;…&gt;)는 코드 주석의 안내에 따라 확인이 필요합니다.
+      </>}
+    >
         <Tabs defaultValue="basic" className="w-full">
-          <div className="border-t px-4 pt-2">
+          <div>
             <TabsList>
-              <TabsTrigger value="basic">Basic</TabsTrigger>
-              <TabsTrigger value="spark">PySpark</TabsTrigger>
-              <TabsTrigger value="incremental">Incremental</TabsTrigger>
-              <TabsTrigger value="sql">Hive/Trino SQL</TabsTrigger>
+              {VARIANTS.map((v) => <TabsTrigger key={v.value} value={v.value}>{v.label}</TabsTrigger>)}
             </TabsList>
           </div>
-
-          <TabsContent value="basic" className="mt-0">
-            <PythonViewer code={basicDag} />
-          </TabsContent>
-          <TabsContent value="spark" className="mt-0">
-            <PythonViewer code={sparkDag} />
-          </TabsContent>
-          <TabsContent value="incremental" className="mt-0">
-            <PythonViewer code={incrementalDag} />
-          </TabsContent>
-          <TabsContent value="sql" className="mt-0">
-            <PythonViewer code={sqlDag} />
-          </TabsContent>
+          {VARIANTS.map((v, i) => (
+            <TabsContent key={v.value} value={v.value} className="mt-0">
+              <PythonViewer code={codes[i]!} />
+            </TabsContent>
+          ))}
         </Tabs>
-      </CardContent>
-    </Card>
+    </DetailSection>
   )
 }

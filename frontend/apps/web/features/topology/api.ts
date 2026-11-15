@@ -66,6 +66,7 @@ export interface TopologyOrganization {
   id: number
   name: string
   parent_id: number | null
+  description?: string | null
   children: TopologyOrganization[]
   systems: TopologySystem[]
 }

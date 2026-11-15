@@ -115,12 +115,12 @@ export function AssistantSettings() {
                 </div>
                 <div className="min-w-0">
                   <p className="text-sm font-medium leading-tight">{c.title}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">{c.desc}</p>
+                  <p className="text-xs mt-0.5">{c.desc}</p>
                 </div>
               </div>
             ))}
           </div>
-          <p className="text-xs text-muted-foreground border-t pt-3">
+          <p className="text-xs border-t pt-3">
             tool-use 답변은 별도의 <strong>AI 서비스(argus-catalog-ai-service 의 assistant)</strong>가 필요합니다.
             아래에서 활성화하고 AI 서비스 URL 을 지정하세요. 비활성화하면 도구 없이
             동작하는 <strong>내장 단순 대화</strong>로 폴백합니다.
@@ -143,7 +143,7 @@ export function AssistantSettings() {
           <div className="flex items-center justify-between">
             <div>
               <Label>AI 서비스 기반 어시스턴트 활성화</Label>
-              <p className="text-xs text-muted-foreground mt-0.5">
+              <p className="text-xs mt-0.5">
                 켜면 채팅이 아래 AI 서비스로 프록시되어 도구 기반 답변을 제공합니다.
               </p>
             </div>
@@ -158,7 +158,7 @@ export function AssistantSettings() {
               onChange={(e) => setAgentUrl(e.target.value)}
               placeholder="http://localhost:8930"
             />
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs">
               assistant 서버 주소. 예) <code>http://localhost:8930</code> —
               기동: <code>argus-catalog-ai assistant --port 8930</code>
             </p>
@@ -176,7 +176,7 @@ export function AssistantSettings() {
             </Button>
           </div>
 
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs">
             ※ 플로팅 챗 버튼은 <strong>LLM / AI</strong> 탭에서 LLM 제공자가 활성화돼
             있어야 표시됩니다.
           </p>

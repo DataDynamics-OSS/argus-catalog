@@ -32,7 +32,13 @@ _EXT_STR_FIELDS = (
     "data_category", "data_format", "compression", "encoding",
     "sensitivity", "contains_pii", "pii_fields", "compliance_tags",
     "tier", "certification", "steward", "quality_status", "note",
+    # AI-Ready (불리언은 "true"/"false", 이용 유형은 쉼표 문자열 그대로)
+    "legal_basis", "publisher", "landing_page", "contact_email", "data_language", "persistent_id",
+    "spatial_coverage", "data_version", "version_notes", "license", "license_url", "rights",
+    "allowed_uses", "contains_synthetic", "contains_machine_annotation",
+    "data_biases", "known_limitations", "missing_data_info", "missing_value_notation", "privacy_measures",
 )
+_EXT_DATE_FIELDS = ("temporal_start", "temporal_end")
 
 
 async def _get_or_create_import_datasource(session: AsyncSession):
@@ -109,7 +115,7 @@ async def _get_or_create_marker_tag_id(session: AsyncSession) -> int:
 
 def _apply_extended(dataset, ext: dict) -> None:
     """확장 메타데이터 dict 를 로컬 Dataset 행에 타입 맞춰 반영한다."""
-    from datetime import datetime
+    from datetime import date, datetime
 
     for k in _EXT_STR_FIELDS:
         v = ext.get(k)
@@ -129,6 +135,13 @@ def _apply_extended(dataset, ext: dict) -> None:
                 setattr(dataset, k, datetime.fromisoformat(v))
             except ValueError:
                 logger.debug("확장 메타 시각 변환 실패 — 무시: key=%s", k)
+    for k in _EXT_DATE_FIELDS:
+        v = ext.get(k)
+        if isinstance(v, str) and v:
+            try:
+                setattr(dataset, k, date.fromisoformat(v[:10]))
+            except ValueError:
+                logger.debug("확장 메타 날짜 변환 실패 — 무시: key=%s", k)
 
 
 async def _copy_sample_to_local(

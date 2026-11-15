@@ -26,6 +26,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import func, or_, select
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.mcp_servers import normalize
@@ -462,6 +463,12 @@ async def compute_findings(session: AsyncSession, dep: McpDeployment) -> dict[st
     retired 배포는 빈 목록. fingerprint 는 ``<kind>:<subject>`` (300자 제한).
     """
     from app.mcp_servers import service as svc
+
+    # flush 뒤에는 onupdate 컬럼(updated_at)이 만료된다. 아래 동기 코드(not_applied_reason 등)가
+    # 만료 속성을 읽으면 비동기 세션에서 지연 로딩이 일어나 MissingGreenlet 으로 실패하므로 미리 다시 읽는다(DEF-042).
+    expired = sa_inspect(dep).expired_attributes
+    if expired:
+        await session.refresh(dep, list(expired))
 
     found: dict[str, dict] = {}
 

@@ -1,17 +1,21 @@
 "use client"
 
+import { InfoTip } from "@/components/tip"
 import { Fragment } from "react"
 
 import { Badge } from "@workspace/ui/components/badge"
-import { Card, CardContent } from "@workspace/ui/components/card"
 import {
   Tooltip,
   TooltipContent,
-  TooltipProvider,
+
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
 
 import { type DatasetDetail } from "../data/schema"
+import Link from "next/link"
+import { datasetListHref } from "../links"
+import { datasetQualityStatus, datasetStatus } from "../status"
+import { type DatasetCategoryRef } from "@/features/taxonomy/api"
 
 const FREQ_LABEL: Record<string, string> = {
   REALTIME: "실시간", HOURLY: "매시간", DAILY: "매일", WEEKLY: "매주", MONTHLY: "매월", MANUAL: "수동",
@@ -22,14 +26,10 @@ const MODE_LABEL: Record<string, string> = {
 const CATEGORY_LABEL: Record<string, string> = {
   STRUCTURED: "정형", SEMI_STRUCTURED: "반정형", UNSTRUCTURED: "비정형",
 }
-const STATUS_LABEL: Record<string, string> = {
-  active: "활성", inactive: "비활성", deprecated: "사용 중단", removed: "삭제됨",
-}
 // 코드 → 한글 라벨 (맵에 없으면 코드 그대로 = 고유명사 유지, 예: SNAPPY/GZIP/CSV)
 const UPDATE_LABEL: Record<string, string> = { FULL: "전체", INCREMENTAL: "증분", APPEND: "추가", UPSERT: "병합" }
 const CERT_LABEL: Record<string, string> = { CERTIFIED: "인증됨", IN_REVIEW: "검토 중", DEPRECATED: "사용 중단", NONE: "없음" }
 const TIER_LABEL: Record<string, string> = { GOLD: "골드", SILVER: "실버", BRONZE: "브론즈" }
-const QUALITY_LABEL: Record<string, string> = { GOOD: "양호", WARN: "주의", BAD: "불량", UNKNOWN: "미확인" }
 const COMPRESSION_LABEL: Record<string, string> = { NONE: "없음" } // 알고리즘명(GZIP/SNAPPY/ZSTD…)은 고유명사라 유지
 const SENSITIVITY_LABEL: Record<string, string> = { PUBLIC: "공개", INTERNAL: "대내한정", CONFIDENTIAL: "대외비", RESTRICTED: "기밀" }
 // 코드 → 라벨(없으면 코드 유지), 빈 값은 "—"
@@ -97,8 +97,8 @@ const KEY_DESC: Record<string, string> = {
   "파일 수": "데이터셋을 구성하는 파일/객체 수",
   "민감도 등급": "공개(PUBLIC): 외부 공개 가능, 제약 없음 · 대내한정(INTERNAL): 사내 구성원만 열람 · 대외비(CONFIDENTIAL): 인가된 일부만 열람, 외부 유출 금지 · 기밀(RESTRICTED): 최고 민감도, 통제된 소수만 접근",
   "개인정보(PII)": "개인정보 포함 여부",
-  "개인정보 항목": "포함된 개인정보 항목 (쉼표로 구분)",
-  "규제 태그": "적용 규제 — 개인정보보호법/GDPR/PCI 등 (쉼표로 구분)",
+  "개인정보 항목": "포함된 개인정보 항목",
+  "규제 태그": "적용 규제 — 개인정보보호법/GDPR/PCI 등",
   "등급(Tier)": "데이터 성숙도·신뢰 등급 — Gold: 검증·정제 완료된 공식 데이터(전사 신뢰·활용) · Silver: 일부 정제되어 활용 가능한 데이터 · Bronze: 원천/미정제(raw) 데이터",
   "인증 상태": "CERTIFIED(인증됨): 검증을 거친 신뢰 가능한 공식 데이터 · IN_REVIEW(검토 중): 인증 검토 진행 중 · DEPRECATED(사용 중단): 더 이상 권장되지 않음(폐기·대체 예정) · NONE(없음): 인증 절차 미진행(기본)",
   "품질 점수": "품질 모듈에서 자동 연동되는 품질 점수(0~100)",
@@ -112,12 +112,7 @@ function KeyLabel({ label }: { label: string }) {
   const desc = KEY_DESC[label]
   if (!desc) return <>{label}</>
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span className="cursor-help underline decoration-dotted decoration-muted-foreground/50 underline-offset-2">{label}</span>
-      </TooltipTrigger>
-      <TooltipContent side="right" className="max-w-sm whitespace-pre-wrap">{desc}</TooltipContent>
-    </Tooltip>
+    <InfoTip tip={desc} side="right">{label}</InfoTip>
   )
 }
 
@@ -141,8 +136,13 @@ function fmtBytes(v?: number | null): string {
 
 const dash = (v: unknown) => (v === null || v === undefined || v === "" ? "—" : String(v))
 
-// 콤마 구분 값을 배지로 표시하는 항목 (개요 탭, 읽기 전용)
+// 값 목록을 배지로 표시하는 항목 (개요 탭, 읽기 전용)
 const TAG_FIELDS = new Set(["개인정보 항목", "규제 태그"])
+
+/** 용어집 화면에서 그 용어를 연다(GLO-03 딥링크). */
+function glossaryTermHref(termId: number): string {
+  return `/dashboard/glossary?term=${termId}`
+}
 
 // 소유자 값 셀 — 이름 목록을 보여주고, hover 시 소유자별 소속/소속부서/Username/Email 툴팁 표시.
 // 툴팁 스타일은 KeyLabel 과 동일(점선 밑줄 + side="right").
@@ -154,12 +154,28 @@ function OwnerValue({
   ownerInfo?: Record<string, { email?: string; organization?: string; department?: string }>
 }) {
   if (owners.length === 0) return <span className="block truncate font-medium">—</span>
-  const names = owners.map((o) => o.owner_name).join(", ")
+  const emailOf = (ownerName: string) => {
+    const username = ownerName.match(/\(([^()]+)\)\s*$/)?.[1]?.trim() ?? ""
+    return (username && ownerInfo?.[username]?.email) || ""
+  }
+  // 이메일을 아는 소유자는 누르면 메일 쓰기(TODO-075)
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <span className="block cursor-help truncate font-medium underline decoration-dotted decoration-muted-foreground/50 underline-offset-2">
-          {names}
+          {owners.map((o, i) => {
+            const email = emailOf(o.owner_name)
+            return (
+              <Fragment key={o.id ?? i}>
+                {i > 0 && ", "}
+                {email ? (
+                  <a href={`mailto:${email}`} className="text-primary hover:underline">{o.owner_name}</a>
+                ) : (
+                  o.owner_name
+                )}
+              </Fragment>
+            )
+          })}
         </span>
       </TooltipTrigger>
       <TooltipContent side="right" className="max-w-sm whitespace-pre-wrap">
@@ -186,23 +202,23 @@ function OwnerValue({
 
 export function DatasetMetadataSummary({
   dataset: d,
-  categoryPaths,
+  categories,
   ownerInfo,
   children,
 }: {
   dataset: DatasetDetail
-  /** 매핑된 분류 체계 경로 (A > B > C). 각 항목 1행. */
-  categoryPaths?: string[]
+  /** 매핑된 분류 — 경로(A > B > C)를 각 항목 1행으로, 누르면 그 분류의 데이터셋 목록. */
+  categories?: DatasetCategoryRef[]
   /** username → 소속/부서/이메일 (소유자 tooltip 용) */
   ownerInfo?: Record<string, { email?: string; organization?: string; department?: string }>
   children?: React.ReactNode
 }) {
   // 라벨 / 값 쌍 — 첫 행은 데이터 소스 정보, 이후 메타데이터 탭과 동일한 항목.
-  const items: { label: string; value: string }[] = [
+  const items: { label: string; value: string; tags?: string[] }[] = [
     { label: "데이터 소스 유형", value: dsTypeLabel(d.datasource?.type) },
     { label: "데이터 소스명", value: dash(d.datasource?.name) },
     { label: "소유자", value: dash((d.owners ?? []).map((o) => o.owner_name).join(", ")) },
-    { label: "상태", value: d.status ? (STATUS_LABEL[d.status] ?? d.status) : "—" },
+    { label: "상태", value: d.status ? datasetStatus(d.status).label : "—" },
     { label: "환경", value: dash(d.origin) },
     { label: "수집 주기", value: formatIngestion(d) },
     { label: "수집 방식", value: d.ingestion_mode ? (MODE_LABEL[d.ingestion_mode] ?? d.ingestion_mode) : "—" },
@@ -219,12 +235,22 @@ export function DatasetMetadataSummary({
     { label: "파일 수", value: d.file_count == null ? "—" : d.file_count.toLocaleString() },
     { label: "민감도 등급", value: lbl(SENSITIVITY_LABEL, d.sensitivity) },
     { label: "개인정보(PII)", value: d.contains_pii == null ? "—" : (d.contains_pii ? "예" : "아니오") },
-    { label: "개인정보 항목", value: dash(d.pii_fields) },
-    { label: "규제 태그", value: dash(d.compliance_tags) },
+    { label: "개인정보 항목", value: dash((d.pii_fields ?? []).join(", ")), tags: d.pii_fields ?? [] },
+    { label: "규제 태그", value: dash((d.compliance_tags ?? []).join(", ")), tags: d.compliance_tags ?? [] },
     { label: "등급(Tier)", value: lbl(TIER_LABEL, d.tier) },
     { label: "인증 상태", value: lbl(CERT_LABEL, d.certification) },
     { label: "품질 점수", value: d.quality_score != null ? `${d.quality_score} / 100` : "—" },
-    { label: "품질 상태", value: lbl(QUALITY_LABEL, d.quality_status) },
+    { label: "품질 상태", value: d.quality_status ? datasetQualityStatus(d.quality_status).label : "—" },
+    // AI-Ready (메타데이터 탭 'AI 활용') — 라이선스·제공기관은 기관 기본값이 있어 여기서는 보이지 않는다
+    { label: "데이터 버전", value: dash(d.data_version) },
+    {
+      label: "시간범위",
+      value: d.temporal_start || d.temporal_end ? `${d.temporal_start ?? "?"} ~ ${d.temporal_end ?? "?"}` : "—",
+    },
+    {
+      label: "AI 학습 이용",
+      value: d.allowed_uses == null ? "—" : d.allowed_uses.includes("AI_TRAINING") ? "허용" : "허용하지 않음",
+    },
     { label: "등록일", value: fmtDate(d.created_at) },
     { label: "수정일", value: fmtDate(d.updated_at) },
   ]
@@ -249,14 +275,16 @@ export function DatasetMetadataSummary({
             t.description ? (
               <Tooltip key={t.id}>
                 <TooltipTrigger asChild>
-                  <span className="cursor-help">
-                    <Badge variant="secondary" className="text-xs">{t.name}</Badge>
-                  </span>
+                  <Link href={glossaryTermHref(t.id)}>
+                    <Badge variant="secondary" className="hover:underline">{t.name}</Badge>
+                  </Link>
                 </TooltipTrigger>
                 <TooltipContent side="top" className="max-w-xs whitespace-pre-wrap">{t.description}</TooltipContent>
               </Tooltip>
             ) : (
-              <Badge key={t.id} variant="secondary" className="text-xs">{t.name}</Badge>
+              <Link key={t.id} href={glossaryTermHref(t.id)}>
+                <Badge variant="secondary" className="hover:underline">{t.name}</Badge>
+              </Link>
             ),
           )}
         </div>
@@ -269,9 +297,11 @@ export function DatasetMetadataSummary({
       node: (
         <div className="flex flex-wrap gap-1">
           {tags.map((t) => (
-            <Badge key={t.id} className="text-xs" style={{ backgroundColor: t.color, color: "white" }}>
-              {t.name}
-            </Badge>
+            <Link key={t.id} href={datasetListHref({ tag: [String(t.id)] })} title="이 태그가 붙은 데이터셋 보기">
+              <Badge className="hover:underline" style={{ backgroundColor: t.color, color: "white" }}>
+                {t.name}
+              </Badge>
+            </Link>
           ))}
         </div>
       ),
@@ -282,101 +312,103 @@ export function DatasetMetadataSummary({
   const rows = items.filter((it) => it.value !== "—")
 
   // 1행에 3쌍(key/value) — 3개씩 묶기
-  const groups: { label: string; value: string }[][] = []
+  const groups: { label: string; value: string; tags?: string[] }[][] = []
   for (let i = 0; i < rows.length; i += 3) groups.push(rows.slice(i, i + 3))
 
   return (
-    <TooltipProvider delayDuration={150}>
-    <Card>
-      <CardContent className="space-y-4 pt-6">
-        <div className="space-y-2">
-          <h3 className="text-base font-semibold">메타데이터</h3>
-          {/* key/value 분리 셀 — key 셀 배경색. 상단은 전체 폭 단일 행, 이후 1행 3쌍.
-              colgroup 으로 6컬럼(key 120px 고정 / value 균등) 정의 → 혼합 colSpan 정렬. */}
-          <div className="overflow-hidden rounded-md border">
-            <table className="w-full table-fixed border-collapse text-sm">
-              <colgroup>
-                <col className="w-[120px]" /><col />
-                <col className="w-[120px]" /><col />
-                <col className="w-[120px]" /><col />
-              </colgroup>
-              <tbody>
-                {(categoryPaths ?? []).map((p, i) => (
-                  <tr key={`cat-${i}`}>
-                    <th className="border bg-muted/60 px-3 py-2 text-left align-middle font-medium text-black"><KeyLabel label="분류 체계" /></th>
-                    <td colSpan={5} className="border px-3 py-2 align-top">
-                      <span className="block truncate font-medium" title={p}>{p}</span>
-                    </td>
-                  </tr>
-                ))}
-                {topRows.map((r) => (
-                  <tr key={r.label}>
-                    <th className="border bg-muted/60 px-3 py-2 text-left align-middle font-medium text-black"><KeyLabel label={r.label} /></th>
-                    <td colSpan={5} className="border px-3 py-2 align-top">
-                      <span className="block truncate font-medium" title={r.value}>{r.value}</span>
-                    </td>
-                  </tr>
-                ))}
-                {nodeRows.map((r) => (
-                  <tr key={r.label}>
-                    <th className="border bg-muted/60 px-3 py-2 text-left align-middle font-medium text-black"><KeyLabel label={r.label} /></th>
-                    <td colSpan={5} className="border px-3 py-2 align-top">{r.node}</td>
-                  </tr>
-                ))}
-                {groups.map((group, ri) => (
-                  <tr key={ri}>
-                    {group.map((it) => (
-                      <Fragment key={it.label}>
-                        <th className="border bg-muted/60 px-3 py-2 text-left align-middle font-medium text-black">
-                          <KeyLabel label={it.label} />
-                        </th>
-                        <td className="border px-3 py-2 align-top">
-                          {it.label === "소유자" ? (
-                            <OwnerValue owners={d.owners ?? []} ownerInfo={ownerInfo} />
-                          ) : TAG_FIELDS.has(it.label) ? (
-                            <div className="flex flex-wrap gap-1">
-                              {it.value.split(",").map((t) => t.trim()).filter(Boolean).map((t) => (
-                                <Badge key={t} variant="secondary" className="text-xs">{t}</Badge>
-                              ))}
-                            </div>
-                          ) : (
-                            <span className="block truncate font-medium" title={it.value}>{it.value}</span>
-                          )}
-                        </td>
-                      </Fragment>
-                    ))}
-                    {/* 마지막 행 빈 칸 채우기(3쌍 정렬) */}
-                    {Array.from({ length: 3 - group.length }).map((_, k) => (
-                      <Fragment key={`pad-${k}`}>
-                        <th className="border bg-muted/60" />
-                        <td className="border" />
-                      </Fragment>
-                    ))}
-                  </tr>
-                ))}
-                {/* 비고 — 표 최하단, 값이 있을 때만 표시 */}
-                {d.note && d.note.trim() !== "" && (
-                  <tr>
-                    <th className="border bg-muted/60 px-3 py-2 text-left align-middle font-medium text-black">비고</th>
-                    <td colSpan={5} className="border px-3 py-2 align-top">
-                      <span className="block whitespace-pre-wrap">{d.note}</span>
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+    <div className="space-y-6">
+      {/* 제목 없이 표부터 — 탭 이름(개요)과 표 모양으로 충분하다 */}
+      <div>
+        {/* key/value 분리 셀 — key 셀 배경색. 상단은 전체 폭 단일 행, 이후 1행 3쌍.
+            colgroup 으로 6컬럼(key 120px 고정 / value 균등) 정의 → 혼합 colSpan 정렬. 바깥 카드 없이 표가 박스 하나 */}
+        <div className="overflow-hidden rounded-md border">
+          <table className="w-full table-fixed border-collapse text-sm">
+            <colgroup>
+              <col className="w-[120px]" /><col />
+              <col className="w-[120px]" /><col />
+              <col className="w-[120px]" /><col />
+            </colgroup>
+            <tbody>
+              {(categories ?? []).map((c) => (
+                <tr key={`cat-${c.category_id}`}>
+                  <th className="border bg-muted/60 px-3 py-2 text-left align-middle font-medium text-black"><KeyLabel label="분류 체계" /></th>
+                  <td colSpan={5} className="border px-3 py-2 align-top">
+                    <Link
+                      href={datasetListHref({ category: String(c.category_id), taxonomy: String(c.taxonomy_id) })}
+                      className="block truncate font-medium text-primary hover:underline"
+                      title={`${c.path} — 이 분류의 데이터셋 보기`}
+                    >
+                      {c.path}
+                    </Link>
+                  </td>
+                </tr>
+              ))}
+              {topRows.map((r) => (
+                <tr key={r.label}>
+                  <th className="border bg-muted/60 px-3 py-2 text-left align-middle font-medium text-black"><KeyLabel label={r.label} /></th>
+                  <td colSpan={5} className="border px-3 py-2 align-top">
+                    <span className="block truncate font-medium" title={r.value}>{r.value}</span>
+                  </td>
+                </tr>
+              ))}
+              {nodeRows.map((r) => (
+                <tr key={r.label}>
+                  <th className="border bg-muted/60 px-3 py-2 text-left align-middle font-medium text-black"><KeyLabel label={r.label} /></th>
+                  <td colSpan={5} className="border px-3 py-2 align-top">{r.node}</td>
+                </tr>
+              ))}
+              {groups.map((group, ri) => (
+                <tr key={ri}>
+                  {group.map((it) => (
+                    <Fragment key={it.label}>
+                      <th className="border bg-muted/60 px-3 py-2 text-left align-middle font-medium text-black">
+                        <KeyLabel label={it.label} />
+                      </th>
+                      <td className="border px-3 py-2 align-top">
+                        {it.label === "소유자" ? (
+                          <OwnerValue owners={d.owners ?? []} ownerInfo={ownerInfo} />
+                        ) : TAG_FIELDS.has(it.label) ? (
+                          <div className="flex flex-wrap gap-1">
+                            {(it.tags ?? []).length === 0 ? <span>—</span> : (it.tags ?? []).map((t) => (
+                              <Badge key={t} variant="secondary">{t}</Badge>
+                            ))}
+                          </div>
+                        ) : (
+                          <span className="block truncate font-medium" title={it.value}>{it.value}</span>
+                        )}
+                      </td>
+                    </Fragment>
+                  ))}
+                  {/* 마지막 행 빈 칸 채우기(3쌍 정렬) */}
+                  {Array.from({ length: 3 - group.length }).map((_, k) => (
+                    <Fragment key={`pad-${k}`}>
+                      <th className="border bg-muted/60" />
+                      <td className="border" />
+                    </Fragment>
+                  ))}
+                </tr>
+              ))}
+              {/* 비고 — 표 최하단, 값이 있을 때만 표시 */}
+              {d.note && d.note.trim() !== "" && (
+                <tr>
+                  <th className="border bg-muted/60 px-3 py-2 text-left align-middle font-medium text-black">비고</th>
+                  <td colSpan={5} className="border px-3 py-2 align-top">
+                    <span className="block whitespace-pre-wrap">{d.note}</span>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
+      </div>
 
-        {/* 상세 설명 — "메타데이터" 타이틀과 동일 형식의 제목 + 본문 */}
-        {children !== undefined && (
-          <div className="space-y-2">
-            <h3 className="text-base font-semibold">상세 설명</h3>
-            <div>{children}</div>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-    </TooltipProvider>
+      {/* 상세 설명 — 표와의 경계만 알 수 있게 작은 회색 라벨(설명이 비었거나 짧은 평문이어도 표의 각주처럼 보이지 않게) */}
+      {children !== undefined && (
+        <section className="space-y-1.5">
+          <h3 className="text-xs font-medium text-muted-foreground">상세 설명</h3>
+          {children}
+        </section>
+      )}
+    </div>
   )
 }

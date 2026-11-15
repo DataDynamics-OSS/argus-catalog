@@ -18,8 +18,14 @@ type DatasetListParams = {
   categoryId?: number
   taxonomyId?: number
   uncategorized?: boolean
+  /** 태그 id 쉼표 목록 */
+  tagIds?: string
+  /** 용어집 용어 id */
+  termId?: number
   page?: number
   pageSize?: number
+  /** 카드 보기용 필드(컬럼 미리보기)도 받는다 */
+  card?: boolean
 }
 
 export type PaginatedDatasets = {
@@ -43,8 +49,11 @@ export async function fetchDatasets(
   if (params?.categoryId) query.set("category_id", String(params.categoryId))
   if (params?.taxonomyId) query.set("taxonomy_id", String(params.taxonomyId))
   if (params?.uncategorized) query.set("uncategorized", "true")
+  if (params?.tagIds) query.set("tag_id", params.tagIds)
+  if (params?.termId) query.set("term_id", String(params.termId))
   query.set("page", String(params?.page ?? 1))
   query.set("page_size", String(params?.pageSize ?? 20))
+  if (params?.card) query.set("card", "true")
 
   const res = await authFetch(`${BASE}/datasets?${query.toString()}`)
   if (!res.ok) throw new Error(`데이터셋을 불러오지 못했습니다. (HTTP ${res.status})`)
@@ -53,7 +62,13 @@ export async function fetchDatasets(
 
 export async function fetchDataset(id: number): Promise<DatasetDetail> {
   const res = await authFetch(`${BASE}/datasets/${id}`)
-  if (!res.ok) throw new Error(`데이터셋을 불러오지 못했습니다. (HTTP ${res.status})`)
+  if (!res.ok) {
+    // 서버 안내(detail)를 살린다 — 404 는 "데이터셋을 찾을 수 없습니다." (DEF-082)
+    const err = await res.json().catch(() => ({}))
+    const detail = typeof err?.detail === "string" ? err.detail : null
+    throw new Error(detail || (res.status === 404 ? "데이터셋을 찾을 수 없습니다."
+      : `데이터셋을 불러오지 못했습니다. (HTTP ${res.status})`))
+  }
   return res.json()
 }
 
@@ -110,14 +125,339 @@ export type DatasetMetadataUpdate = {
   file_count?: number | null
   sensitivity?: string | null
   contains_pii?: boolean | null
-  pii_fields?: string | null
-  compliance_tags?: string | null
+  pii_fields?: string[] | null
+  compliance_tags?: string[] | null
   tier?: string | null
   certification?: string | null
   steward?: string | null
   quality_status?: string | null
   show_quality_score?: boolean | null
   note?: string | null
+} & AiReadyUpdate
+
+/** AI-Ready 항목 (TODO-096). null 을 보내면 지운다. */
+export type AiReadyUpdate = {
+  legal_basis?: string | null
+  publisher?: string | null
+  landing_page?: string | null
+  contact_email?: string | null
+  data_language?: string | null
+  persistent_id?: string | null
+  temporal_start?: string | null
+  temporal_end?: string | null
+  spatial_coverage?: string | null
+  data_version?: string | null
+  version_notes?: string | null
+  license?: string | null
+  license_url?: string | null
+  rights?: string | null
+  allowed_uses?: string[] | null
+  contains_synthetic?: boolean | null
+  contains_machine_annotation?: boolean | null
+  data_biases?: string | null
+  known_limitations?: string | null
+  missing_data_info?: string | null
+  missing_value_notation?: string | null
+  privacy_measures?: string | null
+}
+
+export type AiReadyCode = { code: string; label: string }
+export type AiReadyDefaults = {
+  /** 설정 › AI-Ready 의 기관 기본값 — 데이터셋에 값이 없을 때 쓴다 */
+  defaults: {
+    publisher: string | null
+    data_language: string
+    license: string | null
+    license_url: string | null
+    contact_email: string | null
+  }
+  licenses: AiReadyCode[]
+  allowed_uses: AiReadyCode[]
+}
+
+export async function fetchAiReadyDefaults(): Promise<AiReadyDefaults> {
+  const res = await authFetch(`${BASE}/ai-ready/defaults`)
+  if (!res.ok) await throwOnError(res, "AI-Ready 기본값을 불러오지 못했습니다.")
+  return res.json()
+}
+
+export type AiReadySuggestions = {
+  profile: { id: number; row_count: number; profiled_at: string | null } | null
+  temporal: { temporal_start: string; temporal_end: string; column: string } | null
+  missing: { missing_data_info: string; missing_ratio: number; missing_columns: number } | null
+}
+
+/** 최신 프로파일에서 계산한 시간범위·결측 정보 제안 (저장하지 않음) */
+export async function fetchAiReadySuggestions(datasetId: number): Promise<AiReadySuggestions> {
+  const res = await authFetch(`${BASE}/datasets/${datasetId}/ai-ready/suggestions`)
+  if (!res.ok) await throwOnError(res, "프로파일에서 제안을 만들지 못했습니다.")
+  return res.json()
+}
+
+// ---------------------------------------------------------------------------
+// AI-Ready 점검 (TODO-096 2단계) — 가이드라인 부록 4 체크리스트
+// ---------------------------------------------------------------------------
+
+export type AiReadyStatus = "PASS" | "FAIL" | "NA"
+export type AiReadyLevel = "REQUIRED" | "RECOMMENDED"
+export type AiReadyRate = { passed: number; total: number; rate: number | null }
+
+export type AiReadyItem = {
+  key: string
+  level: AiReadyLevel
+  /** 최종 판정 — 수동 판정이 있으면 그것, 없으면 자동 판정. null = 판정 필요 */
+  status: AiReadyStatus | null
+  source: "AUTO" | "MANUAL" | null
+  auto_status: AiReadyStatus | null
+  evidence: string
+  group: string
+  text: string
+  /** AUTO(카탈로그 정보로 계산) · MANUAL(담당자 판정) · EXTERNAL(제공 플랫폼의 일) */
+  mode: "AUTO" | "MANUAL" | "EXTERNAL"
+  hint: string
+  judgment: { status: AiReadyStatus; note: string | null; judged_by: string | null; judged_at: string | null } | null
+}
+
+export type AiReadyMinCheck = { key: string; label: string; met: boolean | null; detail: string }
+
+export type AiReadyCheck = {
+  dataset_id: number
+  required: AiReadyRate
+  recommended: AiReadyRate
+  counts: { PASS: number; FAIL: number; NA: number; UNKNOWN: number }
+  min_requirements: { met: boolean; checks: AiReadyMinCheck[] }
+  items: AiReadyItem[]
+  profiled_at: string | null
+}
+
+export async function fetchAiReadyCheck(datasetId: number): Promise<AiReadyCheck> {
+  const res = await authFetch(`${BASE}/datasets/${datasetId}/ai-ready/check`)
+  if (!res.ok) await throwOnError(res, "AI-Ready 점검 결과를 불러오지 못했습니다.")
+  return res.json()
+}
+
+/** 수동 판정 저장 — 자동 판정보다 우선한다. 저장 뒤 전체 점검 결과를 돌려준다. */
+export async function saveAiReadyJudgment(
+  datasetId: number, itemKey: string, body: { status: AiReadyStatus; note?: string | null },
+): Promise<AiReadyCheck> {
+  const res = await authFetch(`${BASE}/datasets/${datasetId}/ai-ready/check/${encodeURIComponent(itemKey)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) await throwOnError(res, "판정을 저장하지 못했습니다.")
+  return res.json()
+}
+
+/** 수동 판정을 지워 자동 판정으로 되돌린다. */
+export async function clearAiReadyJudgment(datasetId: number, itemKey: string): Promise<AiReadyCheck> {
+  const res = await authFetch(`${BASE}/datasets/${datasetId}/ai-ready/check/${encodeURIComponent(itemKey)}`, {
+    method: "DELETE",
+  })
+  if (!res.ok) await throwOnError(res, "수동 판정을 지우지 못했습니다.")
+  return res.json()
+}
+
+// ---------------------------------------------------------------------------
+// AI-Ready 내보내기 (TODO-096 3단계) — 배포본, DCAT · Croissant · 데이터 카드
+// ---------------------------------------------------------------------------
+
+export type DatasetDistribution = {
+  id: number
+  dataset_id: number
+  title: string | null
+  description: string | null
+  format: string | null
+  media_type: string | null
+  /** 형식에서 추정한 MIME 까지 반영한 값 */
+  effective_media_type: string | null
+  access_url: string
+  download_url: string | null
+  byte_size: number | null
+  checksum_algorithm: string | null
+  checksum: string | null
+  ordinal: number
+  created_at: string | null
+  updated_at: string | null
+}
+
+export type DistributionInput = {
+  title?: string | null
+  description?: string | null
+  format?: string | null
+  media_type?: string | null
+  access_url: string
+  download_url?: string | null
+  byte_size?: number | null
+  checksum_algorithm?: string | null
+  checksum?: string | null
+}
+
+export async function fetchDistributions(datasetId: number): Promise<DatasetDistribution[]> {
+  const res = await authFetch(`${BASE}/datasets/${datasetId}/distributions`)
+  if (!res.ok) await throwOnError(res, "배포본을 불러오지 못했습니다.")
+  return res.json()
+}
+
+export async function saveDistribution(
+  datasetId: number, body: DistributionInput, distId?: number,
+): Promise<DatasetDistribution> {
+  const url = distId ? `${BASE}/datasets/${datasetId}/distributions/${distId}` : `${BASE}/datasets/${datasetId}/distributions`
+  const res = await authFetch(url, {
+    method: distId ? "PUT" : "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) await throwOnError(res, "배포본을 저장하지 못했습니다.")
+  return res.json()
+}
+
+export async function deleteDistribution(datasetId: number, distId: number): Promise<void> {
+  const res = await authFetch(`${BASE}/datasets/${datasetId}/distributions/${distId}`, { method: "DELETE" })
+  if (!res.ok) await throwOnError(res, "배포본을 지우지 못했습니다.")
+}
+
+export type AiReadyExportKind = "dcat" | "croissant" | "data-card"
+
+/** 외부 연동 API 경로 — 다른 시스템이 부를 주소. 데이터셋 ID 판과 URN 판이 있다. */
+export function aiReadyExportPath(datasetId: number, kind: AiReadyExportKind): string {
+  return `/api/v1/external/datasets/${datasetId}/${kind}`
+}
+
+export async function fetchAiReadyExport(datasetId: number, kind: AiReadyExportKind): Promise<string> {
+  const res = await authFetch(aiReadyExportPath(datasetId, kind))
+  if (!res.ok) await throwOnError(res, "내보내기 결과를 만들지 못했습니다.")
+  const text = await res.text()
+  if (kind === "data-card") return text
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2)
+  } catch {
+    return text
+  }
+}
+
+// 데이터 버전 이력 (TODO-096 4단계) — 데이터셋 '버전'·'버전 노트'를 저장할 때 서버가 남긴다.
+export type DatasetVersionEntry = {
+  id: number
+  version: string
+  notes: string | null
+  created_by: string | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export async function fetchDatasetVersions(datasetId: number): Promise<DatasetVersionEntry[]> {
+  const res = await authFetch(`${BASE}/datasets/${datasetId}/versions`)
+  if (!res.ok) await throwOnError(res, "버전 이력을 불러오지 못했습니다.")
+  return res.json()
+}
+
+export async function deleteDatasetVersion(datasetId: number, versionId: number): Promise<void> {
+  const res = await authFetch(`${BASE}/datasets/${datasetId}/versions/${versionId}`, { method: "DELETE" })
+  if (!res.ok) await throwOnError(res, "버전 이력을 지우지 못했습니다.")
+}
+
+export type AiReadyItemDef = Pick<AiReadyItem, "key" | "group" | "level" | "text" | "mode" | "hint"> & {
+  /** 표 · 배지용 짧은 이름(예: "필수 메타데이터") */
+  short: string
+}
+
+export async function fetchAiReadyItems(): Promise<AiReadyItemDef[]> {
+  const res = await authFetch(`${BASE}/ai-ready/items`)
+  if (!res.ok) await throwOnError(res, "AI-Ready 점검 항목을 불러오지 못했습니다.")
+  return res.json()
+}
+
+export type AiReadyOverviewRow = {
+  dataset_id: number
+  name: string
+  display_name: string | null
+  catalog_id: number | null
+  /** 카탈로그 키 — 카탈로그가 없으면 데이터 소스 키 */
+  catalog_key: string
+  catalog_name: string | null
+  /** DB(스키마) — URN 에서 나눈 값, 단계가 없으면 "" */
+  db: string
+  table: string
+  /** db.dataset — 카탈로그 키는 난수가 섞여 넣지 않는다(카탈로그는 catalog_name 으로) */
+  path: string
+  required: AiReadyRate
+  recommended: AiReadyRate
+  counts: AiReadyCheck["counts"]
+  min_requirements_met: boolean
+  /** 적정이 아닌 필수 항목 키 (해당없음 제외) */
+  unmet_required: string[]
+}
+
+export type AiReadyBreakdownGroup = {
+  catalog_id: number | null
+  catalog_name: string | null
+  catalog_key: string
+  /** 카탈로그를 골랐을 때만 — DB 별 묶음 */
+  db: string | null
+  datasets: number
+  min_met: number
+  required_rate: number | null
+  recommended_rate: number | null
+}
+
+export type AiReadyOverview = {
+  summary: {
+    datasets: number
+    required_rate: number | null
+    recommended_rate: number | null
+    min_met: number
+    fully_required: number
+  }
+  /** 카탈로그별 평균 — 카탈로그를 고르면 그 카탈로그의 DB 별 */
+  breakdown: { by: "catalog" | "db"; groups: AiReadyBreakdownGroup[] }
+  items: AiReadyOverviewRow[]
+  total: number
+  page: number
+  size: number
+}
+
+export type AiReadyScope = {
+  /** null = 카탈로그가 없는 데이터셋 (목록 조건은 catalog_id=0) */
+  catalog_id: number | null
+  catalog_key: string | null
+  name: string
+  datasets: number
+  dbs: { name: string; datasets: number }[]
+}
+
+/** 점검 목록의 범위 선택지 — 카탈로그와 그 아래 DB */
+export async function fetchAiReadyScopes(): Promise<AiReadyScope[]> {
+  const res = await authFetch(`${BASE}/ai-ready/scopes`)
+  if (!res.ok) await throwOnError(res, "카탈로그·DB 목록을 불러오지 못했습니다.")
+  return res.json()
+}
+
+export async function fetchAiReadyOverview(params: {
+  q?: string
+  /** 0 = 카탈로그 없음 */
+  catalogId?: number
+  /** catalogId 와 함께. "" = DB 단계 없음 */
+  db?: string
+  onlyUnmet?: boolean
+  sort?: "required" | "recommended" | "name"
+  /** 내림차순 — 기본은 오름차순(충족률 낮은 순 · 경로 가나다순) */
+  desc?: boolean
+  page?: number
+  size?: number
+}): Promise<AiReadyOverview> {
+  const sp = new URLSearchParams()
+  if (params.q) sp.set("q", params.q)
+  if (params.catalogId !== undefined) sp.set("catalog_id", String(params.catalogId))
+  if (params.db !== undefined) sp.set("db", params.db)
+  if (params.onlyUnmet) sp.set("only_unmet", "true")
+  if (params.sort) sp.set("sort", params.sort)
+  if (params.desc) sp.set("desc", "true")
+  sp.set("page", String(params.page ?? 1))
+  sp.set("size", String(params.size ?? 20))
+  const res = await authFetch(`${BASE}/ai-ready/overview?${sp}`)
+  if (!res.ok) await throwOnError(res, "AI-Ready 충족률 목록을 불러오지 못했습니다.")
+  return res.json()
 }
 
 export async function updateDataset(

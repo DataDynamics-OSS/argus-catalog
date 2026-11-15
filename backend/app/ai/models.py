@@ -4,7 +4,7 @@
 감사(audit), 되돌리기, 비용 추적을 위해 AI 가 생성한 모든 메타데이터 제안을 추적한다.
 """
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, SmallInteger, String, Text, UniqueConstraint, func
 
 from app.core.database import Base
 
@@ -32,3 +32,26 @@ class AIGenerationLog(Base):
     prompt_tokens = Column(Integer)
     completion_tokens = Column(Integer)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class AssistantFeedback(Base):
+    """AI 어시스턴트 답변 평가(👍/👎) — 답변 하나에 사용자당 한 건, 다시 누르면 바꾼다 (TODO-068).
+
+    ``answer_id`` 는 화면이 답변마다 만든 식별자다. 질문·답변 원문은 나중에 무엇을 평가했는지 보려고
+    앞부분만 남긴다(질문 2,000자·답변 8,000자).
+    """
+
+    __tablename__ = "catalog_ai_assistant_feedback"
+    __table_args__ = (UniqueConstraint("user_sub", "answer_id", name="uq_ai_assistant_feedback_answer"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_sub = Column(String(200), nullable=False)
+    username = Column(String(200))
+    conversation_id = Column(String(100))
+    answer_id = Column(String(64), nullable=False)
+    rating = Column(SmallInteger, nullable=False)   # 1 = 👍, -1 = 👎
+    comment = Column(Text)
+    question = Column(Text)
+    answer = Column(Text)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

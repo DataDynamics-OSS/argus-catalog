@@ -35,6 +35,7 @@ SECRET_CONFIG_KEYS = frozenset({
     "auth_keycloak_client_secret",
     "notify_slack_webhook_url",       # webhook URL 자체가 전송 권한(토큰 포함)
     "notify_mattermost_webhook_url",
+    "metadata_sync_api_token",        # 수집 서비스(metadata-sync) 호출 토큰
 })
 _SEALED_PREFIX = "enc:"
 
@@ -145,7 +146,7 @@ _CHANGE_DEFAULTS: list[tuple[str, str, str]] = [
 ]
 
 # 데이터 품질 기본값: 원천 데이터 시간대 — 시간대 없는 시각 값(MySQL DATETIME 등)을 FRESHNESS 에서 해석할 때 사용.
-# 품질 배치(quality/*.py)의 --source-timezone 기본값과 같아야 두 엔진 판정이 일치한다.
+# Trino · 원천 직접 두 경로의 판정이 같은 값을 쓴다(rule_sql.parse_timestamp).
 _QUALITY_DEFAULTS: list[tuple[str, str, str]] = [
     ("quality_source_timezone", "Asia/Seoul",
      "원천 데이터 시간대 (IANA 이름 또는 +09:00) — 시간대 없는 시각 값 해석(FRESHNESS)"),
@@ -159,8 +160,32 @@ _CATALOG_DEFAULTS: list[tuple[str, str, str]] = [
 ]
 
 
+# 사이드바 브랜드(TODO-145) — 사이드바 위 제품명 · 회사명 문구와 눌렀을 때 갈 주소.
+# 제품명이 비면 "Argus Catalog", 회사명이 비면 회사명 줄을 숨기고, 주소가 비면 데이터셋 목록(카드 보기)으로 간다.
+BRANDING_DEFAULT_TITLE = "Argus Catalog"
+_BRANDING_DEFAULTS: list[tuple[str, str, str]] = [
+    ("branding_title", BRANDING_DEFAULT_TITLE, "사이드바 제품명 — 비우면 Argus Catalog"),
+    ("branding_subtitle", "Data Dynamics Inc", "사이드바 제품명 아래 문구(회사명) — 비우면 숨김"),
+    ("branding_link_url", "", "사이드바 브랜드를 눌렀을 때 갈 주소(http(s):// 는 새 탭, / 로 시작하면 화면 안) — 비우면 데이터셋 카드 보기"),
+]
+
+
+# AI-Ready 기관 기본값 — 데이터셋에 값이 없을 때 화면·내보내기가 쓰는 제공기관·언어·라이선스·연락처 (TODO-096).
+# 키 이름은 app/catalog/ai_ready.py 의 SETTING_* 와 같다.
+_AI_READY_DEFAULTS: list[tuple[str, str, str]] = [
+    ("ai_ready_publisher", "", "AI-Ready 제공기관 기본값 (dct:publisher) — 데이터셋에 제공기관이 없을 때 사용"),
+    ("ai_ready_language", "ko", "AI-Ready 언어 기본값 (ISO 639-1, 쉼표 구분) — 데이터셋에 언어가 없을 때 사용"),
+    ("ai_ready_license", "", "AI-Ready 라이선스 기본값 (KOGL-1~4, CC-BY-4.0 등, CUSTOM) — 데이터셋에 라이선스가 없을 때 사용"),
+    ("ai_ready_license_url", "", "AI-Ready 라이선스·이용약관 URL 기본값"),
+    ("ai_ready_contact_email", "", "AI-Ready 문의 연락처 기본값 (역할 기준 공용 이메일)"),
+    ("ai_ready_max_missing_pct", "20", "AI-Ready 최소 요건 — 전체 결측률 상한(%, 이 값 미만이어야 충족)"),
+    ("ai_ready_max_missed_cycles", "2", "AI-Ready 최소 요건 — 갱신 주기를 몇 번까지 놓쳐도 되는지(이내면 충족)"),
+    ("ai_ready_report_due_days", "10", "AI-Ready 오류 신고·개선 요청 처리 기한(일) — 접수 때 기한으로 저장"),
+]
+
+
 def _build_assistant_defaults(settings=None) -> list[tuple[str, str, str]]:
-    """최초 시드용 AI 어시스턴트 기본값 — config 파일의 ``assistant.service.url``(이전 이름 ``assistant.agent.url``)을 반영.
+    """최초 시드용 AI 어시스턴트 기본값 — config 파일의 ``assistant.service.url`` 을 반영.
 
     기존에 properties 로 URL 을 설정해 둔 배포는 enabled=true 로 출고되어
     동작이 유지된다. URL 이 없으면 enabled=false (내장 단순 대화로 폴백).
@@ -203,6 +228,20 @@ def _build_cors_defaults(settings=None) -> list[tuple[str, str, str]]:
     ]
 
 
+def _build_metadata_sync_defaults(settings=None) -> list[tuple[str, str, str]]:
+    """최초 시드용 수집 서비스(metadata-sync) 기본값을 config 파일 값에서 구성."""
+    if settings is None:
+        from app.core.config import settings
+    return [
+        ("metadata_sync_base_url", settings.metadata_sync_base_url,
+         "Metadata sync service URL (e.g. http://localhost:4610) — connection test, browse, sync jobs, Impala profiles"),
+        ("metadata_sync_api_token", settings.metadata_sync_api_token,
+         "Metadata sync API token (same as server.api_token of the service; empty = no token)"),
+        ("metadata_sync_run_retention_days", str(settings.sync_run_retention_days),
+         "Days to keep datasource sync run history"),
+    ]
+
+
 def _all_defaults(settings=None) -> list[tuple[str, list[tuple[str, str, str]]]]:
     """카테고리별 시드 기본값. ``settings`` 를 주면 그 객체의 값(설정 파일 값)으로 구성."""
     return [
@@ -214,9 +253,12 @@ def _all_defaults(settings=None) -> list[tuple[str, list[tuple[str, str, str]]]]
         ("change", _CHANGE_DEFAULTS),
         ("quality", _QUALITY_DEFAULTS),
         ("catalog", _CATALOG_DEFAULTS),
+        ("branding", _BRANDING_DEFAULTS),
+        ("ai_ready", _AI_READY_DEFAULTS),
         ("assistant", _build_assistant_defaults(settings)),
         ("auth", _build_auth_defaults(settings)),
         ("cors", _build_cors_defaults(settings)),
+        ("metadata_sync", _build_metadata_sync_defaults(settings)),
     ]
 
 
@@ -287,13 +329,12 @@ def _file_path(key: str) -> tuple[str, ...] | None:
         return ("auth", "keycloak", key[len("auth_keycloak_"):])
     if key == "cors_origins":
         return ("cors", "origins")
+    if key.startswith("metadata_sync_"):
+        return ("metadata_sync", key[len("metadata_sync_"):])
     if key.startswith("object_storage_"):
         return ("object_storage", key[len("object_storage_"):])
     if key in ("assistant_agent_url", "assistant_enabled"):  # enabled 는 URL 유무로 정해진다
-        # assistant.service.url, 없으면 이전 이름 assistant.agent.url
-        if str(cfgmod_raw().get("assistant", {}).get("service.url") or "").strip():
-            return ("assistant", "service.url")
-        return ("assistant", "agent.url")
+        return ("assistant", "service.url")
     return None
 
 
@@ -580,4 +621,30 @@ async def load_cors_settings(session: AsyncSession) -> dict[str, str]:
     settings.cors_origins = [o.strip() for o in origins_str.split(",") if o.strip()]
 
     logger.info("DB 에서 CORS 설정 로드: origins=%s", settings.cors_origins)
+    return cfg
+
+
+async def load_metadata_sync_settings(session: AsyncSession) -> dict[str, str]:
+    """수집 서비스(metadata-sync) 설정을 DB 에서 읽어 in-memory ``settings`` 에 반영.
+
+    호출 측(연결 테스트·탐색·수집 작업·Impala 프로파일 프록시)은 ``settings.metadata_sync_*`` 를 읽으므로
+    저장 직후 다음 요청부터 적용된다.
+    """
+    from app.core.config import settings
+
+    cfg = await get_config_by_category(session, "metadata_sync")
+    if not cfg:
+        logger.info("DB 에 수집 서비스 설정 없음, config 파일 기본값 사용")
+        return {}
+    url = (cfg.get("metadata_sync_base_url") or "").strip()
+    if url:
+        settings.metadata_sync_base_url = url.rstrip("/")
+    settings.metadata_sync_api_token = cfg.get("metadata_sync_api_token", "") or ""
+    try:
+        days = int(cfg.get("metadata_sync_run_retention_days") or settings.sync_run_retention_days)
+        settings.sync_run_retention_days = max(1, days)
+    except ValueError:
+        logger.warning("수집 이력 보관 기간 값이 정수가 아니어서 무시: %r", cfg.get("metadata_sync_run_retention_days"))
+    logger.info("DB 에서 수집 서비스 설정 로드: url=%s token=%s retention=%d일", settings.metadata_sync_base_url,
+                "설정됨" if settings.metadata_sync_api_token else "없음", settings.sync_run_retention_days)
     return cfg

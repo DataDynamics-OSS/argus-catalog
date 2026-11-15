@@ -5,7 +5,8 @@
 - C04/C05: 샘플 경로 탈출(``..``)은 500 이 아니라 400 으로 거부한다.
 - C06: 쿼리 리니지 테이블명의 ``_``·``%`` 를 LIKE 와일드카드로 오해석하지 않는다.
 - C10: A←B←C 에서 B, A 를 차례로 지워도 살아 있는 C(와 삭제된 조상 자리표시)가 보인다.
-- C38: DB 가 naive datetime(MariaDB DATETIME·SQLite)을 돌려줘도 스케줄러 tick 이 실패하지 않는다.
+- C38: DB 가 naive datetime(MariaDB DATETIME·SQLite)을 돌려줘도 페더레이션 스케줄러 tick 이 실패하지 않는다
+  (품질 데이터셋 주기 스케줄러는 없앴다 — TODO-095).
 
 실행:
     cd backend
@@ -80,9 +81,15 @@ async def test_lineage_resolve_no_wildcard():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:
         await conn.execute(text(
-            "CREATE TABLE argus_query_lineage (id INTEGER PRIMARY KEY, source_table TEXT, "
+            "CREATE TABLE argus_query_lineage (id INTEGER PRIMARY KEY, datasource_id TEXT NOT NULL DEFAULT '', "
+            "source_catalog TEXT NOT NULL DEFAULT '', source_table TEXT, target_catalog TEXT NOT NULL DEFAULT '', "
             "target_table TEXT, source_dataset_id INTEGER, target_dataset_id INTEGER)"
         ))
+        # 엔진 정보 없는 행은 종전처럼 모든 데이터셋에서 찾는다 — 연결 표는 비어 있어도 된다.
+        await conn.execute(text("CREATE TABLE catalog_datasources (id INTEGER PRIMARY KEY, datasource_id TEXT)"))
+        await conn.execute(text(
+            "CREATE TABLE catalog_catalog_connections (id INTEGER PRIMARY KEY, catalog_id INT, "
+            "datasource_id INT, role TEXT, remote_name TEXT)"))
         rows = [
             (1, "a_b", "x"),          # '_' 와일드카드로 a_b 가 axb 에 매칭되면 안 됨
             (2, "%", "x"),            # '%' 단독도 매칭되면 안 됨
@@ -171,13 +178,11 @@ async def test_comment_deleted_ancestor_chain_keeps_live_reply():
 @pytest.fixture
 async def sched_db(monkeypatch):
     import app.core.database as database
-    from app.catalog.models import DatasetProperty
     from app.federation.models import FederatedInstance, FederationSyncRun
-    from app.quality.models import QualityScore
 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:
-        for m in (FederatedInstance, FederationSyncRun, DatasetProperty, QualityScore):
+        for m in (FederatedInstance, FederationSyncRun):
             await conn.run_sync(lambda sc, t=m.__table__: t.create(sc))
     make = async_sessionmaker(engine, expire_on_commit=False)
     monkeypatch.setattr(database, "async_session", make)
@@ -201,25 +206,6 @@ async def test_federation_scheduler_naive_started_at(sched_db):
         ])
         await s.commit()
     assert await scheduler._due_peers() == [1]
-
-
-async def test_quality_scheduler_naive_scored_at(sched_db):
-    from app.catalog.models import DatasetProperty
-    from app.quality import scheduler
-    from app.quality.models import QualityScore
-
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-    async with sched_db() as s:
-        s.add_all([
-            DatasetProperty(dataset_id=1, property_key=scheduler.QUALITY_SCHEDULE_PROPERTY,
-                            property_value="hourly"),
-            DatasetProperty(dataset_id=2, property_key=scheduler.QUALITY_SCHEDULE_PROPERTY,
-                            property_value="daily"),
-            QualityScore(dataset_id=1, scored_at=now - timedelta(hours=2)),
-            QualityScore(dataset_id=2, scored_at=now - timedelta(hours=2)),
-        ])
-        await s.commit()
-    assert await scheduler._due_dataset_ids() == [1]
 
 
 # ---------------------------------------------------------------------------

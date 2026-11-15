@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""권한 매트릭스 모델.
+"""권한 매트릭스 모델(메뉴 · 보기 전용 · 기능 · 사용자 정의 역할의 기반 역할).
 
 행 의미: (kind, perm_key) 에 role 이 허용됨.
 정책(open-by-default): 어떤 perm_key 에 대한 행이 **하나도 없으면 전 역할
@@ -19,7 +19,7 @@ class Permission(Base):
     __table_args__ = (UniqueConstraint("kind", "perm_key", "role_id", name="uq_permission"),)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    kind = Column(String(10), nullable=False)        # MENU | FEATURE
+    kind = Column(String(10), nullable=False)        # MENU | FEATURE | MENU_VIEW(보기 전용) | ROLE(사용자 정의 역할 → 기반 역할)
     perm_key = Column(String(100), nullable=False)   # 메뉴/기능 key (프런트 레지스트리와 일치)
-    role_id = Column(String(50), nullable=False)     # argus-superuser | argus-user | __none__(admin 전용 센티널)
+    role_id = Column(String(50), nullable=False)     # argus-superuser | argus-user | 사용자 정의 역할 | __none__(admin 전용 센티널)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

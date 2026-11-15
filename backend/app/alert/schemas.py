@@ -48,25 +48,36 @@ class RuleScopeType(str, Enum):
 class RuleTriggerType(str, Enum):
     """트리거 조건.
 
-    ``SYNC_STALE`` 은 평가기가 없어 받지 않는다(과거 데이터에 남아 있을 수는 있음 — 응답은 str).
+    ``SYNC_FAILED``·``SYNC_STALE`` 은 데이터 소스 수집 실행 이력(``catalog_datasource_sync_runs``)으로 평가한다
+    (``app.catalog.sync_runs_service``).
     """
     ANY = "ANY"
     SCHEMA_CHANGE = "SCHEMA_CHANGE"
     COLUMN_WATCH = "COLUMN_WATCH"
     MAPPING_BROKEN = "MAPPING_BROKEN"
-    QUALITY_FAILED = "QUALITY_FAILED"   # 품질 검증 실패 — evaluate_quality_alerts 가 평가
+    QUALITY_FAILED = "QUALITY_FAILED"   # 품질 진단 실패 — evaluate_quality_alerts 가 평가
     MCP_POLICY_DRIFT = "MCP_POLICY_DRIFT"          # MCP 배포 승인 정책 위반·드리프트 — evaluate_entity_alerts
     MCP_SECURITY_WARNING = "MCP_SECURITY_WARNING"  # MCP 서버 보안 경고
+    SYNC_FAILED = "SYNC_FAILED"    # 수집 실행이 실패(또는 일부 실패)로 끝남
+    SYNC_STALE = "SYNC_STALE"      # 수집 대상 데이터 소스가 정해진 시간 안에 성공한 수집이 없음
+    # AI-Ready (app.catalog.ai_ready_alerts) — 데이터셋 범위
+    AI_READY_UNMET = "AI_READY_UNMET"    # 공유 최소 요건 미충족 (주기 점검)
+    REPORT_RECEIVED = "REPORT_RECEIVED"  # 오류 신고·개선 요청 접수 (댓글 저장 때)
+    REPORT_DUE = "REPORT_DUE"            # 신고 처리 기한 임박·넘김 (주기 점검)
 
 
 # 엔터티(MCP) 트리거 — 범위는 ALL / DATASOURCE 만 의미가 있다.
 ENTITY_TRIGGERS = frozenset({"MCP_POLICY_DRIFT", "MCP_SECURITY_WARNING"})
+# 데이터 소스 수집 트리거 — 범위는 ALL / DATASOURCE 만 의미가 있다.
+SYNC_TRIGGERS = frozenset({"SYNC_FAILED", "SYNC_STALE"})
 # 지원 채널. EMAIL 은 발송기가 없어 받지 않는다(저장해도 아무 데도 가지 않으므로).
 SUPPORTED_CHANNELS = ("IN_APP", "WEBHOOK")
 _CHANGE_TYPES = ("DROP", "MODIFY", "ADD")
 _QUALITY_SEVERITIES = ("INFO", "WARNING", "BREAKING")
 _MCP_SEVERITIES = ("low", "medium", "high", "critical")
 _MCP_ENVIRONMENTS = ("DEV", "STG", "PROD")
+_AI_READY_CONDITIONS = ("missing", "metadata", "freshness", "format")
+_REPORT_CATEGORIES = ("bug", "suggestion")
 
 
 def _str_list(value, field: str, *, allowed: tuple[str, ...] | None = None,
@@ -153,6 +164,38 @@ def normalize_trigger_config(trigger_type: str, raw: str | dict | None) -> str:
         kinds = _str_list(cfg.get("kinds"), "kinds")
         if kinds:
             out["kinds"] = kinds
+    elif trigger_type == "SYNC_FAILED":
+        ip = cfg.get("include_partial")
+        if ip is not None:
+            if not isinstance(ip, bool):
+                raise ValueError("include_partial 은 true/false 여야 합니다.")
+            out["include_partial"] = ip
+    elif trigger_type == "SYNC_STALE":
+        # 생략하면 데이터 소스 예약 주기의 2배(최소 1시간)를 기준으로 본다
+        hours = cfg.get("stale_hours")
+        if hours is not None:
+            if isinstance(hours, bool) or not isinstance(hours, int) or not 1 <= hours <= 720:
+                raise ValueError("stale_hours 는 1~720 사이의 정수(시간)여야 합니다.")
+            out["stale_hours"] = hours
+    elif trigger_type == "AI_READY_UNMET":
+        conds = _str_list(cfg.get("conditions"), "conditions", allowed=_AI_READY_CONDITIONS)
+        if conds is not None:
+            if not conds:
+                raise ValueError("최소 요건 조건을 하나 이상 선택해야 합니다.")
+            out["conditions"] = conds
+    elif trigger_type == "REPORT_RECEIVED":
+        cats = _str_list(cfg.get("categories"), "categories", allowed=_REPORT_CATEGORIES)
+        if cats is not None:
+            if not cats:
+                raise ValueError("분류(오류 신고·개선 요청)를 하나 이상 선택해야 합니다.")
+            out["categories"] = cats
+    elif trigger_type == "REPORT_DUE":
+        # 생략하면 2일 전부터 임박으로 본다. 0 이면 기한을 넘겼을 때만
+        days = cfg.get("days_before")
+        if days is not None:
+            if isinstance(days, bool) or not isinstance(days, int) or not 0 <= days <= 30:
+                raise ValueError("days_before 는 0~30 사이의 정수(일)여야 합니다.")
+            out["days_before"] = days
     # ANY / MAPPING_BROKEN 은 옵션 없음
     return json.dumps(out, ensure_ascii=False)
 
@@ -176,12 +219,21 @@ def normalize_channels(value: str | list[str] | None) -> str:
     return ",".join(out)
 
 
-def normalize_subscribers(value: str | None) -> str | None:
-    """구독자 콤마 목록 정규화(공백·중복 제거, 줄바꿈도 구분자로). 비면 None."""
+def normalize_subscribers(value: str | list[str] | None) -> str | None:
+    """구독자 목록 정규화 → 저장 문자열(쉼표 구분 사용자 이름). 비면 None.
+
+    화면은 목록(배지 입력, TODO-144)을 보내고, 예전 클라이언트는 쉼표 · 줄바꿈 문자열을 보낸다.
+    사용자 이름에는 쉼표가 들어갈 수 없으므로 목록 항목에 쉼표가 있으면 거부한다."""
     if value is None:
         return None
+    if isinstance(value, (list, tuple)):
+        items = [str(v) for v in value]
+        if any("," in v for v in items):
+            raise ValueError("구독자 이름에는 쉼표를 쓸 수 없습니다.")
+    else:
+        items = value.replace("\n", ",").split(",")
     out: list[str] = []
-    for v in value.replace("\n", ",").split(","):
+    for v in items:
         v = v.strip()
         if v and v not in out:
             if len(v) > 200:
@@ -282,7 +334,7 @@ class AlertRuleCreate(_RuleFields):
     channels: str = "IN_APP"
     notify_owners: str = "true"
     webhook_url: str | None = None
-    subscribers: str | None = None                           # 콤마 구분
+    subscribers: str | None = None                           # 사용자 이름 목록(배열 또는 예전 쉼표 문자열) → 저장은 쉼표 구분
 
     @model_validator(mode="after")
     def _check_config(self):

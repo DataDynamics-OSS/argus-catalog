@@ -124,7 +124,7 @@ export function SidebarUser() {
                 </Avatar>
                 <div className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-semibold">{displayName}</span>
-                  <span className="truncate text-xs text-muted-foreground">
+                  <span className="truncate text-xs">
                     @{user.username}
                   </span>
                 </div>
@@ -138,18 +138,18 @@ export function SidebarUser() {
               sideOffset={4}
             >
               <DropdownMenuItem onSelect={() => setProfileOpen(true)}>
-                <User2 className="mr-2 size-4" />
+                <User2 />
                 프로필
               </DropdownMenuItem>
               {authType === "local" && (
                 <DropdownMenuItem onSelect={() => setSettingsOpen(true)}>
-                  <Settings className="mr-2 size-4" />
+                  <Settings />
                   계정 설정
                 </DropdownMenuItem>
               )}
               <DropdownMenuSeparator />
               <DropdownMenuItem onSelect={handleLogout}>
-                <LogOut className="mr-2 size-4" />
+                <LogOut />
                 로그아웃
               </DropdownMenuItem>
             </DropdownMenuContent>
@@ -189,7 +189,7 @@ export function SidebarUser() {
             </button>
             <div className="text-center">
               <p className="text-lg font-semibold">{displayName}</p>
-              <p className="text-sm text-muted-foreground">@{user.username}</p>
+              <p className="text-sm">@{user.username}</p>
             </div>
           </div>
 

@@ -9,8 +9,12 @@ import {
   Database,
   FolderOpen,
   MoreHorizontal,
+  Pencil,
+  Trash2,
+  type LucideIcon,
 } from "lucide-react"
 
+import { MenuItemContent } from "@/components/menu-item-content"
 import {
   ContextMenu,
   ContextMenuContent,
@@ -25,6 +29,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
+import { originMeta } from "@/features/datasets/origin"
+import { SystemStatusBadge } from "@/features/topology/components/system-status-badge"
 import type {
   Topology,
   TopologyOrganization,
@@ -41,12 +47,6 @@ export function nodeKey(n: SelectedNode): string {
   return n.kind === "unassigned" ? "unassigned" : `${n.kind}:${n.id}`
 }
 
-const ORIGIN_DOT: Record<string, string> = {
-  PROD: "bg-emerald-600",
-  STAGING: "bg-orange-500",
-  DEV: "bg-sky-500",
-}
-
 // 펼침/포커스 추적용 트리 키 (조직 루트·미분류 버킷은 선택 키와 별개)
 const ROOT_KEY = "__root__"
 const UNASSIGNED_KEY = "__unassigned__"
@@ -59,7 +59,7 @@ interface TreeProps {
   onAddRootOrg: () => void
   onAddDatasource: () => void
   onAddSubOrg: (parentId: number) => void
-  onAddSystem: (orgId: number) => void
+  onAddSystem: (orgId: number | null) => void
   onEditOrg: (orgId: number) => void
   onDeleteOrg: (orgId: number) => void
   // 시스템
@@ -74,6 +74,9 @@ interface TreeProps {
 /** 행 작업 — 우클릭 메뉴와 키보드/"…" 버튼 메뉴가 같은 목록을 쓴다 */
 interface RowAction {
   label: string
+  icon: LucideIcon
+  /** 라벨 아래 회색 설명줄 */
+  hint?: string
   onSelect: () => void
   destructive?: boolean
   separatorBefore?: boolean
@@ -251,7 +254,7 @@ export function TopologyTree({
         variant={a.destructive ? "destructive" : undefined}
         onClick={() => a.onSelect()}
       >
-        {a.label}
+        <MenuItemContent icon={a.icon} label={a.label} hint={a.hint} />
       </ContextMenuItem>,
     ])
   }
@@ -303,7 +306,7 @@ export function TopologyTree({
                 variant={a.destructive ? "destructive" : undefined}
                 onSelect={() => a.onSelect()}
               >
-                {a.label}
+                <MenuItemContent icon={a.icon} label={a.label} hint={a.hint} />
               </DropdownMenuItem>,
             ])}
           </DropdownMenuContent>
@@ -383,16 +386,16 @@ export function TopologyTree({
           expandable: false,
           expanded: false,
           onActivate: () => onSelect({ kind: "datasource", id: p.id }),
-          actions: [{ label: "삭제", destructive: true, onSelect: () => onDeleteDatasource(p.id) }],
+          actions: [{ label: "삭제", icon: Trash2, destructive: true, onSelect: () => onDeleteDatasource(p.id) }],
           pushActionsRight: false,
-          menuLabel: `${p.name} 작업`,
+          menuLabel: `${p.name} 메뉴`,
           content: (
             <>
               <span className="w-4 shrink-0" />
-              <span className={`h-2 w-2 shrink-0 rounded-full ${ORIGIN_DOT[p.origin] ?? "bg-muted-foreground"}`} />
+              <span className={`h-2 w-2 shrink-0 rounded-full ${originMeta(p.origin).bg}`} />
               <Database className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
               <span className="truncate">{p.name}</span>
-              <span className="ml-auto shrink-0 rounded bg-muted px-1.5 text-xs text-muted-foreground tabular-nums">
+              <span className="ml-auto shrink-0 rounded bg-muted px-1.5 text-xs tabular-nums">
                 {p.dataset_count}
               </span>
             </>
@@ -419,22 +422,20 @@ export function TopologyTree({
           expanded: open,
           onActivate: () => onSelect({ kind: "system", id: s.id }),
           actions: [
-            { label: "데이터 소스 추가", onSelect: () => onAddDatasourceToSystem(s.id) },
-            { label: "삭제", destructive: true, separatorBefore: true, onSelect: () => onDeleteSystem(s.id) },
+            { label: "데이터 소스 추가", icon: Database, onSelect: () => onAddDatasourceToSystem(s.id) },
+            { label: "삭제", icon: Trash2, destructive: true, separatorBefore: true, onSelect: () => onDeleteSystem(s.id) },
           ],
           pushActionsRight: false,
-          menuLabel: `${s.name} 작업`,
+          menuLabel: `${s.name} 메뉴`,
           content: (
             <>
               {renderToggle(key, hasChildren, open)}
               <Boxes className="h-3.5 w-3.5 shrink-0 text-amber-600" />
               <span className="truncate">{s.name}</span>
               {s.status !== "ACTIVE" && (
-                <span className="shrink-0 rounded border px-1 text-[10px] text-muted-foreground">
-                  {s.status}
-                </span>
+                <SystemStatusBadge status={s.status} size="sm" />
               )}
-              <span className="ml-auto shrink-0 rounded bg-muted px-1.5 text-xs text-muted-foreground tabular-nums">
+              <span className="ml-auto shrink-0 rounded bg-muted px-1.5 text-xs tabular-nums">
                 {s.datasources.length}
               </span>
             </>
@@ -464,13 +465,13 @@ export function TopologyTree({
           expanded: open,
           onActivate: () => onSelect({ kind: "org", id: o.id }),
           actions: [
-            { label: "하위 조직 추가", onSelect: () => onAddSubOrg(o.id) },
-            { label: "시스템 추가", onSelect: () => onAddSystem(o.id) },
-            { label: "이름 변경", separatorBefore: true, onSelect: () => onEditOrg(o.id) },
-            { label: "삭제", destructive: true, onSelect: () => onDeleteOrg(o.id) },
+            { label: "하위 조직 추가", icon: Building2, onSelect: () => onAddSubOrg(o.id) },
+            { label: "시스템 추가", icon: Boxes, onSelect: () => onAddSystem(o.id) },
+            { label: "이름 변경", icon: Pencil, onSelect: () => onEditOrg(o.id) },
+            { label: "삭제", icon: Trash2, destructive: true, separatorBefore: true, onSelect: () => onDeleteOrg(o.id) },
           ],
           pushActionsRight: true,
-          menuLabel: `${o.name} 작업`,
+          menuLabel: `${o.name} 메뉴`,
           content: (
             <>
               {renderToggle(key, hasChildren, open)}
@@ -503,11 +504,11 @@ export function TopologyTree({
         expanded: rootOpen,
         onActivate: () => toggle(ROOT_KEY),
         actions: [
-          { label: "조직 추가", onSelect: () => onAddRootOrg() },
-          { label: "데이터 소스 추가", onSelect: () => onAddDatasource() },
+          { label: "조직 추가", icon: Building2, onSelect: () => onAddRootOrg() },
+          { label: "데이터 소스 추가", icon: Database, onSelect: () => onAddDatasource() },
         ],
         pushActionsRight: true,
-        menuLabel: "조직 작업",
+        menuLabel: "조직 메뉴",
         content: (
           <>
             <button
@@ -540,7 +541,7 @@ export function TopologyTree({
           )}
           {topology.organizations.map((o) => renderOrg(o, 1, ROOT_KEY))}
 
-          {/* 미분류 — 항상 표시, 삭제 불가. 우클릭 → 데이터 소스 추가만 제공 */}
+          {/* 미분류 — 항상 표시, 삭제 불가. 우클릭 → 데이터 소스 추가 · 시스템 추가(조직 없이) */}
           <div role="none">
             {renderRow({
               treeKey: UNASSIGNED_KEY,
@@ -552,15 +553,18 @@ export function TopologyTree({
               expandable: unassignedCount > 0,
               expanded: unassignedOpen,
               onActivate: () => onSelect({ kind: "unassigned" }),
-              actions: [{ label: "데이터 소스 추가", onSelect: () => onAddDatasource() }],
+              actions: [
+                { label: "데이터 소스 추가", icon: Database, onSelect: () => onAddDatasource() },
+                { label: "시스템 추가", icon: Boxes, hint: "조직 없이 추가합니다", onSelect: () => onAddSystem(null) },
+              ],
               pushActionsRight: false,
-              menuLabel: "미분류 작업",
+              menuLabel: "미분류 메뉴",
               content: (
                 <>
                   {renderToggle(UNASSIGNED_KEY, unassignedCount > 0, unassignedOpen)}
                   <FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                   <span className="truncate">미분류</span>
-                  <span className="ml-auto shrink-0 rounded bg-muted px-1.5 text-xs text-muted-foreground tabular-nums">
+                  <span className="ml-auto shrink-0 rounded bg-muted px-1.5 text-xs tabular-nums">
                     {unassignedCount}
                   </span>
                 </>

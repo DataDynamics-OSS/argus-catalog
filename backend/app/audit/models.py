@@ -9,7 +9,7 @@ from app.core.database import Base
 class AdminAuditLog(Base):
     """관리 메뉴(사용자·설정·권한) 변경 1건.
 
-    - ``category``: ``users`` / ``settings`` / ``permissions``
+    - ``category``: ``users`` / ``settings`` / ``permissions`` / ``operations``(운영 작업)
     - ``action``: 예) ``user.create``, ``user.role``, ``settings.llm``, ``permissions.menus``
     - ``target``: 대상(사용자 아이디, 설정 범주, 권한 종류 등)
     - ``detail``: 변경 내용 JSON(비밀값은 값 없이 "변경됨"만)

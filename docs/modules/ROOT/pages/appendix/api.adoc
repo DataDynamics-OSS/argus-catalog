@@ -123,24 +123,30 @@ curl "http://<server>:4600/api/v1/external/metadata?urn=mysql-19d0bfe9.sakila.ac
 
 == Avro 스키마 응답
 
-Avro 스키마 조회는 그대로 직렬화·역직렬화에 쓸 수 있는 Avro record 형태로 응답합니다.
-각 필드에는 원본 타입 정보를 담은 `metadata` 가 함께 붙습니다.
+Avro 스키마 조회는 그대로 직렬화·역직렬화에 쓸 수 있는 표준 Avro record 형태로 응답합니다.
+비표준 키는 넣지 않습니다. 원본 타입 정보는 메타데이터 조회 API 로 확인합니다.
+캐시 적중 여부는 `X-Cache-Hit` 응답 헤더로 알려 줍니다.
+
+* `name` 과 `namespace` 는 Avro 이름 규칙(`[A-Za-z_][A-Za-z0-9_]*`)에 맞춰 만듭니다. 영문·숫자·`_` 가 아닌 문자는 `_` 로 바꾸고, 숫자로 시작하면 앞에 `_` 를 붙입니다.
+** `name` 은 물리명에서 만듭니다(`sakila.actor` → `sakila_actor`).
+** `namespace` 는 데이터 소스 ID 에서 만듭니다(`mysql-19d0bfe9` → `mysql_19d0bfe9`).
+* NULL 을 허용하는 컬럼에는 `"default": null` 이 붙습니다.
+* 화면에서 Avro 편집본을 저장했으면 편집본을 그대로 돌려줍니다.
 
 [source,json]
 ----
 {
   "type": "record",
-  "name": "actor",
-  "namespace": "mysql-19d0bfe9.sakila",
+  "name": "sakila_actor",
+  "namespace": "mysql_19d0bfe9",
+  "doc": "배우 마스터",
   "fields": [
-    {"name": "actor_id", "type": "int", "doc": "배우 고유 식별자",
-     "metadata": {"native_type": "smallint(5) unsigned", "primary_key": true}},
+    {"name": "actor_id", "type": "int", "doc": "배우 고유 식별자"},
     {"name": "rating",
      "type": ["null", {"type":"bytes","logicalType":"decimal","precision":5,"scale":2}],
-     "metadata": {"native_type": "decimal(5,2)"}},
+     "default": null},
     {"name": "last_update",
-     "type": {"type":"long","logicalType":"timestamp-millis"},
-     "metadata": {"native_type": "timestamp"}}
+     "type": {"type":"long","logicalType":"timestamp-millis"}}
   ]
 }
 ----

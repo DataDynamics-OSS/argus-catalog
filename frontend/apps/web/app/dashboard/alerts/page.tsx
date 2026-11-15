@@ -1,5 +1,6 @@
 "use client"
 
+import { Tip } from "@/components/tip"
 import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
@@ -7,6 +8,7 @@ import { DashboardHeader } from "@/components/dashboard-header"
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { Card, CardContent } from "@workspace/ui/components/card"
 import { Badge } from "@workspace/ui/components/badge"
+import { StatusBadge as ToneBadge } from "@workspace/ui/components/status-badge"
 import { Button } from "@workspace/ui/components/button"
 import { Checkbox } from "@workspace/ui/components/checkbox"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@workspace/ui/components/tabs"
@@ -24,15 +26,19 @@ import {
   Bell, Check, ChevronDown, ChevronRight, Eye, HelpCircle, X, Plus, Pencil, Trash2,
   Database, Tag, GitBranch, Server, Globe, RotateCcw, Eraser,
 } from "lucide-react"
-import { errorMessage, toast } from "@/lib/notify"
+import { toast, notifyError } from "@/lib/notify"
+import { SeverityBadge } from "@/components/severity-badge"
+import { KeyValueTable } from "@/components/key-value-table"
 import { authFetch, throwOnError } from "@/features/auth/auth-fetch"
-import { useAuth } from "@/features/auth"
 import { usePermissions } from "@/features/permissions/use-permissions"
+import { AdminAuditButton } from "@/features/audit/admin-audit-sheet"
 import { RuleCreateDialog } from "@/features/alerts/components/rule-create-dialog"
 import { notifyAlertsChanged } from "@/features/alerts/events"
 import {
-  ALERT_TYPE_LABEL, CHANNEL_LABEL, SCOPE_LABEL, SEVERITY_LABEL, STATUS_LABEL, TRIGGER_LABEL, labelOf,
+  ALERT_TYPE_LABEL, CHANNEL_LABEL, SCOPE_LABEL, SEVERITY_LABEL, STATUS_LABEL, STATUS_TONE, TRIGGER_LABEL, labelOf,
 } from "@/features/alerts/labels"
+import { type DatasetTab, datasetHref } from "@/features/datasets/links"
+import { fetchDataset } from "@/features/datasets/api"
 
 const BASE = "/api/v1/alerts"
 const RULES_FEATURE = "alerts.rules"
@@ -53,9 +59,19 @@ type Alert = {
   can_update: boolean
 }
 
-const ENTITY_LABEL: Record<string, string> = { mcp_deployment: "MCP 배포" }
+const ENTITY_LABEL: Record<string, string> = { mcp_deployment: "MCP 배포", datasource: "데이터 소스" }
 function entityLabel(t: string): string {
   return ENTITY_LABEL[t] ?? t
+}
+
+// 데이터셋이 아닌 엔터티 알림의 '출처' 이동 경로 — 종류별로 다르다(DEF-054, 예전엔 모두 MCP 서버 화면).
+// 수집 알림(datasource)의 entity_ref 는 데이터 소스 이름. 모르는 종류는 링크 없이 보여 준다.
+function entityHref(type: string, ref: string | null): string | null {
+  if (type === "datasource") {
+    return ref ? `/dashboard/datasources?datasource=${encodeURIComponent(ref)}` : "/dashboard/datasources"
+  }
+  if (type === "mcp_deployment") return "/dashboard/mcp-servers"
+  return null
 }
 
 type PaginatedAlerts = { items: Alert[]; total: number; page: number; page_size: number }
@@ -95,15 +111,11 @@ async function api<T>(url: string, init: RequestInit & { json?: unknown } = {}, 
   return res.json() as Promise<T>
 }
 
-function errMsg(e: unknown, fallback: string): string {
-  return errorMessage(e) ?? fallback
-}
 
 /** 규칙 관리 — admin 이거나 alerts.rules 기능 권한이 명시적으로 허용된 역할. */
 function useCanManageRules(): boolean {
-  const { user } = useAuth()
-  const { isFeatureGranted } = usePermissions()
-  return !!user?.is_admin || isFeatureGranted(RULES_FEATURE)
+  const { canUseFeature } = usePermissions()
+  return canUseFeature(RULES_FEATURE)
 }
 
 // ---------------------------------------------------------------------------
@@ -174,7 +186,12 @@ export default function AlertsPage() {
 // ---------------------------------------------------------------------------
 
 function AlertsTab({ focusId }: { focusId: string | null }) {
-  const { user } = useAuth()
+  // 오래된 알림 정리는 명시 허용형 alerts.purge(미설정이면 관리자만, TODO-122)
+  const { canUseFeature } = usePermissions()
+  const canPurge = canUseFeature("alerts.purge")
+  // 알림 처리(확인 · 해결 · 무시 · 다시 열기)는 기능 권한 alerts.ack(기본 허용형, TODO-124) — 없으면 처리 단추 · 선택을 숨긴다
+  const canAck = canUseFeature("alerts.ack")
+  const gate = useCallback((a: Alert): Alert => (canAck ? a : { ...a, can_update: false }), [canAck])
   const router = useRouter()
   const [data, setData] = useState<PaginatedAlerts | null>(null)
   const [loading, setLoading] = useState(true)
@@ -196,12 +213,13 @@ function AlertsTab({ focusId }: { focusId: string | null }) {
     params.set("page", String(page))
     params.set("page_size", "20")
     try {
-      setData(await api<PaginatedAlerts>(`${BASE}?${params}`, {}, "알림 목록을 불러오지 못했습니다."))
+      const d = await api<PaginatedAlerts>(`${BASE}?${params}`, {}, "알림 목록을 불러오지 못했습니다.")
+      setData({ ...d, items: d.items.map(gate) })
       setSelected(new Set())
     } catch (e) {
-      toast.error(errMsg(e, "알림 목록을 불러오지 못했습니다."))
+      notifyError(e, "알림 목록을 불러오지 못했습니다.")
     } finally { setLoading(false) }
-  }, [statusFilter, severityFilter, typeFilter, page])
+  }, [statusFilter, severityFilter, typeFilter, page, gate])
 
   useEffect(() => { fetchAlerts() }, [fetchAlerts])
 
@@ -209,21 +227,21 @@ function AlertsTab({ focusId }: { focusId: string | null }) {
   useEffect(() => {
     if (!focusId) return
     api<Alert>(`${BASE}/${focusId}`, {}, "알림을 불러오지 못했습니다.")
-      .then(setSelectedAlert)
-      .catch(e => toast.error(errMsg(e, "알림을 찾을 수 없습니다.")))
+      .then(a => setSelectedAlert(gate(a)))
+      .catch(e => notifyError(e, "알림을 불러오지 못했습니다."))
       .finally(() => router.replace("/dashboard/alerts"))
-  }, [focusId, router])
+  }, [focusId, router, gate])
 
   const updateStatus = async (alert: Alert, status: string) => {
     setBusy(true)
     try {
       const updated = await api<Alert>(`${BASE}/${alert.id}/status`, { method: "PUT", json: { status } }, "알림 상태를 바꾸지 못했습니다.")
       toast.success(`알림을 '${STATUS_LABEL[status]}' 상태로 바꿨습니다.`)
-      if (selectedAlert?.id === alert.id) setSelectedAlert(updated)
+      if (selectedAlert?.id === alert.id) setSelectedAlert(gate(updated))
       fetchAlerts()
       notifyAlertsChanged()
     } catch (e) {
-      toast.error(errMsg(e, "상태를 바꾸지 못했습니다."))
+      notifyError(e, "상태를 바꾸지 못했습니다.")
     } finally { setBusy(false) }
   }
 
@@ -242,7 +260,7 @@ function AlertsTab({ focusId }: { focusId: string | null }) {
       fetchAlerts()
       if (res.updated.length) notifyAlertsChanged()
     } catch (e) {
-      toast.error(errMsg(e, "알림 상태를 일괄 변경하지 못했습니다."))
+      notifyError(e, "알림 상태를 일괄 변경하지 못했습니다.")
     } finally { setBusy(false) }
   }
 
@@ -255,7 +273,7 @@ function AlertsTab({ focusId }: { focusId: string | null }) {
       fetchAlerts()
       if (res.deleted) notifyAlertsChanged()
     } catch (e) {
-      toast.error(errMsg(e, "오래된 알림을 정리하지 못했습니다."))
+      notifyError(e, "오래된 알림을 정리하지 못했습니다.")
     } finally { setBusy(false) }
   }
 
@@ -303,7 +321,7 @@ function AlertsTab({ focusId }: { focusId: string | null }) {
         </Select>
         {selected.size > 0 && (
           <div className="flex items-center gap-1.5">
-            <span className="text-sm text-muted-foreground">{selected.size}건 선택</span>
+            <span className="text-sm">{selected.size}건 선택</span>
             {bulkActions.map(st => (
               <Button key={st} variant="outline" size="sm" className="h-8" disabled={busy} onClick={() => bulkUpdate(st)}>
                 {ACTION_META[st]!.label}
@@ -315,13 +333,15 @@ function AlertsTab({ focusId }: { focusId: string | null }) {
           </div>
         )}
         <div className="ml-auto flex items-center gap-2">
-          <span className="text-sm text-muted-foreground">{data ? `${data.total}건` : ""}</span>
-          {user?.is_admin && (
+          <span className="text-sm">{data ? `${data.total}건` : ""}</span>
+          {canPurge && (
             <Button variant="ghost" size="sm" className="h-8 gap-1.5" onClick={() => setPurgeOpen(true)}
               title="해결·무시된 지 90일이 지난 알림을 삭제합니다">
               <Eraser className="h-3.5 w-3.5" /> 오래된 알림 정리
             </Button>
           )}
+          {/* 정리는 되돌릴 수 없어 감사 로그(운영 작업)에 남는다 — 감사 로그 조회 권한(audit.view)이 있으면 이력 단추 */}
+          {canPurge && <AdminAuditButton category="operations" />}
         </div>
       </div>
 
@@ -345,7 +365,7 @@ function AlertsTab({ focusId }: { focusId: string | null }) {
             </TableHeader>
             <TableBody>
               {loading ? (
-                <TableRow><TableCell colSpan={8} className="text-center py-8 text-muted-foreground">불러오는 중...</TableCell></TableRow>
+                <TableRow><TableCell colSpan={8} className="text-center py-8 text-muted-foreground">불러오는 중…</TableCell></TableRow>
               ) : items.length === 0 ? (
                 <TableRow><TableCell colSpan={8} className="text-center py-12">
                   <Bell className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
@@ -361,21 +381,21 @@ function AlertsTab({ focusId }: { focusId: string | null }) {
                   <TableCell><SeverityBadge severity={alert.severity} /></TableCell>
                   <TableCell>
                     <p className="text-sm truncate max-w-sm">{alert.change_summary}</p>
-                    <p className="text-sm text-muted-foreground mt-0.5">
+                    <p className="text-sm mt-0.5">
                       {labelOf(ALERT_TYPE_LABEL, alert.alert_type)}
                       {alert.rule_name && ` · 규칙: ${alert.rule_name}`}
                     </p>
                   </TableCell>
                   <TableCell>
                     <div className="text-sm">
-                      <span className="text-muted-foreground">{alert.entity_type ? entityLabel(alert.entity_type) : alert.source_datasource_type}</span>
+                      <span >{alert.entity_type ? entityLabel(alert.entity_type) : alert.source_datasource_type}</span>
                       <p className="font-medium truncate">{alert.entity_ref ?? alert.source_dataset_name ?? "(삭제된 데이터셋)"}</p>
                     </div>
                   </TableCell>
                   <TableCell>
                     {alert.affected_dataset_name ? (
                       <div className="text-sm">
-                        <span className="text-muted-foreground">{alert.affected_datasource_type}</span>
+                        <span >{alert.affected_datasource_type}</span>
                         <p className="font-medium truncate">{alert.affected_dataset_name}</p>
                       </div>
                     ) : <span className="text-sm text-muted-foreground">-</span>}
@@ -383,22 +403,22 @@ function AlertsTab({ focusId }: { focusId: string | null }) {
                   <TableCell>
                     <StatusBadge status={alert.status} />
                     {alert.resolved_by && (
-                      <p className="text-sm text-muted-foreground mt-0.5 truncate" title={alert.resolved_at ? new Date(alert.resolved_at).toLocaleString() : ""}>
+                      <p className="text-sm mt-0.5 truncate" title={alert.resolved_at ? new Date(alert.resolved_at).toLocaleString() : ""}>
                         {alert.resolved_by}
                       </p>
                     )}
                   </TableCell>
-                  <TableCell><span className="text-sm text-muted-foreground">{formatTimeAgo(alert.created_at)}</span></TableCell>
+                  <TableCell><span className="text-sm">{formatTimeAgo(alert.created_at)}</span></TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
                       {alert.can_update && (NEXT_STATUS[alert.status] ?? []).map(st => {
                         const meta = ACTION_META[st]!
                         const Icon = meta.icon
                         return (
-                          <Button key={st} variant="ghost" size="icon" className="h-7 w-7" title={meta.label}
+                          <Tip key={st} label={meta.label}><Button variant="ghost" size="icon" className="h-7 w-7" aria-label={meta.label}
                             disabled={busy} onClick={() => updateStatus(alert, st)}>
                             <Icon className="h-3.5 w-3.5" />
-                          </Button>
+                          </Button></Tip>
                         )
                       })}
                     </div>
@@ -413,7 +433,7 @@ function AlertsTab({ focusId }: { focusId: string | null }) {
       {totalPages > 1 && (
         <div className="flex items-center justify-center gap-2 mt-4">
           <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>이전</Button>
-          <span className="text-sm text-muted-foreground">{page} / {totalPages} 페이지</span>
+          <span className="text-sm">{page} / {totalPages} 페이지</span>
           <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}>다음</Button>
         </div>
       )}
@@ -443,12 +463,41 @@ function AlertsTab({ focusId }: { focusId: string | null }) {
 // Alert detail
 // ---------------------------------------------------------------------------
 
+function EntityLink({ type, entityRef }: { type: string; entityRef: string | null }) {
+  const href = entityHref(type, entityRef)
+  const label = `${entityLabel(type)} · ${entityRef ?? ""}`
+  return href ? <Link href={href} className="text-primary hover:underline">{label}</Link> : <span>{label}</span>
+}
+
 function AlertDetailDialog({ alert, busy, onClose, onChangeStatus }: {
   alert: Alert | null
   busy: boolean
   onClose: () => void
   onChangeStatus: (alert: Alert, status: string) => void
 }) {
+  // 조치 대상 데이터셋 — 영향받은 데이터셋, 없으면 출처. 데이터셋 알림(entity_type 없음)이고 데이터셋이 남아 있을 때만
+  const target = alert && !alert.entity_type
+    ? (alert.affected_dataset_id && alert.affected_dataset_name
+        ? { id: alert.affected_dataset_id, name: alert.affected_dataset_name }
+        : alert.source_dataset_id && alert.source_dataset_name
+          ? { id: alert.source_dataset_id, name: alert.source_dataset_name } : null)
+    : null
+  // '변경 요청 만들기' 는 변경 관리 메뉴와 changes.create 가 모두 있을 때만 — 데이터셋 상세의 '변경 요청 만들기' 와 같은 기준(DEF-064, DEF-079)
+  const { canUseFeature, isMenuAllowed } = usePermissions()
+  const canCreateChange = isMenuAllowed("changes") && canUseFeature("changes.create")
+  const targetId = target?.id ?? null
+  // 누구에게 연락할지 — 조치 대상 데이터셋의 소유자(TODO-077)
+  const [owners, setOwners] = useState<string[] | null>(null)
+  useEffect(() => {
+    setOwners(null)
+    if (!targetId) return
+    let alive = true
+    fetchDataset(targetId)
+      .then((d) => { if (alive) setOwners(d.owners.map((o) => o.owner_name)) })
+      .catch(() => { if (alive) setOwners([]) })
+    return () => { alive = false }
+  }, [targetId])
+
   return (
     <Dialog open={!!alert} onOpenChange={o => { if (!o) onClose() }}>
       <DialogContent className="max-w-xl max-h-[85vh] overflow-y-auto">
@@ -460,60 +509,46 @@ function AlertDetailDialog({ alert, busy, onClose, onChangeStatus }: {
         </DialogHeader>
         {alert && (
           <div className="space-y-3">
-            <div>
-              <span className="text-sm text-muted-foreground">{labelOf(ALERT_TYPE_LABEL, alert.alert_type)}</span>
-              <p className="text-sm font-medium break-words">{alert.change_summary}</p>
-            </div>
-            <div>
-              <span className="text-sm text-muted-foreground">규칙</span>
-              <p className="text-sm">{alert.rule_name ?? (alert.rule_id ? `#${alert.rule_id}` : "(삭제된 규칙)")}</p>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <span className="text-sm text-muted-foreground">출처</span>
-                <p className="text-sm">
-                  {alert.entity_type ? (
-                    <Link href="/dashboard/mcp-servers" className="text-primary hover:underline">
-                      {entityLabel(alert.entity_type)} · {alert.entity_ref}
-                    </Link>
-                  ) : (
-                    <DatasetLink id={alert.source_dataset_id} name={alert.source_dataset_name} type={alert.source_datasource_type} />
-                  )}
-                </p>
-              </div>
-              <div>
-                <span className="text-sm text-muted-foreground">영향</span>
-                <p className="text-sm">
-                  {alert.affected_dataset_id
-                    ? <DatasetLink id={alert.affected_dataset_id} name={alert.affected_dataset_name} type={alert.affected_datasource_type} />
-                    : "-"}
-                </p>
-              </div>
-            </div>
+            {/* 키-값 표 — 값이 없는 항목은 KeyValueTable 이 건너뛴다 */}
+            <KeyValueTable items={[
+              ["유형", labelOf(ALERT_TYPE_LABEL, alert.alert_type)],
+              ["내용", <span key="s" className="font-medium">{alert.change_summary}</span>],
+              ["규칙", alert.rule_name ?? (alert.rule_id ? `#${alert.rule_id}` : "(삭제된 규칙)")],
+              ["출처", alert.entity_type
+                ? <EntityLink key="src" type={alert.entity_type} entityRef={alert.entity_ref} />
+                : <DatasetLink key="src" id={alert.source_dataset_id} name={alert.source_dataset_name} type={alert.source_datasource_type} tab={alertSourceTab(alert.alert_type)} />],
+              ["영향", alert.affected_dataset_id
+                ? <DatasetLink key="aff" id={alert.affected_dataset_id} name={alert.affected_dataset_name} type={alert.affected_datasource_type} tab={alertAffectedTab(alert.alert_type)} />
+                : <span key="aff" className="text-muted-foreground">-</span>],
+              ["소유자", target
+                ? (owners === null ? "불러오는 중…" : owners.length > 0 ? owners.join(", ") : "지정되지 않음")
+                : null],
+              ["생성", new Date(alert.created_at).toLocaleString()],
+              [`${STATUS_LABEL[alert.status] ?? alert.status} 처리`, alert.resolved_by
+                ? `${alert.resolved_by}${alert.resolved_at ? ` · ${new Date(alert.resolved_at).toLocaleString()}` : ""}`
+                : null],
+            ]} />
             {alert.change_detail && (
-              <div>
-                <span className="text-sm text-muted-foreground">상세</span>
-                <div className="mt-1 max-h-64 overflow-y-auto">
+              <section className="space-y-1.5 border-t pt-3">
+                <h3 className="text-sm font-medium">상세</h3>
+                <div className="max-h-64 overflow-y-auto">
                   <AlertDetailBody alertType={alert.alert_type} raw={alert.change_detail} />
                 </div>
-              </div>
+              </section>
             )}
-            <div className="text-sm text-muted-foreground space-y-0.5">
-              <p>생성: {new Date(alert.created_at).toLocaleString()}</p>
-              {alert.resolved_by && (
-                <p>
-                  {STATUS_LABEL[alert.status] ?? alert.status} 처리: {alert.resolved_by}
-                  {alert.resolved_at && ` · ${new Date(alert.resolved_at).toLocaleString()}`}
-                </p>
-              )}
-              {!alert.can_update && (
-                <p>상태 변경은 규칙 관리자 또는 관련 데이터셋의 생성자·소유자만 할 수 있습니다.</p>
-              )}
-            </div>
+            {!alert.can_update && (
+              <p className="text-xs text-muted-foreground">상태 변경은 규칙 관리자 또는 관련 데이터셋의 생성자·소유자만 할 수 있습니다.</p>
+            )}
           </div>
         )}
         <DialogFooter className="gap-2">
           <Button variant="outline" onClick={onClose}>닫기</Button>
+          {/* 알림을 보고 스키마를 맞춰야 하면 바로 변경 요청으로 — 대상 데이터셋이 잠긴 상태로 열린다 */}
+          {target && canCreateChange && (
+            <Button variant="outline" asChild>
+              <Link href={`/dashboard/changes/new?dataset_id=${target.id}`}>변경 요청 만들기</Link>
+            </Button>
+          )}
           {alert?.can_update && (NEXT_STATUS[alert.status] ?? []).map(st => (
             <Button key={st} variant={st === "RESOLVED" ? "default" : "outline"} disabled={busy}
               onClick={() => onChangeStatus(alert, st)}>
@@ -526,11 +561,26 @@ function AlertDetailDialog({ alert, busy, onClose, onChangeStatus }: {
   )
 }
 
-function DatasetLink({ id, name, type }: { id: number | null; name: string | null; type: string | null }) {
+// 알림 유형에 맞는 데이터셋 상세 탭(TODO-072) — 스키마 변경은 출처의 변경 이력·영향 데이터셋의 리니지, 품질 실패는 품질 탭.
+function alertSourceTab(alertType: string): DatasetTab | undefined {
+  if (alertType === "SCHEMA_CHANGE") return "history"
+  if (alertType === "QUALITY_FAILED") return "quality"
+  if (alertType === "AI_READY_UNMET") return "ai-ready"
+  if (alertType === "REPORT_RECEIVED" || alertType === "REPORT_DUE") return "comments"
+  return undefined
+}
+
+function alertAffectedTab(alertType: string): DatasetTab | undefined {
+  if (alertType === "SCHEMA_CHANGE") return "lineage"
+  if (alertType === "QUALITY_FAILED") return "quality"
+  return undefined
+}
+
+function DatasetLink({ id, name, type, tab }: { id: number | null; name: string | null; type: string | null; tab?: DatasetTab }) {
   if (!id) return <span>-</span>
-  if (!name) return <span className="text-muted-foreground">(삭제된 데이터셋)</span>
+  if (!name) return <span >(삭제된 데이터셋)</span>
   return (
-    <Link href={`/dashboard/datasets/${id}`} className="text-primary hover:underline">
+    <Link href={datasetHref(id, tab)} className="text-primary hover:underline">
       {type ? `${type}.` : ""}{name}
     </Link>
   )
@@ -551,8 +601,8 @@ function AlertDetailBody({ alertType, raw }: { alertType: string; raw: string })
           return (
             <div key={i} className={box}>
               <span className="font-medium break-all">{col}</span>
-              <span className="text-muted-foreground ml-1">({CHANGE_LABEL[type] ?? type})</span>
-              {d.mapped_to ? <span className="text-muted-foreground ml-1">→ 매핑: {String(d.mapped_to)}</span> : null}
+              <span className="ml-1">({CHANGE_LABEL[type] ?? type})</span>
+              {d.mapped_to ? <span className="ml-1">→ 매핑: {String(d.mapped_to)}</span> : null}
             </div>
           )
         })}
@@ -564,14 +614,14 @@ function AlertDetailBody({ alertType, raw }: { alertType: string; raw: string })
     if (alertType === "QUALITY_FAILED" && Array.isArray(obj.failed_rules)) {
       return (
         <div className="space-y-1.5">
-          {typeof obj.score === "number" && <p className="text-sm">품질 점수: <b>{obj.score.toFixed(1)}%</b></p>}
+          {typeof obj.score === "number" && <KeyValueTable items={[["품질 점수", <b key="sc">{obj.score.toFixed(1)}%</b>]]} />}
           {(obj.failed_rules as Record<string, unknown>[]).map((f, i) => (
             <div key={i} className={box}>
               <span className="font-medium">{String(f.rule_name ?? "?")}</span>
               {f.severity ? <span className="ml-1.5"><SeverityBadge severity={String(f.severity)} /></span> : null}
-              {f.check_type ? <span className="text-muted-foreground ml-1.5">{String(f.check_type)}</span> : null}
-              {f.actual !== undefined && f.actual !== null && <span className="text-muted-foreground ml-1.5">실제값: {String(f.actual)}</span>}
-              {f.detail ? <p className="text-muted-foreground mt-0.5 break-words">{String(f.detail)}</p> : null}
+              {f.check_type ? <span className="ml-1.5">{String(f.check_type)}</span> : null}
+              {f.actual !== undefined && f.actual !== null && <span className="ml-1.5">실제값: {String(f.actual)}</span>}
+              {f.detail ? <p className="mt-0.5 break-words">{String(f.detail)}</p> : null}
             </div>
           ))}
         </div>
@@ -583,12 +633,10 @@ function AlertDetailBody({ alertType, raw }: { alertType: string; raw: string })
         ["종류", obj.kind], ["finding 심각도", obj.severity],
       ]
       return (
-        <div className={box + " space-y-0.5"}>
-          {rows.filter(([, v]) => v !== undefined && v !== null && v !== "").map(([k, v]) => (
-            <p key={k}><span className="text-muted-foreground">{k}:</span> {String(v)}</p>
-          ))}
+        <div className="space-y-2">
+          <KeyValueTable items={rows.map(([k, v]) => [k, v === undefined || v === null || v === "" ? null : String(v)])} />
           {obj.detail !== undefined && obj.detail !== null && (
-            <pre className="whitespace-pre-wrap break-all text-sm mt-1">
+            <pre className={box + " whitespace-pre-wrap break-all"}>
               {typeof obj.detail === "string" ? obj.detail : JSON.stringify(obj.detail, null, 2)}
             </pre>
           )}
@@ -622,7 +670,7 @@ function RulesTab({ canManage, version, onAddRule, onEditRule }: {
     try {
       setRules(await api<AlertRule[]>(`${BASE}/rules`, {}, "규칙 목록을 불러오지 못했습니다."))
     } catch (e) {
-      toast.error(errMsg(e, "규칙 목록을 불러오지 못했습니다."))
+      notifyError(e, "규칙 목록을 불러오지 못했습니다.")
     } finally { setLoading(false) }
   }, [])
 
@@ -636,7 +684,7 @@ function RulesTab({ canManage, version, onAddRule, onEditRule }: {
       toast.success(active ? `'${rule.rule_name}' 규칙을 활성화했습니다.` : `'${rule.rule_name}' 규칙을 비활성화했습니다.`)
       fetchRules()
     } catch (e) {
-      toast.error(errMsg(e, "규칙 상태를 바꾸지 못했습니다."))
+      notifyError(e, "규칙 상태를 바꾸지 못했습니다.")
     }
   }
 
@@ -657,18 +705,18 @@ function RulesTab({ canManage, version, onAddRule, onEditRule }: {
       setDeleteTarget(null)
       fetchRules()
     } catch (e) {
-      toast.error(errMsg(e, "규칙을 삭제하지 못했습니다."))
+      notifyError(e, "규칙을 삭제하지 못했습니다.")
     } finally { setBusy(false) }
   }
 
   if (loading && rules.length === 0) {
-    return <p className="text-sm text-muted-foreground text-center py-8">규칙을 불러오는 중...</p>
+    return <p className="text-sm text-muted-foreground text-center py-8">규칙을 불러오는 중…</p>
   }
 
   return (
     <div className="space-y-3">
       {!canManage && (
-        <p className="text-sm text-muted-foreground">
+        <p className="text-sm">
           규칙 추가·수정·삭제는 관리자 또는 &lsquo;알림 규칙 관리&rsquo; 권한이 있는 역할만 할 수 있습니다.
         </p>
       )}
@@ -695,16 +743,16 @@ function RulesTab({ canManage, version, onAddRule, onEditRule }: {
                   {rule.severity_override ? (
                     <SeverityBadge severity={rule.severity_override} />
                   ) : (
-                    <Badge variant="outline" className="text-sm px-1.5 py-0">자동</Badge>
+                    <Badge variant="outline">자동</Badge>
                   )}
                   <span className="font-medium text-sm">{rule.rule_name}</span>
-                  {rule.is_active === "false" && <Badge variant="secondary" className="text-sm px-1.5 py-0">비활성</Badge>}
+                  {rule.is_active === "false" && <Badge variant="secondary">비활성</Badge>}
                 </div>
 
                 {/* 적용 범위 */}
                 <div className="flex items-center gap-2 mb-2">
                   <ScopeIcon type={rule.scope_type} />
-                  <span className="text-sm text-muted-foreground">
+                  <span className="text-sm">
                     {labelOf(SCOPE_LABEL, rule.scope_type)}:{" "}
                     {rule.scope_type === "ALL" ? "전체" : rule.scope_missing
                       ? <span className="text-destructive">(삭제된 대상 — 이 규칙은 더 이상 발동하지 않습니다)</span>
@@ -713,7 +761,7 @@ function RulesTab({ canManage, version, onAddRule, onEditRule }: {
                 </div>
 
                 {/* 트리거 + 채널 */}
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
                   <span>트리거: <span className="text-foreground">{labelOf(TRIGGER_LABEL, rule.trigger_type)}</span></span>
                   <span>채널: <span className="text-foreground">
                     {rule.channels.split(",").map(c => labelOf(CHANNEL_LABEL, c.trim())).join(", ")}
@@ -727,7 +775,7 @@ function RulesTab({ canManage, version, onAddRule, onEditRule }: {
                 </div>
 
                 {rule.description && (
-                  <p className="text-sm text-muted-foreground mt-2">{rule.description}</p>
+                  <p className="text-sm mt-2">{rule.description}</p>
                 )}
               </div>
 
@@ -739,12 +787,12 @@ function RulesTab({ canManage, version, onAddRule, onEditRule }: {
                     onCheckedChange={() => toggleActive(rule)}
                     aria-label="활성"
                   />
-                  <Button variant="ghost" size="icon" className="h-7 w-7" title="수정" onClick={() => onEditRule(rule)}>
+                  <Tip label="수정"><Button variant="ghost" size="icon" className="h-7 w-7" aria-label="수정" onClick={() => onEditRule(rule)}>
                     <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
-                  </Button>
-                  <Button variant="ghost" size="icon" className="h-7 w-7" title="삭제" onClick={() => handleDeleteClick(rule)}>
+                  </Button></Tip>
+                  <Tip label="삭제"><Button variant="ghost" size="icon" className="h-7 w-7" aria-label="삭제" onClick={() => handleDeleteClick(rule)}>
                     <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
-                  </Button>
+                  </Button></Tip>
                 </div>
               )}
             </div>
@@ -765,13 +813,13 @@ function RulesTab({ canManage, version, onAddRule, onEditRule }: {
             {helpOpen ? <ChevronDown className="h-4 w-4 ml-auto" /> : <ChevronRight className="h-4 w-4 ml-auto" />}
           </button>
           {helpOpen && (
-            <div className="border-t px-5 py-4 text-sm text-muted-foreground space-y-4">
+            <div className="border-t px-5 py-4 text-sm space-y-4">
               <div>
                 <p className="font-semibold text-foreground mb-1">평가 시점 — 이벤트가 기록되는 순간</p>
                 <p className="mb-1">규칙은 주기적으로 검사하지 않고, 아래 이벤트가 생길 때 즉시 평가됩니다:</p>
                 <ul className="list-disc pl-5 space-y-0.5">
                   <li><b>스키마 변경</b> — 메타데이터 동기화에서 컬럼 추가/변경/삭제가 감지되거나, 데이터셋 상세 &gt; 스키마 탭에서 직접 수정·저장한 경우</li>
-                  <li><b>품질 검증 실패</b> — 품질 탭 &quot;검증 실행&quot; 또는 품질 배치 결과 반입 시 실패한 규칙이 있는 경우</li>
+                  <li><b>품질 진단 실패</b> — 정밀 진단(품질 탭 · 품질 진단 작업) 결과에 실패한 규칙이 있는 경우</li>
                   <li><b>MCP 배포 finding</b> — 정책 위반·드리프트·보안 경고가 새로 열리거나 다시 열린 경우</li>
                 </ul>
                 <p className="mt-1">
@@ -840,22 +888,8 @@ function ScopeIcon({ type }: { type: string }) {
   }
 }
 
-function SeverityBadge({ severity }: { severity: string }) {
-  const label = labelOf(SEVERITY_LABEL, severity)
-  if (severity === "BREAKING") return <Badge className="bg-red-500 text-white text-sm px-1.5 py-0 border-0">{label}</Badge>
-  if (severity === "WARNING") return <Badge className="bg-amber-500 text-white text-sm px-1.5 py-0 border-0">{label}</Badge>
-  return <Badge variant="outline" className="text-sm px-1.5 py-0">{label}</Badge>
-}
-
 function StatusBadge({ status }: { status: string }) {
-  const label = labelOf(STATUS_LABEL, status)
-  const cls: Record<string, string> = {
-    OPEN: "border-red-300 text-red-600",
-    ACKNOWLEDGED: "border-amber-300 text-amber-600",
-    RESOLVED: "border-green-300 text-green-600",
-    DISMISSED: "border-gray-300 text-gray-500",
-  }
-  return <Badge variant="outline" className={`text-sm px-1.5 py-0 ${cls[status] ?? ""}`}>{label}</Badge>
+  return <ToneBadge tone={STATUS_TONE[status] ?? "neutral"} label={labelOf(STATUS_LABEL, status)} />
 }
 
 function formatTimeAgo(dateStr: string): string {

@@ -128,6 +128,18 @@ export function descriptionToAvroDoc(description: string | null | undefined): st
   return markdownToPlain(text)
 }
 
+/** Avro 이름 규칙(``[A-Za-z_][A-Za-z0-9_]*``) — 그 밖의 문자는 ``_``, 숫자로 시작하면 앞에 ``_``.
+ * 외부 Avro API(``backend/app/external/service.py`` ``avro_name``)와 같은 규칙. */
+export function avroName(text: string): string {
+  const name = (text ?? "").replace(/[^A-Za-z0-9_]/g, "_") || "_"
+  return /^[0-9]/.test(name) ? `_${name}` : name
+}
+
+/** 점으로 나눈 각 부분을 ``avroName`` 으로 맞춘 네임스페이스 — 예: ``s3-1a2b`` → ``s3_1a2b`` (DEF-040). */
+export function avroNamespace(text: string): string {
+  return (text ?? "").split(".").filter(Boolean).map(avroName).join(".") || "default"
+}
+
 /**
  * 화면 Avro 탭의 자동 생성 스키마. ``doc`` 은 데이터셋 설명 평문, 비어 있으면 ``Avro schema for {name}``
  * (외부 Avro API 와 동일).
@@ -141,7 +153,7 @@ export function generateAvroSchema(
   const avroFields = fields.map((f) => {
     const avroType = fieldTypeToAvro(f.field_type)
     const fieldDef: Record<string, unknown> = {
-      name: f.field_path.replace(/[^a-zA-Z0-9_]/g, "_"),
+      name: avroName(f.field_path),
       type: f.nullable === "true" ? ["null", avroType] : avroType,
     }
     if (f.nullable === "true") {
@@ -155,8 +167,8 @@ export function generateAvroSchema(
 
   const schema = {
     type: "record",
-    name: datasetName.replace(/[^a-zA-Z0-9_]/g, "_"),
-    namespace,
+    name: avroName(datasetName),
+    namespace: avroNamespace(namespace),
     doc: descriptionToAvroDoc(description) || `Avro schema for ${datasetName}`,
     fields: avroFields,
   }

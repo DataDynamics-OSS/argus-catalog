@@ -7,11 +7,11 @@
  * 항목(이전 → 이후)을 펼친다. 비밀값·전화번호는 서버가 값 없이 "(변경됨)"만 기록한다.
  */
 
+import { Tip } from "@/components/tip"
 import { useCallback, useEffect, useState } from "react"
 import { ChevronDown, ChevronRight, History, RefreshCw } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
-import { Input } from "@workspace/ui/components/input"
 import {
   Sheet,
   SheetContent,
@@ -21,8 +21,10 @@ import {
 } from "@workspace/ui/components/sheet"
 import { authFetch } from "@/features/auth/auth-fetch"
 import { errorMessage } from "@/lib/notify"
+import { usePermissions } from "@/features/permissions/use-permissions"
+import { SearchInput } from "@/components/search-input"
 
-export type AuditCategory = "users" | "settings" | "permissions"
+export type AuditCategory = "users" | "settings" | "permissions" | "operations"
 
 type AuditItem = {
   id: number
@@ -42,6 +44,7 @@ const CATEGORY_LABEL: Record<AuditCategory, string> = {
   users: "사용자 관리",
   settings: "설정",
   permissions: "권한 관리",
+  operations: "운영 작업",
 }
 
 const ACTION_LABEL: Record<string, string> = {
@@ -56,6 +59,16 @@ const ACTION_LABEL: Record<string, string> = {
   "user.unlock": "잠금 해제",
   "permissions.menus": "메뉴 권한",
   "permissions.features": "기능 권한",
+  "permissions.menu-views": "메뉴 보기 전용",
+  "permission.denied": "권한 거부",
+  "role.create": "역할 추가",
+  "role.update": "역할 변경",
+  "role.delete": "역할 삭제",
+  "alerts.purge": "닫힌 알림 정리",
+  "apikey.create": "API 키 발급",
+  "apikey.modify": "API 키 수정",
+  "apikey.rotate": "API 키 재발급",
+  "apikey.revoke": "API 키 폐기",
   "settings.keycloak_initialize": "Keycloak 초기화",
   "settings.object_storage_initialize": "버킷 초기화",
   "settings.cache": "캐시",
@@ -113,6 +126,9 @@ function fmtTime(iso: string): string {
 
 export function AdminAuditButton({ category }: { category: AuditCategory }) {
   const [open, setOpen] = useState(false)
+  // 감사 로그는 관리자, 또는 audit.view(명시 허용형)를 위임받은 역할만(서버와 같은 기준, TODO-123)
+  const canView = usePermissions().canUseFeature("audit.view")
+  if (!canView) return null
   return (
     <>
       <Button variant="outline" size="sm" className="h-8" onClick={() => setOpen(true)}>
@@ -177,21 +193,25 @@ export function AdminAuditSheet({
           </SheetDescription>
         </SheetHeader>
         <div className="flex items-center gap-2 px-4">
-          <Input
+          <SearchInput
+            size="sm"
+            className="flex-1"
             value={q}
-            onChange={(e) => setQ(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                setPage(1)
-                setQuery(q.trim())
-              }
+            onValueChange={setQ}
+            onSearch={() => {
+              setPage(1)
+              setQuery(q.trim())
             }}
-            placeholder="대상·요약·작업자 검색 (Enter)"
-            className="h-8"
+            onClear={() => {
+              setQ("")
+              setPage(1)
+              setQuery("")
+            }}
+            placeholder="대상·요약·작업자 검색…"
           />
-          <Button variant="ghost" size="sm" className="h-8" onClick={() => load()} aria-label="새로 고침">
+          <Tip label="새로 고침"><Button variant="ghost" size="sm" className="h-8" onClick={() => load()} aria-label="새로 고침">
             <RefreshCw className={`size-4 ${loading ? "animate-spin" : ""}`} />
-          </Button>
+          </Button></Tip>
         </div>
         <div className="flex-1 overflow-auto px-4">
           {error && <p className="py-4 text-sm text-destructive">{error}</p>}
@@ -210,22 +230,22 @@ export function AdminAuditSheet({
                     onClick={() => setExpanded(isOpen ? null : it.id)}
                     disabled={lines.length === 0}
                   >
-                    <span className="mt-0.5 w-4 shrink-0 text-muted-foreground">
+                    <span className="mt-0.5 w-4 shrink-0">
                       {lines.length > 0 && (isOpen ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />)}
                     </span>
-                    <span className="w-40 shrink-0 whitespace-nowrap tabular-nums text-muted-foreground">{fmtTime(it.created_at)}</span>
+                    <span className="w-40 shrink-0 whitespace-nowrap tabular-nums">{fmtTime(it.created_at)}</span>
                     <span className="w-32 shrink-0 font-medium">{actionLabel(it.action)}</span>
                     <span className="min-w-0 flex-1 break-words">{it.summary || it.target || "-"}</span>
-                    <span className="w-24 shrink-0 truncate text-right text-muted-foreground" title={it.client_ip ?? undefined}>
+                    <span className="w-24 shrink-0 truncate text-right" title={it.client_ip ?? undefined}>
                       {it.actor ?? "-"}
                     </span>
                   </button>
                   {isOpen && (
-                    <ul className="mt-1 ml-6 space-y-0.5 rounded bg-muted/50 px-3 py-2 font-mono text-xs">
+                    <ul className="mt-1 ml-6 space-y-0.5 rounded bg-muted/50 px-3 py-2 font-mono text-sm">
                       {lines.map((l, i) => (
                         <li key={i} className="break-all">{l}</li>
                       ))}
-                      {it.client_ip && <li className="text-muted-foreground">IP: {it.client_ip}</li>}
+                      {it.client_ip && <li >IP: {it.client_ip}</li>}
                     </ul>
                   )}
                 </li>
@@ -233,7 +253,7 @@ export function AdminAuditSheet({
             })}
           </ul>
         </div>
-        <div className="flex items-center justify-between border-t px-4 py-3 text-sm text-muted-foreground">
+        <div className="flex items-center justify-between border-t px-4 py-3 text-sm">
           <span>총 {total}건</span>
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>

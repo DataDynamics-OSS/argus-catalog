@@ -16,8 +16,12 @@ openpyxl>=3.1.0
 mammoth>=1.8.0
 python-pptx>=1.0.0
 
+# 품질 진단 리포트 PDF (app/quality/report_pdf.py)
+reportlab>=4.2
+
 # HTTP client (metadata sync)
 httpx>=0.27.0
+nh3>=0.2.17  # 리치 텍스트 HTML 저장 전 정화(app/core/html_sanitize.py)
 
 # Change Management — Temporal workflow engine
 temporalio>=1.7.0

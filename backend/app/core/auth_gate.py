@@ -5,13 +5,14 @@
 AI Agent, 표준 사전 등)는 토큰 없이도 응답했다. 서버 API 차단 메뉴의 검사(``require_menu``)도
 사용자가 없으면 통과시켜, 토큰만 빼면 막아 둔 메뉴의 데이터를 볼 수 있었다.
 
-이 미들웨어는 사용자 토큰(로컬 JWT 또는 Keycloak)을 검증해 통과시키고, 그 밖의 요청은 401 로
+이 미들웨어는 사용자 토큰(로컬 JWT 또는 Keycloak)이나 API 키(프로그램용, 범위 검사 포함)를 검증해 통과시키고, 그 밖의 요청은 401 로
 막는다. 사용자 토큰 대신 자체 자격을 쓰는 경로만 예외로 두며, 그 경로는 핸들러가 직접 검증한다.
 
-- 로그인·토큰 갱신·로그아웃·인증 방식 조회 (로그인 전에 부름)
+- 로그인·토큰 갱신·로그아웃·인증 방식 조회·로그인 화면 제목 (로그인 전에 부름)
 - 페더레이션 export (``/federation/export/*`` — peer 의 export 서비스 토큰)
 - MCP 배포 정책 번들·감사 이벤트 수집 (배포 서비스 토큰, 없으면 핸들러가 로그인 검사)
 - 다운로드 링크 (``?token=`` — 파일 하나에만 유효한 짧은 토큰, 핸들러가 검증)
+- 스키마 레지스트리 (``/schema-registry/*`` — Bearer 또는 Basic, 핸들러가 검증)
 """
 
 from __future__ import annotations
@@ -20,7 +21,6 @@ import logging
 import re
 
 from fastapi import HTTPException
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
@@ -36,12 +36,15 @@ PUBLIC_PATHS = frozenset({
     "/api/v1/auth/refresh",
     "/api/v1/auth/logout",
     "/api/v1/auth/type",
+    "/api/v1/settings/branding/public",  # 로그인 화면 제목(TODO-146) — 문구 · 주소만
 })
 
 # 자체 서비스 토큰으로 검증하는 경로
 SERVICE_TOKEN_PATTERNS = (
     re.compile(r"^/api/v1/federation/export(/.*)?$"),
     re.compile(r"^/api/v1/mcp-deployments/[^/]+/(policy-bundle|audit-events)$"),
+    # 스키마 레지스트리 — 클라이언트(NiFi 등)가 Basic 인증만 지원해 핸들러가 Bearer·Basic 을 직접 검증
+    re.compile(r"^/api/v1/schema-registry(/.*)?$"),
 )
 
 # 다운로드 링크 토큰(``?token=``)으로 여는 파일 경로 — 토큰이 있을 때만 예외
@@ -69,19 +72,31 @@ def is_exempt(request: Request) -> bool:
     return False
 
 
-class ApiAuthGateMiddleware(BaseHTTPMiddleware):
+class ApiAuthGateMiddleware:
     """예외 경로가 아닌 ``/api/v1/*`` 요청을 ``get_current_user`` 로 검증하고, 실패하면 그 상태코드
-    (401/403)와 detail 로 바로 응답한다. 핸들러의 개별 인증 의존성은 그대로 다시 실행된다.
+    (401/403)와 detail 로 바로 응답한다.
+
+    순수 ASGI 미들웨어(TODO-086). 검증한 사용자는 요청 범위에 기억되어 핸들러의 인증 의존성이 다시 검증하지 않는다.
     """
 
-    async def dispatch(self, request: Request, call_next):
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        request = Request(scope, receive)
         if is_exempt(request):
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
         try:
             await get_current_user(request)
         except HTTPException as e:
             logger.warning("API 로그인 게이트 차단: %s %s status=%d",
                            request.method, request.url.path, e.status_code)
-            return JSONResponse(status_code=e.status_code, content={"detail": e.detail},
-                                headers=getattr(e, "headers", None) or None)
-        return await call_next(request)
+            response = JSONResponse(status_code=e.status_code, content={"detail": e.detail},
+                                    headers=getattr(e, "headers", None) or None)
+            await response(scope, receive, send)
+            return
+        await self.app(scope, receive, send)

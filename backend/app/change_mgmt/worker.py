@@ -25,6 +25,7 @@ from app.change_mgmt import temporal_client
 from app.change_mgmt.activities import (
     analyze_impact,
     apply_change,
+    escalate_unacked_consumers,
     record_decision,
     send_notifications,
     update_cr_status,
@@ -53,6 +54,7 @@ async def main() -> None:
             update_cr_status,
             send_notifications,
             wait_acks_summary,
+            escalate_unacked_consumers,
             apply_change,
         ],
     )

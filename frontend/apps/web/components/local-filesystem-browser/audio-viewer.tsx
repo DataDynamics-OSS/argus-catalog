@@ -64,7 +64,7 @@ export function AudioViewer({ url, extension, fileName }: AudioViewerProps) {
   if (error) {
     return (
       <div className="flex items-center justify-center h-[200px]">
-        <p className="text-sm text-muted-foreground">{error}</p>
+        <p className="text-sm">{error}</p>
       </div>
     )
   }
@@ -76,7 +76,7 @@ export function AudioViewer({ url, extension, fileName }: AudioViewerProps) {
       <div className="flex items-center justify-center w-24 h-24 rounded-full bg-muted">
         <Music className="h-10 w-10 text-muted-foreground" />
       </div>
-      <p className="text-sm text-muted-foreground truncate max-w-[400px]">{fileName}</p>
+      <p className="text-sm truncate max-w-[400px]">{fileName}</p>
       <audio controls preload="metadata" className="w-full max-w-[500px]">
         <source src={blobUrl!} type={mime} />
         Your browser does not support this audio format.

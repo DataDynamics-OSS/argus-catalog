@@ -27,7 +27,7 @@ import {
   AlertDialogTitle,
 } from "@workspace/ui/components/alert-dialog"
 import { Button } from "@workspace/ui/components/button"
-import { errorMessage, toast } from "@/lib/notify"
+import { errorMessage, notifyError } from "@/lib/notify"
 import { activateUser, deactivateUser } from "../api"
 import { type User } from "../data/schema"
 import { useUsers } from "./users-provider"
@@ -74,7 +74,7 @@ export function UsersStatusDialog({
     }
     await refreshUsers()
     if (failures.length) {
-      toast.error(failures.join("\n"))
+      notifyError(failures.join("\n"), `일부 사용자를 ${action}하지 못했습니다.`)
     } else {
       onOpenChange(false)
     }

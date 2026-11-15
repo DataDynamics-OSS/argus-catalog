@@ -9,6 +9,7 @@
 // (HDFS = 파일시스템 스캔, Java/Python Source = 빌드 산출물 분석)을 가린다. 기존
 // 데이터셋의 datasource.type 표시·필터링은 그대로 동작해야 하므로 DATASOURCE_TYPES 자체
 // 에서 제거하지는 않는다.
+// Amazon S3 · Google BigQuery · MongoDB 는 지원 계획이 없어 추가 목록에서 뺐다(2026-11-15 사용자 요청).
 // 데이터 소스 역할 (design/catalog-entity-design.md 2단계) — 백엔드 datasource_metadata.DATASOURCE_ROLES 와 맞춘다.
 // CATALOG: 메타데이터 원본(카탈로그 서비스) · DATABASE: DB 자체가 카탈로그 · ENGINE: 쿼리 엔진(카탈로그에 연결)
 export type DatasourceRole = "CATALOG" | "DATABASE" | "ENGINE"
@@ -28,21 +29,24 @@ export const DATASOURCE_TYPES: {
 }[] = [
   { name: "postgresql", display: "PostgreSQL", role: "DATABASE", implemented: true },
   { name: "mysql", display: "MySQL", role: "DATABASE", implemented: true },
+  { name: "oracle", display: "Oracle", role: "DATABASE", implemented: true },
+  { name: "mssql", display: "Microsoft SQL Server", role: "DATABASE", implemented: true },
   { name: "hive", display: "Apache Hive", role: "CATALOG", implemented: true },
   { name: "impala", display: "Apache Impala", role: "ENGINE", implemented: true },
   { name: "kafka", display: "Apache Kafka", role: "DATABASE", implemented: false },
-  { name: "s3", display: "Amazon S3", role: "DATABASE", implemented: false },
+  { name: "s3", display: "Amazon S3", role: "DATABASE", implemented: false, hiddenFromAddDialog: true },
   { name: "hdfs", display: "HDFS", role: "DATABASE", implemented: false, hiddenFromAddDialog: true },
   { name: "snowflake", display: "Snowflake", role: "DATABASE", implemented: false },
-  { name: "bigquery", display: "Google BigQuery", role: "DATABASE", implemented: false },
+  { name: "bigquery", display: "Google BigQuery", role: "DATABASE", implemented: false, hiddenFromAddDialog: true },
   { name: "redshift", display: "Amazon Redshift", role: "DATABASE", implemented: false },
   { name: "elasticsearch", display: "Elasticsearch", role: "DATABASE", implemented: false },
-  { name: "mongodb", display: "MongoDB", role: "DATABASE", implemented: false },
+  { name: "mongodb", display: "MongoDB", role: "DATABASE", implemented: false, hiddenFromAddDialog: true },
   { name: "trino", display: "Trino", role: "ENGINE", implemented: true },
   { name: "starrocks", display: "StarRocks", role: "DATABASE", implemented: true },
   { name: "greenplum", display: "Greenplum", role: "DATABASE", implemented: true },
   { name: "kudu", display: "Apache Kudu", role: "CATALOG", implemented: true },
   { name: "iceberg-rest", display: "Iceberg REST Catalog", role: "CATALOG", implemented: true },
+  { name: "iceberg-hadoop", display: "Iceberg Hadoop Catalog", role: "CATALOG", implemented: true },
   { name: "unity_catalog", display: "Unity Catalog", role: "CATALOG", implemented: false },
   { name: "java", display: "Java Source", role: "DATABASE", implemented: true, hiddenFromAddDialog: true },
   { name: "python", display: "Python Source", role: "DATABASE", implemented: true, hiddenFromAddDialog: true },
@@ -65,7 +69,8 @@ export function isDatasourceTypeImplemented(type: string | null | undefined): bo
 export type DatasourceFieldDef = {
   key: string
   label: string
-  type: 'text' | 'number' | 'password' | 'select' | 'toggle'
+  /** list: 값 목록 — 배지 입력(TODO-144), 문자열 배열로 저장(예전 쉼표 문자열도 읽음) */
+  type: 'text' | 'number' | 'password' | 'select' | 'toggle' | 'textarea' | 'list'
   placeholder?: string
   required?: boolean
   defaultValue?: string | number | boolean
@@ -133,6 +138,25 @@ export const DATASOURCE_CONFIGS: Record<string, DatasourceFieldDef[]> = {
   greenplum: rdbmsConfig(5432),
   redshift: rdbmsConfig(5439),
   starrocks: rdbmsConfig(9030),
+
+  // ---- Oracle ------------------------------------------------------------
+  // 수집은 metadata-sync(oracledb thin) — Service Name 이 있으면 그것을, 없으면 SID 로 접속한다.
+  oracle: [
+    ...hostField(1521),
+    { key: 'service_name', label: 'Service Name', type: 'text', placeholder: '예: ORCLPDB1 (SID 로 접속하면 비워 둠)' },
+    { key: 'sid', label: 'SID', type: 'text', placeholder: 'Service Name 이 없을 때만' },
+    { key: 'username', label: 'Username', type: 'text', required: true },
+    { key: 'password', label: 'Password', type: 'password', required: true },
+  ],
+
+  // ---- Microsoft SQL Server ----------------------------------------------
+  // Database 는 처음 접속할 DB 다(비우면 master). 수집할 데이터베이스는 수집 범위에서 고른다.
+  mssql: [
+    ...hostField(1433),
+    { key: 'database', label: 'Database (접속용)', type: 'text', placeholder: '비우면 master' },
+    { key: 'username', label: 'Username', type: 'text', required: true },
+    { key: 'password', label: 'Password', type: 'password', required: true },
+  ],
 
   // ---- Snowflake ---------------------------------------------------------
   snowflake: [
@@ -266,7 +290,7 @@ export const DATASOURCE_CONFIGS: Record<string, DatasourceFieldDef[]> = {
       ],
     },
     { key: 'java_version', label: 'Java Version', type: 'text', placeholder: '17 (auto-detected from pom.xml)' },
-    { key: 'exclude_dirs', label: 'Exclude Directories', type: 'text', placeholder: 'target,build,test (comma-separated)' },
+    { key: 'exclude_dirs', label: 'Exclude Directories', type: 'list', placeholder: '예: target 입력 후 Enter' },
   ],
 
   // ---- Python Source ----------------------------------------------------
@@ -287,7 +311,7 @@ export const DATASOURCE_CONFIGS: Record<string, DatasourceFieldDef[]> = {
       ],
     },
     { key: 'python_version', label: 'Python Version', type: 'text', placeholder: '3.11 (auto-detected from pyproject.toml)' },
-    { key: 'exclude_dirs', label: 'Exclude Directories', type: 'text', placeholder: '.venv,__pycache__,test (comma-separated)' },
+    { key: 'exclude_dirs', label: 'Exclude Directories', type: 'list', placeholder: '예: .venv 입력 후 Enter' },
   ],
 
   // ---- Iceberg REST Catalog ---------------------------------------------
@@ -311,8 +335,34 @@ export const DATASOURCE_CONFIGS: Record<string, DatasourceFieldDef[]> = {
     { key: 'credential', label: 'OAuth2 Credential', type: 'password', placeholder: 'client_id:client_secret', showWhen: { field: 'auth_type', value: 'OAUTH2' } },
     { key: 'scope', label: 'OAuth2 Scope', type: 'text', defaultValue: 'PRINCIPAL_ROLE:ALL', showWhen: { field: 'auth_type', value: 'OAUTH2' } },
     { key: 'token', label: 'Bearer Token', type: 'password', showWhen: { field: 'auth_type', value: 'BEARER' } },
-    { key: 'namespaces', label: 'Namespaces', type: 'text', placeholder: 'analytics,sales.events (쉼표 구분, 비우면 전체)' },
-    { key: 'exclude_namespaces', label: 'Exclude Namespaces', type: 'text', placeholder: 'system,tmp (쉼표 구분)' },
+    // 수집 대상 네임스페이스는 상세 화면 '수집' 범위에서 고른다
+    // 스토리지 자격증명은 비밀값으로 따로 받는다(암호화·마스킹) — Catalog Properties 에 넣으면 평문으로 저장·표시된다
+    { key: 's3_access_key_id', label: 'S3 Access Key ID', type: 'text', placeholder: '카탈로그가 자격증명을 내려주지 않을 때(선택)' },
+    { key: 's3_secret_access_key', label: 'S3 Secret Access Key', type: 'password' },
+    {
+      key: 'properties',
+      label: 'Catalog Properties',
+      type: 'textarea',
+      placeholder: 's3.endpoint=http://minio:9000\ns3.path-style-access=true\n(한 줄에 하나)',
+    },
+    { key: 'exclude_namespaces', label: 'Exclude Namespaces', type: 'list', placeholder: '예: system 입력 후 Enter' },
+    { key: 'origin', label: 'Origin', type: 'text', defaultValue: 'PROD' },
+  ],
+
+  // ---- Iceberg Hadoop Catalog -------------------------------------------
+  // 메타스토어 없이 웨어하우스 디렉터리(<warehouse>/<ns>/<table>/metadata/version-hint.text)를 직접 읽는다.
+  // 웨어하우스 스킴으로 저장소를 고른다 — s3:// (S3·MinIO), hdfs:// (WebHDFS), file:// (로컬·NFS).
+  "iceberg-hadoop": [
+    { key: 'warehouse', label: 'Warehouse', type: 'text', required: true, placeholder: 's3://bucket/warehouse 또는 hdfs://namenode:8020/warehouse' },
+    { key: 's3_endpoint', label: 'S3 Endpoint', type: 'text', placeholder: 'http://minio:9000 (AWS S3 면 비움)' },
+    { key: 's3_region', label: 'S3 Region', type: 'text', placeholder: 'us-east-1 (선택)' },
+    { key: 's3_access_key_id', label: 'S3 Access Key ID', type: 'text', placeholder: '비우면 실행 환경의 AWS 자격증명' },
+    { key: 's3_secret_access_key', label: 'S3 Secret Access Key', type: 'password' },
+    { key: 'webhdfs_url', label: 'WebHDFS URL', type: 'text', placeholder: 'http://namenode:9870 (hdfs:// 웨어하우스일 때)' },
+    hadoopAuthType(['NONE', 'KERBEROS']),
+    { key: 'hdfs_user', label: 'HDFS User', type: 'text', placeholder: 'WebHDFS user.name (선택)', showWhen: { field: 'auth_type', value: 'NONE' } },
+    ...kerberosFields,
+    { key: 'exclude_namespaces', label: 'Exclude Namespaces', type: 'list', placeholder: '예: tmp 입력 후 Enter' },
     { key: 'origin', label: 'Origin', type: 'text', defaultValue: 'PROD' },
   ],
 

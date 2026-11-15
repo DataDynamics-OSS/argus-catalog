@@ -1,9 +1,11 @@
 "use client"
 
+import { Tip } from "@/components/tip"
 import { useEffect, useState } from "react"
 import { Loader2, Minus, Plus } from "lucide-react"
 import { notifyError, toast } from "@/lib/notify"
 import { useConfirm } from "@/components/confirm-provider"
+import { FieldError } from "@/components/field-error"
 
 import { Button } from "@workspace/ui/components/button"
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@workspace/ui/components/dialog"
@@ -14,7 +16,8 @@ import { Textarea } from "@workspace/ui/components/textarea"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { type ApiEndpoint, type EndpointPayload, createEndpoint, updateEndpoint } from "../api"
-import { CodeEditor, TagsInput } from "./apis-detail-shared"
+import { CodeEditor } from "./apis-detail-shared"
+import { TagInput } from "@/components/tag-input"
 
 // 요청/응답 스키마 JSON 편집기 — 공용 Monaco 에디터(JSON 하이라이트·괄호 매칭, text-sm).
 function JsonSchemaEditor({ value, onChange, placeholder, ariaLabel }: {
@@ -105,7 +108,7 @@ function responsesToRows(rs: Record<string, unknown>): RespRow[] {
 const pathTemplateParams = (path: string) => [...path.matchAll(/\{([^{}/]+)\}/g)].map((m) => m[1]!.trim()).filter(Boolean)
 
 type FormState = {
-  method: string; extra: Record<string, string>; statusCodes: string[]; path: string; summary: string; description: string; tags: string
+  method: string; extra: Record<string, string>; statusCodes: string[]; path: string; summary: string; description: string; tags: string[]
   params: ParamRow[]; reqMode: "fields" | "json"; bodyFields: BodyField[]; reqBody: string; respMode: "rows" | "json"; respRows: RespRow[]; resp: string
 }
 // 변경 여부 비교용 — 원본 파라미터(raw)는 편집 대상이 아니므로 제외
@@ -133,7 +136,7 @@ export function EndpointEditDialog({ apiName, protocol, endpoint, open, onOpenCh
   const [path, setPath] = useState("")
   const [summary, setSummary] = useState("")
   const [description, setDescription] = useState("")
-  const [tags, setTags] = useState("")
+  const [tags, setTags] = useState<string[]>([])
   const [params, setParams] = useState<ParamRow[]>([])
   const [reqMode, setReqMode] = useState<"fields" | "json">("fields")
   const [bodyFields, setBodyFields] = useState<BodyField[]>([])
@@ -142,6 +145,12 @@ export function EndpointEditDialog({ apiName, protocol, endpoint, open, onOpenCh
   const [respRows, setRespRows] = useState<RespRow[]>([])
   const [resp, setResp] = useState("")
   const [busy, setBusy] = useState(false)
+  // 검증 오류 — path(식별자) · reqBody(요청 바디) · resp(응답). 각 입력란 아래에 보인다.
+  const [errors, setErrors] = useState<Record<string, string>>({})
+  const setError = (k: string, msg: string | null) => setErrors((e) => {
+    if (msg === null) { if (!(k in e)) return e; const n = { ...e }; delete n[k]; return n }
+    return { ...e, [k]: msg }
+  })
   // 열 때의 폼 값 — 닫을 때 변경 여부(dirty) 확인용
   const [initialKey, setInitialKey] = useState("")
 
@@ -164,7 +173,7 @@ export function EndpointEditDialog({ apiName, protocol, endpoint, open, onOpenCh
         path: endpoint.path || "",
         summary: endpoint.summary || "",
         description: endpoint.description || "",
-        tags: (endpoint.tags || []).join(", "),
+        tags: endpoint.tags || [],
         params: (endpoint.parameters || []).map((p) => {
           const pp = p as { name?: string; in?: string; required?: boolean; type?: string; schema?: { type?: string } }
           return { name: pp.name || "", location: pp.in || "query", type: pp.schema?.type || pp.type || "string", required: !!pp.required, raw: p as Record<string, unknown> }
@@ -178,7 +187,7 @@ export function EndpointEditDialog({ apiName, protocol, endpoint, open, onOpenCh
       }
     } else {
       init = {
-        method: ops.typeOptions[0] || "GET", extra: {}, statusCodes: [], path: "", summary: "", description: "", tags: "", params: [],
+        method: ops.typeOptions[0] || "GET", extra: {}, statusCodes: [], path: "", summary: "", description: "", tags: [], params: [],
         reqMode: "fields", bodyFields: [], reqBody: "", respMode: "rows", respRows: [], resp: "",
       }
     }
@@ -187,6 +196,7 @@ export function EndpointEditDialog({ apiName, protocol, endpoint, open, onOpenCh
     setReqMode(init.reqMode); setBodyFields(init.bodyFields); setReqBody(init.reqBody)
     setRespMode(init.respMode); setRespRows(init.respRows); setResp(init.resp)
     setInitialKey(formKey(init))
+    setErrors({})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, endpoint])
 
@@ -208,56 +218,63 @@ export function EndpointEditDialog({ apiName, protocol, endpoint, open, onOpenCh
   const switchReqMode = (to: "fields" | "json") => {
     if (to === reqMode) return
     if (to === "json") {
+      setError("reqBody", null)
       const schema = fieldsToSchema(bodyFields)
       setReqBody(schema ? JSON.stringify(schema, null, 2) : "")
       setReqMode("json")
       return
     }
-    if (!reqBody.trim()) { setBodyFields([]); setReqMode("fields"); return }
+    if (!reqBody.trim()) { setBodyFields([]); setReqMode("fields"); setError("reqBody", null); return }
     let parsed: unknown
-    try { parsed = JSON.parse(reqBody) } catch { toast.error("JSON 이 올바르지 않아 필드로 바꿀 수 없습니다."); return }
+    try { parsed = JSON.parse(reqBody) } catch { setError("reqBody", "JSON 이 올바르지 않아 필드로 바꿀 수 없습니다."); return }
     if (!bodyFitsFields(parsed)) {
-      toast.error("필드 편집기는 type·description 만 있는 단순 object 스키마만 다룰 수 있습니다. JSON 으로 계속 편집하세요.")
+      setError("reqBody", "필드 편집기는 type·description 만 있는 단순 object 스키마만 다룰 수 있습니다. JSON 으로 계속 편집하세요.")
       return
     }
+    setError("reqBody", null)
     setBodyFields(schemaToFields(parsed as Record<string, unknown>))
     setReqMode("fields")
   }
   const switchRespMode = (to: "rows" | "json") => {
     if (to === respMode) return
     if (to === "json") {
+      setError("resp", null)
       const r = rowsToResponses(respRows)
       setResp(r ? JSON.stringify(r, null, 2) : "")
       setRespMode("json")
       return
     }
-    if (!resp.trim()) { setRespRows([]); setRespMode("rows"); return }
+    if (!resp.trim()) { setRespRows([]); setRespMode("rows"); setError("resp", null); return }
     let parsed: unknown
-    try { parsed = JSON.parse(resp) } catch { toast.error("JSON 이 올바르지 않아 행으로 바꿀 수 없습니다."); return }
+    try { parsed = JSON.parse(resp) } catch { setError("resp", "JSON 이 올바르지 않아 행으로 바꿀 수 없습니다."); return }
     if (!responsesFitRows(parsed)) {
-      toast.error("행 편집기는 상태코드별 description 만 다룰 수 있습니다(스키마·content 가 있음). JSON 으로 계속 편집하세요.")
+      setError("resp", "행 편집기는 상태코드별 description 만 다룰 수 있습니다(스키마·content 가 있음). JSON 으로 계속 편집하세요.")
       return
     }
+    setError("resp", null)
     setRespRows(responsesToRows(parsed as Record<string, unknown>))
     setRespMode("rows")
   }
 
   const save = async () => {
-    if (!path.trim()) { toast.error(`${ops.idLabel}을(를) 입력하세요.`); return }
+    const errs: Record<string, string> = {}
+    if (!path.trim()) errs.path = `${ops.idLabel}을(를) 입력하세요.`
     let request_body: Record<string, unknown> | null = null
     let responses: Record<string, unknown> | null = null
     // 요청 바디
     if (reqMode === "fields") {
       request_body = fieldsToSchema(bodyFields)
     } else {
-      try { if (reqBody.trim()) request_body = JSON.parse(reqBody) } catch { toast.error("요청 바디 스키마가 올바른 JSON이 아닙니다."); return }
+      try { if (reqBody.trim()) request_body = JSON.parse(reqBody) } catch { errs.reqBody = "요청 바디 스키마가 올바른 JSON이 아닙니다." }
     }
     // 응답
     if (respMode === "rows") {
       responses = rowsToResponses(respRows)
     } else {
-      try { if (resp.trim()) responses = JSON.parse(resp) } catch { toast.error("응답 스키마가 올바른 JSON이 아닙니다."); return }
+      try { if (resp.trim()) responses = JSON.parse(resp) } catch { errs.resp = "응답 스키마가 올바른 JSON이 아닙니다." }
     }
+    setErrors(errs)
+    if (Object.keys(errs).length > 0) return
     // REST: 경로의 {name} 중 파라미터에 없는 것은 필수 path 파라미터로 자동 추가(호출 화면에 입력란이 생기도록)
     let finalParams = params
     if (ops.params === "rest") {
@@ -276,7 +293,7 @@ export function EndpointEditDialog({ apiName, protocol, endpoint, open, onOpenCh
       method, path: path.trim(),
       summary: summary.trim() || null,
       description: description.trim() || null,
-      tags: tags.split(",").map((t) => t.trim()).filter(Boolean),
+      tags,
       parameters: finalParams.filter((p) => p.name.trim()).map(paramToPayload),
       request_body, responses,
       extra: Object.keys(extraObj).length ? extraObj : null,
@@ -312,7 +329,8 @@ export function EndpointEditDialog({ apiName, protocol, endpoint, open, onOpenCh
             </div>
             <div className="flex-1 space-y-1">
               <Label>{ops.idLabel}</Label>
-              <Input className="h-8 text-sm" placeholder={ops.idPlaceholder} value={path} onChange={(e) => setPath(e.target.value)} />
+              <Input className="h-8 text-sm" placeholder={ops.idPlaceholder} value={path} aria-invalid={!!errors.path || undefined} onChange={(e) => { setPath(e.target.value); setError("path", null) }} />
+              <FieldError>{errors.path}</FieldError>
             </div>
           </div>
           {ops.extras.length > 0 && (
@@ -337,13 +355,13 @@ export function EndpointEditDialog({ apiName, protocol, endpoint, open, onOpenCh
           )}
           <div className="space-y-1"><Label>요약</Label><Input className="h-8 text-sm" value={summary} onChange={(e) => setSummary(e.target.value)} /></div>
           <div className="space-y-1"><Label>설명</Label><Textarea className="min-h-16 text-sm" value={description} onChange={(e) => setDescription(e.target.value)} /></div>
-          <div className="space-y-1"><Label>태그 (입력 후 Enter)</Label><TagsInput value={tags} onChange={setTags} /></div>
+          <div className="space-y-1"><Label>태그 (입력 후 Enter)</Label><TagInput value={tags} onChange={setTags} /></div>
 
           {ops.params !== "none" && (
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
               <Label>{ops.params === "rest" ? "파라미터" : "인자(arguments)"}</Label>
-              <Button size="sm" variant="outline" className="h-7" onClick={() => setParams((r) => [...r, { name: "", location: ops.params === "rest" ? "query" : "argument", type: "string", required: false }])}><Plus className="h-3.5 w-3.5" /></Button>
+              <Tip label="파라미터 추가"><Button aria-label="파라미터 추가" size="sm" variant="outline" className="h-7" onClick={() => setParams((r) => [...r, { name: "", location: ops.params === "rest" ? "query" : "argument", type: "string", required: false }])}><Plus className="h-3.5 w-3.5" /></Button></Tip>
             </div>
             {params.map((p, i) => (
               <div key={i} className="flex items-center gap-2">
@@ -361,7 +379,7 @@ export function EndpointEditDialog({ apiName, protocol, endpoint, open, onOpenCh
                 <label className="flex items-center gap-1 text-xs text-muted-foreground">
                   <input type="checkbox" checked={p.required} onChange={(e) => setParams((rs) => rs.map((x, j) => j === i ? { ...x, required: e.target.checked } : x))} /> 필수
                 </label>
-                <Button size="icon" variant="ghost" className="h-8 w-8 shrink-0" onClick={() => setParams((rs) => rs.filter((_, j) => j !== i))}><Minus className="h-4 w-4" /></Button>
+                <Tip label="파라미터 삭제"><Button aria-label="파라미터 삭제" size="icon" variant="ghost" className="h-8 w-8 shrink-0" onClick={() => setParams((rs) => rs.filter((_, j) => j !== i))}><Minus className="h-4 w-4" /></Button></Tip>
               </div>
             ))}
           </div>
@@ -390,7 +408,7 @@ export function EndpointEditDialog({ apiName, protocol, endpoint, open, onOpenCh
             <div className="flex items-center justify-between">
               <Label>{ops.bodyMode === "payload" ? "페이로드 스키마 (선택)" : "요청 바디 (선택)"}</Label>
               <div className="flex items-center gap-2">
-                {reqMode === "fields" && <Button size="sm" variant="outline" className="h-7" onClick={() => setBodyFields((r) => [...r, { name: "", type: "string", required: false, description: "" }])}><Plus className="h-3.5 w-3.5" /></Button>}
+                {reqMode === "fields" && <Tip label="필드 추가"><Button aria-label="필드 추가" size="sm" variant="outline" className="h-7" onClick={() => setBodyFields((r) => [...r, { name: "", type: "string", required: false, description: "" }])}><Plus className="h-3.5 w-3.5" /></Button></Tip>}
                 <div className="flex overflow-hidden rounded-md border">
                   <button type="button" onClick={() => switchReqMode("fields")} className={cn("px-2 py-1 text-xs", reqMode === "fields" ? "bg-primary text-primary-foreground" : "bg-background text-muted-foreground")}>필드</button>
                   <button type="button" onClick={() => switchReqMode("json")} className={cn("px-2 py-1 text-xs", reqMode === "json" ? "bg-primary text-primary-foreground" : "bg-background text-muted-foreground")}>JSON</button>
@@ -398,7 +416,7 @@ export function EndpointEditDialog({ apiName, protocol, endpoint, open, onOpenCh
               </div>
             </div>
             {reqMode === "fields" ? (
-              bodyFields.length === 0 ? <p className="text-xs text-muted-foreground">+ 버튼으로 본문 필드를 추가하세요(JSON Schema 자동 생성).</p> : bodyFields.map((f, i) => (
+              bodyFields.length === 0 ? <p className="text-xs">+ 버튼으로 본문 필드를 추가하세요(JSON Schema 자동 생성).</p> : bodyFields.map((f, i) => (
                 <div key={i} className="flex items-center gap-2">
                   <Input className="h-8 w-[140px] text-sm" placeholder="필드명" value={f.name} onChange={(e) => setBodyFields((rs) => rs.map((x, j) => j === i ? { ...x, name: e.target.value } : x))} />
                   <Select value={f.type} onValueChange={(v) => setBodyFields((rs) => rs.map((x, j) => j === i ? { ...x, type: v } : x))}>
@@ -407,12 +425,13 @@ export function EndpointEditDialog({ apiName, protocol, endpoint, open, onOpenCh
                   </Select>
                   <Input className="h-8 flex-1 text-sm" placeholder="설명" value={f.description} onChange={(e) => setBodyFields((rs) => rs.map((x, j) => j === i ? { ...x, description: e.target.value } : x))} />
                   <label className="flex items-center gap-1 text-xs text-muted-foreground"><input type="checkbox" checked={f.required} onChange={(e) => setBodyFields((rs) => rs.map((x, j) => j === i ? { ...x, required: e.target.checked } : x))} /> 필수</label>
-                  <Button size="icon" variant="ghost" className="h-8 w-8 shrink-0" onClick={() => setBodyFields((rs) => rs.filter((_, j) => j !== i))}><Minus className="h-4 w-4" /></Button>
+                  <Tip label="필드 삭제"><Button aria-label="필드 삭제" size="icon" variant="ghost" className="h-8 w-8 shrink-0" onClick={() => setBodyFields((rs) => rs.filter((_, j) => j !== i))}><Minus className="h-4 w-4" /></Button></Tip>
                 </div>
               ))
             ) : (
-              <JsonSchemaEditor ariaLabel="요청 바디 JSON 스키마" placeholder='{ "type": "object", "properties": { ... } }' value={reqBody} onChange={setReqBody} />
+              <JsonSchemaEditor ariaLabel="요청 바디 JSON 스키마" placeholder='{ "type": "object", "properties": { ... } }' value={reqBody} onChange={(v) => { setReqBody(v); setError("reqBody", null) }} />
             )}
+            <FieldError>{errors.reqBody}</FieldError>
           </div>
           )}
 
@@ -421,7 +440,7 @@ export function EndpointEditDialog({ apiName, protocol, endpoint, open, onOpenCh
             <div className="flex items-center justify-between">
               <Label>응답 (선택)</Label>
               <div className="flex items-center gap-2">
-                {respMode === "rows" && <Button size="sm" variant="outline" className="h-7" onClick={() => setRespRows((r) => [...r, { code: "", description: "" }])}><Plus className="h-3.5 w-3.5" /></Button>}
+                {respMode === "rows" && <Tip label="응답 행 추가"><Button aria-label="응답 행 추가" size="sm" variant="outline" className="h-7" onClick={() => setRespRows((r) => [...r, { code: "", description: "" }])}><Plus className="h-3.5 w-3.5" /></Button></Tip>}
                 <div className="flex overflow-hidden rounded-md border">
                   <button type="button" onClick={() => switchRespMode("rows")} className={cn("px-2 py-1 text-xs", respMode === "rows" ? "bg-primary text-primary-foreground" : "bg-background text-muted-foreground")}>행</button>
                   <button type="button" onClick={() => switchRespMode("json")} className={cn("px-2 py-1 text-xs", respMode === "json" ? "bg-primary text-primary-foreground" : "bg-background text-muted-foreground")}>JSON</button>
@@ -429,16 +448,17 @@ export function EndpointEditDialog({ apiName, protocol, endpoint, open, onOpenCh
               </div>
             </div>
             {respMode === "rows" ? (
-              respRows.length === 0 ? <p className="text-xs text-muted-foreground">+ 버튼으로 상태코드(예: 200, 404)와 설명을 추가하세요.</p> : respRows.map((row, i) => (
+              respRows.length === 0 ? <p className="text-xs">+ 버튼으로 상태코드(예: 200, 404)와 설명을 추가하세요.</p> : respRows.map((row, i) => (
                 <div key={i} className="flex items-center gap-2">
                   <Input className="h-8 w-[100px] text-sm" placeholder="상태코드" value={row.code} onChange={(e) => setRespRows((rs) => rs.map((x, j) => j === i ? { ...x, code: e.target.value } : x))} />
                   <Input className="h-8 flex-1 text-sm" placeholder="설명" value={row.description} onChange={(e) => setRespRows((rs) => rs.map((x, j) => j === i ? { ...x, description: e.target.value } : x))} />
-                  <Button size="icon" variant="ghost" className="h-8 w-8 shrink-0" onClick={() => setRespRows((rs) => rs.filter((_, j) => j !== i))}><Minus className="h-4 w-4" /></Button>
+                  <Tip label="응답 행 삭제"><Button aria-label="응답 행 삭제" size="icon" variant="ghost" className="h-8 w-8 shrink-0" onClick={() => setRespRows((rs) => rs.filter((_, j) => j !== i))}><Minus className="h-4 w-4" /></Button></Tip>
                 </div>
               ))
             ) : (
-              <JsonSchemaEditor ariaLabel="응답 JSON" placeholder='{ "200": { "description": "ok" } }' value={resp} onChange={setResp} />
+              <JsonSchemaEditor ariaLabel="응답 JSON" placeholder='{ "200": { "description": "ok" } }' value={resp} onChange={(v) => { setResp(v); setError("resp", null) }} />
             )}
+            <FieldError>{errors.resp}</FieldError>
           </div>
           )}
         </div>

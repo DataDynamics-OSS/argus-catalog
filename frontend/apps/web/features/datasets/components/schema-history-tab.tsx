@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useState } from "react"
 import { ChevronRight, History, Loader2, Minus, Plus, RefreshCw } from "lucide-react"
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@workspace/ui/components/card"
+import { DetailSection } from "@/components/detail-section"
 import {
   fetchSchemaHistory,
   type SchemaSnapshot,
@@ -73,7 +73,7 @@ function ChangeDetail({ change }: { change: SchemaChangeEntry }) {
                 {Object.entries(change.before).map(([k, v]) => `${k}=${v}`).join(", ")}
               </span>
             )}
-            <span className="text-muted-foreground">&rarr;</span>
+            <span >&rarr;</span>
             {change.after && (
               <span className="text-green-600">
                 {Object.entries(change.after).map(([k, v]) => `${k}=${v}`).join(", ")}
@@ -107,7 +107,7 @@ function SnapshotRow({ snapshot }: { snapshot: SchemaSnapshot }) {
         </td>
         <td className="px-3 py-2 text-sm text-center">{snapshot.field_count}</td>
         <td className="px-3 py-2 text-sm">{snapshot.change_summary || "-"}</td>
-        <td className="px-3 py-2 text-sm text-center text-muted-foreground">
+        <td className="px-3 py-2 text-sm text-center">
           {snapshot.changes.length}
         </td>
       </tr>
@@ -163,22 +163,12 @@ export function SchemaHistoryTab({ datasetId }: SchemaHistoryTabProps) {
   }, [load])
 
   return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between py-3">
-        <div>
-          <CardTitle className="text-base flex items-center gap-2">
-            <History className="h-4 w-4" />
-            스키마 변경 이력
-          </CardTitle>
-          <CardDescription className="text-xs mt-1">
-            최근 20개의 스냅샷만 보관됩니다.
-          </CardDescription>
-        </div>
-        <span className="text-xs text-muted-foreground">
-          {snapshots.length} / {total} 스냅샷
-        </span>
-      </CardHeader>
-      <CardContent>
+    <DetailSection
+      title="스키마 변경 이력"
+      icon={<History />}
+      description="최근 20개의 스냅샷만 보관됩니다."
+      actions={<span className="text-xs">{snapshots.length} / {total} 스냅샷</span>}
+    >
         {isLoading ? (
           <div className="flex items-center justify-center py-8">
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -186,7 +176,7 @@ export function SchemaHistoryTab({ datasetId }: SchemaHistoryTabProps) {
         ) : loadError !== null ? (
           <div className="py-8 text-center text-sm">
             <p className="text-destructive">스키마 변경 이력을 불러오지 못했습니다.</p>
-            {loadError && <p className="mt-1 text-xs text-muted-foreground">{loadError}</p>}
+            {loadError && <p className="mt-1 text-xs">{loadError}</p>}
           </div>
         ) : snapshots.length === 0 ? (
           <p className="text-sm text-muted-foreground text-center py-8">
@@ -211,7 +201,6 @@ export function SchemaHistoryTab({ datasetId }: SchemaHistoryTabProps) {
             </table>
           </div>
         )}
-      </CardContent>
-    </Card>
+    </DetailSection>
   )
 }

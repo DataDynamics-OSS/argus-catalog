@@ -1,17 +1,14 @@
 import { Shield, UserCheck, Users } from "lucide-react"
 
+import type { StatusTone } from "@workspace/ui/components/status-badge"
+
 import { type UserStatus } from "./schema"
 
-export const callTypes = new Map<UserStatus, string>([
-  [
-    "active",
-    "bg-primary/10 text-primary border-primary/30",
-  ],
-  [
-    "inactive",
-    "bg-destructive/10 dark:bg-destructive/50 text-destructive dark:text-primary border-destructive/10",
-  ],
-])
+/** 계정 상태 톤(TODO-107) — 비활성은 오류가 아니라 무채색. 잠김은 따로 주의 배지. */
+export const USER_STATUS_TONE: Record<UserStatus, StatusTone> = {
+  active: "success",
+  inactive: "muted",
+}
 
 export const roles = [
   {

@@ -1,4 +1,8 @@
+import type { StatusMeta } from "@workspace/ui/components/status-badge"
 import { z } from "zod"
+
+import { LIFECYCLE_LABEL } from "@/lib/lifecycle"
+import { RISK_LABEL as SHARED_RISK_LABEL } from "@/lib/risk"
 
 export const aiAgentSummarySchema = z.object({
   id: z.number(),
@@ -8,6 +12,7 @@ export const aiAgentSummarySchema = z.object({
   version: z.string(),
   status: z.string(),
   owner_email: z.string().nullable().optional(),
+  created_by: z.string().nullable().optional(),
   department: z.string().nullable().optional(),
   category: z.string().nullable().optional(),
   base_model: z.string().nullable().optional(),
@@ -28,19 +33,20 @@ export const aiAgentSummarySchema = z.object({
   missing_fields: z.array(z.string()).optional(),
   /** 보유 도구의 최고 위험도 */
   max_risk: z.string().nullable().optional(),
+  risk_tier: z.string().nullable().optional(),
+  autonomy_level: z.string().nullable().optional(),
+  /** owner_email 로 조회한 등록 사용자 — 이름 표시용. 미지정·미등록이면 null */
+  owner: z.object({
+    email: z.string(),
+    username: z.string(),
+    first_name: z.string().nullable().default(null),
+    last_name: z.string().nullable().default(null),
+    organization: z.string().nullable().default(null),
+    department: z.string().nullable().default(null),
+  }).nullable().optional(),
 })
 
 export type AIAgentSummary = z.infer<typeof aiAgentSummarySchema>
-
-/** 상태 배지 색상 매핑. */
-export const AGENT_STATUS_VARIANTS: Record<string, string> = {
-  active: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300",
-  staging: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
-  draft: "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300",
-  blocked: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300",
-  deprecated: "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300",
-  retired: "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400",
-}
 
 /** 관리 방식 표시 이름. */
 export const MANAGED_BY_LABEL: Record<string, string> = {
@@ -74,15 +80,33 @@ export const COMPLETENESS_LABEL: Record<string, string> = {
   evaluation: "평가 기록",
 }
 
-export const RISK_LABEL: Record<string, string> = { low: "낮음", medium: "보통", high: "높음", critical: "매우 높음" }
-export const RISK_CLASS: Record<string, string> = {
-  low: "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300",
-  medium: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
-  high: "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300",
-  critical: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300",
+// 위험도 · 상태 이름과 톤은 MCP 와 공용(`lib/risk.ts` · `lib/lifecycle.ts`, TODO-107)
+export const RISK_LABEL: Record<string, string> = SHARED_RISK_LABEL
+export const AGENT_STATUS_LABEL: Record<string, string> = LIFECYCLE_LABEL
+
+/** 집행 훅 단계 · 판정(DEF-116) — 판정은 허용 초록 · 거부 빨강 · 마스킹/승인 필요 주의 · 수정 진행 */
+export const HOOK_STAGE_LABEL: Record<string, string> = {
+  access: "접근",
+  pre_exec: "실행 전",
+  post_exec: "실행 후",
+}
+export const HOOK_DECISION: Record<string, StatusMeta> = {
+  allow: { label: "허용", tone: "success" },
+  approved: { label: "승인됨", tone: "success" },
+  modified: { label: "수정됨", tone: "info" },
+  mask: { label: "마스킹", tone: "warning" },
+  require_approval: { label: "승인 필요", tone: "warning" },
+  deny: { label: "거부", tone: "danger" },
 }
 
-export const AGENT_STATUS_LABEL: Record<string, string> = {
-  draft: "초안", staging: "스테이징", active: "활성",
-  blocked: "차단", deprecated: "사용 중단", retired: "폐기",
+/** 에이전트 연결 관계 · 대상 종류(TODO-113) */
+export const AGENT_LINK_RELATION_LABEL: Record<string, string> = {
+  depends_on: "의존",
+  consumed_by: "호출됨",
+  related: "연관",
+}
+export const AGENT_LINK_TARGET_LABEL: Record<string, string> = {
+  agent: "에이전트",
+  model: "모델",
+  dataset: "데이터셋",
 }

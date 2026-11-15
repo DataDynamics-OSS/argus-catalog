@@ -8,8 +8,11 @@
  * 안 바뀌지?"를 바로 알 수 있게 항목별 출처와 설정 파일 값과의 차이를 표시한다.
  */
 
+import { Tip } from "@/components/tip"
 import { useCallback, useEffect, useState } from "react"
 import { ChevronDown, ChevronRight, RefreshCw } from "lucide-react"
+
+import { Badge } from "@workspace/ui/components/badge"
 
 import { Button } from "@workspace/ui/components/button"
 import { authFetch } from "@/features/auth/auth-fetch"
@@ -33,10 +36,11 @@ export const SOURCE_LABEL: Record<SourceKind, string> = {
   db: "화면에서 변경",
 }
 
+// 출처는 분류라 무채색 테두리(TODO-107) — 기본값만 흐리게, 바뀐 값(설정 파일 · 화면)은 진하게
 const SOURCE_CLASS: Record<SourceKind, string> = {
-  default: "border-border text-muted-foreground",
-  config: "border-sky-500/40 text-sky-700 dark:text-sky-400",
-  db: "border-emerald-500/40 text-emerald-700 dark:text-emerald-400",
+  default: "text-muted-foreground",
+  config: "",
+  db: "",
 }
 
 /** 출처별 개수와 설정 파일과 어긋난 항목 수 */
@@ -68,9 +72,9 @@ export function sourceNote(info: SourceInfo): string {
 
 function SourceBadge({ kind }: { kind: SourceKind }) {
   return (
-    <span className={`inline-flex items-center whitespace-nowrap rounded border px-1.5 py-px text-[11px] ${SOURCE_CLASS[kind]}`}>
+    <Badge variant="outline" className={SOURCE_CLASS[kind]}>
       {SOURCE_LABEL[kind]}
-    </span>
+    </Badge>
   )
 }
 
@@ -99,7 +103,7 @@ export function SettingSources({ category }: { category: string }) {
     load()
   }, [load])
 
-  if (error) return <p className="mt-4 max-w-2xl text-xs text-destructive">{error}</p>
+  if (error) return <p className="mt-4 max-w-2xl text-sm text-destructive">{error}</p>
   if (!items || Object.keys(items).length === 0) return null
 
   const { counts, differs, overrides } = summarize(items)
@@ -120,34 +124,34 @@ export function SettingSources({ category }: { category: string }) {
           {open ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
           값 출처
         </button>
-        <span className="text-xs text-muted-foreground">
+        <span className="text-sm">
           {(Object.keys(SOURCE_LABEL) as SourceKind[])
             .filter((k) => counts[k] > 0)
             .map((k) => `${SOURCE_LABEL[k]} ${counts[k]}`)
             .join(" · ")}
         </span>
         {differs > 0 && (
-          <span className="rounded border border-amber-500/40 px-1.5 py-px text-[11px] text-amber-700 dark:text-amber-400">
+          <span className="rounded border border-amber-500/40 px-1.5 py-px text-sm text-amber-700 dark:text-amber-400">
             설정 파일과 다름 {differs}
           </span>
         )}
         {overrides > 0 && (
-          <span className="rounded border border-amber-500/40 px-1.5 py-px text-[11px] text-amber-700 dark:text-amber-400">
+          <span className="rounded border border-amber-500/40 px-1.5 py-px text-sm text-amber-700 dark:text-amber-400">
             환경변수 강제 {overrides}
           </span>
         )}
-        <Button variant="ghost" size="sm" className="ml-auto h-7" onClick={() => load()} aria-label="값 출처 새로 고침">
+        <Tip label="값 출처 새로 고침"><Button variant="ghost" size="sm" className="ml-auto h-7" onClick={() => load()} aria-label="값 출처 새로 고침">
           <RefreshCw className={`size-3.5 ${loading ? "animate-spin" : ""}`} />
-        </Button>
+        </Button></Tip>
       </div>
       {open && (
         <div className="border-t px-3 py-2">
-          <p className="mb-2 text-xs text-muted-foreground">
+          <p className="mb-2 text-sm">
             설정 파일(config.yml·config.properties)은 처음 기동할 때 DB 에 없는 항목만 채웁니다. 그 뒤에는 이 화면에서
             저장한 DB 값이 우선이라, 설정 파일을 고쳐도 아래 &ldquo;설정 파일과 다름&rdquo; 항목은 바뀌지 않습니다.
             비밀값은 값을 보여 주지 않습니다.
           </p>
-          <table className="w-full text-xs">
+          <table className="w-full text-sm">
             <thead className="text-muted-foreground">
               <tr>
                 <th className="py-1 pr-2 text-left font-medium">항목</th>
@@ -162,7 +166,7 @@ export function SettingSources({ category }: { category: string }) {
                   <tr key={k} className="border-t border-border/60 align-top">
                     <td className="py-1 pr-2">
                       <div className="font-mono">{k}</div>
-                      {info.description && <div className="text-muted-foreground">{info.description}</div>}
+                      {info.description && <div >{info.description}</div>}
                     </td>
                     <td className="py-1 pr-2"><SourceBadge kind={info.source} /></td>
                     <td className="py-1 text-amber-700 dark:text-amber-400">{sourceNote(info)}</td>

@@ -1,12 +1,14 @@
 "use client"
 
+import { Tip } from "@/components/tip"
 import { useEffect, useMemo, useState } from "react"
 import { Link2, Plus, SlidersHorizontal, Trash2 } from "lucide-react"
 import { notifyError, toast } from "@/lib/notify"
 
 import { Badge } from "@workspace/ui/components/badge"
+import { DetailSection } from "@/components/detail-section"
+import { StatusBadge } from "@workspace/ui/components/status-badge"
 import { Button } from "@workspace/ui/components/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@workspace/ui/components/card"
 import { Checkbox } from "@workspace/ui/components/checkbox"
 import {
   Dialog,
@@ -34,7 +36,7 @@ import {
 import { Tabs, TabsList, TabsTrigger } from "@workspace/ui/components/tabs"
 
 import { fetchMcpDeployments, fetchMcpEffective } from "@/features/mcp-servers/api"
-import type { McpDeploymentSummary, McpEffectiveState } from "@/features/mcp-servers/data/schema"
+import { authMethodLabel, type McpDeploymentSummary, type McpEffectiveState } from "@/features/mcp-servers/data/schema"
 
 import {
   addAIAgentMcpServer,
@@ -42,6 +44,8 @@ import {
   updateAIAgentMcpServer,
   type AIAgentMcpServer,
 } from "../api"
+import { LIFECYCLE_LABEL } from "@/lib/lifecycle"
+import { MutatingBadge } from "@/components/mutating-badge"
 
 const AUTH_OPTIONS = ["none", "bearer", "api_key", "basic", "oauth2"]
 
@@ -54,25 +58,25 @@ function RegisteredBadge({ m }: { m: AIAgentMcpServer }) {
     return (
       <a href={deploymentHref(m.mcp_deployment_name)} className="inline-flex flex-col">
         <span className="inline-flex items-center gap-1">
-          <Badge variant="outline" className="border-emerald-300 text-[10px] text-emerald-700 dark:text-emerald-300">
-            카탈로그
-          </Badge>
+          <StatusBadge tone="success" size="sm">카탈로그</StatusBadge>
           <span className="text-xs text-primary hover:underline">{m.mcp_deployment_name}</span>
         </span>
-        <span className="text-[11px] text-muted-foreground">
-          {[m.mcp_server_name, m.deployment_environment, m.deployment_status].filter(Boolean).join(" · ")}
+        <span className="text-[11px]">
+          {[m.mcp_server_name, m.deployment_environment, m.deployment_status && (LIFECYCLE_LABEL[m.deployment_status] ?? m.deployment_status)]
+            .filter(Boolean)
+            .join(" · ")}
         </span>
       </a>
     )
   }
   return (
-    <Badge
-      variant="outline"
-      className="border-amber-300 text-[10px] text-amber-700 dark:text-amber-300"
+    <StatusBadge
+      tone="warning"
+      size="sm"
       title="MCP Server 카탈로그에 등록되지 않은 직접 입력 연결입니다. 도구·리소스 범위를 관리하려면 카탈로그 배포와 연결하세요."
     >
       미등록
-    </Badge>
+    </StatusBadge>
   )
 }
 
@@ -100,23 +104,17 @@ export function AgentMcpCard({
   const unregistered = items.filter((m) => !m.registered).length
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex flex-wrap items-center gap-2 text-sm">
-          MCP 서버 ({items.length})
+    <DetailSection
+      title={<>
+        MCP 서버 ({items.length})
           {unregistered > 0 && (
-            <Badge variant="outline" className="border-amber-300 text-[10px] text-amber-700 dark:text-amber-300">
-              미등록 {unregistered}
-            </Badge>
+            <StatusBadge tone="warning" size="sm">미등록 {unregistered}</StatusBadge>
           )}
-        </CardTitle>
-        <p className="text-xs text-muted-foreground">
-          MCP Server 카탈로그의 배포를 선택하면 노출 도구·리소스 범위가 연동되고, 에이전트별 허용 그룹·도구로 범위를 좁힐 수 있습니다.
-          직접 입력한 연결은 “미등록”으로 표시됩니다.
-        </p>
-      </CardHeader>
-      <CardContent className="space-y-2">
-        <Table>
+      </>}
+      description={<>MCP Server 카탈로그의 배포를 선택하면 노출 도구·리소스 범위가 연동되고, 에이전트별 허용 그룹·도구로 범위를 좁힐 수 있습니다.
+          직접 입력한 연결은 “미등록”으로 표시됩니다.</>}
+    >
+        <div className="rounded-md border"><Table>
           <TableHeader>
             <TableRow>
               <TableHead>이름</TableHead>
@@ -139,41 +137,41 @@ export function AgentMcpCard({
                     )}
                   </div>
                 </TableCell>
-                <TableCell className="break-all font-mono text-xs text-muted-foreground">{m.url || "-"}</TableCell>
-                <TableCell>{m.auth_method ? <Badge variant="outline">{m.auth_method}</Badge> : "-"}</TableCell>
+                <TableCell className="break-all font-mono text-xs">{m.url || "-"}</TableCell>
+                <TableCell>{m.auth_method ? <Badge variant="outline">{authMethodLabel(m.auth_method)}</Badge> : "-"}</TableCell>
                 <TableCell className="text-xs">
                   {m.registered ? (
                     <div className="flex flex-col">
                       <span>
-                        그룹: {m.allowed_groups?.length ? m.allowed_groups.join(", ") : <span className="text-muted-foreground">전체</span>}
+                        그룹: {m.allowed_groups?.length ? m.allowed_groups.join(", ") : <span >전체</span>}
                       </span>
                       <span>
-                        도구: {m.allowed_tools?.length ? `${m.allowed_tools.length}개 지정` : <span className="text-muted-foreground">전체</span>}
+                        도구: {m.allowed_tools?.length ? `${m.allowed_tools.length}개 지정` : <span >전체</span>}
                       </span>
                       {m.effective_tool_count != null && (
-                        <span className="text-muted-foreground">실효 도구 {m.effective_tool_count}개</span>
+                        <span >실효 도구 {m.effective_tool_count}개</span>
                       )}
                     </div>
                   ) : (
-                    <span className="text-muted-foreground">관리 불가</span>
+                    <span >관리 불가</span>
                   )}
                 </TableCell>
                 <TableCell>
                   <div className="flex gap-1">
                     {canEdit && m.registered && (
-                      <Button
+                      <Tip label="허용 범위"><Button
                         variant="ghost"
                         size="icon"
                         className="h-7 w-7"
                         aria-label="허용 범위"
-                        title="허용 그룹·도구"
+                       
                         onClick={() => setScopeTarget(m)}
                       >
                         <SlidersHorizontal className="h-4 w-4" />
-                      </Button>
+                      </Button></Tip>
                     )}
                     {canEdit && (
-                    <Button
+                    <Tip label="삭제"><Button
                       variant="ghost"
                       size="icon"
                       className="h-7 w-7"
@@ -188,23 +186,22 @@ export function AgentMcpCard({
                       }}
                     >
                       <Trash2 className="h-4 w-4" />
-                    </Button>
+                    </Button></Tip>
                     )}
                   </div>
                 </TableCell>
               </TableRow>
             ))}
           </TableBody>
-        </Table>
+        </Table></div>
         {canEdit && <AddMcpForm agentName={agentName} deployments={deployments} onAdded={onChanged} />}
-      </CardContent>
       <AllowedScopeDialog
         agentName={agentName}
         target={scopeTarget}
         onClose={() => setScopeTarget(null)}
         onSaved={onChanged}
       />
-    </Card>
+    </DetailSection>
   )
 }
 
@@ -292,7 +289,7 @@ function AddMcpForm({
       </Tabs>
       {mode === "catalog" ? (
         deployments.length === 0 ? (
-          <span className="text-xs text-muted-foreground">
+          <span className="text-xs">
             등록된 MCP 배포가 없습니다. <a href="/dashboard/mcp-servers" className="text-primary hover:underline">MCP Server 카탈로그</a>에서 먼저 등록하세요.
           </span>
         ) : (
@@ -381,12 +378,12 @@ function AllowedScopeDialog({
         <DialogHeader>
           <DialogTitle>허용 그룹·도구 — {target?.mcp_deployment_name}</DialogTitle>
         </DialogHeader>
-        <p className="text-xs text-muted-foreground">
+        <p className="text-xs">
           아무것도 선택하지 않으면 배포에서 노출된 도구 전체를 사용합니다. 그룹과 도구를 함께 고르면 둘 다 만족하는 도구만 허용되며,
           정책 번들에는 배포 노출 도구(차단 제외) ∩ 허용 범위만 포함됩니다.
         </p>
         {!eff ? (
-          <p className="text-sm text-muted-foreground">불러오는 중...</p>
+          <p className="text-sm text-muted-foreground">불러오는 중…</p>
         ) : (
           <div className="grid max-h-[55vh] gap-4 overflow-y-auto sm:grid-cols-[1fr_2fr]">
             <div className="space-y-1.5">
@@ -399,8 +396,8 @@ function AllowedScopeDialog({
                       onCheckedChange={() => toggle(groups, setGroups, g.key)}
                     />
                     <span>{g.label || g.key}</span>
-                    {g.mutating && <Badge variant="outline" className="h-4 px-1 text-[10px] text-orange-700">변경</Badge>}
-                    <span className="text-[11px] text-muted-foreground">{g.exposed_count}/{g.tool_count}</span>
+                    {g.mutating && <MutatingBadge />}
+                    <span className="text-[11px]">{g.exposed_count}/{g.tool_count}</span>
                   </label>
                 )
               })}
@@ -411,8 +408,8 @@ function AllowedScopeDialog({
                 <label key={t.name} className="flex items-center gap-2 text-sm">
                   <Checkbox checked={tools.has(t.name)} onCheckedChange={() => toggle(tools, setTools, t.name)} />
                   <span className="font-mono text-xs">{t.name}</span>
-                  {t.group_key && <span className="text-[11px] text-muted-foreground">{t.group_key}</span>}
-                  {t.mutating && <Badge variant="outline" className="h-4 px-1 text-[10px] text-orange-700">변경</Badge>}
+                  {t.group_key && <span className="text-[11px]">{t.group_key}</span>}
+                  {t.mutating && <MutatingBadge />}
                 </label>
               ))}
             </div>
@@ -420,7 +417,7 @@ function AllowedScopeDialog({
         )}
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={saving}>취소</Button>
-          <Button onClick={save} disabled={saving || !eff}>{saving ? "저장 중..." : "저장"}</Button>
+          <Button onClick={save} disabled={saving || !eff}>{saving ? "저장 중…" : "저장"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

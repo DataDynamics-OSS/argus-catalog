@@ -33,6 +33,7 @@ from app.alert.models import AlertNotification, AlertRule, LineageAlert
 from app.alert.schemas import (
     ENTITY_TRIGGERS,
     SUPPORTED_CHANNELS,
+    SYNC_TRIGGERS,
     AlertBulkResult,
     AlertResponse,
     AlertRuleCreate,
@@ -56,7 +57,7 @@ logger = logging.getLogger(__name__)
 
 # 심각도 순위(높을수록 심각) — 모듈 전체에서 이 하나만 쓴다.
 _SEVERITY_RANK = {"INFO": 1, "WARNING": 2, "BREAKING": 3}
-_SEVERITY_LABEL = {"BREAKING": "심각", "WARNING": "경고", "INFO": "정보"}
+_SEVERITY_LABEL = {"BREAKING": "치명", "WARNING": "경고", "INFO": "정보"}
 _CHANGE_LABEL = {"DROP": "삭제", "MODIFY": "변경", "ADD": "추가"}
 
 _SUMMARY_MAX = 500          # LineageAlert.change_summary 컬럼 길이
@@ -114,10 +115,13 @@ async def evaluate_rules_and_create_alerts(
     session: AsyncSession,
     dataset_id: int,
     changes: list[dict],
+    *,
+    summary_prefix: str | None = None,
 ) -> list[LineageAlert]:
     """스키마 변경에 대해 활성 규칙을 평가하고 알림을 생성한다.
 
-    ``save_schema_snapshot()`` 이 변경 사항을 감지했을 때 호출된다.
+    ``save_schema_snapshot()`` 이 변경 사항을 감지했을 때 호출된다. 데이터셋이 원본에서 사라져
+    removed 로 바뀔 때도 모든 컬럼 DROP 으로 호출된다(``summary_prefix="테이블 제거됨 — "``, DEF-055).
 
     처리 흐름:
         1. 활성 규칙 전부 조회
@@ -178,6 +182,9 @@ async def evaluate_rules_and_create_alerts(
         created_alerts.extend(alerts)
 
     if created_alerts:
+        if summary_prefix:
+            for a in created_alerts:
+                a.change_summary = _clip(summary_prefix + (a.change_summary or ""))
         await _persist_and_dispatch(session, created_alerts)
         logger.info("규칙 평가 완료: dataset_id=%d, alerts_created=%d", dataset_id, len(created_alerts))
     return created_alerts
@@ -189,9 +196,9 @@ async def evaluate_quality_alerts(
     score: float,
     failed: list[dict],
 ) -> list[LineageAlert]:
-    """품질 검증 실패에 대해 QUALITY_FAILED 트리거 규칙을 평가하고 알림을 생성한다.
+    """품질 진단 실패에 대해 QUALITY_FAILED 트리거 규칙을 평가하고 알림을 생성한다.
 
-    ``run_quality_check``(서버 검증) / ``import_results``(배치 반입)가 실패
+    ``import_results``(품질 워커의 정밀 진단 결과 저장)가 실패
     결과를 저장한 직후 호출된다. ``failed`` 는 실패 규칙 요약 dict 목록:
     ``{"rule_name", "check_type", "severity", "actual", "detail"}``.
 
@@ -253,7 +260,7 @@ async def evaluate_quality_alerts(
             severity=rule.severity_override or worst,
             source_dataset_id=dataset_id,
             rule_id=rule.id,
-            change_summary=_clip(f"품질 검증 실패: {dataset.name} — {names}{more} (점수 {score:.1f}%)"),
+            change_summary=_clip(f"품질 진단 실패: {dataset.name} — {names}{more} (점수 {score:.1f}%)"),
             change_detail=_json.dumps(
                 {"score": score, "failed_rules": matched}, ensure_ascii=False, default=str,
             ),
@@ -336,6 +343,67 @@ async def evaluate_entity_alerts(
     if created:
         await _persist_and_dispatch(session, created, extra_owners=owners)
         logger.info("엔터티 알림 생성됨: %s %s (%s) count=%d", entity_type, entity_ref, trigger_type, len(created))
+    return created
+
+
+async def evaluate_sync_alerts(
+    session: AsyncSession,
+    *,
+    trigger_type: str,
+    datasource_id: int,
+    datasource_name: str,
+    summary: str,
+    detail: dict,
+    partial: bool = False,
+    severity: str = "WARNING",
+    rule_id: int | None = None,
+) -> list[LineageAlert]:
+    """데이터 소스 수집 이벤트(``SYNC_FAILED``·``SYNC_STALE``)에 대해 규칙을 평가하고 알림을 만든다.
+
+    규칙 scope: ``ALL`` 또는 ``DATASOURCE`` (이 데이터 소스일 때). ``SYNC_FAILED`` 의 ``include_partial``
+    (기본 true)이 false 면 일부 실패(PARTIAL)는 알리지 않는다. 같은 규칙·데이터 소스의 열린 ``SYNC_STALE``
+    알림이 있으면 다시 만들지 않는다(주기 평가가 매번 알림을 쌓지 않도록). ``rule_id`` 를 주면 그 규칙만 본다
+    (규칙마다 기준 시간이 다른 SYNC_STALE). 커밋은 호출자 책임.
+    """
+    q = select(AlertRule).where(AlertRule.is_active == "true", AlertRule.trigger_type == trigger_type)
+    if rule_id is not None:
+        q = q.where(AlertRule.id == rule_id)
+    rules = (await session.execute(q)).scalars().all()
+    created: list[LineageAlert] = []
+    ref = datasource_name[:500]  # 알림 화면은 entity_ref 를 그대로 보여 준다
+    for rule in rules:
+        if rule.scope_type == "DATASOURCE":
+            if rule.scope_id != datasource_id:
+                continue
+        elif rule.scope_type != "ALL":
+            continue
+        config = _load_config(rule)
+        if config is None:
+            continue
+        if trigger_type == "SYNC_FAILED" and partial and config.get("include_partial") is False:
+            continue
+        if trigger_type == "SYNC_STALE":
+            open_exists = (await session.execute(
+                select(LineageAlert.id).where(
+                    LineageAlert.rule_id == rule.id, LineageAlert.entity_ref == ref,
+                    LineageAlert.status.in_(("OPEN", "ACKNOWLEDGED")),
+                ).limit(1)
+            )).first()
+            if open_exists:
+                continue
+        created.append(LineageAlert(
+            alert_type=trigger_type,
+            severity=rule.severity_override or severity,
+            source_dataset_id=None,
+            entity_type="datasource",
+            entity_ref=ref,
+            rule_id=rule.id,
+            change_summary=_clip(summary),
+            change_detail=_json.dumps(detail, ensure_ascii=False, default=str),
+        ))
+    if created:
+        await _persist_and_dispatch(session, created)
+        logger.info("수집 알림 생성됨: datasource=%s (%s) count=%d", datasource_name, trigger_type, len(created))
     return created
 
 
@@ -685,7 +753,7 @@ async def _send_webhook(session: AsyncSession, alert: LineageAlert, rule: AlertR
 
 def _entity_label(entity_type: str | None) -> str:
     """엔터티 유형 코드를 사람이 읽는 라벨로 바꾼다(모르는 값은 그대로)."""
-    return {"mcp_deployment": "MCP 배포"}.get(entity_type or "", entity_type or "")
+    return {"mcp_deployment": "MCP 배포", "datasource": "데이터 소스"}.get(entity_type or "", entity_type or "")
 
 
 # ---------------------------------------------------------------------------
@@ -712,8 +780,8 @@ async def _validate_rule_state(session: AsyncSession, *, scope_type: str, scope_
             raise RuleValidationError("선택한 감시 대상이 존재하지 않습니다(삭제되었을 수 있습니다).")
     if trigger_type in ENTITY_TRIGGERS and scope_type not in ("ALL", "DATASOURCE"):
         raise RuleValidationError("MCP 트리거는 범위를 '전체' 또는 '데이터 소스'로만 지정할 수 있습니다.")
-    if trigger_type == "SYNC_STALE":
-        raise RuleValidationError("SYNC_STALE 트리거는 지원하지 않습니다.")
+    if trigger_type in SYNC_TRIGGERS and scope_type not in ("ALL", "DATASOURCE"):
+        raise RuleValidationError("수집 트리거는 범위를 '전체' 또는 '데이터 소스'로만 지정할 수 있습니다.")
     if "WEBHOOK" in channels.split(",") and not webhook_url:
         raise RuleValidationError("Webhook 채널을 선택하면 Webhook URL 을 입력해야 합니다.")
 
@@ -805,8 +873,6 @@ async def update_rule(
             session, scope_type=merged_scope, scope_id=merged_scope_id, trigger_type=merged_trigger,
             channels=merged_channels, webhook_url=merged_webhook,
         )
-    elif changes.get("is_active") == "true" and rule.trigger_type == "SYNC_STALE":
-        raise RuleValidationError("SYNC_STALE 트리거는 지원하지 않아 활성화할 수 없습니다.")
 
     changes["scope_id"] = merged_scope_id
     if "WEBHOOK" not in merged_channels.split(","):

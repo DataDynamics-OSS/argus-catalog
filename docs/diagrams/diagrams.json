@@ -470,8 +470,13 @@
         "shape": "card"
       },
       {
-        "id": "AIR",
-        "label": "에어갭 카탈로그",
+        "id": "OCI",
+        "label": "에어갭 OCI 모델 허브",
+        "shape": "card"
+      },
+      {
+        "id": "ML",
+        "label": "에어갭 MLflow 레지스트리",
         "shape": "card"
       }
     ],
@@ -494,15 +499,15 @@
       },
       {
         "from": "F",
-        "to": "AIR",
-        "label": "push",
+        "to": "OCI",
+        "label": "push (권장)",
         "dashed": false,
         "bidirectional": false,
         "relation": false
       },
       {
         "from": "F",
-        "to": "AIR",
+        "to": "ML",
         "label": "서버로 복사 후 import-local",
         "dashed": true,
         "bidirectional": false,
@@ -884,7 +889,7 @@
       {
         "from": "D",
         "to": "Q",
-        "label": "프로파일 · 품질 배치",
+        "label": "프로파일 · 정밀 진단",
         "dashed": false,
         "bidirectional": false,
         "relation": false
@@ -977,10 +982,25 @@
   {
     "id": "catalog-quality-01",
     "page": "catalog/quality.adoc",
-    "title": "프로파일·검증·품질 배치와 알림",
+    "title": "정밀 진단 · 프로파일과 알림",
     "kind": "flow",
     "direction": "LR",
     "nodes": [
+      {
+        "id": "J",
+        "label": "품질 탭 · 품질 진단 작업",
+        "shape": "card"
+      },
+      {
+        "id": "W",
+        "label": "품질 워커",
+        "shape": "card"
+      },
+      {
+        "id": "T",
+        "label": "Trino",
+        "shape": "card"
+      },
       {
         "id": "S",
         "label": "원본 DB",
@@ -989,16 +1009,6 @@
       {
         "id": "P",
         "label": "컬럼 통계 스냅숏",
-        "shape": "card"
-      },
-      {
-        "id": "V",
-        "label": "검증 실행 · 예약 검증",
-        "shape": "card"
-      },
-      {
-        "id": "B",
-        "label": "프로파일 · 결과 반입",
         "shape": "card"
       },
       {
@@ -1019,7 +1029,39 @@
     ],
     "edges": [
       {
-        "from": "S",
+        "from": "J",
+        "to": "W",
+        "label": "실행 대기열",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "W",
+        "to": "T",
+        "label": "Trino 경로",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "T",
+        "to": "S",
+        "label": "",
+        "dashed": false,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "W",
+        "to": "S",
+        "label": "원천 직접",
+        "dashed": true,
+        "bidirectional": false,
+        "relation": false
+      },
+      {
+        "from": "W",
         "to": "P",
         "label": "프로파일",
         "dashed": false,
@@ -1027,33 +1069,9 @@
         "relation": false
       },
       {
-        "from": "P",
-        "to": "V",
-        "label": "",
-        "dashed": false,
-        "bidirectional": false,
-        "relation": false
-      },
-      {
-        "from": "S",
-        "to": "B",
-        "label": "품질 배치 · 전체 데이터",
-        "dashed": false,
-        "bidirectional": false,
-        "relation": false
-      },
-      {
-        "from": "B",
-        "to": "V",
-        "label": "",
-        "dashed": false,
-        "bidirectional": false,
-        "relation": false
-      },
-      {
-        "from": "V",
+        "from": "W",
         "to": "R",
-        "label": "",
+        "label": "정밀 진단 결과",
         "dashed": false,
         "bidirectional": false,
         "relation": false
@@ -4525,8 +4543,13 @@
         "shape": "card"
       },
       {
-        "id": "AIR",
-        "label": "에어갭 카탈로그",
+        "id": "OCI",
+        "label": "에어갭 OCI 모델 허브",
+        "shape": "card"
+      },
+      {
+        "id": "ML",
+        "label": "에어갭 MLflow 레지스트리",
         "shape": "card"
       }
     ],
@@ -4549,15 +4572,15 @@
       },
       {
         "from": "F",
-        "to": "AIR",
-        "label": "push",
+        "to": "OCI",
+        "label": "push (권장)",
         "dashed": false,
         "bidirectional": false,
         "relation": false
       },
       {
         "from": "F",
-        "to": "AIR",
+        "to": "ML",
         "label": "서버로 복사 후 import-local",
         "dashed": true,
         "bidirectional": false,

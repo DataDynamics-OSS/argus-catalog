@@ -20,11 +20,8 @@ export type UserStatus = z.infer<typeof userStatusSchema>
  * - admin: Full datasource access including user management and configuration.
  * - user:  Standard access with limited administrative capabilities.
  */
-const userRoleSchema = z.union([
-  z.literal("argus-admin"),
-  z.literal("argus-superuser"),
-  z.literal("argus-user"),
-])
+// 기본 세 역할(argus-admin · argus-superuser · argus-user) 또는 권한 관리에서 만든 사용자 정의 역할(TODO-124)
+const userRoleSchema = z.string()
 
 /**
  * User schema.

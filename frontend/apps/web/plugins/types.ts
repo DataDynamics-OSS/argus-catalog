@@ -7,12 +7,24 @@
 import type { ComponentType } from "react"
 import type { LucideIcon } from "lucide-react"
 import type { MenuGroup } from "@/types/menu"
+import type { FeatureEntry } from "@/lib/permission-registry"
 
 export interface PluginScreen {
   /** /dashboard/x/<slug> 로 매핑되는 경로. 예: "acme/billing" → /dashboard/x/acme/billing */
   slug: string
   /** 렌더링할 화면 컴포넌트. 보통 "use client" 컴포넌트. */
   component: ComponentType
+  /**
+   * 헤더 `?`(도움말) 아이콘이 열 주소. 같은 출처 경로(예: "/manual/argus-catalog/plugin/usage.html" 또는
+   * 플러그인이 함께 배포한 정적 쪽)나 외부 주소. 없으면 매뉴얼의 플러그인 사용 안내를 연다.
+   */
+  help?: PluginHelp
+}
+
+export interface PluginHelp {
+  url: string
+  /** 도움말 아이콘 툴팁에 보일 이름. 없으면 "플러그인 화면". */
+  title?: string
 }
 
 export interface ArgusPlugin {
@@ -24,4 +36,9 @@ export interface ArgusPlugin {
   screens?: PluginScreen[]
   /** 메뉴에서 쓸 추가 lucide 아이콘(이름→컴포넌트). 코어 icon-map 에 없는 아이콘을 쓸 때만 필요. */
   icons?: Record<string, LucideIcon>
+  /**
+   * 기능 권한(TODO-123) — 권한 관리 › 기능 권한에 행이 생기고 화면은 canUseFeature(key) 로 판정한다.
+   * 백엔드 플러그인 객체의 features 에도 같은 키를 선언해야 서버가 저장 · 판정한다(키는 "<플러그인>." 으로 시작 권장).
+   */
+  features?: FeatureEntry[]
 }

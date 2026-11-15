@@ -1,5 +1,6 @@
 "use client"
 
+import { DetailSection } from "@/components/detail-section"
 import { useEffect, useMemo, useState } from "react"
 import { Download, Monitor, TrendingUp } from "lucide-react"
 
@@ -43,8 +44,7 @@ export function ActivityTab({ modelName, canEdit }: { modelName: string; canEdit
         />
       </div>
 
-      <section className="space-y-2">
-        <h3 className="text-sm font-semibold">최근 사용 기록</h3>
+      <DetailSection title="최근 사용 기록">
         {error ? (
           <p className="text-sm text-destructive">사용 기록을 불러오지 못했습니다.</p>
         ) : !stats ? (
@@ -67,7 +67,7 @@ export function ActivityTab({ modelName, canEdit }: { modelName: string; canEdit
                 {stats.recent_logs.map((l, i) => (
                   <tr key={i}>
                     <td className="whitespace-nowrap px-3 py-1.5" title={formatDateTime(l.downloaded_at, true)}>
-                      {formatDateTime(l.downloaded_at)} <span className="text-xs text-muted-foreground">({timeAgo(l.downloaded_at)})</span>
+                      {formatDateTime(l.downloaded_at)} <span className="text-xs">({timeAgo(l.downloaded_at)})</span>
                     </td>
                     <td className="px-3 py-1.5">v{l.version}</td>
                     <td className="px-3 py-1.5">{TYPE_LABEL[l.download_type] ?? l.download_type}</td>
@@ -79,12 +79,11 @@ export function ActivityTab({ modelName, canEdit }: { modelName: string; canEdit
             </table>
           </div>
         )}
-      </section>
+      </DetailSection>
 
-      <section className="space-y-2">
-        <h3 className="text-sm font-semibold">댓글</h3>
+      <DetailSection title="댓글">
         <CommentSection entityType="model" entityId={modelName} />
-      </section>
+      </DetailSection>
     </div>
   )
 }

@@ -55,7 +55,9 @@ pytest          # sdk/tests — 가짜 서버(httpx.MockTransport)로 push·pull
 import httpx
 from argus_catalog_sdk import ModelClient
 
-# 조회를 포함한 모든 호출에 로그인이 필요합니다(인증 정보가 없으면 401)
+# 조회를 포함한 모든 호출에 인증이 필요합니다(인증 정보가 없으면 401)
+# 프로그램·파이프라인은 API 키(카탈로그 설정 > API 키에서 발급)를 씁니다. 인자를 빼면 환경변수 ARGUS_CATALOG_API_KEY 를 읽습니다.
+client = ModelClient("http://catalog-server:4600", api_key="argus_sk_...")
 client = ModelClient("http://catalog-server:4600", token="<액세스 토큰>")
 client = ModelClient("http://catalog-server:4600", username="mjkim", password="...")  # 생성 시 로그인
 
@@ -225,7 +227,7 @@ print(f"Storage: {result['storage_location']}")
 
 ### 로컬 Import (Airgap)
 
-인터넷이 닿지 않는 폐쇄망이라면 HuggingFace에서 바로 받아 올 수 없습니다. 이럴 때는 USB 같은 매체로 파일을 옮겨 둔 뒤, 서버가 접근 가능한 로컬 디렉토리에서 S3로 임포트하면 됩니다.
+인터넷이 닿지 않는 폐쇄망이라면 HuggingFace에서 바로 받아 올 수 없습니다. 이럴 때는 USB 같은 매체로 파일을 옮겨 둔 뒤, **카탈로그 서버(컨테이너)가 읽을 수 있는** 디렉토리에서 S3로 임포트합니다(관리자). 파일은 스트리밍으로 올라가 큰 모델도 서버 메모리를 크게 쓰지 않습니다. 서버 파일시스템에 접근할 수 없다면 아래 [Airgap 워크플로우](#airgap-워크플로우)의 `push` 방법을 쓰세요.
 
 ```python
 result = client.import_local(
@@ -292,11 +294,11 @@ Python 코드를 짤 필요 없이 터미널에서 같은 일을 하고 싶을 �
 
 ### 인증
 
-모든 명령은 `--server`, `--token` 또는 `--username`/`--password` 를 받습니다. 환경 변수로 지정해 두면 편합니다.
+모든 명령은 `--server`, `--api-key`(권장), `--token` 또는 `--username`/`--password` 를 받습니다. 환경 변수로 지정해 두면 편합니다.
 
 ```bash
 export ARGUS_SERVER=http://catalog:4600
-export ARGUS_TOKEN=<액세스 토큰>        # 또는 ARGUS_USERNAME / ARGUS_PASSWORD
+export ARGUS_CATALOG_API_KEY=argus_sk_...   # 카탈로그 설정 > API 키 (또는 ARGUS_TOKEN, ARGUS_USERNAME / ARGUS_PASSWORD)
 ```
 
 ### OCI 모델 허브
@@ -404,29 +406,54 @@ argus-model delete argus.ml.old_model -y
 
 ## Airgap 워크플로우
 
-지금까지 본 명령들을 어떻게 엮어 쓰는지, 실제 시나리오 하나로 정리해 보겠습니다. 인터넷이 닿는 곳에서 모델을 받아 폐쇄망으로 옮겨 쓰는 전체 흐름은 다음과 같습니다. 온라인 환경에서 임포트·Pull로 파일을 꺼내고, 매체로 옮긴 뒤, Airgap 환경에서 다시 import하는 순서입니다.
+지금까지 본 명령들을 어떻게 엮어 쓰는지, 실제 시나리오 하나로 정리해 보겠습니다. 인터넷이 닿는 곳에서 모델을 받아 폐쇄망으로 옮겨 쓰는 전체 흐름입니다. 방법은 둘이고, 서버 파일시스템 접근도 관리자 권한도 필요 없는 **방법 1(`push`, OCI 모델 허브)** 을 권합니다.
+
+### 방법 1 — `push` (권장, OCI 모델 허브)
 
 ```bash
 # ──── 인터넷 환경 ────
 
-# 1. HuggingFace에서 모델 임포트 (온라인 Catalog Server)
-argus-model import-hf bert-base-uncased argus.ml.bert \
+# 1. HuggingFace 모델을 온라인 Catalog Server 의 OCI 허브로 (관리자) — 끝나면 버전 번호가 출력됨
+argus-model oci-import-hf bert-base-uncased --name bert-base \
   --server http://online-catalog:4600
 
-# 2. 모델을 로컬 디렉토리로 Pull
-argus-model pull argus.ml.bert 1 /usb/bert-export/ \
+# 2. 그 버전을 로컬 디렉토리로 Pull (같은 이름 모델이 있었다면 버전이 1 이 아닐 수 있음)
+argus-model pull bert-base 1 ./bert-base \
   --server http://online-catalog:4600
 
-# 3. USB 또는 SCP로 파일 전송
-scp -r /usb/bert-export/ airgap-server:/data/transferred/bert/
+# 3. USB 등으로 ./bert-base 를 폐쇄망 PC 로 옮김
 
 # ──── Airgap 환경 ────
 
-# 4. 전송된 파일을 Airgap Catalog Server에 import
-argus-model import-local /data/transferred/bert argus.ml.bert \
+# 4. 폐쇄망 PC 에서 push — pull 은 파일만 받으므로 설명·태스크·프레임워크는 여기서 다시 적음(새 모델일 때만 적용)
+argus-model push ./bert-base bert-base \
+  --description "BERT base uncased" --task fill-mask --framework pytorch \
+  --presigned-min-mb 100 \
   --server http://airgap-catalog:4600
 
 # 5. 확인
+argus-model files bert-base 1 --server http://airgap-catalog:4600
+```
+
+`push` 로 만든 모델은 출처가 "직접 등록"으로 기록되고 언어·라이선스·HuggingFace 원본 정보는 옮겨지지 않습니다. `README.md` 는 모델 카드로 올라갑니다.
+`--presigned-min-mb` 는 큰 파일을 저장소로 바로 올리는 옵션이라, 폐쇄망 PC 가 저장소(MinIO)의 외부용 주소에 닿아야 합니다.
+
+### 방법 2 — `import-local` (관리자, MLflow 레지스트리)
+
+```bash
+# ──── 인터넷 환경 ────
+argus-model import-hf bert-base-uncased argus.ml.bert --server http://online-catalog:4600
+argus-model pull argus.ml.bert 1 ./bert --server http://online-catalog:4600
+
+# ──── Airgap 환경 ────
+# 파일을 카탈로그 서버가 읽을 수 있는 경로에 둔다 — 컨테이너라면 컨테이너 안으로
+#   (상위 폴더는 미리 만들고, 대상 bert/ 는 없는 경로로 — 이미 있으면 그 안에 bert/ 가 하나 더 생긴다)
+docker exec <백엔드 컨테이너> mkdir -p /data/transferred
+docker cp ./bert <백엔드 컨테이너>:/data/transferred/bert
+
+# 서버 기준 경로로 import (관리자)
+argus-model import-local /data/transferred/bert argus.ml.bert \
+  --server http://airgap-catalog:4600
 argus-model files argus.ml.bert 1 --server http://airgap-catalog:4600
 ```
 
@@ -471,7 +498,7 @@ agents-plan:
 agents-apply:
   rules: [{ if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH }]
   script: argus-catalog agent-apply -f agents/ --prune
-# ARGUS_SERVER, ARGUS_USERNAME/ARGUS_PASSWORD(서비스 계정) 는 파이프라인 비밀 변수로
+# ARGUS_SERVER, ARGUS_CATALOG_API_KEY(범위 catalog:write 키) 는 파이프라인 비밀 변수로
 ```
 
 ## 환경 변수
@@ -481,6 +508,7 @@ CLI 는 다음 환경 변수를 읽습니다. 같은 이름의 플래그가 우�
 | 변수 | 플래그 | 설명 | 기본값 |
 |------|------|------|--------|
 | `ARGUS_SERVER` | `--server` | 카탈로그 서버 주소 | `http://localhost:4600` |
+| `ARGUS_CATALOG_API_KEY` | `--api-key` | 카탈로그 API 키 — 프로그램·파이프라인 권장 (`ModelClient` 도 인자가 없으면 이 값을 읽음) | — |
 | `ARGUS_TOKEN` | `--token` | 액세스 토큰 (Bearer) | — |
 | `ARGUS_USERNAME` / `ARGUS_PASSWORD` | `--username` / `--password` | 토큰 대신 로그인 | — |
 

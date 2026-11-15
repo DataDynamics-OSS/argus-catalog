@@ -1,3 +1,4 @@
+import { DEFAULT_SUBMIT_CHANNELS } from "./notification-labels"
 import { authFetch, throwOnError } from "@/features/auth/auth-fetch"
 
 const BASE = "/api/v1/changes"
@@ -53,6 +54,8 @@ export interface ChangeRequest {
   updated_at: string
   approval_steps: ApprovalStep[]
   referrers: Referrer[]
+  /** 대상 데이터셋 표시 이름(qualified_name) — 서버가 채운다. 데이터셋이 없으면 null */
+  dataset_name?: string | null
 }
 
 export type ReferrerChannel = "EMAIL" | "SLACK" | "MATTERMOST"
@@ -116,7 +119,7 @@ export async function getChangeRequest(crId: number): Promise<ChangeRequest> {
 
 export async function submitChangeRequest(
   crId: number,
-  notifyChannels: string[] = ["EMAIL", "IN_APP"],
+  notifyChannels: string[] = DEFAULT_SUBMIT_CHANNELS,
 ): Promise<{ cr_id: number; cr_code: string; workflow_id: string; status: CRStatus }> {
   const res = await authFetch(`${BASE}/${crId}/submit`, {
     method: "POST",
@@ -175,6 +178,37 @@ export async function cancelChangeRequest(crId: number): Promise<void> {
   if (!res.ok) await throwOnError(res, "변경 요청을 취소하지 못했습니다.")
 }
 
+/** 작성 중(DRAFT) 초안 수정 — 본문은 생성과 같고 결재선·참조자까지 통째로 바꾼다. */
+export async function updateChangeRequest(crId: number, payload: CreateChangeRequestInput): Promise<ChangeRequest> {
+  const res = await authFetch(`${BASE}/${crId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) await throwOnError(res, "변경 요청을 수정하지 못했습니다.")
+  return res.json()
+}
+
+/** 상신한 적 없는 변경 요청(작성 중·상신 전 취소) 삭제. */
+export async function deleteChangeRequest(crId: number): Promise<void> {
+  const res = await authFetch(`${BASE}/${crId}`, { method: "DELETE" })
+  if (!res.ok) await throwOnError(res, "변경 요청을 삭제하지 못했습니다.")
+}
+
+/** 적용 완료(APPLIED) 변경 요청 종료 — 종료하면 롤백할 수 없다. */
+export async function closeChangeRequest(crId: number): Promise<ChangeRequest> {
+  const res = await authFetch(`${BASE}/${crId}/close`, { method: "POST" })
+  if (!res.ok) await throwOnError(res, "변경 요청을 종료하지 못했습니다.")
+  return res.json()
+}
+
+/** 적용한 스키마 변경 되돌리기 — CR 이 건드린 컬럼만 적용 전 상태로. */
+export async function rollbackChangeRequest(crId: number): Promise<ChangeRequest> {
+  const res = await authFetch(`${BASE}/${crId}/rollback`, { method: "POST" })
+  if (!res.ok) await throwOnError(res, "변경을 되돌리지 못했습니다.")
+  return res.json()
+}
+
 export interface NotificationLog {
   id: number
   consumer_id?: number | null
@@ -186,6 +220,8 @@ export interface NotificationLog {
   sent_at?: string | null
   acked_at?: string | null
   ack_comment?: string | null
+  /** FAILED·SKIPPED 사유 (DEF-005) */
+  error?: string | null
 }
 
 export interface Consumer {

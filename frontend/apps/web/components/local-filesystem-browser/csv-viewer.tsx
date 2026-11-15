@@ -355,11 +355,11 @@ export function CsvViewer({ url, defaultDelimiter }: CsvViewerProps) {
           className="h-8"
         >
           <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
-          Refresh
+          새로고침
         </Button>
 
         {!isLoading && rows.length > 0 && (
-          <span className="text-sm text-muted-foreground ml-auto">
+          <span className="text-sm ml-auto">
             {displayRows.data.length} rows · {columnCount} columns
           </span>
         )}
@@ -374,7 +374,7 @@ export function CsvViewer({ url, defaultDelimiter }: CsvViewerProps) {
 
       {error && (
         <div className="flex items-center justify-center h-[200px]">
-          <p className="text-sm text-muted-foreground">{error}</p>
+          <p className="text-sm">{error}</p>
         </div>
       )}
 
@@ -401,7 +401,7 @@ export function CsvViewer({ url, defaultDelimiter }: CsvViewerProps) {
             <tbody className="divide-y">
               {displayRows.data.map((row, ri) => (
                 <tr key={ri} className="hover:bg-muted/30">
-                  <td className="px-2 py-1 text-right text-muted-foreground border-r tabular-nums">
+                  <td className="px-2 py-1 text-right border-r tabular-nums">
                     {ri + 1}
                   </td>
                   {Array.from({ length: columnCount }, (_, ci) => (
@@ -422,7 +422,7 @@ export function CsvViewer({ url, defaultDelimiter }: CsvViewerProps) {
 
       {!isLoading && !error && rows.length === 0 && (
         <div className="flex items-center justify-center h-[200px]">
-          <p className="text-sm text-muted-foreground">No data</p>
+          <p className="text-sm">No data</p>
         </div>
       )}
     </div>

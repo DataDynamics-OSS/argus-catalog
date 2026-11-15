@@ -205,6 +205,12 @@ async def _send_notifications(inp: NotifyInput) -> None:
     _log.append(("notify", inp.cr_id, inp.stage))
 
 
+@activity.defn(name="escalate_unacked_consumers")
+async def _escalate(cr_id: int) -> dict:
+    _log.append(("escalate", cr_id))
+    return {"total": 0, "acked": 0, "pending": 0, "pending_consumers": []}
+
+
 async def _run_workflow_cases() -> None:
     from temporalio.testing import WorkflowEnvironment
     from temporalio.worker import Worker
@@ -215,7 +221,7 @@ async def _run_workflow_cases() -> None:
         pytest.skip(f"Temporal 테스트 서버 사용 불가: {e}")
     async with env:
         tq = f"cr-cancel-{uuid.uuid4()}"
-        acts = [_analyze_impact, _update_cr_status, _record_decision, _apply_change, _send_notifications]
+        acts = [_analyze_impact, _update_cr_status, _record_decision, _apply_change, _send_notifications, _escalate]
         async with Worker(env.client, task_queue=tq, workflows=[ChangeApprovalWorkflow], activities=acts):
 
             async def start(cr_id, chain, scheduled=None):

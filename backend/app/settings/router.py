@@ -12,19 +12,27 @@
 """
 
 import logging
+from typing import Annotated, Literal
 
 import aioboto3
 from botocore.exceptions import ClientError
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import AdminUser
+from app.core.auth import AdminUser, CurrentUser, TokenUser
 from app.core.database import async_session, get_session
 from app.embedding.base import DEFAULT_EMBEDDING_MODEL
+from app.permissions.router import (
+    SETTINGS_DELEGATE_FEATURES,
+    check_feature_granted,
+    require_any_feature_granted,
+    require_feature_granted,
+)
 from app.settings.mail import EmailConfig, load_mail_config, send_mail
 from app.settings.notify import NotifyConfig, load_notify_config, send_notify
 from app.settings.service import (
+    BRANDING_DEFAULT_TITLE,
     DATASET_CREATE_BY_USERS_KEY,
     config_sources,
     dataset_create_by_users_enabled,
@@ -33,6 +41,7 @@ from app.settings.service import (
     load_cors_settings,
     load_embedding_settings,
     load_llm_settings,
+    load_metadata_sync_settings,
     load_os_settings,
     update_config,
 )
@@ -40,6 +49,17 @@ from app.settings.service import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/settings", tags=["settings"])
+
+# 설정 항목별 위임(TODO-123) — 관리자, 또는 그 항목의 위임 기능(명시 허용형)을 받은 역할.
+# 인증(Keycloak) · CORS · 데이터셋 등록 · 변경관리 · 값 출처 전체는 관리자 고정(AdminUser).
+SettingsAiReadyUser = Annotated[TokenUser, Depends(require_feature_granted("settings.ai-ready"))]
+SettingsAssistantUser = Annotated[TokenUser, Depends(require_feature_granted("settings.assistant"))]
+SettingsEmbeddingUser = Annotated[TokenUser, Depends(require_feature_granted("settings.embedding"))]
+SettingsLlmUser = Annotated[TokenUser, Depends(require_feature_granted("settings.llm"))]
+SettingsMailUser = Annotated[TokenUser, Depends(require_feature_granted("settings.mail"))]
+SettingsMetadataSyncUser = Annotated[TokenUser, Depends(require_feature_granted("settings.metadata-sync"))]
+SettingsNotifyUser = Annotated[TokenUser, Depends(require_feature_granted("settings.notify"))]
+SettingsObjectStorageUser = Annotated[TokenUser, Depends(require_feature_granted("settings.object-storage"))]
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +159,7 @@ async def _audit_initialize(actor, action: str, target: str, steps: list[dict]) 
 # ---------------------------------------------------------------------------
 
 @router.get("/object-storage", response_model=ObjectStorageConfig)
-async def get_object_storage_config(_guard: AdminUser, session: AsyncSession = Depends(get_session)):
+async def get_object_storage_config(_guard: SettingsObjectStorageUser, session: AsyncSession = Depends(get_session)):
     """DB 에서 현재 오브젝트 스토리지 설정을 읽어 반환한다(secret_key 는 마스킹)."""
     logger.debug("오브젝트 스토리지 설정 조회")
     cfg = await get_config_by_category(session, "object_storage")
@@ -156,7 +176,7 @@ async def get_object_storage_config(_guard: AdminUser, session: AsyncSession = D
 
 
 @router.put("/object-storage")
-async def update_object_storage_config(_guard: AdminUser,
+async def update_object_storage_config(_guard: SettingsObjectStorageUser,
     body: ObjectStorageConfig,
     session: AsyncSession = Depends(get_session),
 ):
@@ -190,7 +210,7 @@ async def update_object_storage_config(_guard: AdminUser,
 # ---------------------------------------------------------------------------
 
 @router.post("/object-storage/test", response_model=TestResponse)
-async def test_object_storage(_guard: AdminUser, body: ObjectStorageTestRequest):
+async def test_object_storage(_guard: SettingsObjectStorageUser, body: ObjectStorageTestRequest):
     """지정된 버킷에 ``head_bucket`` 을 호출해 S3 연결성을 확인한다."""
     logger.info("오브젝트 스토리지 테스트: endpoint=%s, bucket=%s", body.endpoint, body.bucket)
     try:
@@ -227,7 +247,7 @@ class _StepsDoneError(Exception):
 
 
 @router.post("/object-storage/initialize")
-async def initialize_object_storage(_guard: AdminUser, body: ObjectStorageTestRequest):
+async def initialize_object_storage(_guard: SettingsObjectStorageUser, body: ObjectStorageTestRequest):
     """버킷이 없으면 생성한다. 이미 있으면 건너뛴다(멱등)."""
     logger.info("오브젝트 스토리지 초기화: endpoint=%s, bucket=%s", body.endpoint, body.bucket)
     steps: list[dict] = []
@@ -301,7 +321,7 @@ class EmbeddingConfig(BaseModel):
 
 
 @router.get("/embedding", response_model=EmbeddingConfig)
-async def get_embedding_config(_guard: AdminUser, session: AsyncSession = Depends(get_session)):
+async def get_embedding_config(_guard: SettingsEmbeddingUser, session: AsyncSession = Depends(get_session)):
     """현재 임베딩 설정 반환(api_key 는 마스킹)."""
     logger.debug("임베딩 설정 조회")
     cfg = await get_config_by_category(session, "embedding")
@@ -317,7 +337,7 @@ async def get_embedding_config(_guard: AdminUser, session: AsyncSession = Depend
 
 
 @router.put("/embedding")
-async def update_embedding_config(_guard: AdminUser,
+async def update_embedding_config(_guard: SettingsEmbeddingUser,
     body: EmbeddingConfig,
     session: AsyncSession = Depends(get_session),
 ):
@@ -362,7 +382,7 @@ async def update_embedding_config(_guard: AdminUser,
 
 
 @router.post("/embedding/test", response_model=TestResponse)
-async def test_embedding(_guard: AdminUser, body: EmbeddingConfig):
+async def test_embedding(_guard: SettingsEmbeddingUser, body: EmbeddingConfig):
     """샘플 문장 임베딩을 시도해 provider 동작을 검증한다."""
     logger.info("임베딩 테스트: provider=%s, model=%s", body.provider, body.model)
     if await _masked_key_retargeted(body.api_key, "embedding", "embedding", body.provider, body.api_url):
@@ -462,6 +482,206 @@ async def update_catalog_policy_config(_guard: AdminUser,
 
 
 # ---------------------------------------------------------------------------
+# 사이드바 브랜드 (TODO-145) — 제품명 · 회사명 문구와 눌렀을 때 갈 주소
+# ---------------------------------------------------------------------------
+
+class BrandingConfig(BaseModel):
+    title: str = Field(default=BRANDING_DEFAULT_TITLE, max_length=60)
+    subtitle: str = Field(default="", max_length=80)
+    # 비우면 데이터셋 목록(카드 보기). http(s):// 는 새 탭, / 로 시작하면 화면 안에서 이동.
+    link_url: str = Field(default="", max_length=1000)
+
+    @field_validator("title", "subtitle", "link_url")
+    @classmethod
+    def _strip(cls, v: str) -> str:
+        return v.strip()
+
+    @field_validator("link_url")
+    @classmethod
+    def _safe_url(cls, v: str) -> str:
+        # javascript: 같은 주소로 사이드바에서 스크립트가 돌지 않게 — 웹 주소와 화면 안 경로만
+        if v and not (v.lower().startswith(("http://", "https://")) or (v.startswith("/") and not v.startswith("//"))):
+            raise ValueError("주소는 http:// · https:// 로 시작하거나 / 로 시작하는 화면 경로여야 합니다")
+        return v
+
+
+_BRANDING_KEYS = {"title": "branding_title", "subtitle": "branding_subtitle", "link_url": "branding_link_url"}
+
+
+async def _load_branding(session: AsyncSession) -> BrandingConfig:
+    cfg = await get_config_by_category(session, "branding")
+    return BrandingConfig(
+        title=cfg.get("branding_title", "").strip() or BRANDING_DEFAULT_TITLE,
+        subtitle=cfg.get("branding_subtitle", "Data Dynamics Inc").strip(),
+        link_url=cfg.get("branding_link_url", "").strip(),
+    )
+
+
+@router.get("/branding", response_model=BrandingConfig)
+async def get_branding_config(_user: CurrentUser, session: AsyncSession = Depends(get_session)):
+    """사이드바 브랜드 — 사이드바를 그리는 모든 사용자가 읽는다. 행이 없으면 기본값."""
+    return await _load_branding(session)
+
+
+@router.get("/branding/public", response_model=BrandingConfig)
+async def get_branding_public(session: AsyncSession = Depends(get_session)):
+    """로그인 화면용(로그인 전) — 화면에 보이는 문구 · 주소뿐이라 공개한다(``auth_gate.PUBLIC_PATHS``)."""
+    return await _load_branding(session)
+
+
+@router.put("/branding", response_model=BrandingConfig)
+async def update_branding_config(_guard: AdminUser,
+    body: BrandingConfig,
+    session: AsyncSession = Depends(get_session),
+):
+    """사이드바 브랜드를 저장한다. 제품명이 비면 기본값(Argus Catalog)으로 저장."""
+    body.title = body.title or BRANDING_DEFAULT_TITLE
+    await update_config(session, "branding", {
+        _BRANDING_KEYS[k]: getattr(body, k) for k in _BRANDING_KEYS
+    }, actor=_guard)
+    logger.info("사이드바 브랜드 저장됨: title=%s, subtitle=%s, link_url=%s", body.title, body.subtitle, body.link_url)
+    return body
+
+
+# ---------------------------------------------------------------------------
+# AI-Ready 기관 기본값 (TODO-096) — 데이터셋에 값이 없을 때 쓰는 제공기관·언어·라이선스·연락처
+# ---------------------------------------------------------------------------
+
+class AiReadyConfig(BaseModel):
+    publisher: str = Field(default="", max_length=200)
+    language: str = Field(default="ko", max_length=50)
+    license: str = Field(default="", max_length=30)
+    license_url: str = Field(default="", max_length=1000)
+    contact_email: str = Field(default="", max_length=255)
+    # 최소 요건 배지(가이드라인 §3.1.1.2 의 예시 기준) — 결측률 상한 %, 놓쳐도 되는 갱신 주기 수
+    max_missing_pct: float = Field(default=20, ge=0, le=100)
+    max_missed_cycles: int = Field(default=2, ge=1, le=100)
+    # 오류 신고·개선 요청 처리 기한(일) — 가이드라인 §3 "신고 후 10일 안에 수정 또는 소명"(기준 예시, TODO-096 4단계)
+    report_due_days: int = Field(default=10, ge=1, le=365)
+    # 관련법령 목록 — 한 줄에 하나(``법령명 | 해당하는 경우``). AI 초안은 이 안에서만 관련법령을 고른다(TODO-096 6단계)
+    laws: str = Field(default="", max_length=20000)
+    # 외부 공개 주소 — DCAT · Croissant · 데이터 카드에 넣는 이 서버 주소(``app/catalog/public_url.py``)
+    public_mode: Literal["REQUEST", "FQDN", "IP", "CUSTOM"] = "REQUEST"
+    public_scheme: Literal["http", "https"] = "http"
+    public_port: int | None = Field(default=None, ge=1, le=65535)
+    public_url: str = Field(default="", max_length=500)
+
+    @model_validator(mode="after")
+    def _public(self):
+        if self.public_mode == "CUSTOM" and not self.public_url:
+            raise ValueError("직접 입력 방식이면 공개 주소 URL 을 넣어야 합니다.")
+        return self
+
+    @field_validator("public_url")
+    @classmethod
+    def _public_url(cls, v: str) -> str:
+        from app.catalog.ai_ready import check_url
+        return (check_url(v, "공개 주소") or "").rstrip("/")
+
+    @field_validator("laws")
+    @classmethod
+    def _laws(cls, v: str) -> str:
+        from app.ai.ai_ready_drafts import check_laws
+        return check_laws(v)
+
+    @field_validator("publisher")
+    @classmethod
+    def _publisher(cls, v: str) -> str:
+        return v.strip()
+
+    @field_validator("language")
+    @classmethod
+    def _language(cls, v: str) -> str:
+        from app.catalog.ai_ready import check_language
+        return check_language(v) or ""
+
+    @field_validator("license")
+    @classmethod
+    def _license(cls, v: str) -> str:
+        from app.catalog.ai_ready import check_license
+        return check_license(v) or ""
+
+    @field_validator("license_url")
+    @classmethod
+    def _license_url(cls, v: str) -> str:
+        from app.catalog.ai_ready import check_url
+        return check_url(v, "라이선스 URL") or ""
+
+    @field_validator("contact_email")
+    @classmethod
+    def _contact_email(cls, v: str) -> str:
+        from app.catalog.ai_ready import check_email
+        return check_email(v) or ""
+
+
+@router.get("/ai-ready", response_model=AiReadyConfig)
+async def get_ai_ready_config(_guard: SettingsAiReadyUser, session: AsyncSession = Depends(get_session)):
+    """AI-Ready 기관 기본값 반환(행이 없으면 기본값)."""
+    cfg = await get_config_by_category(session, "ai_ready")
+    return AiReadyConfig(
+        publisher=cfg.get("ai_ready_publisher", ""),
+        language=cfg.get("ai_ready_language", "") or "ko",
+        license=cfg.get("ai_ready_license", ""),
+        license_url=cfg.get("ai_ready_license_url", ""),
+        contact_email=cfg.get("ai_ready_contact_email", ""),
+        max_missing_pct=_num(cfg.get("ai_ready_max_missing_pct"), 20.0),
+        max_missed_cycles=int(_num(cfg.get("ai_ready_max_missed_cycles"), 2)),
+        report_due_days=int(_num(cfg.get("ai_ready_report_due_days"), 10)) or 10,
+        laws=cfg.get("ai_ready_laws", ""),
+        public_mode=cfg.get("ai_ready_public_mode") or "REQUEST",
+        public_scheme=cfg.get("ai_ready_public_scheme") or "http",
+        public_port=int(_num(cfg.get("ai_ready_public_port"), 0)) or None,
+        public_url=cfg.get("ai_ready_public_url", ""),
+    )
+
+
+@router.get("/ai-ready/public-url")
+async def preview_public_url(_guard: SettingsAiReadyUser, request: Request,
+                             scheme: Literal["http", "https"] = "http",
+                             port: int | None = Query(None, ge=1, le=65535),
+                             session: AsyncSession = Depends(get_session)):
+    """외부 공개 주소 방식별로 실제 어떤 주소가 되는지(설정 화면 안내) — ``current`` 는 저장된 설정의 주소."""
+    from app.catalog import public_url
+
+    return {"REQUEST": public_url.request_base(request), **public_url.candidates(scheme, port),
+            "current": await public_url.public_base(session, request)}
+
+
+def _num(v, default: float) -> float:
+    """설정 문자열을 숫자로 — 비었거나 숫자가 아니면 기본값."""
+    try:
+        return float(v) if v not in (None, "") else default
+    except (TypeError, ValueError):
+        return default
+
+
+@router.put("/ai-ready")
+async def update_ai_ready_config(_guard: SettingsAiReadyUser,
+    body: AiReadyConfig,
+    session: AsyncSession = Depends(get_session),
+):
+    """AI-Ready 기관 기본값을 저장한다. 데이터셋에 써 넣지 않으므로 값이 빈 데이터셋 전체에 바로 반영된다."""
+    await update_config(session, "ai_ready", {
+        "ai_ready_publisher": body.publisher,
+        "ai_ready_language": body.language or "ko",
+        "ai_ready_license": body.license,
+        "ai_ready_license_url": body.license_url,
+        "ai_ready_contact_email": body.contact_email,
+        "ai_ready_max_missing_pct": f"{body.max_missing_pct:g}",
+        "ai_ready_max_missed_cycles": str(body.max_missed_cycles),
+        "ai_ready_report_due_days": str(body.report_due_days),
+        "ai_ready_laws": body.laws,
+        "ai_ready_public_mode": body.public_mode,
+        "ai_ready_public_scheme": body.public_scheme,
+        "ai_ready_public_port": str(body.public_port or ""),
+        "ai_ready_public_url": body.public_url,
+    }, actor=_guard)
+    logger.info("AI-Ready 기본값 저장됨: publisher=%s, language=%s, license=%s",
+                body.publisher, body.language, body.license)
+    return {"status": "ok", "message": "AI-Ready configuration saved"}
+
+
+# ---------------------------------------------------------------------------
 # LLM (AI 메타데이터 생성) 설정
 # ---------------------------------------------------------------------------
 
@@ -478,7 +698,7 @@ class LLMConfig(BaseModel):
 
 
 @router.get("/llm", response_model=LLMConfig)
-async def get_llm_config(_guard: AdminUser, session: AsyncSession = Depends(get_session)):
+async def get_llm_config(_guard: SettingsLlmUser, session: AsyncSession = Depends(get_session)):
     """AI 메타데이터 생성에 사용할 LLM 설정 반환(api_key 는 마스킹)."""
     logger.debug("LLM 설정 조회")
     cfg = await get_config_by_category(session, "llm")
@@ -497,7 +717,7 @@ async def get_llm_config(_guard: AdminUser, session: AsyncSession = Depends(get_
 
 
 @router.put("/llm")
-async def update_llm_config(_guard: AdminUser,
+async def update_llm_config(_guard: SettingsLlmUser,
     body: LLMConfig,
     session: AsyncSession = Depends(get_session),
 ):
@@ -526,7 +746,7 @@ async def update_llm_config(_guard: AdminUser,
 
 
 @router.post("/llm/test", response_model=TestResponse)
-async def test_llm(_guard: AdminUser, body: LLMConfig):
+async def test_llm(_guard: SettingsLlmUser, body: LLMConfig):
     """샘플 프롬프트로 LLM provider 의 응답을 확인한다.
 
     전역 LLM 제공자는 건드리지 않고 ``create_provider`` 로 만든 임시 인스턴스로 시험한 뒤 닫는다
@@ -576,7 +796,7 @@ class AssistantConfig(BaseModel):
 
 
 @router.get("/assistant", response_model=AssistantConfig)
-async def get_assistant_config(_guard: AdminUser, session: AsyncSession = Depends(get_session)):
+async def get_assistant_config(_guard: SettingsAssistantUser, session: AsyncSession = Depends(get_session)):
     """AI 어시스턴트(에이전트 프록시) 설정 반환."""
     logger.debug("AI 어시스턴트 설정 조회")
     cfg = await get_config_by_category(session, "assistant")
@@ -587,7 +807,7 @@ async def get_assistant_config(_guard: AdminUser, session: AsyncSession = Depend
 
 
 @router.put("/assistant")
-async def update_assistant_config(_guard: AdminUser,
+async def update_assistant_config(_guard: SettingsAssistantUser,
     body: AssistantConfig,
     session: AsyncSession = Depends(get_session),
 ):
@@ -603,7 +823,7 @@ async def update_assistant_config(_guard: AdminUser,
 
 
 @router.post("/assistant/test", response_model=TestResponse)
-async def test_assistant(_guard: AdminUser, body: AssistantConfig):
+async def test_assistant(_guard: SettingsAssistantUser, body: AssistantConfig):
     """에이전트 서버의 ``/health`` 를 호출해 연결을 확인한다."""
     url = body.agent_url.strip()
     if not url:
@@ -746,15 +966,32 @@ async def _check_auth_change(body: AuthConfig, current, session: AsyncSession) -
         raise HTTPException(status_code=409, detail={"code": "confirm_required", "message": consequence})
 
 
+# 값 출처 범주(catalog_configuration.category) → 그 범주를 볼 수 있는 위임 기능(TODO-123)
+_SOURCE_CATEGORY_FEATURE = {
+    "object_storage": "settings.object-storage", "embedding": "settings.embedding", "ai_ready": "settings.ai-ready",
+    "llm": "settings.llm", "assistant": "settings.assistant", "metadata_sync": "settings.metadata-sync",
+    "mail": "settings.mail", "notify": "settings.notify",
+}
+
+
 @router.get("/sources")
-async def get_config_sources(_guard: AdminUser, session: AsyncSession = Depends(get_session)):
+async def get_config_sources(
+    current: Annotated[TokenUser, Depends(require_any_feature_granted(*SETTINGS_DELEGATE_FEATURES))],
+    session: AsyncSession = Depends(get_session),
+):
     """설정 값 출처 — 카테고리 → 키 → {source: default|config|db, differs_from_file?, file_value?, override?}.
 
     설정 파일은 최초 기동 때 비어 있는 키만 DB 에 채우고 이후에는 DB(이 화면) 값이 우선이라, 설정 파일을
     고쳐도 반영되지 않는 키를 화면에서 알려 주기 위한 것. 비밀값은 값을 내보내지 않는다.
+    관리자가 아니면 위임받은 설정 항목의 범주만 돌려준다(TODO-123).
     """
     logger.debug("설정 값 출처 조회")
-    return await config_sources(session)
+    sources = await config_sources(session)
+    if current.is_admin:
+        return sources
+    allowed = {cat for cat, key in _SOURCE_CATEGORY_FEATURE.items()
+               if await check_feature_granted(session, current, key)}
+    return {cat: v for cat, v in sources.items() if cat in allowed}
 
 
 @router.get("/auth", response_model=AuthConfig)
@@ -1164,6 +1401,103 @@ async def update_cors_config(_guard: AdminUser,
 
 
 # ---------------------------------------------------------------------------
+# 수집 서비스 (metadata-sync)
+# ---------------------------------------------------------------------------
+
+class MetadataSyncConfig(BaseModel):
+    base_url: str = ""
+    # 응답에서는 비밀값을 돌려주지 않는다 — 설정 여부만
+    api_token_set: bool = False
+    run_retention_days: int = 90
+
+
+class MetadataSyncConfigUpdate(BaseModel):
+    base_url: str = Field(min_length=1, max_length=500)
+    # None 이면 기존 토큰 유지, "" 이면 토큰 지움
+    api_token: str | None = Field(default=None, max_length=500)
+    run_retention_days: int = Field(default=90, ge=1, le=3650)
+
+    @field_validator("base_url")
+    @classmethod
+    def _http(cls, v: str) -> str:
+        v = v.strip().rstrip("/")
+        if not v.startswith(("http://", "https://")):
+            raise ValueError("주소는 http:// 또는 https:// 로 시작해야 합니다.")
+        return v
+
+
+class MetadataSyncTest(BaseModel):
+    base_url: str = Field(min_length=1, max_length=500)
+    # None 이면 저장된 토큰으로 테스트
+    api_token: str | None = Field(default=None, max_length=500)
+
+
+@router.get("/metadata-sync", response_model=MetadataSyncConfig)
+async def get_metadata_sync_config(_guard: SettingsMetadataSyncUser, session: AsyncSession = Depends(get_session)):
+    """수집 서비스(metadata-sync) 접속 설정 — DB 값, 없으면 설정 파일 값."""
+    from app.core.config import settings as app_settings
+
+    cfg = await get_config_by_category(session, "metadata_sync")
+    try:
+        days = int(cfg.get("metadata_sync_run_retention_days") or app_settings.sync_run_retention_days)
+    except ValueError:
+        days = app_settings.sync_run_retention_days
+    return MetadataSyncConfig(
+        base_url=cfg.get("metadata_sync_base_url") or app_settings.metadata_sync_base_url,
+        api_token_set=bool(cfg.get("metadata_sync_api_token") if cfg else app_settings.metadata_sync_api_token),
+        run_retention_days=days,
+    )
+
+
+@router.put("/metadata-sync")
+async def update_metadata_sync_config(_guard: SettingsMetadataSyncUser, body: MetadataSyncConfigUpdate,
+                                      session: AsyncSession = Depends(get_session)):
+    """수집 서비스 설정 저장 — 다음 요청부터 적용(재시작 불필요)."""
+    items = {"metadata_sync_base_url": body.base_url,
+             "metadata_sync_run_retention_days": str(body.run_retention_days)}
+    if body.api_token is not None:
+        items["metadata_sync_api_token"] = body.api_token.strip()
+    await update_config(session, "metadata_sync", items, actor=_guard)
+    await load_metadata_sync_settings(session)
+    logger.info("수집 서비스 설정 저장됨: url=%s token=%s retention=%d", body.base_url,
+                "변경" if body.api_token is not None else "유지", body.run_retention_days)
+    return {"status": "ok", "message": "Metadata sync configuration saved"}
+
+
+@router.post("/metadata-sync/test", response_model=TestResponse)
+async def test_metadata_sync(_guard: SettingsMetadataSyncUser, body: MetadataSyncTest, session: AsyncSession = Depends(get_session)):
+    """``{base_url}/v2/status`` 를 호출해 수집 서비스 연결·인증을 확인한다(입력한 값으로, 저장 전에도)."""
+    import httpx
+
+    url = body.base_url.strip().rstrip("/")
+    if not url.startswith(("http://", "https://")):
+        return TestResponse(success=False, message="주소는 http:// 또는 https:// 로 시작해야 합니다.")
+    token = body.api_token
+    if token is None:
+        from app.core.config import settings as app_settings
+
+        token = (await get_config_by_category(session, "metadata_sync")).get("metadata_sync_api_token") \
+            or app_settings.metadata_sync_api_token
+    headers = {"X-API-Token": token} if token else {}
+    logger.info("수집 서비스 연결 테스트: url=%s", url)
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10, connect=5)) as client:
+            resp = await client.get(f"{url}/v2/status", headers=headers)
+    except httpx.HTTPError as e:
+        return TestResponse(success=False, message=f"실패: 연결할 수 없습니다 ({type(e).__name__}) — {url}")
+    if resp.status_code in (401, 403):
+        return TestResponse(success=False, message="실패: 인증 거부 — API 토큰이 수집 서비스의 server.api_token 과 같은지 확인하세요.")
+    if resp.status_code == 404:
+        return TestResponse(success=False, message="실패: /v2/status 가 없습니다 — 수집 작업 API 가 있는 버전의 metadata-sync 인지 확인하세요.")
+    if resp.status_code != 200:
+        return TestResponse(success=False, message=f"실패: HTTP {resp.status_code}")
+    data = resp.json()
+    return TestResponse(success=True, message=(
+        f"성공: 연결됨 — 워커 {data.get('workers')}개, 실행 중 {data.get('running')}, 대기 {data.get('queued')}"
+        f"{', v' + str(data['version']) if data.get('version') else ''}"))
+
+
+# ---------------------------------------------------------------------------
 # 이메일 (SMTP)
 # ---------------------------------------------------------------------------
 
@@ -1174,7 +1508,7 @@ class MailTestRequest(BaseModel):
 
 
 @router.get("/mail", response_model=EmailConfig)
-async def get_mail_config(_guard: AdminUser, session: AsyncSession = Depends(get_session)):
+async def get_mail_config(_guard: SettingsMailUser, session: AsyncSession = Depends(get_session)):
     """현재 메일(SMTP) 설정 반환. ``smtp_password`` 는 마스킹된 문자열."""
     logger.debug("메일 설정 조회")
     cfg = await load_mail_config(session)
@@ -1182,7 +1516,7 @@ async def get_mail_config(_guard: AdminUser, session: AsyncSession = Depends(get
 
 
 @router.put("/mail")
-async def update_mail_config(_guard: AdminUser,
+async def update_mail_config(_guard: SettingsMailUser,
     body: EmailConfig,
     session: AsyncSession = Depends(get_session),
 ):
@@ -1213,7 +1547,7 @@ async def update_mail_config(_guard: AdminUser,
 
 
 @router.post("/mail/test", response_model=TestResponse)
-async def test_mail(_guard: AdminUser,
+async def test_mail(_guard: SettingsMailUser,
     body: MailTestRequest,
     session: AsyncSession = Depends(get_session),
 ):
@@ -1240,7 +1574,7 @@ class NotifyTestRequest(BaseModel):
 
 
 @router.get("/notify", response_model=NotifyConfig)
-async def get_notify_config(_guard: AdminUser, session: AsyncSession = Depends(get_session)):
+async def get_notify_config(_guard: SettingsNotifyUser, session: AsyncSession = Depends(get_session)):
     """현재 Slack/Mattermost 알림 설정 반환. webhook URL 은 그 자체가 자격증명이므로 마스킹."""
     logger.debug("알림 설정 조회")
     cfg = await load_notify_config(session)
@@ -1253,7 +1587,7 @@ async def get_notify_config(_guard: AdminUser, session: AsyncSession = Depends(g
 
 
 @router.put("/notify")
-async def update_notify_config(_guard: AdminUser,
+async def update_notify_config(_guard: SettingsNotifyUser,
     body: NotifyConfig,
     session: AsyncSession = Depends(get_session),
 ):
@@ -1280,7 +1614,7 @@ async def update_notify_config(_guard: AdminUser,
 
 
 @router.post("/notify/test", response_model=TestResponse)
-async def test_notify(_guard: AdminUser,
+async def test_notify(_guard: SettingsNotifyUser,
     body: NotifyTestRequest,
     session: AsyncSession = Depends(get_session),
 ):

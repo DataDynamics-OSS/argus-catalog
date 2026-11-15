@@ -64,10 +64,10 @@ export function UploadProgressDialog({
               <div className="flex items-center gap-2 text-sm">
                 <StatusIcon status={item.status} />
                 <span className="flex-1 truncate">{item.file.name}</span>
-                <span className="text-muted-foreground tabular-nums shrink-0 text-xs">
+                <span className="tabular-nums shrink-0 text-xs">
                   {formatBytes(item.file.size)}
                 </span>
-                <span className="text-muted-foreground tabular-nums shrink-0 text-xs w-10 text-right">
+                <span className="tabular-nums shrink-0 text-xs w-10 text-right">
                   {item.progress}%
                 </span>
               </div>

@@ -16,6 +16,7 @@
 """
 
 import logging
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,9 +34,9 @@ from app.alert.schemas import (
     AlertUpdateStatus,
     PaginatedAlerts,
 )
-from app.core.auth import AdminUser, CurrentUser, TokenUser
+from app.core.auth import CurrentUser, TokenUser
 from app.core.database import get_session
-from app.permissions.router import check_feature_granted, require_feature_granted
+from app.permissions.router import check_feature_granted, require_feature, require_feature_granted
 
 logger = logging.getLogger(__name__)
 
@@ -163,7 +164,7 @@ async def list_alerts(
     )
 
 
-@router.post("/bulk-status", response_model=AlertBulkResult)
+@router.post("/bulk-status", response_model=AlertBulkResult, dependencies=[Depends(require_feature("alerts.ack"))])
 async def bulk_update_status(
     data: AlertBulkStatus, current: CurrentUser, session: AsyncSession = Depends(get_session),
 ):
@@ -179,13 +180,18 @@ async def bulk_update_status(
 
 @router.delete("/closed", response_model=AlertPurgeResult)
 async def purge_closed_alerts(
-    _admin: AdminUser,
+    _admin: Annotated[TokenUser, Depends(require_feature_granted("alerts.purge"))],
     older_than_days: int = Query(90, ge=1, le=3650),
     session: AsyncSession = Depends(get_session),
 ):
     """해결·무시 처리된 지 N일이 지난 알림과 전달 기록을 삭제한다(보관 정리)."""
     deleted = await service.purge_closed_alerts(session, older_than_days)
     await session.commit()
+    # 되돌릴 수 없는 일괄 삭제라 감사 로그(운영 범주)에 남긴다(TODO-124)
+    from app.audit.service import record
+    await record(session, _admin, "operations", "alerts.purge", target=f"{older_than_days}일 지난 닫힌 알림",
+                 summary=f"닫힌 알림 정리: {deleted}건 삭제 ({older_than_days}일 지난 해결 · 무시 알림)",
+                 detail={"older_than_days": older_than_days, "deleted": deleted})
     return AlertPurgeResult(deleted=deleted)
 
 
@@ -201,7 +207,7 @@ async def get_alert(alert_id: int, current: CurrentUser, session: AsyncSession =
     )
 
 
-@router.put("/{alert_id}/status", response_model=AlertResponse)
+@router.put("/{alert_id}/status", response_model=AlertResponse, dependencies=[Depends(require_feature("alerts.ack"))])
 async def update_alert_status(
     alert_id: int,
     data: AlertUpdateStatus,

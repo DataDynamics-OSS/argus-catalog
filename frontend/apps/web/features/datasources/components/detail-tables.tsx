@@ -11,6 +11,7 @@ import {
   TableRow,
 } from "@workspace/ui/components/table"
 import type { TopologyDatasource } from "@/features/topology/api"
+import { OriginText } from "@/features/datasets/components/origin-text"
 
 // 키-값 정보 테이블
 export function InfoTable({ rows }: { rows: { label: string; value: ReactNode }[] }) {
@@ -20,7 +21,7 @@ export function InfoTable({ rows }: { rows: { label: string; value: ReactNode }[
         <TableBody>
           {rows.map((r) => (
             <TableRow key={r.label}>
-              <TableCell className="w-32 bg-muted/40 font-medium text-muted-foreground">
+              <TableCell className="w-32 bg-muted/40 font-medium">
                 {r.label}
               </TableCell>
               <TableCell>{r.value}</TableCell>
@@ -32,7 +33,7 @@ export function InfoTable({ rows }: { rows: { label: string; value: ReactNode }[
   )
 }
 
-// 데이터 소스 목록 테이블 (행 클릭 시 해당 데이터 소스 선택)
+// 데이터 소스 목록 테이블 — 이름을 누르면(키보드로도) 그 데이터 소스를 선택한다
 export function DatasourcesTable({
   rows,
   onSelect,
@@ -42,26 +43,27 @@ export function DatasourcesTable({
 }) {
   return (
     <div className="overflow-hidden rounded-md border">
-      <Table>
+      <Table className="table-fixed">
         <TableHeader>
           <TableRow>
             <TableHead>이름</TableHead>
-            <TableHead>유형</TableHead>
-            <TableHead>환경</TableHead>
-            <TableHead className="text-right">데이터셋</TableHead>
+            <TableHead className="w-32 text-center">유형</TableHead>
+            <TableHead className="w-36 text-center">환경</TableHead>
+            <TableHead className="w-24 text-center">데이터셋</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {rows.map((p) => (
-            <TableRow
-              key={p.id}
-              className="cursor-pointer"
-              onClick={() => onSelect(p.id)}
-            >
-              <TableCell className="font-medium">{p.name}</TableCell>
-              <TableCell className="text-muted-foreground">{p.type}</TableCell>
-              <TableCell className="text-muted-foreground">{p.origin}</TableCell>
-              <TableCell className="text-right tabular-nums">{p.dataset_count}</TableCell>
+            <TableRow key={p.id}>
+              <TableCell className="truncate">
+                <button type="button" className="font-medium text-primary underline-offset-2 hover:underline"
+                  title={p.name} onClick={() => onSelect(p.id)}>
+                  {p.name}
+                </button>
+              </TableCell>
+              <TableCell className="text-center font-mono text-xs">{p.type}</TableCell>
+              <TableCell className="text-center"><OriginText origin={p.origin} /></TableCell>
+              <TableCell className="text-center tabular-nums">{p.dataset_count.toLocaleString()}</TableCell>
             </TableRow>
           ))}
         </TableBody>

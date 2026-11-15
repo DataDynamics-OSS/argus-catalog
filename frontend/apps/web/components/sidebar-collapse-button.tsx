@@ -1,5 +1,6 @@
 "use client"
 
+import { Tip } from "@/components/tip"
 import { ChevronLeft, ChevronRight } from "lucide-react"
 
 import {
@@ -21,15 +22,15 @@ export function SidebarCollapseButton() {
 
   if (state === "expanded") {
     return (
-      <button
+      <Tip label="사이드바 접기"><button
         type="button"
         onClick={toggleSidebar}
-        title="사이드바 접기 (Ctrl+B)"
+       
         aria-label="사이드바 접기"
         className="absolute top-1/2 right-0 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
       >
         <ChevronLeft className="size-4" />
-      </button>
+      </button></Tip>
     )
   }
 

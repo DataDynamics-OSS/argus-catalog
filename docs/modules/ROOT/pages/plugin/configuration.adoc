@@ -68,11 +68,11 @@ pip install -e extensions/argus-plugin-acme
 
 # 운영 환경 — wheel 을 빌드해 고객 이미지/서버에 설치
 cd extensions/argus-plugin-acme
-python -m build            # → dist/argus_plugin_acme-0.5.0-py3-none-any.whl
-pip install dist/argus_plugin_acme-0.5.0-py3-none-any.whl
+python -m build            # → dist/argus_plugin_acme-0.8.0-py3-none-any.whl
+pip install dist/argus_plugin_acme-0.8.0-py3-none-any.whl
 
 # RPM · tar.gz 로 설치한 서버 — 서버의 venv 에 있는 pip 로 설치
-/opt/argus-catalog-server/venv/bin/pip install argus_plugin_acme-0.5.0-py3-none-any.whl
+/opt/argus-catalog-server/venv/bin/pip install argus_plugin_acme-0.8.0-py3-none-any.whl
 ----
 
 반드시 *백엔드 서버가 실행되는 같은 Python 환경(가상환경)* 에 설치해야 합니다. 다른

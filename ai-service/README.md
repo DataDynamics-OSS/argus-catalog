@@ -5,7 +5,8 @@ Argus Catalog 의 AI 메타데이터 생성 기능을 카탈로그 본체와 분
 컨텍스트(스키마·샘플·용어집)를 읽어오고, 로컬 LLM(기본 ollama + **qwen2.5:7b**)
 으로 메타데이터를 생성한 다음, 그 결과를 다시 카탈로그로 되돌려 보냅니다.
 
-> **이름 변경 (0.5.0)** — 이전 이름 `argus-agent` 는 한 버전 동안 그대로 동작합니다(경고 출력).
+> **이름 변경 (0.5.0)** — 이전 이름 `argus-agent` 는 0.7.0 에서 제거했습니다. 이전 명령을 실행하면 바꿀 명령을 알려 주고
+> 종료 코드 2 로 끝나며, `AGENT_*` 환경변수와 서버 설정 `assistant.agent.url` 은 읽지 않습니다.
 >
 > | 이전 | 현재 |
 > |---|---|
@@ -133,7 +134,7 @@ AI 서비스까지 compose 파일 하나에 묶여 있어 명령 몇 줄이면 �
 
 ```bash
 cd ai-service
-cp .env.example .env         # ARGUS_PASSWORD 등 수정
+cp .env.example .env         # ARGUS_CATALOG_API_KEY 등 수정
 
 docker compose up -d ollama          # qwen2.5:7b 자동 pull (최초 1회 수 분)
 docker compose run --rm enrich enrich describe --urn sakila-mysql.sakila.film.dataset
@@ -156,7 +157,8 @@ docker compose up -d worker          # 폴링 데몬 상시 실행
 | 환경변수 | 기본값 | 설명 |
 |---|---|---|
 | `ARGUS_API_URL` | `http://localhost:4600` | 카탈로그 API |
-| `ARGUS_USERNAME` / `ARGUS_PASSWORD` | `admin` / (없음) — 설치 묶음(`ai-service.env`)은 `argus` | 반입은 admin 권한 필요. 운영에서는 관리자 역할의 전용 서비스 계정(`argus`)을 만들어 사용 |
+| `ARGUS_CATALOG_API_KEY` | (없음) | 카탈로그 API 키 — 카탈로그 설정 > API 키에서 역할 관리자·범위 `catalog:write` 로 발급(반입은 관리자 권한 필요) |
+| `ARGUS_USERNAME` / `ARGUS_PASSWORD` | `admin` / (없음) | (이전 방식, 다음 릴리스에서 제거) API 키가 없을 때 로그인하는 관리자 역할 계정 |
 | `ARGUS_AI_LLM_URL` | `http://localhost:11434/v1` | OpenAI 호환 엔드포인트 |
 | `ARGUS_AI_MODEL` | `qwen2.5:7b` | 모델 이름 |
 | `ARGUS_AI_LLM_API_KEY` | `ollama` | ollama 는 임의 값이면 됨 |
@@ -164,6 +166,7 @@ docker compose up -d worker          # 폴링 데몬 상시 실행
 | `ARGUS_AI_POLL_INTERVAL` | `300` | worker 폴링 주기(초) |
 | `ARGUS_AI_AGENT_NAME` | `argus-catalog-assistant` | assistant 셀프-텔레메트리 레지스트리 이름 |
 | `ARGUS_AI_TELEMETRY` | `on` | assistant 셀프-텔레메트리 on/off |
+| `ARGUS_AI_AGENT_OWNER_EMAIL` / `ARGUS_AI_AGENT_DEPARTMENT` | (없음) | 셀프 등록에 쓸 소유자 이메일·부서. 레지스트리 필수 항목이라 없으면 셀프 등록은 건너뜁니다 |
 
 LLM 백엔드는 ollama 에 묶여 있지 않습니다. OpenAI 호환 엔드포인트라면
 무엇이든 연결할 수 있어, 다음처럼 바꿔 끼우기만 하면 됩니다.
@@ -190,6 +193,9 @@ LLM 백엔드는 ollama 에 묶여 있지 않습니다. OpenAI 호환 엔드포�
 - 일괄 모드는 한 데이터셋·한 작업이 실패해도 나머지를 계속 처리하고,
   실패가 있으면 exit code 1 을 반환합니다 (스케줄러 알림 연동용).
 - worker 는 `--once` 로 1회 실행할 수 있어 cron 에도 등록 가능합니다.
+- worker 는 미적용 AI 제안이 이미 있는 데이터셋을 건너뛰어(재시작해도) 같은 제안을 중복 반입하지 않고,
+  모든 작업이 실패한 데이터셋은 다음 주기에 다시 시도합니다.
+- 카탈로그 API 요청은 30초 타임아웃이 있고, 토큰이 만료되면(401) 한 번 다시 로그인해 이어갑니다.
 
 ## AI 어시스턴트 서버 (assistant)
 
@@ -208,11 +214,17 @@ LLM 백엔드는 ollama 에 묶여 있지 않습니다. OpenAI 호환 엔드포�
 | `get_lineage` | `/catalog/datasets/{id}/lineage` | 원천/영향 범위 + 업스트림 품질 경고 — "이 데이터 어디서 와?" |
 | `get_glossary_term` | `/catalog/glossary` | 비즈니스 용어 정의 — "이 용어 무슨 뜻이야?" |
 | `get_standard_compliance` | `/standards/mappings/dataset`·`/compliance` | 표준 용어 준수율·비준수 컬럼 — "명명 규칙 잘 지켜?" |
-| `validate_sql` | (로컬 검증 — API 호출 없음) | 생성한 SQL 의 SELECT-only 자가 검증 |
+| `validate_sql` | (로컬 검증 — API 호출 없음) | 생성한 SQL 의 SELECT-only 자가 검증 (문자열 값·인용 식별자 속 키워드는 무시) |
 
 동작은 이렇게 흘러갑니다. LLM 이 질문을 보고 어떤 도구가 필요할지 스스로 골라
 호출하고(최대 6라운드), 그렇게 모은 결과를 근거로 답을 만듭니다. 이 과정 하나하나가
 SSE 이벤트(`tool_call`/`tool_result`/`text_delta`)로 UI 에 그대로 비쳐 보입니다.
+6라운드를 다 써도 답을 못 냈으면, 도구 없이 한 번 더 불러 그때까지 확인한 결과만으로
+답하게 합니다(확인하지 못한 부분은 그렇다고 밝힘). 그것마저 실패할 때만 오류를 보냅니다.
+
+대화 이력에는 답변과 함께 그 답변에서 도구로 확인한 데이터셋(id·이름)을 남깁니다.
+다음 질문 때 이 목록(최근 10개)을 모델에 알려 주므로 "그 테이블 품질은?" 같은
+이어지는 질문에서 다시 검색하지 않고 바로 그 데이터셋을 조회합니다.
 
 이 안정성을 확보하느라 몇 가지 손을 봐 둔 부분이 있습니다(`assistant.py`):
 - **도구 판단은 비스트리밍**으로 한다 — ollama/qwen2.5 는 스트리밍 모드에서
@@ -264,6 +276,10 @@ docker compose up -d assistant
 
 - 백엔드가 **사용자의 Bearer 토큰을 그대로 전달** — 도구가 보는 데이터는
   곧 그 사용자 권한으로 보이는 데이터 (권한 위임 없음)
+- 채팅마다 카탈로그 API `GET /api/v1/auth/me` 로 **토큰을 검증**하고, 확인된 사용자(`sub`)를
+  대화 이력의 주인으로 씁니다. 카탈로그가 거부한 토큰은 401, 카탈로그 API 에 닿지 못하면 502 입니다.
+  그래서 8930 포트에 직접 닿더라도 토큰을 꾸며 다른 사람의 대화 이력을 볼 수 없습니다.
+  그래도 이 서버는 백엔드만 부르는 내부 서비스이니 외부에는 열지 않는 것을 권장합니다.
 - SQL 은 작성·검증만 (실행 기능 없음), SELECT 단일 문장 가드
 
 ## 셀프-텔레메트리 (assistant)
@@ -279,10 +295,15 @@ assistant 서버에는 자기 자신을 카탈로그에 알리고 사용 현황�
   채팅 응답에는 전혀 영향이 없다 — 레지스트리가 없는 환경에서도 안전하다.
 - **끄기**: `ARGUS_AI_TELEMETRY=off` 또는 `assistant --telemetry off`.
 - 등록은 프로세스당 1회 (이름 기준 idempotent — 이미 있으면 건너뜀).
+- **소유자·부서**: 레지스트리는 소유자 이메일·부서·분류를 필수로 요구합니다. `ARGUS_AI_AGENT_OWNER_EMAIL`·
+  `ARGUS_AI_AGENT_DEPARTMENT`(또는 `--agent-owner-email`·`--agent-department`)를 주면 셀프 등록하고,
+  없으면 등록은 건너뛰고 화면에서 미리 등록해 둔 에이전트에 지표만 보냅니다.
+- 레지스트리에 그 이름이 없어 적재가 404 면 그 프로세스에서는 텔레메트리를 끄고 한 번만 경고합니다.
 
 ```bash
 argus-catalog-ai assistant --port 8930 \
     --agent-name argus-catalog-assistant --telemetry on \
+    --agent-owner-email data-ops@example.com --agent-department 데이터플랫폼팀 \
     --api-url http://localhost:4600 --llm-url http://localhost:11434/v1
 ```
 

@@ -37,7 +37,7 @@ from app.settings import service as ssvc
 from app.settings.models import CatalogConfiguration
 from app.usermgr import ownership
 from app.usermgr import router as umr
-from app.usermgr.models import ArgusRole, ArgusUser
+from app.usermgr.models import ArgusRole, ArgusUser, ArgusUserPreference
 
 
 @pytest.fixture(autouse=True)
@@ -51,7 +51,7 @@ def _fast_hash(monkeypatch):
 @pytest.fixture
 async def factory(monkeypatch):
     engine = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool)
-    tables = [ArgusRole.__table__, ArgusUser.__table__, Permission.__table__, CatalogConfiguration.__table__,
+    tables = [ArgusRole.__table__, ArgusUser.__table__, ArgusUserPreference.__table__, Permission.__table__, CatalogConfiguration.__table__,
               AdminAuditLog.__table__] + [a.model.__table__ for a in ownership._registry()]
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all, tables=tables)
@@ -249,13 +249,17 @@ async def test_audit_list_api(factory):
         await audit.record(None, boss, "settings", "settings.llm", target="llm", summary=f"s{i}")
     await audit.record(None, tu("other", "argus-admin"), "users", "user.create", target="kim", summary="생성 kim")
     app, who = _app(factory, audit_router.router)
+    from app.permissions import router as perm
+    perm._deny_seen.clear()
     async with _client(app) as c:
         who["user"] = tu("u1")
         assert (await c.get("/api/v1/admin/audit")).status_code == 403
         who["user"] = boss
         body = (await c.get("/api/v1/admin/audit?page_size=2")).json()
-        assert body["total"] == 4 and len(body["items"]) == 2
-        assert body["items"][0]["action"] == "user.create"  # 최신순
+        # 403 거부도 권한 범주에 남는다(TODO-124)
+        assert body["total"] == 5 and len(body["items"]) == 2
+        assert [i["action"] for i in body["items"]] == ["permission.denied", "user.create"]  # 최신순
+        assert (await c.get("/api/v1/admin/audit?category=permissions")).json()["items"][0]["actor"] == "u1"
         assert (await c.get("/api/v1/admin/audit?category=settings")).json()["total"] == 3
         assert (await c.get("/api/v1/admin/audit?actor=other")).json()["total"] == 1
         assert (await c.get("/api/v1/admin/audit?q=kim")).json()["total"] == 1

@@ -26,6 +26,9 @@ import app.catalog.models as cm
 from app.catalog import service
 from app.catalog.schemas import DatasetCreate
 from app.comments.models import Comment
+from app.permissions.models import (
+    Permission,  # noqa: F401 — 권한 확인(require_dataset_feature)용 테이블
+)
 
 _TABLES = [
     "catalog_organizations", "catalog_systems", "catalog_datasources",
@@ -33,6 +36,7 @@ _TABLES = [
     "catalog_datasets", "catalog_dataset_properties", "catalog_dataset_schemas",
     "catalog_schema_snapshots", "catalog_tags", "catalog_dataset_tags", "catalog_owners",
     "catalog_glossary_terms", "catalog_dataset_glossary_terms",
+    "argus_permissions",
 ]
 
 

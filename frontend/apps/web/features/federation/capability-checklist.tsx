@@ -113,7 +113,7 @@ export function CapabilityChecklist({
                     <span className="truncate">
                       {it.label}
                       {unavailable && (
-                        <span className="ml-1 text-[10px] text-muted-foreground">
+                        <span className="ml-1 text-[11px]">
                           (노출 안 함)
                         </span>
                       )}

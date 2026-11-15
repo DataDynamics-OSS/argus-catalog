@@ -6,13 +6,15 @@
 
 import logging
 from datetime import datetime
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit import service
-from app.core.auth import AdminUser
+from app.core.auth import TokenUser
 from app.core.database import get_session
+from app.permissions.router import require_feature_granted
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +23,7 @@ router = APIRouter(prefix="/admin/audit", tags=["admin-audit"])
 
 @router.get("")
 async def list_audit_logs(
-    _admin: AdminUser,
+    _admin: Annotated[TokenUser, Depends(require_feature_granted("audit.view"))],
     category: str | None = Query(None),
     actor: str | None = Query(None),
     action: str | None = Query(None),

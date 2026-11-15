@@ -24,7 +24,7 @@ import { pluginMenus, pluginScreens } from "@/plugins/registry"
 export default function PluginHostPage() {
   const params = useParams<{ slug: string[] }>()
   const { user, isLoading } = useAuth()
-  const { loaded, isMenuAllowed } = usePermissions()
+  const { loaded, isMenuAllowed, canUseFeature } = usePermissions()
 
   const slug = Array.isArray(params.slug) ? params.slug : [params.slug].filter(Boolean)
   const slugPath = slug.join("/")
@@ -40,6 +40,7 @@ export default function PluginHostPage() {
     pluginMenus,
     !!user?.is_admin,
     isMenuAllowed,
+    canUseFeature,
   )
   if (!allowed) return <AccessDenied />
 
