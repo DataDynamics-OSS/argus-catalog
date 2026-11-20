@@ -12,12 +12,17 @@
 // Amazon S3 · Google BigQuery · MongoDB 는 지원 계획이 없어 추가 목록에서 뺐다(2026-11-15 사용자 요청).
 // 데이터 소스 역할 (design/catalog-entity-design.md 2단계) — 백엔드 datasource_metadata.DATASOURCE_ROLES 와 맞춘다.
 // CATALOG: 메타데이터 원본(카탈로그 서비스) · DATABASE: DB 자체가 카탈로그 · ENGINE: 쿼리 엔진(카탈로그에 연결)
-export type DatasourceRole = "CATALOG" | "DATABASE" | "ENGINE"
+// MANUAL: 카탈로그에 직접 등록한 데이터셋을 담는 내부 데이터 소스(TODO-CAT-001) — 카탈로그마다 자동으로 하나, 사용자가 만들지 않는다
+export type DatasourceRole = "CATALOG" | "DATABASE" | "ENGINE" | "MANUAL"
+
+/** 카탈로그 수동 등록 데이터 소스 유형 — 데이터 소스 화면 · 선택 목록에 나오지 않는다. */
+export const MANUAL_DATASOURCE_TYPE = "manual"
 
 export const DATASOURCE_ROLE_LABELS: Record<DatasourceRole, { title: string; desc: string }> = {
   CATALOG: { title: "카탈로그", desc: "테이블 메타데이터를 가진 카탈로그 서비스 — 메타데이터를 수집합니다." },
   DATABASE: { title: "데이터베이스", desc: "데이터베이스 자체가 카탈로그입니다 — 메타데이터를 수집합니다." },
   ENGINE: { title: "쿼리 엔진", desc: "자체 카탈로그가 없습니다 — 등록된 카탈로그에 연결해 쿼리 이력·리니지를 수집합니다." },
+  MANUAL: { title: "수동 등록", desc: "카탈로그에 직접 등록한 데이터셋 — 메타데이터를 수집하지 않습니다." },
 }
 
 export const DATASOURCE_TYPES: {
@@ -50,11 +55,21 @@ export const DATASOURCE_TYPES: {
   { name: "unity_catalog", display: "Unity Catalog", role: "CATALOG", implemented: false },
   { name: "java", display: "Java Source", role: "DATABASE", implemented: true, hiddenFromAddDialog: true },
   { name: "python", display: "Python Source", role: "DATABASE", implemented: true, hiddenFromAddDialog: true },
+  { name: MANUAL_DATASOURCE_TYPE, display: "수동 등록", role: "MANUAL", implemented: false, hiddenFromAddDialog: true },
 ]
 
 export const IMPLEMENTED_DATASOURCE_TYPES: ReadonlySet<string> = new Set(
   DATASOURCE_TYPES.filter((p) => p.implemented).map((p) => p.name),
 )
+
+/**
+ * 화면에 보일 데이터 소스 유형 — 수동 등록 데이터 소스(`manual`, TODO-CAT-001)는 "수동 등록", 그 밖에는 유형 코드 그대로
+ * (지금까지 표시를 바꾸지 않는다). 빈 값은 빈 문자열.
+ */
+export function datasourceTypeLabel(type: string | null | undefined): string {
+  if (!type) return ""
+  return type === MANUAL_DATASOURCE_TYPE ? "수동 등록" : type
+}
 
 export function datasourceRole(type: string | null | undefined): DatasourceRole {
   return DATASOURCE_TYPES.find((t) => t.name === type)?.role ?? "DATABASE"

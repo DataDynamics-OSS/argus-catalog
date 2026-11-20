@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 import app.catalog.models as cm
 from tests.test_datasets_remaining_fixes import _client, _seed, _tu
 
@@ -138,6 +140,137 @@ def test_external_avro_types_without_native_type() -> None:
     assert _description_doc("<p><strong>IT 주문</strong> 원장</p><ul><li><p>금액 &amp; 수량</p></li></ul><p></p>") \
         == "IT 주문 원장 금액 & 수량"
     assert _description_doc(None) == ""
+
+
+# DEF-190 · DEF-193 — Avro 타입 표. 화면 frontend/apps/web/features/datasets/avro.test.ts 의 같은 표(`AVRO_TYPE_CASES`)와 같은 입력·기대값 —
+# 두 구현(화면 Avro 탭 / 외부 Avro API)이 같은 타입을 내야 한다. (카탈로그 타입, 네이티브 타입, Avro 타입)
+AVRO_TYPE_CASES = [
+    # time 은 int + time-millis (Avro 명세 — long 은 time-micros)
+    ("DATE", "time", {"type": "int", "logicalType": "time-millis"}),
+    ("DATE", "time(6)", {"type": "int", "logicalType": "time-millis"}),
+    ("TIME", "time(3) with time zone", {"type": "int", "logicalType": "time-millis"}),
+    ("DATE", "time without time zone", {"type": "int", "logicalType": "time-millis"}),
+    ("DATE", "timetz", {"type": "int", "logicalType": "time-millis"}),
+    ("TIME", None, {"type": "int", "logicalType": "time-millis"}),
+    # 괄호 뒤 수식어(unsigned · zerofill · signed)를 걷어 내고 정밀도 · 스케일 유지
+    ("NUMBER", "decimal(10,2) unsigned", {"type": "bytes", "logicalType": "decimal", "precision": 10, "scale": 2}),
+    ("NUMBER", "DECIMAL(10,2) UNSIGNED ZEROFILL", {"type": "bytes", "logicalType": "decimal", "precision": 10, "scale": 2}),
+    ("NUMBER", "int unsigned zerofill", "int"),
+    ("NUMBER", "int(11) unsigned", "int"),
+    ("NUMBER", "int(10) unsigned zerofill", "int"),
+    ("NUMBER", "bigint(20) unsigned", "long"),
+    ("NUMBER", "double(10,2) unsigned", "double"),
+    ("DECIMAL", "NUMBER(10,2)", {"type": "bytes", "logicalType": "decimal", "precision": 10, "scale": 2}),
+    ("DECIMAL", "NUMBER(10)", {"type": "bytes", "logicalType": "decimal", "precision": 10, "scale": 0}),
+    ("DECIMAL", "NUMBER", {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 10}),
+    ("DECIMAL", "decimal(10, 2)", {"type": "bytes", "logicalType": "decimal", "precision": 10, "scale": 2}),
+    # 비정상 decimal 인자는 기본값 (38,10)
+    ("NUMBER", "decimal(5,2,1)", {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 10}),
+    ("NUMBER", "decimal(a,b)", {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 10}),
+    ("NUMBER", "decimal()", {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 10}),
+    ("NUMBER", "decimal(0,0)", {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 10}),
+    ("NUMBER", "decimal(5,9)", {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 10}),
+    ("NUMBER", "decimal(10,-2)", {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 10}),
+    # 날짜 · 시각 · 연도 계열 네이티브 타입
+    ("DATE", "datetime", {"type": "long", "logicalType": "timestamp-millis"}),
+    ("DATE", "datetime(6)", {"type": "long", "logicalType": "timestamp-millis"}),
+    ("DATE", "timestamp(6)", {"type": "long", "logicalType": "timestamp-millis"}),
+    ("DATE", "timestamptz", {"type": "long", "logicalType": "timestamp-millis"}),
+    ("DATE", "timestamp with time zone", {"type": "long", "logicalType": "timestamp-millis"}),
+    ("DATE", "timestamp without time zone", {"type": "long", "logicalType": "timestamp-millis"}),
+    ("TIMESTAMP", "timestamp(6) with time zone", {"type": "long", "logicalType": "timestamp-millis"}),
+    ("TIMESTAMP", "TIMESTAMP(6) WITH LOCAL TIME ZONE", {"type": "long", "logicalType": "timestamp-millis"}),
+    ("TIMESTAMP", "DATETIME2", {"type": "long", "logicalType": "timestamp-millis"}),
+    ("TIMESTAMP", "SMALLDATETIME", {"type": "long", "logicalType": "timestamp-millis"}),
+    ("TIMESTAMP", "DATETIMEOFFSET", {"type": "long", "logicalType": "timestamp-millis"}),
+    ("DATE", "year", "int"),
+    ("DATE", "YEAR", "int"),
+    ("DATE", "year(4)", "int"),
+    ("DATE", "interval", "string"),
+    ("DATE", "date", {"type": "int", "logicalType": "date"}),
+    ("DATE", "DATE", {"type": "int", "logicalType": "date"}),
+    # PostgreSQL udt · Kudu 타입명
+    ("NUMBER", "int8", "long"),
+    ("NUMBER", "float4", "float"),
+    ("NUMBER", "float8", "double"),
+    ("SMALLINT", "int16", "int"),
+    ("INT", "int32", "int"),
+    ("BIGINT", "int64", "long"),
+    ("TINYINT", "int8", "int"),
+    ("TIMESTAMP", "unixtime_micros", {"type": "long", "logicalType": "timestamp-millis"}),
+    # 카탈로그 타입 DATE 는 날짜 · 시각 공통 타입 — 네이티브가 없으면 timestamp-millis 그대로
+    ("DATE", None, {"type": "long", "logicalType": "timestamp-millis"}),
+    ("date", "", {"type": "long", "logicalType": "timestamp-millis"}),
+    # 타입 선택지의 별칭 (이전엔 string)
+    ("DATETIME", None, {"type": "long", "logicalType": "timestamp-millis"}),
+    ("TIMESTAMPTZ", None, {"type": "long", "logicalType": "timestamp-millis"}),
+    ("timestamptz", None, {"type": "long", "logicalType": "timestamp-millis"}),
+    ("TIMESTAMP_NTZ", None, {"type": "long", "logicalType": "timestamp-millis"}),
+    ("TIMESTAMP_LTZ", None, {"type": "long", "logicalType": "timestamp-millis"}),
+    ("TIMESTAMP_TZ", None, {"type": "long", "logicalType": "timestamp-millis"}),
+    ("UNIXTIME_MICROS", None, {"type": "long", "logicalType": "timestamp-millis"}),
+    ("YEAR", None, "int"),
+    ("INT8", None, "long"),
+    ("INT16", None, "int"),
+    ("INT32", None, "int"),
+    ("INT64", None, "long"),
+    ("Int32", None, "int"),
+    ("Int64", None, "long"),
+    ("byte", None, "int"),
+    ("short", None, "int"),
+    ("long", None, "long"),
+    ("LONG", None, "long"),
+    ("serial", None, "int"),
+    ("bigserial", None, "long"),
+    ("FLOAT32", None, "float"),
+    ("FLOAT64", None, "double"),
+    ("half_float", None, "float"),
+    ("BinData", None, "bytes"),
+    # 바꾸지 않은 것
+    ("NUMBER", "bigint unsigned", "long"),
+    ("NUMBER", "int4", "long"),
+    ("NUMBER", "int unsigned", "int"),
+    ("MAP", "json", {"type": "map", "values": "string"}),
+    ("MAP", "jsonb", {"type": "map", "values": "string"}),
+    ("STRING", "text", "string"),
+    ("TEXT", "LONG", "string"),
+    ("ARRAY<DECIMAL>", "numeric(10,2)[]", "string"),
+    ("money", None, {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 10}),
+    # DEF-193 — 원천마다 뜻이 다른 네이티브 이름은 수집이 넣은 카탈로그 타입을 따른다
+    ("TIMESTAMP", "DATE", {"type": "long", "logicalType": "timestamp-millis"}),
+    ("TIMESTAMP", "date", {"type": "long", "logicalType": "timestamp-millis"}),
+    ("DOUBLE", "FLOAT", "double"),
+    ("DOUBLE", "float(53)", "double"),
+    ("BINARY", "TIMESTAMP", "bytes"),
+    # DEF-193 — 그 밖의 조합은 그대로 네이티브 타입 우선
+    ("DATE", "Date", {"type": "int", "logicalType": "date"}),
+    ("STRING", "date", {"type": "int", "logicalType": "date"}),
+    ("DATETIME", "date", {"type": "int", "logicalType": "date"}),
+    ("NUMBER", "float", "float"),
+    ("FLOAT", "float", "float"),
+    ("FLOAT", "FLOAT(7,2)", "float"),
+    ("DOUBLE", "real", "float"),
+    ("DOUBLE", "double", "double"),
+    ("DOUBLE", "BINARY_DOUBLE", "double"),
+    ("DATE", "timestamp", {"type": "long", "logicalType": "timestamp-millis"}),
+    ("TIMESTAMP", "timestamp", {"type": "long", "logicalType": "timestamp-millis"}),
+    ("BYTES", "timestamp", {"type": "long", "logicalType": "timestamp-millis"}),
+    ("BINARY", "datetime", {"type": "long", "logicalType": "timestamp-millis"}),
+    ("BINARY", "ROWVERSION", "bytes"),
+    ("BINARY", "VARBINARY(MAX)", "bytes"),
+    ("NUMBER", "money", {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 10}),
+    ("DECIMAL", "SMALLMONEY", {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 10}),
+    ("DECIMAL", "money", {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 10}),
+    ("DECIMAL", "SMALLMONEY", {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 10}),
+]
+
+
+@pytest.mark.parametrize(("field_type", "native_type", "expected"), AVRO_TYPE_CASES)
+def test_external_avro_type_table(field_type: str, native_type: str | None, expected) -> None:
+    from app.external.service import _resolve_avro_type
+
+    assert _resolve_avro_type(field_type, native_type, False) == expected
+    assert _resolve_avro_type(field_type, native_type, True) == ["null", expected]
 
 
 # 화면 frontend/apps/web/features/datasets/avro.test.ts 의 "descriptionToAvroDoc" 케이스와 같은 입력·기대값 —

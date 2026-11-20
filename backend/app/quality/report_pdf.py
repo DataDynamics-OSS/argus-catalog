@@ -16,7 +16,7 @@ from pathlib import Path
 from xml.sax.saxutils import escape
 
 from app.quality import indicators as quality_indicators
-from app.quality.reports import _STATUS, _local, _zone
+from app.quality.reports import _STATUS, _local, _zone, check_type_label, display_zone, severity_label
 from app.quality.schemas import QualityJobRunReport
 
 # 규칙별 표에 싣는 최대 줄 수 — 넘으면 실패한 규칙부터 싣고 나머지는 엑셀로 안내한다
@@ -67,8 +67,8 @@ def _rate(rate: float | None) -> str:
     return f"{rate:.2f}%" if rate is not None else "-"
 
 
-def report_pdf(report: QualityJobRunReport) -> bytes:
-    """리포트를 PDF 파일로."""
+def report_pdf(report: QualityJobRunReport, tz: str | None = None) -> bytes:
+    """리포트를 PDF 파일로. ``tz`` 는 시각을 적을 IANA 시간대(화면의 브라우저 시간대, ``reports.display_zone``)."""
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_RIGHT
     from reportlab.lib.pagesizes import A4, landscape
@@ -120,12 +120,13 @@ def report_pdf(report: QualityJobRunReport) -> bytes:
         return t
 
     jr = report.job_run
-    zone = _zone()
+    tzi = display_zone(tz)
+    zone = _zone(tzi)
     names = {i.key: i.name for i in quality_indicators.INDICATORS}
     job_name = jr.job_name or f"작업 #{jr.job_id}"
     story: list = [
         p("데이터 품질 진단 리포트", title),
-        p(f"{job_name} · 작업 실행 #{jr.id} · {_local(jr.started_at) or '-'} ({zone})", subtitle),
+        p(f"{job_name} · 작업 실행 #{jr.id} · {_local(jr.started_at, tzi) or '-'} ({zone})", subtitle),
         Spacer(1, 8),
     ]
 
@@ -156,13 +157,13 @@ def report_pdf(report: QualityJobRunReport) -> bytes:
     facts = [
         ("품질 진단 작업", job_name),
         ("상태", _STATUS.get(jr.status, jr.status)),
-        (f"시작 ({zone})", _local(jr.started_at) or "-"),
-        (f"종료 ({zone})", _local(jr.finished_at) or "-"),
+        (f"시작 ({zone})", _local(jr.started_at, tzi) or "-"),
+        (f"종료 ({zone})", _local(jr.finished_at, tzi) or "-"),
         ("시작 방식", "예약" if jr.trigger_type == "SCHEDULE" else f"수동 ({jr.requested_by or '-'})"),
         ("대상 데이터셋", _num(jr.targets_total)),
         ("품질 지표", ", ".join(jr.definitions) or "전체"),
         ("진단 기준", ", ".join(names.get(k, k) for k in jr.indicators) or "전체"),
-        ("실패·일부 실패·중지", _num(jr.runs_failed)),
+        ("실패·일부 실패 / 중지", f"{_num(jr.runs_failed)} / {_num(jr.runs_cancelled)}"),
         ("시작하지 못한 데이터셋", _num(jr.skipped_total)),
         ("규칙이 없어 진단하지 않은 데이터셋", _num(jr.no_rules)),
         ("비고", jr.message or "-"),
@@ -213,7 +214,7 @@ def report_pdf(report: QualityJobRunReport) -> bytes:
     story += [p(f"데이터셋별 — 오류율 높은 순 ({len(report.datasets):,})", section)]
     if report.datasets:
         story.append(table(
-            ["데이터셋", "원본", "Trino 테이블", "상태", "규칙", "실패한 규칙", "진단 건수", "오류 건수", "오류율", "오류 내용"],
+            ["데이터셋", "원본", "진단 테이블", "상태", "규칙", "실패한 규칙", "진단 건수", "오류 건수", "오류율", "오류 내용"],
             [[d.dataset_name or f"데이터셋 #{d.dataset_id}", d.datasource_name or "-", d.engine_table or "-",
               _STATUS.get(d.status, d.status), _num(d.rules), _num(d.failed_rules), _num(d.checked_count),
               _num(d.error_count), _rate(d.error_rate), d.error_message or ""] for d in report.datasets],
@@ -238,8 +239,8 @@ def report_pdf(report: QualityJobRunReport) -> bytes:
     if shown:
         story.append(table(
             ["데이터셋", "규칙", "유형", "컬럼", "진단 기준", "품질 지표", "심각도", "결과", "진단 건수", "오류 건수", "오류율", "상세"],
-            [[r.dataset_name or f"데이터셋 #{r.dataset_id}", r.rule_name or "-", r.check_type or "-",
-              r.column_name or "-", r.indicator_name or "-", r.definition_name or "-", r.severity or "-",
+            [[r.dataset_name or f"데이터셋 #{r.dataset_id}", r.rule_name or "-", check_type_label(r.check_type) or "-",
+              r.column_name or "-", r.indicator_name or "-", r.definition_name or "-", severity_label(r.severity) or "-",
               "통과" if r.passed else "실패", _num(r.checked_count), _num(r.error_count), _rate(r.error_rate),
               r.detail or ""] for r in shown],
             [16, 20, 13, 13, 10, 14, 11, 6, 10, 9, 8, 23], numeric={8, 9, 10},
@@ -247,7 +248,7 @@ def report_pdf(report: QualityJobRunReport) -> bytes:
     else:
         story.append(p("이 실행에서 평가한 규칙이 없습니다.", note))
 
-    made = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    made = datetime.now(tzi).strftime("%Y-%m-%d %H:%M:%S")
 
     def footer(canvas, doc) -> None:
         canvas.saveState()

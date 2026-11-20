@@ -239,6 +239,30 @@ def test_defaults_from_settings(env):
     }
 
 
+def test_settings_partial_update_keeps_other_fields(env):
+    """DEF-143 — 보낸 필드만 바꾸고 나머지는 저장된 값을 그대로 둔다(병합)."""
+    c, who, _ds_id, _add = env
+    who["user"] = _tu("root", admin=True)
+    url = f"{V1}/settings/ai-ready"
+    assert c.put(url, json={"publisher": "행정안전부", "license": "KOGL-1", "contact_email": "d@x.kr",
+                            "laws": "공공데이터법\n대기환경보전법"}).status_code == 200
+    assert c.put(url, json={"public_mode": "CUSTOM", "public_url": "https://catalog.example.kr/"}).status_code == 200
+    assert c.put(url, json={"public_mode": "IP"}).status_code == 200
+    body = c.get(url).json()
+    assert (body["publisher"], body["license"], body["contact_email"], body["laws"]) == \
+        ("행정안전부", "KOGL-1", "d@x.kr", "공공데이터법\n대기환경보전법"), "부분 갱신이 기관 기본값을 지우지 않음"
+    assert (body["public_mode"], body["public_url"]) == ("IP", "https://catalog.example.kr")
+
+    assert c.put(url, json={"public_mode": "CUSTOM"}).status_code == 200, "저장된 공개 주소가 있으면 방식만 바꿔도 된다"
+    assert c.put(url, json={"laws": ""}).status_code == 200
+    body = c.get(url).json()
+    assert (body["laws"], body["publisher"], body["public_mode"]) == ("", "행정안전부", "CUSTOM")
+
+    assert c.put(url, json={"public_mode": "CUSTOM", "public_url": ""}).status_code == 422, "주소를 비우면 422"
+    assert c.put(url, json={"public_url": ""}).status_code == 422, "병합 결과(CUSTOM · 빈 주소)도 검사"
+    assert c.get(url).json()["public_url"] == "https://catalog.example.kr", "거부된 저장은 반영되지 않음"
+
+
 def test_suggestions_from_latest_profile(env):
     c, _who, ds_id, add_profile = env
     assert c.get(f"{V1}/catalog/datasets/999/ai-ready/suggestions").status_code == 404

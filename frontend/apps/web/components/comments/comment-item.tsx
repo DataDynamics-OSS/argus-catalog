@@ -76,6 +76,8 @@ export function CommentItem({
 }: CommentItemProps) {
   const [showReplyEditor, setShowReplyEditor] = useState(false)
   const [editing, setEditing] = useState(false)
+  // 담당자가 손댄 신고(처리 중 · 해결 · 소명)는 분류를 바꾸면 처리 기록이 사라지므로 서버가 막는다(DEF-141 · DEF-165)
+  const reportLocked = comment.status === "IN_PROGRESS" || comment.status === "RESOLVED" || comment.status === "REJECTED"
   const [handling, setHandling] = useState(false)
 
   // 댓글의 author_name 은 새 형식 "성이름(username)" 또는 구 형식 "username".
@@ -107,11 +109,11 @@ export function CommentItem({
     <div style={{ marginLeft: `${maxDepthIndent * 24}px` }}>
       {comment.is_deleted ? (
         /* Deleted comment placeholder — still shows so child replies remain visible */
-        <div className="border border-dashed rounded-lg p-3 mb-2 opacity-50">
+        <div data-comment-id={comment.id} className="border border-dashed rounded-lg p-3 mb-2 opacity-50">
           <p className="text-sm italic">삭제된 댓글입니다.</p>
         </div>
       ) : (
-      <div className="border rounded-lg p-3 mb-2">
+      <div data-comment-id={comment.id} className="border rounded-lg p-3 mb-2">
         {/* Header */}
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2">
@@ -193,6 +195,11 @@ export function CommentItem({
             onSubmit={handleEdit}
             initialContent={comment.content}
             initialCategory={comment.category}
+            // 처리 중 · 해결 · 소명된 신고는 분류 선택을 숨긴다(DEF-141 · DEF-165)
+            showCategory={!reportLocked}
+            categoryNote={reportLocked
+              ? (comment.status === "IN_PROGRESS" ? "처리 중인 신고는 분류를 바꿀 수 없습니다" : "처리된 신고는 분류를 바꿀 수 없습니다")
+              : undefined}
             submitLabel="저장"
             autoFocus
             onCancel={() => setEditing(false)}

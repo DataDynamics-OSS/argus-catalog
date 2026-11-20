@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import CurrentUser, TokenUser
+from app.core.auth import CurrentUser, PermissionDenied, TokenUser
 from app.core.database import get_session
 from app.models.store_router import _s3_http_error
 from app.oci_hub import service
@@ -72,11 +72,11 @@ async def assert_oci_editor(current: TokenUser, session: AsyncSession, name: str
         raise HTTPException(status_code=404, detail=f"모델 '{name}'을(를) 찾을 수 없습니다.")
     if not (current.is_admin or current.username in {model.created_by, model.owner} - {None, ""}):
         logger.warning("OCI 모델 쓰기 거부: %s (요청자 %s)", name, current.username)
-        raise HTTPException(status_code=403, detail="OCI 모델의 소유자 또는 관리자만 수행할 수 있습니다.")
+        raise PermissionDenied("OCI 모델의 소유자 또는 관리자만 수행할 수 있습니다.", user=current, kind="OWNER", key="OCI 모델 소유자")
     # 역할의 기능 권한(수정 oci.edit · 삭제 oci.delete, 기본 허용형)도 본다(TODO-122)
     if not await check_feature(session, current, feature):
         logger.warning("OCI 모델 쓰기 거부(기능 권한 %s): %s (요청자 %s)", feature, name, current.username)
-        raise HTTPException(status_code=403, detail=f"기능 권한이 없습니다: {feature}")
+        raise PermissionDenied(f"기능 권한이 없습니다: {feature}", user=current, kind="FEATURE", key=feature)
     return model
 
 
@@ -84,7 +84,7 @@ def _assert_status_allowed(current: TokenUser, status: str | None) -> None:
     """승인(approved)·운영(production) 지정은 관리자만 — 거버넌스 승인 절차를 우회하지 못하게."""
     if status in OCI_ADMIN_ONLY_STATUSES and not current.is_admin:
         logger.warning("OCI 상태 지정 거부(관리자 전용 상태): status=%s user=%s", status, current.username)
-        raise HTTPException(status_code=403, detail=f"'{status}' 상태 지정은 관리자만 할 수 있습니다.")
+        raise PermissionDenied(f"'{status}' 상태 지정은 관리자만 할 수 있습니다.", user=current, kind="ADMIN", key=f"OCI 상태 {status}")
 
 
 @router.get("/stats")

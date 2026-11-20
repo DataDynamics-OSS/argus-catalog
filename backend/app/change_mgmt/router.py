@@ -29,7 +29,6 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio.service import RPCError, RPCStatusCode
 
-from app.catalog import service as catalog_service
 from app.change_mgmt import schemas, service, temporal_client
 from app.change_mgmt.activities import CONSUMER_CHANNELS
 from app.core.auth import CurrentUser, TokenUser, assert_owner_or_admin
@@ -69,8 +68,9 @@ async def _require_independent_approver(session: AsyncSession, user: TokenUser, 
     """
     if user.is_admin or any(a and a != user.username for a in approvers):
         return
-    created_by = await catalog_service.get_dataset_created_by(session, dataset_id)
-    if created_by and created_by == user.username:
+    from app.catalog.dataset_owner import is_dataset_owner
+
+    if await is_dataset_owner(session, dataset_id, user.username):  # 생성자 · 소유자 목록(TODO-154)
         return
     logger.warning("CR 거부(독립 결재자 없음): by=%s dataset_id=%s approvers=%s", user.username, dataset_id, approvers)
     raise HTTPException(status_code=422, detail=NEED_INDEPENDENT_APPROVER)
@@ -304,7 +304,8 @@ async def submit_change_request(user: CurrentUser,
     notify_channels: list[str] = Body(default=["WEBHOOK", "EMAIL"]),
     session: AsyncSession = Depends(get_session),
 ):
-    """결재 상신 — 요청자 본인 또는 관리자만. DRAFT 가 아니면 400, Temporal 장애 시 503.
+    """결재 상신 — 요청자 본인 또는 관리자만. DRAFT 가 아니면 400, Temporal 장애 시 503,
+    같은 코드의 워크플로우가 이미 실행 중이면 409.
 
     본문은 소비자 통지 채널 목록(WEBHOOK·EMAIL·SLACK, 기본 WEBHOOK·EMAIL). 모르는 채널이나 빈 목록은 400.
     SMS·IN_APP 은 예전 호출 호환으로 받지만 보내지 않고 이력에 ``SKIPPED`` 로 남는다(DEF-005).
@@ -329,6 +330,11 @@ async def submit_change_request(user: CurrentUser,
         await session.rollback()
         logger.warning("워크플로우 기동 실패: cr=%d: %s", cr_id, e)
         raise HTTPException(status_code=503, detail=TEMPORAL_CALL_FAILED) from e
+    except service.WorkflowIdConflictError as e:
+        # 같은 ID 의 워크플로우가 실행 중(동시 상신, 주인을 알 수 없는 워크플로우) — 예전에는 500(DEF-187)
+        await session.rollback()
+        logger.warning("워크플로우 ID 충돌로 상신 거부(409): cr=%d: %s", cr_id, e)
+        raise HTTPException(status_code=409, detail=str(e)) from e
     await session.commit()
     return schemas.ChangeRequestSubmitResponse(
         cr_id=cr.id,
@@ -452,12 +458,11 @@ async def create_consumer(_guard: CurrentUser,
     """데이터셋 소비자를 등록한다(``changes.consumers`` 기능 권한 + 그 데이터셋의 소유자 또는 관리자).
 
     소비자에는 연락 이메일 · 웹훅 주소가 들어가 변경 내용이 그쪽으로 나간다 — 남의 데이터셋에 임의의 수신처를
-    붙이지 못하게 데이터셋 소유자(생성자)로 묶는다(DEF-121). 없는 데이터셋은 404."""
+    붙이지 못하게 데이터셋 소유자(생성자 또는 소유자 목록, TODO-154)로 묶는다(DEF-121). 없는 데이터셋은 404."""
     if not _guard.is_admin:
-        exists, owner = await service.dataset_creator(session, data.dataset_id)
-        if not exists:
-            raise HTTPException(status_code=404, detail="데이터셋을 찾을 수 없습니다.")
-        assert_owner_or_admin(_guard, owner, "데이터셋")
+        from app.catalog.dataset_owner import assert_dataset_owner_or_admin
+
+        await assert_dataset_owner_or_admin(session, _guard, data.dataset_id)
     consumer = await service.create_consumer(session, data)
     await session.commit()
     logger.info("소비자 등록: id=%s dataset_id=%s name=%s by=%s",

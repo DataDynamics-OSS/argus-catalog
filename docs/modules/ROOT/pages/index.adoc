@@ -82,6 +82,131 @@ Hive · Impala · Trino · StarRocks 의 *쿼리 이벤트* 와 Greenplum · Kud
 Airgap Push/Pull · Presigned URL 대용량 전송) 와 External API 를 코드로 자동화합니다.
 xref:appendix/sdk.adoc[자세히].
 
+== 기능 구성
+
+Argus Catalog 의 기능을 *대분류 → 중분류 → 소분류(세부 기능)* 로 정리했습니다.
+중분류 이름을 누르면 해당 화면의 사용법으로 이동합니다.
+
+[cols="2,2,7",options="header"]
+|===
+| 대분류 | 중분류 | 소분류
+
+.7+| *데이터 카탈로그*
+| xref:catalog/platforms.adoc[데이터 소스]
+| 조직 → 시스템 → 데이터 소스 트리 · 11종 데이터 소스(MySQL·PostgreSQL·Oracle·SQL Server·Hive·Impala·Trino·StarRocks·Greenplum·Kudu·Iceberg REST) 등록 · 연결 테스트 · 메타데이터 동기화 · 데이터 소스 전체 ER 다이어그램 · 삭제 전 영향 확인
+
+| xref:catalog/datasets.adoc[데이터셋]
+| 목록 · 검색 · 필터(표 · 카드 보기) · 개요 · 스키마 · DDL · 샘플 데이터 · 스키마 편집과 변경 이력 · 확장 메타데이터(민감도 · 보존 · 규제 태그 등) · 소유자 · 태그 · 용어 연결 · 커스텀 속성 · 댓글
+
+| xref:catalog/lineage.adoc[리니지 · 관계]
+| 리니지 그래프(컬럼 매핑 · 파이프라인) · 조인 관계 그래프 · ER 다이어그램(FK) · 쿼리 수집기(Hive·Impala·Trino·StarRocks) 기반 관계 분석
+
+| xref:catalog/taxonomies.adoc[분류 체계]
+| 분류체계 · 분류 트리(드래그 정렬) · 데이터셋 매핑 · 분류별 / 미분류 데이터셋
+
+| xref:ops/search.adoc[검색]
+| 통합 검색(데이터셋 · 용어 · AI Agent · API · MCP) · 키워드 + 임베딩 시맨틱(하이브리드) 검색 · 임베딩 재계산
+
+| xref:catalog/schema.adoc[스키마 · 적재 코드]
+| Avro 스키마(편집 · 외부 조회 API) · Confluent 호환 스키마 레지스트리 · 적재 코드 자동 생성(PySpark · Kestra · Airflow)
+
+| xref:catalog/dashboard.adoc[대시보드]
+| 핵심 지표 카드 · 데이터 소스 유형 · 환경별 분포 · 신규 데이터셋 추이 · 최근 데이터셋
+
+.6+| *데이터 품질*
+| xref:catalog/quality.adoc[프로파일링]
+| 컬럼 통계(행 수 · NULL · 고유값 · 최소/최대 · 최빈값) — 품질 워커가 수집
+
+| xref:catalog/quality.adoc[품질 규칙]
+| 필수값 · 중복 · 범위 · 허용 값 · 정규식 · 날짜 형식 · 글자 깨짐 · 공백 · 더미 값 · 연속성 · 값 분포 다양성 · 여러 컬럼 키 · 컬럼 간 비교 · 논리관계 · 참조관계 · 최신성 · Trino 함수 · 커스텀 SQL / Python · 규칙 추천 · 진단 쿼리 보기
+
+| xref:catalog/quality.adoc[정밀 진단]
+| 품질 워커의 전수 진단 — Trino 경로 또는 원천 직접(PostgreSQL · MySQL · Oracle · SQL Server) · 위반 샘플 · 실행 현황 · 취소 · 다시 실행
+
+| xref:catalog/quality.adoc[품질 지표]
+| 공공데이터 품질관리 지침 진단 기준 16개 · AI-Ready 품질 지표(완전성 · 일관성 · 적시성 · 유효성 등) · 기본 지표 · 컬럼 할당
+
+| xref:catalog/quality.adoc[품질 진단 작업]
+| 데이터셋 · 지표 단위 작업 · 주기 실행(매시간 · 매일 · 매주 · 매월) · 프로파일 함께 수집 · 작업 이력
+
+| xref:catalog/quality.adoc[리포트 · 점수]
+| 오류율 · 진단 기준별 · 지표별 · 규칙별 리포트 · 엑셀 · PDF 내려받기 · 품질 점수와 추이 · 업스트림 품질 경고
+
+.5+| *AI-Ready 공공데이터*
+| xref:governance/ai-ready.adoc[AI 활용 메타데이터]
+| 행정안전부 「공공데이터의 인공지능 친화적 관리 가이드라인」 항목(제공기관 · 라이선스 · 허용 용도 · 시간 · 공간 범위 · 편향 · 한계 · 개인정보 조치 등) · 기관 기본값 · 데이터 버전 이력
+
+| xref:governance/ai-ready.adoc[AI-Ready 점검]
+| 부록 4 체크리스트 자동 판정 · 수동 판정 · 필수 / 권장 충족률 · 전체 데이터셋 점검 목록
+
+| xref:governance/ai-ready.adoc[배포 · 내보내기]
+| 배포본(접근 주소 · 형식 · 체크섬) · DCAT · Croissant 1.0 · 데이터 카드(Markdown) · 외부 공개 주소 설정
+
+| xref:governance/data-reports.adoc[이용자 피드백]
+| 오류 신고 · 개선 요청 접수 · 처리 기한 · 처리 상태(처리 중 · 해결 · 소명) · 오류 신고 처리 화면
+
+| xref:governance/alerts.adoc[AI-Ready 알림 · 초안]
+| 최소 요건 미충족 · 신고 접수 · 처리 기한 알림 · LLM 초안(편향 · 한계 · 관련법령 · 개인정보 보호조치 · 허용 이용 유형)
+
+.4+| *거버넌스*
+| xref:governance/standards.adoc[데이터 표준]
+| 표준 사전 · 단어 · 도메인 · 용어(형태소 분석으로 영문명 · 물리명 자동) · 코드 그룹 · 코드 값 · 준수율 · 데이터셋 표준 매핑
+
+| xref:governance/glossary.adoc[용어집 · 태그]
+| 용어집 분류 트리 · 용어 · 데이터셋 연결 · 태그(색상 · 사용처)
+
+| xref:governance/change-management.adoc[변경 관리]
+| 변경 요청(스키마 변경 · 유형 · 우선순위) · 영향 분석(다운스트림 · 소비자) · 순차 결재(승인 · 반려 · 위임) · 예약 적용 · 소비자 통지 · 내 결재함
+
+| xref:governance/alerts.adoc[알림]
+| 알림 규칙(범위 · 트리거: 스키마 변경 · 컬럼 감시 · 품질 실패 · 수집 실패 · AI-Ready) · 채널(화면 · Webhook · 이메일 · Slack/Mattermost) · 헤더 알림 벨
+
+.3+| *API · AI 자산*
+| xref:governance/api-catalog.adoc[API 카탈로그]
+| OpenAPI 3 / Swagger 2 스펙 등록 · 수동 등록(GraphQL · gRPC · SOAP · Webhook · 이벤트) · 버전 비교(Breaking 경고) · 린팅 · 시험 호출 · 사용량 · 즐겨찾기 · 리니지 · 자격증명 암호화 보관
+
+| xref:governance/ai-agent-catalog.adoc[AI Agent]
+| 에이전트 등록 · 버전 · 상태 이력 · 평가와 평판 점수 · 에이전트 카드(A2A) · 정의 파일 일괄 반영 · 미등록 에이전트 발견 · 실행 계층 연동(정책 번들 · 훅 이벤트)
+
+| xref:governance/mcp-server-catalog.adoc[MCP Server]
+| 서버 정의 · 배포 · 도구 수집(manifest · MCP 프로토콜) · 승인 정책 · 정책 번들 배포 · 감사 이벤트 · 통제 현황 · 보안 finding
+
+.3+| *ML 모델*
+| xref:models/registry.adoc[MLflow 모델]
+| MLflow 호환 모델 레지스트리(Unity Catalog 호환 REST) · 버전 · Stage · 성능 비교 · 모델 카드 · 리니지 · 아티팩트 업로드 / 다운로드
+
+| xref:models/oci-hub.adoc[OCI 모델 허브]
+| HuggingFace 가져오기 · 수동 푸시 · README · 태그 · 리니지 · MLflow 모델 연결 · 에어갭 반입
+
+| xref:models/import.adoc[파일 · SDK]
+| MLflow · OCI 모델 파일 브라우저 · Python SDK · `argus-model` CLI(반입 · 조회 · 정의 파일)
+
+.2+| *AI*
+| xref:ai/metadata-generation.adoc[메타데이터 생성]
+| LLM(OpenAI · Anthropic · Ollama)으로 요약 · 설명 · 컬럼 설명 · 태그 · PII 감지 · 미리보기 후 적용 · 일괄 생성
+
+| xref:ai/assistant.adoc[AI 어시스턴트]
+| 대화형 질의 · 카탈로그 도구(검색 · 스키마 · ER · 품질 · 리니지 · 용어 · 표준 준수 · SQL 검증) · 사용자 권한 그대로 조회
+
+.2+| *페더레이션*
+| xref:federation/instances.adoc[인스턴스 연합]
+| 인스턴스 등록(HARVEST · HYBRID · LIVE) · 가져오기(증분 · 전체) · 상태 점검
+
+| xref:federation/browse-search.adoc[탐색 · 승격]
+| 통합 검색 · 탐색 · 원격 데이터셋 상세(스키마 · 샘플 · DDL · 리니지) · 로컬로 가져오기 · 노출 정책 · 관측(서킷 브레이커)
+
+.3+| *운영 · 보안*
+| xref:ops/authentication.adoc[인증 · 사용자]
+| 로컬 · Keycloak(OIDC) 인증 · 비밀번호 정책 · 로그인 잠금 · API 키(역할 · 범위 · 만료) · 사용자 관리 · LDAP 사용자 동기화
+
+| xref:ops/permissions.adoc[권한]
+| 메뉴 · 기능 권한(역할별) · 사용자 정의 역할 · 메뉴 보기 전용 · 관리 기능 위임 · 권한 거부 감사
+
+| xref:ops/settings.adoc[설정 · 감사]
+| 오브젝트 스토리지 · 임베딩 · LLM · 이메일 · 알림 채널 · CORS · 외부 API 캐시 · 설정 값 출처 · 설정 변경 이력 · 관리 감사 로그
+
+|===
+
 == 시스템 구성
 
 다음 아키텍처는 사용자 접점인 SDK·UI·CLI, 카탈로그 서버, 저장소와 외부 제공자,

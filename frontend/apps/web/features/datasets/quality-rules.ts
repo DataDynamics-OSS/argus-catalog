@@ -1,7 +1,30 @@
 // 품질 탭 규칙 목록 표시 규칙 — 서버 시맨틱(app/quality/service.py)과 맞춘다.
 
 /** 임계값(%)을 쓰는 진단 유형 — 나머지 유형은 저장된 threshold(기본 100)를 판정에 쓰지 않는다. */
-export const THRESHOLD_CHECK_TYPES: ReadonlySet<string> = new Set(["NOT_NULL", "UNIQUE"])
+export const THRESHOLD_CHECK_TYPES: ReadonlySet<string> = new Set([
+  "NOT_NULL", "UNIQUE", "DUMMY_VALUE", "CONTINUITY", "COMPOSITE_UNIQUE",
+])
+
+/**
+ * 허용 값(ACCEPTED_VALUES)의 표준 코드 그룹 연결 — 기대값이 `{"code_group_id": N}` 이면 N, 값 목록이면 null.
+ * 서버 `rule_sql.code_group_ref` 와 같은 규칙(양의 정수만).
+ */
+export function codeGroupRef(expected: string | null | undefined): number | null {
+  const text = (expected ?? "").trim()
+  if (!text.startsWith("{")) return null
+  try {
+    const parsed: unknown = JSON.parse(text)
+    const id = (parsed as { code_group_id?: unknown } | null)?.code_group_id
+    return typeof id === "number" && Number.isInteger(id) && id > 0 ? id : null
+  } catch {
+    return null
+  }
+}
+
+/** 표준 코드 그룹 연결의 저장 값 — 서버 `rule_sql.code_group_expected` 와 같은 모양. */
+export function codeGroupExpected(id: number): string {
+  return JSON.stringify({ code_group_id: id })
+}
 
 /**
  * 규칙 목록 한 줄의 표시 정보.

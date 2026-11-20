@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.catalog import sync_runs_service as svc
-from app.catalog.router import DatasourceSyncer
+from app.catalog.router import DatasourceSyncer, NotManual
 from app.catalog.schemas import (
     SyncBrowseResponse,
     SyncRunItemResponse,
@@ -49,7 +49,7 @@ async def get_sync_scope(datasource_id: int, _user: CurrentUser, session: AsyncS
         raise _http(e) from None
 
 
-@router.put("/datasources/{datasource_id}/sync-scope", response_model=SyncSettingsResponse)
+@router.put("/datasources/{datasource_id}/sync-scope", response_model=SyncSettingsResponse, dependencies=[NotManual])
 async def put_sync_scope(datasource_id: int, req: SyncSettingsUpdate, user: DatasourceSyncer,
                          session: AsyncSession = Depends(get_session)):
     try:
@@ -58,7 +58,7 @@ async def put_sync_scope(datasource_id: int, req: SyncSettingsUpdate, user: Data
         raise _http(e) from None
 
 
-@router.put("/datasources/{datasource_id}/sync-schedule", response_model=SyncSettingsResponse)
+@router.put("/datasources/{datasource_id}/sync-schedule", response_model=SyncSettingsResponse, dependencies=[NotManual])
 async def put_sync_schedule(datasource_id: int, req: SyncScheduleUpdate, user: DatasourceSyncer,
                             session: AsyncSession = Depends(get_session)):
     """예약 수집 켜기·끄기·주기(분). 저장된 수집 범위로 돈다."""
@@ -68,7 +68,7 @@ async def put_sync_schedule(datasource_id: int, req: SyncScheduleUpdate, user: D
         raise _http(e) from None
 
 
-@router.post("/datasources/{datasource_id}/sync-scope/preview", response_model=SyncScopePreview)
+@router.post("/datasources/{datasource_id}/sync-scope/preview", response_model=SyncScopePreview, dependencies=[NotManual])
 async def preview_sync_scope(datasource_id: int, req: SyncScopePreviewRequest, _user: DatasourceSyncer,
                              session: AsyncSession = Depends(get_session)):
     """저장 전 확인 — 새 범위 밖에 남는 수집 데이터셋 수."""
@@ -78,7 +78,7 @@ async def preview_sync_scope(datasource_id: int, req: SyncScopePreviewRequest, _
         raise _http(e) from None
 
 
-@router.get("/datasources/{datasource_id}/browse", response_model=SyncBrowseResponse)
+@router.get("/datasources/{datasource_id}/browse", response_model=SyncBrowseResponse, dependencies=[NotManual])
 async def browse_datasource(datasource_id: int, _user: DatasourceSyncer,
                             path: list[str] = Query(default_factory=list, max_length=10),
                             q: str | None = Query(None, max_length=200),
@@ -91,7 +91,7 @@ async def browse_datasource(datasource_id: int, _user: DatasourceSyncer,
         raise _http(e) from None
 
 
-@router.post("/datasources/{datasource_id}/sync-runs", response_model=SyncRunResponse, status_code=202)
+@router.post("/datasources/{datasource_id}/sync-runs", response_model=SyncRunResponse, status_code=202, dependencies=[NotManual])
 async def start_sync_run(datasource_id: int, user: DatasourceSyncer, req: SyncRunStart | None = None,
                          session: AsyncSession = Depends(get_session)):
     try:

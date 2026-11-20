@@ -61,7 +61,7 @@ from app.agents.schemas import (
     PaginatedAIAgentDiscoveries,
     PaginatedAIAgents,
 )
-from app.core.auth import AdminUser, CurrentUser, OptionalUser, TokenUser
+from app.core.auth import AdminUser, CurrentUser, OptionalUser, PermissionDenied, TokenUser
 from app.core.database import get_session
 from app.permissions.router import check_feature, require_feature
 
@@ -86,10 +86,10 @@ async def _assert_agent_editor(session: AsyncSession, name: str, current: TokenU
         raise HTTPException(status_code=404, detail=_NOT_FOUND.format(name=name))
     if not manifest._can_edit(agent, current):
         logger.warning("AI Agent 쓰기 거부: %s (요청자 %s)", name, current.username)
-        raise HTTPException(status_code=403, detail="에이전트의 등록자·소유자 또는 관리자만 수행할 수 있습니다.")
+        raise PermissionDenied("에이전트의 등록자·소유자 또는 관리자만 수행할 수 있습니다.", user=current, kind="OWNER", key="AI 에이전트 소유자")
     if not await check_feature(session, current, feature):
         logger.warning("AI Agent 쓰기 거부(기능 권한 %s): %s (요청자 %s)", feature, name, current.username)
-        raise HTTPException(status_code=403, detail=f"기능 권한이 없습니다: {feature}")
+        raise PermissionDenied(f"기능 권한이 없습니다: {feature}", user=current, kind="FEATURE", key=feature)
     return agent
 
 
@@ -105,7 +105,7 @@ async def _assert_telemetry_sender(session: AsyncSession, name: str, current: To
         return False
     if not manifest._can_edit(agent, current):
         logger.warning("AI Agent 텔레메트리 수집 거부(403): %s (요청자 %s)", name, current.username)
-        raise HTTPException(status_code=403, detail="에이전트의 등록자·소유자 또는 관리자만 호출 기록을 보낼 수 있습니다.")
+        raise PermissionDenied("에이전트의 등록자·소유자 또는 관리자만 호출 기록을 보낼 수 있습니다.", user=current, kind="OWNER", key="AI 에이전트 소유자")
     return True
 
 
@@ -461,7 +461,7 @@ async def update_ai_agent(current: CurrentUser,
     if want and "blocked" in (want, agent.status) and want != agent.status and not current.is_admin:
         logger.warning("AI Agent 차단 상태 변경 거부(관리자 아님): %s %s -> %s (요청자 %s)",
                        name, agent.status, want, current.username)
-        raise HTTPException(status_code=403, detail="차단(blocked) 설정·해제는 관리자만 할 수 있습니다.")
+        raise PermissionDenied("차단(blocked) 설정·해제는 관리자만 할 수 있습니다.", user=current, kind="ADMIN", key="AI 에이전트 차단")
     agent = await service.update_agent(session, name, req, changed_by=changed_by)
     if not agent:
         logger.warning("AI Agent 없음(수정): %s", name)

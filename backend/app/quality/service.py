@@ -9,7 +9,7 @@
 import json as _json
 import logging
 
-from sqlalchemy import or_, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.catalog.models import Dataset
@@ -145,6 +145,8 @@ async def update_rule(session: AsyncSession, rule_id: int, data: QualityRuleUpda
             rule.domain = None
     if "expected_value" in changes or "check_type" in changes:
         rule_sql.check_expression(rule.check_type, rule.expected_value)
+    if rule.check_type == "COMPOSITE_UNIQUE":
+        rule.column_name = None  # 테이블 수준 — 키 컬럼은 기대값의 목록
     await session.flush()
     await session.refresh(rule)
     logger.info("품질 규칙 수정됨: id=%d, fields=%s", rule.id, sorted(changes))
@@ -174,7 +176,8 @@ async def _recompute_latest_score(session: AsyncSession, dataset_id: int) -> Non
     - 새 검증이 아니므로 점수 이력 행을 추가하지 않고 최신 행을 고쳐 쓴다(scored_at 유지 — '마지막 진단'
       시각이 바뀌지 않는다). 알림도 다시 평가하지 않는다.
     - 점수 기록이 없는 데이터셋(아직 검증 전)은 그대로 둔다.
-    - 계산 방식은 ``_record_score`` 와 같다: 결과가 없는 규칙은 미평가로 분모에서 빼고, 평가된 결과가 없으면 100.
+    - 계산 방식은 ``_record_score`` 와 같다: 결과가 없는 규칙은 미평가로 분모에서 빼고, 평가된 결과가 하나도
+      없으면(규칙을 모두 지움) 점수를 내지 않고 진단 전 상태로 되돌린다(DEF-195, ``_clear_quality_outcome``).
     """
     latest = (await session.execute(
         select(QualityScore).where(QualityScore.dataset_id == dataset_id)
@@ -195,7 +198,11 @@ async def _recompute_latest_score(session: AsyncSession, dataset_id: int) -> Non
             evaluated.append(_result_response(r, prev, carried_forward=True))
     passed_count = sum(1 for r in evaluated if r.passed == "true")
     total = len(evaluated)
-    score = round(passed_count / total * 100, 1) if total > 0 else 100.0
+    if total == 0:
+        await _clear_quality_outcome(session, dataset_id)
+        logger.info("규칙 삭제 후 점수 재계산: dataset_id=%d — 평가된 규칙 없음, 미평가로 되돌림", dataset_id)
+        return
+    score = round(passed_count / total * 100, 1)
     latest.score = score
     latest.total_rules = total
     latest.passed_rules = passed_count
@@ -215,8 +222,11 @@ async def _recompute_latest_score(session: AsyncSession, dataset_id: int) -> Non
 # 규칙 추천 · 품질 검사 실행 — 데이터셋의 모든 활성 규칙을 평가
 # ---------------------------------------------------------------------------
 
-async def recommend_rules(session: AsyncSession, dataset_id: int) -> list[dict]:
+async def recommend_rules(session: AsyncSession, dataset_id: int, *, reveal_values: bool = True) -> list[dict]:
     """최신 프로파일을 분석해 품질 규칙 후보를 추천한다 (생성하지 않음).
+
+    ``reveal_values=False`` 면(샘플 보기 권한 없음, DEF-164) 실제 값이 들어가는 후보(허용 값 목록)를 빼고
+    최소값 근거 문구에도 값을 적지 않는다.
 
     추천 근거 (프로파일 통계 기반):
     - NULL 0%               → NOT_NULL (지금 깨끗한 컬럼을 계속 깨끗하게)
@@ -272,7 +282,7 @@ async def recommend_rules(session: AsyncSession, dataset_id: int) -> list[dict]:
         # (값 1종은 정보가 없고, 타임스탬프는 코드가 아니라 노이즈)
         is_temporal = any(k in (cp.column_type or "").upper()
                           for k in ("DATE", "TIME", "YEAR"))
-        if (cp.top_values and 2 <= len(cp.top_values) <= 10
+        if (reveal_values and cp.top_values and 2 <= len(cp.top_values) <= 10
                 and cp.unique_count == len(cp.top_values) and not is_temporal):
             values = encode_list(str(tv["value"]) for tv in cp.top_values)  # 값 안의 쉼표 보존(TODO-143)
             add("ACCEPTED_VALUES", col, f"{col} 허용 값", expected=values,
@@ -281,7 +291,8 @@ async def recommend_rules(session: AsyncSession, dataset_id: int) -> list[dict]:
             try:
                 if float(cp.min_value) >= 0:
                     add("MIN_VALUE", col, f"{col} 음수 금지", expected="0",
-                        reason=f"현재 최소값 {cp.min_value} — 음수 유입 감지")
+                        reason=(f"현재 최소값 {cp.min_value} — 음수 유입 감지" if reveal_values
+                                else "현재 최소값 0 이상 — 음수 유입 감지"))
             except ValueError:
                 # 평균은 있으나 최소값이 숫자로 해석되지 않는 컬럼 — 추천하지 않는다.
                 logger.debug("MIN_VALUE 추천 건너뜀(숫자 아님): dataset_id=%d column=%s", dataset_id, col)
@@ -290,6 +301,25 @@ async def recommend_rules(session: AsyncSession, dataset_id: int) -> list[dict]:
     logger.debug("규칙 추천: dataset_id=%d, 후보=%d개 (기존 규칙=%d개)",
                  dataset_id, len(recs), len(existing_keys))
     return recs
+
+
+async def _clear_quality_outcome(session: AsyncSession, dataset_id: int) -> None:
+    """평가된 규칙이 하나도 없는 데이터셋을 진단 전(미평가) 상태로 되돌린다(DEF-195).
+
+    평가한 규칙이 없으면 점수가 없다 — 예전엔 100점 · 양호(GOOD)로 남아 품질 집계 · AI-Ready 판정에 양호로 섞였다.
+    - 점수 기록을 모두 지운다: 최신 행만 지우면 그 앞 진단의 점수가 '최신 점수'로 되살아나고, 0개짜리 행으로 두면
+      추세가 그 값으로 튄다. 점수를 만든 규칙 · 결과는 이미 없고, 진단 이력은 실행 기록(``catalog_quality_runs``)에 남는다.
+    - dataset.quality_score / quality_status 를 비운다(진단한 적 없는 데이터셋과 같은 값).
+    """
+    await session.execute(delete(QualityScore).where(QualityScore.dataset_id == dataset_id))
+    dataset = (await session.execute(
+        select(Dataset).where(Dataset.id == dataset_id)
+    )).scalar_one_or_none()
+    if dataset:
+        dataset.quality_score = None
+        dataset.quality_status = None
+    await session.flush()
+    logger.debug("데이터셋 품질 상태 비움(평가된 규칙 없음): dataset_id=%d", dataset_id)
 
 
 async def _finalize_quality_outcome(
@@ -420,13 +450,18 @@ async def _record_score(
     """결과 목록으로 점수를 산출·기록하고 데이터셋 상태/알림을 갱신한다 (검증·반입 공통).
 
     score = 통과 / (이번에 평가 + 이어받은 결과) × 100. 미평가(passed=None)는 분모에서 제외.
-    평가 가능한 결과가 하나도 없으면 예전과 같이 100.0 (규칙 없음과 동일하게 취급).
+    평가 가능한 결과가 하나도 없으면 점수를 기록하지 않고 진단 전 상태로 되돌린다(DEF-195 — score=None).
     """
     evaluated = [r for r in results if r.passed is not None]
     passed_count = sum(1 for r in evaluated if r.passed == "true")
     total = len(evaluated)
     failed_count = total - passed_count
-    score = round(passed_count / total * 100, 1) if total > 0 else 100.0
+    if total == 0:
+        await _clear_quality_outcome(session, dataset_id)
+        logger.info("%s: dataset_id=%d, 평가된 규칙 없음 — 점수 없음 (미평가 %d)", label, dataset_id, len(results))
+        return RunCheckResponse(
+            dataset_id=dataset_id, score=None, total_rules=0, passed=0, failed=0, results=results)
+    score = round(passed_count / total * 100, 1)
 
     session.add(QualityScore(
         dataset_id=dataset_id,
@@ -501,7 +536,12 @@ async def get_score_history(
 async def get_latest_results(
     session: AsyncSession, dataset_id: int,
 ) -> list[QualityResultResponse]:
-    """각 활성 규칙에 대한 가장 최근 결과를 조회한다. 아직 진단하지 않은 규칙은 빠진다."""
+    """각 활성 규칙에 대한 가장 최근 결과를 조회한다. 아직 진단하지 않은 규칙은 빠진다.
+
+    데이터셋 점수는 마지막 진단이 평가하지 않은 규칙의 결과를 직전 실행에서 이어받는다 — 그 행은 ``carried_forward``
+    로 표시한다(DEF-150). 마지막 진단은 가장 최근에 저장된 결과의 실행이고, 그 실행이 남기지 않은 결과가 이어받은 것이다.
+    가장 최근 결과가 실행 없이 저장된 것(예전 간이 진단 · 반입)이면 구분할 수 없어 표시하지 않는다.
+    """
     rules = (await session.execute(
         select(QualityRule).where(
             QualityRule.dataset_id == dataset_id,
@@ -509,14 +549,18 @@ async def get_latest_results(
         )
     )).scalars().all()
 
-    results = []
+    latest: list[tuple[QualityRule, QualityResult]] = []
     for rule in rules:
         # 예전 간이 진단의 "평가 제외" 자리표시 통과 행은 건너뛰고 실제 마지막 결과를 보여준다
         result = await _latest_result(session, rule.id)
         if result:
-            results.append(_result_response(rule, result))
+            latest.append((rule, result))
 
-    return results
+    last_run_id = max(latest, key=lambda pair: pair[1].id)[1].run_id if latest else None
+    return [
+        _result_response(rule, result, carried_forward=last_run_id is not None and result.run_id != last_run_id)
+        for rule, result in latest
+    ]
 
 
 # ---------------------------------------------------------------------------

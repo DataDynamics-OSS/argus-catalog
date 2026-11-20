@@ -104,10 +104,10 @@ def test_apply_change_keeps_row_ids_and_pii(monkeypatch) -> None:
     ],
 )
 def test_independent_approver_required(monkeypatch, user, created_by, approvers, allowed) -> None:
-    async def _created_by(_s, _id):
-        return created_by
+    async def _is_owner(_s, _id, username):  # 생성자 · 소유자 목록 판정(TODO-154)
+        return bool(created_by) and created_by == username
 
-    monkeypatch.setattr(cr_router.catalog_service, "get_dataset_created_by", _created_by)
+    monkeypatch.setattr("app.catalog.dataset_owner.is_dataset_owner", _is_owner)
     call = cr_router._require_independent_approver(None, user, 1, approvers)
     if allowed:
         asyncio.run(call)

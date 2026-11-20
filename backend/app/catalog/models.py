@@ -208,6 +208,8 @@ class DatasourceSyncRun(Base):
     updated_count = Column(Integer, nullable=False, default=0)
     removed_count = Column(Integer, nullable=False, default=0)
     failed_count = Column(Integer, nullable=False, default=0)
+    # 수동 데이터셋에 원천 매핑돼 건너뛴 테이블 수(TODO-CAT-001)
+    skipped_count = Column(Integer, nullable=False, default=0)
     items_total = Column(Integer, nullable=False, default=0)
     error_message = Column(Text)
     requested_by = Column(String(200))
@@ -345,6 +347,8 @@ class Dataset(Base):
     missing_data_info = Column(Text)                 # 결측 비율·사유·처리 rai:dataCollectionMissingData
     missing_value_notation = Column(String(100))     # 결측·특수값 표기 규칙 (예: NULL, -9999=측정불가)
     privacy_measures = Column(Text)                  # 개인정보 보호조치(비식별·가명처리 방식, 적정성 검토)
+    social_impact = Column(Text)                     # 사회적 영향(데이터 카드) rai:dataSocialImpact
+    risk_mitigation = Column(Text)                   # 리스크 완화 권고(데이터 카드)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -386,6 +390,9 @@ class DatasetSchema(Base):
     is_distribution_key = Column(String(5), default="false")
     ordinal = Column(Integer, nullable=False, default=0)
     pii_type = Column(String(50))  # 개인정보 분류: EMAIL, PHONE, SSN, NAME, ADDRESS 등
+    # 데이터 사전 항목(체크리스트 C08, TODO-096) — 담당자가 쓰는 값. 수집(metadata-sync)은 이 둘을 보내지 않아 보존된다.
+    unit = Column(String(50))       # 단위 — 원, %, km, 명 등
+    calculation = Column(Text)      # 산정기준 — 값을 계산·집계하는 방식
 
 
 class DatasetUrnAlias(Base):
@@ -404,6 +411,37 @@ class DatasetUrnAlias(Base):
         nullable=False, index=True,
     )
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class DatasetSourceMap(Base):
+    """수동 데이터셋 → 실제 데이터 소스 · 원천 경로 매핑 (TODO-CAT-001, design/catalog-registration-design.md 4.2).
+
+    수동 데이터셋(ARGUS 카탈로그의 수동 등록 데이터 소스 소속)이 실제로는 어느 데이터 소스의 어느 테이블인지를
+    가리키는 참조다. 매핑해도 데이터셋의 소속 · URN 은 바뀌지 않고, 수집은 매핑된 경로의 테이블을 건너뛴다.
+    ``check_*`` 는 마지막 원천 확인(존재 · 스키마 비교) 결과 — 매핑을 막지 않는 확인용 값이다.
+    """
+
+    __tablename__ = "catalog_dataset_source_maps"
+    __table_args__ = (
+        UniqueConstraint("datasource_id", "remote_path", name="uq_dataset_source_map_path"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    dataset_id = Column(
+        Integer, ForeignKey("catalog_datasets.id", ondelete="CASCADE"), nullable=False, unique=True,
+    )
+    datasource_id = Column(
+        Integer, ForeignKey("catalog_datasources.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    # 원천 경로 — 수집 URN 의 {path} 와 같은 모양(db.table, schema.table). 대소문자는 보존하고 비교는 대소문자 무시.
+    remote_path = Column(String(500), nullable=False)
+    # MATCH / DIFF / NOT_FOUND / UNREACHABLE / UNSUPPORTED, NULL = 확인 안 함
+    check_status = Column(String(20))
+    check_detail = Column(Text)  # JSON: 스키마 차이 요약
+    checked_at = Column(DateTime(timezone=True))
+    created_by = Column(String(200))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class SchemaSnapshot(Base):

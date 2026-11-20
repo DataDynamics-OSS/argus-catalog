@@ -15,6 +15,7 @@ import { hybridSearch, type SemanticSearchResult, type SemanticSearchResponse } 
 import { errorMessage } from "@/lib/notify"
 import { MatchTypeBadge } from "@/components/match-type-badge"
 import { OriginText } from "./origin-text"
+import { datasetExcerpt } from "@/features/search/excerpt"
 import { SearchInput } from "@/components/search-input"
 
 export function DatasetsSmartSearch() {
@@ -139,9 +140,10 @@ export function DatasetsSmartSearch() {
                     >
                       <td className="px-3 py-2">
                         <div className="font-medium text-sm">{r.dataset.name}</div>
-                        {r.dataset.description && (
+                        {/* 통합 검색과 같은 한 줄: 요약 → 없으면 설명 평문(마크다운 기호 · 편집기 HTML 태그 제거, DEF-192) */}
+                        {datasetExcerpt(r.dataset) && (
                           <p className="text-xs truncate max-w-[500px]">
-                            {r.dataset.description}
+                            {datasetExcerpt(r.dataset)}
                           </p>
                         )}
                       </td>

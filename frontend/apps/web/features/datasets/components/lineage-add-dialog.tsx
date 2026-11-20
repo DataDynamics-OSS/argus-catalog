@@ -3,6 +3,7 @@
 // Dataset 상세 페이지 "리니지" 탭에서 호출되는 3-step 다이얼로그 — 방향 → 데이터셋 선택 →
 // 컬럼 매핑 순으로 수동 리니지를 등록한다.
 
+import { datasourceTypeLabel } from "@/features/datasources/datasource-configs"
 import { Tip } from "@/components/tip"
 import { useCallback, useEffect, useState } from "react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@workspace/ui/components/dialog"
@@ -409,7 +410,7 @@ export function LineageAddDialog({
                     className="w-full justify-between h-9 font-normal"
                   >
                     {selectedDataset
-                      ? `${selectedDataset.datasource_type} > ${selectedDataset.name}`
+                      ? `${datasourceTypeLabel(selectedDataset.datasource_type)} > ${selectedDataset.name}`
                       : "데이터셋 검색 후 선택…"}
                     <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                   </Button>
@@ -439,7 +440,7 @@ export function LineageAddDialog({
                               }`}
                             />
                             <Badge variant="outline" className="mr-2">
-                              {d.datasource_type}
+                              {datasourceTypeLabel(d.datasource_type)}
                             </Badge>
                             <span className="truncate">{d.name}</span>
                             <span className="ml-auto text-sm truncate">

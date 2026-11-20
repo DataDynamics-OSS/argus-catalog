@@ -335,7 +335,9 @@ export default function DatasourcesPage() {
   return (
     <>
       <DashboardHeader title="데이터 소스" />
-      <div className="flex flex-1 flex-col gap-3 p-4 min-h-0">
+      {/* 높이를 화면(머리줄 4rem 제외)에 묶는다 — 트리와 상세가 각자 안에서 스크롤해야
+          상세의 저장 줄(sticky, main 의 아래 여백만큼 -bottom-4)이 보이는 화면 아래에 붙는다 */}
+      <div className="flex h-[calc(100svh-4rem)] shrink-0 flex-col gap-3 p-4">
         <div className="flex flex-wrap items-center gap-2">
           <p className="text-sm">
             조직 · 시스템 · 데이터 소스 구조

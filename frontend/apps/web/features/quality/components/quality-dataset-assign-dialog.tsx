@@ -27,6 +27,7 @@ import { assignQualityDefinition, fetchQualityDefinitions, type QualityDefinitio
 import { describeAssignResult } from "@/features/quality/components/quality-assign-dialog"
 import { QualitySqlPreviewBox } from "@/features/quality/components/quality-sql-preview"
 import { criteriaText } from "@/features/quality/definitions"
+import { usePermissions } from "@/features/permissions/use-permissions"
 import { toast, notifyError } from "@/lib/notify"
 
 /** 데이터셋 품질 탭의 "지표 할당" — 미리 정한 품질 지표 하나를 골라 이 데이터셋의 컬럼들에 할당한다. */
@@ -43,6 +44,9 @@ export function QualityDatasetAssignDialog({ open, datasetId, columns, assigned,
   const [definitions, setDefinitions] = useState<QualityDefinition[]>([])
   // 불러오는 중 · 실패 · 없음을 구분한다
   const [state, setState] = useState<"loading" | "ready" | "failed">("loading")
+  // 관리 › 데이터 품질 은 관리자 · quality.manage 만 연다 — 못 여는 사람에겐 링크 대신 글자만(DEF-158)
+  const { canUseFeature } = usePermissions()
+  const canOpenQualityAdmin = canUseFeature("quality.manage")
   const [definitionId, setDefinitionId] = useState("")
   const [picked, setPicked] = useState<Set<string>>(new Set())
   // 쿼리를 볼 컬럼 — 고른 컬럼마다 쿼리는 컬럼 이름만 다르므로 한 번에 하나만 보여 준다
@@ -115,8 +119,10 @@ export function QualityDatasetAssignDialog({ open, datasetId, columns, assigned,
           <DialogTitle>품질 지표 할당</DialogTitle>
           <DialogDescription>
             미리 정해 둔 품질 지표를 이 데이터셋의 컬럼에 할당합니다. 지표는{" "}
-            <Link href="/dashboard/quality-runs?tab=definitions" className="underline">데이터 품질 &gt; 품질 지표</Link>
-            {" "}에서 만들고 고칩니다.
+            {canOpenQualityAdmin
+              ? <Link href="/dashboard/quality-runs?tab=definitions" className="underline">데이터 품질 &gt; 품질 지표</Link>
+              : <span>관리 › 데이터 품질 › 품질 지표</span>}
+            {" "}에서 {canOpenQualityAdmin ? "만들고 고칩니다." : "관리자나 데이터 품질 관리를 위임받은 사람이 만들고 고칩니다."}
           </DialogDescription>
         </DialogHeader>
 

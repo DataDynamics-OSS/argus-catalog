@@ -10,19 +10,19 @@
  *   viewer 가 다시 강조해야 색이 입혀진다. 렌더 후 DOM 을 고치면 재렌더 때 덮어써질 수 있어
  *   (실제로 강조가 붙지 않았다) 문자열 단계에서 강조까지 끝낸 결과를 주입한다.
  *   언어가 지정되고 등록된 경우에만 강조한다(편집기와 동일 — 언어 없음은 자동 감지하지 않음).
- * - 저장 HTML 을 그대로 주입하지 않고 DOMPurify 로 정화한다 — ``<script>``·``on*`` 핸들러·
- *   ``javascript:`` URL 제거. TipTap 출력(style·data-*·data: 이미지·체크박스)은 유지.
+ * - 저장 HTML 을 그대로 주입하지 않고 DOMPurify 로 정화한다(sanitize.ts ``sanitizeRichHtml``) — ``<script>``·``on*`` 핸들러·
+ *   ``javascript:`` URL · ``<style>`` · ``<form>`` 제거. TipTap 출력(style 속성·data-*·data: 이미지·체크박스)은 유지.
  * - 코드 블록에 편집기와 같은 줄 번호 gutter 를 붙인다(code-block.tsx 의 ``decorateCodeBlock``).
  */
 
 import { useMemo } from "react"
-import DOMPurify from "dompurify"
 import hljs from "highlight.js/lib/core"
 import { common } from "lowlight"
 
 import { cn } from "@workspace/ui/lib/utils"
 
 import { decorateCodeBlock } from "./code-block"
+import { sanitizeRichHtml } from "./sanitize"
 
 // editor 의 lowlight 와 동일한 ``common`` 언어 셋을 highlight.js core 인스턴스에도
 // 한 번만 등록. 같은 모듈을 import 한 다른 viewer 들과 공유된다.
@@ -89,7 +89,8 @@ export function RichTextViewer({ html, className, onClick, title }: RichTextView
   const safeHtml = useMemo(() => {
     if (typeof document === "undefined") return "" // SSR — 본문은 클라이언트에서 그린다
     const tpl = document.createElement("template")
-    tpl.innerHTML = DOMPurify.sanitize(html ?? "")
+    // 정화 규칙은 sanitize.ts(``sanitizeRichHtml``) — ``<style>`` · ``<form>`` 도 막는다.
+    tpl.innerHTML = sanitizeRichHtml(html)
     tpl.content.querySelectorAll<HTMLElement>("pre > code").forEach((code) => {
       decorateCodeBlock(code)
       const lang = code.className.match(/(?:language|lang)-([\w-]+)/i)?.[1]

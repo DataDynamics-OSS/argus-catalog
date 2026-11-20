@@ -59,7 +59,7 @@ from app.catalog.schemas import (
     TagUsage,
 )
 from app.catalog.sync_runs_service import legacy_sync_locks
-from app.core.auth import AdminUser, CurrentUser, OptionalUser, TokenUser, assert_owner_or_admin
+from app.core.auth import AdminUser, CurrentUser, OptionalUser, TokenUser
 from app.core.config import settings
 from app.core.database import get_session
 from app.permissions.router import (
@@ -107,10 +107,27 @@ DatasourceSyncer = Annotated[TokenUser, Depends(require_feature_granted("datasou
 # 화면 수집(start_run)도 이 잠금을 확인하도록 sync_runs_service 에 둔다(DEF-070).
 _sync_locks = legacy_sync_locks
 
+async def reject_manual_datasource(datasource_id: int, session: AsyncSession = Depends(get_session)) -> None:
+    """경로의 데이터 소스가 수동 등록 데이터 소스(TODO-CAT-001)면 409 — 원천 접속 · 직접 관리 조작을 막는다."""
+    from app.catalog.catalogs_service import is_manual_datasource
+    from app.catalog.models import Datasource as _Datasource
+    if is_manual_datasource(await session.get(_Datasource, datasource_id)):
+        raise HTTPException(
+            status_code=409,
+            detail="수동 등록 데이터 소스는 원천 접속이 없고 카탈로그가 관리합니다. 카탈로그 화면에서 관리하세요.")
+
+
+NotManual = Depends(reject_manual_datasource)
+
+
 @router.get("/datasources", response_model=list[DatasourceResponse])
-async def list_datasources(_user: CurrentUser, session: AsyncSession = Depends(get_session)):
-    """전체 데이터 소스 목록을 조회한다."""
-    return await service.list_datasources(session)
+async def list_datasources(
+    _user: CurrentUser,
+    include_manual: bool = Query(False, description="수동 등록 데이터 소스(카탈로그 내부용)도 포함"),
+    session: AsyncSession = Depends(get_session),
+):
+    """전체 데이터 소스 목록을 조회한다. 수동 등록 데이터 소스는 기본 제외(TODO-CAT-001)."""
+    return await service.list_datasources(session, include_manual=include_manual)
 
 
 @router.post("/datasources", response_model=DatasourceResponse)
@@ -129,6 +146,7 @@ async def test_datasource_connection(
     """
     config = req.config
     if req.datasource_id is not None:
+        await reject_manual_datasource(req.datasource_id, session)
         from app.catalog.datasource_secrets import (
             DatasourceSecretError,
             SecretTargetChangedError,
@@ -149,7 +167,7 @@ async def test_datasource_connection(
     return await service.test_datasource_connection(req.type, config)
 
 
-@router.put("/datasources/{datasource_id}", response_model=DatasourceResponse)
+@router.put("/datasources/{datasource_id}", response_model=DatasourceResponse, dependencies=[NotManual])
 async def update_datasource(_guard: DatasourceManager,
     datasource_id: int, req: DatasourceUpdate, session: AsyncSession = Depends(get_session)
 ):
@@ -171,7 +189,7 @@ async def get_datasource_metadata(
     return metadata
 
 
-@router.get("/datasources/{datasource_id}/configuration", response_model=DatasourceConfigurationResponse)
+@router.get("/datasources/{datasource_id}/configuration", response_model=DatasourceConfigurationResponse, dependencies=[NotManual])
 async def get_datasource_configuration(
     datasource_id: int, session: AsyncSession = Depends(get_session),
     # 접속 정보 — 명시 허용형 기능 권한(datasources.connection, 미설정이면 admin 전용).
@@ -185,7 +203,7 @@ async def get_datasource_configuration(
     return config
 
 
-@router.put("/datasources/{datasource_id}/configuration", response_model=DatasourceConfigurationResponse)
+@router.put("/datasources/{datasource_id}/configuration", response_model=DatasourceConfigurationResponse, dependencies=[NotManual])
 async def save_datasource_configuration(_guard: DatasourceManager,
     datasource_id: int,
     req: DatasourceConfigurationSave,
@@ -228,7 +246,7 @@ async def get_datasource_delete_impact(
     return await service.get_datasource_delete_impact(session, datasource_id)
 
 
-@router.delete("/datasources/{datasource_id}")
+@router.delete("/datasources/{datasource_id}", dependencies=[NotManual])
 async def delete_datasource(_guard: DatasourceManager,
     datasource_id: int,
     force: bool = Query(False, description="true 면 소속 데이터셋과 하위를 함께 삭제(cascade)"),
@@ -267,7 +285,7 @@ async def delete_datasource(_guard: DatasourceManager,
     return {"status": "ok", "message": "Datasource deleted"}
 
 
-@router.post("/datasources/{datasource_id}/sync")
+@router.post("/datasources/{datasource_id}/sync", dependencies=[NotManual])
 async def sync_datasource(_guard: DatasourceSyncer,
     datasource_id: int,
     database: str | None = Query(None, description="Specific database to sync (optional)"),
@@ -320,6 +338,7 @@ async def sync_datasource(_guard: DatasourceSyncer,
         "tables_updated": result.tables_updated,
         "tables_removed": result.tables_removed,
         "tables_total": result.tables_total,
+        "tables_skipped": result.tables_skipped,
         "samples_uploaded": result.samples_uploaded,
     }
 
@@ -491,6 +510,8 @@ async def list_datasets(
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=100, description="Items per page"),
     card: bool = Query(False, description="카드 보기용 필드(컬럼 미리보기)도 채운다"),
+    catalog_id: int | None = Query(None, description="소속 카탈로그"),
+    manual: bool | None = Query(None, description="true: 수동 데이터셋만, false: 수동 데이터셋 제외"),
     session: AsyncSession = Depends(get_session),
 ):
     """필터·페이지네이션 옵션으로 데이터셋 목록을 조회한다(status 미지정이면 removed 제외)."""
@@ -500,6 +521,7 @@ async def list_datasets(
         category_id=category_id, taxonomy_id=taxonomy_id, uncategorized=uncategorized,
         tag_id=tag_id, term_id=term_id,
         page=page, page_size=page_size, card=card,
+        catalog_id=catalog_id, manual=manual,
     )
 
 
@@ -507,12 +529,22 @@ async def list_datasets(
 async def create_dataset(req: DatasetCreate, current: CurrentUser, _perm=Depends(require_dataset_create), session: AsyncSession = Depends(get_session)):
     """데이터셋 직접 등록 — 관리자·동기화 계정(datasources.sync), 또는 설정에서 허용한 경우 일반 사용자
     (기능 권한 datasets.create 적용). 생성자(created_by)가 소유자가 된다."""
-    from app.catalog.catalogs_service import CatalogConflictError
+    from app.catalog.catalogs_service import (
+        CatalogConflictError,
+        CatalogNotFoundError,
+        ManualMappedError,
+    )
     try:
         return await service.create_dataset(session, req, created_by=current.username)
+    except ManualMappedError as e:
+        # metadata-sync 는 이 code 를 실패가 아닌 "수동 매핑으로 건너뜀"으로 센다(TODO-CAT-001)
+        logger.info("데이터셋 생성 건너뜀(수동 매핑): user=%s reason=%s", current.username, e)
+        raise HTTPException(status_code=409, detail={"code": ManualMappedError.code, "message": str(e)})
     except CatalogConflictError as e:
         logger.warning("데이터셋 생성 거부(카탈로그): user=%s reason=%s", current.username, e)
         raise HTTPException(status_code=409, detail=str(e))
+    except CatalogNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
         logger.warning("데이터셋 생성 거부: user=%s reason=%s", current.username, e)
         raise HTTPException(status_code=400, detail=str(e))
@@ -547,11 +579,8 @@ async def get_dataset_by_urn(urn: str, user: OptionalUser, session: AsyncSession
 async def update_dataset(
     dataset_id: int, req: DatasetUpdate, current: CurrentUser, session: AsyncSession = Depends(get_session),
 ):
-    """데이터셋 수정 — 소유자(생성자) 또는 관리자만."""
-    created_by = await service.get_dataset_created_by(session, dataset_id)
-    if created_by is None and not await service.get_dataset(session, dataset_id):
-        raise HTTPException(status_code=404, detail="데이터셋을 찾을 수 없습니다.")
-    assert_owner_or_admin(current, created_by, "데이터셋")
+    """데이터셋 수정 — 소유자(생성자 또는 소유자 목록) 또는 관리자(TODO-154)."""
+    await _assert_dataset_editor(session, dataset_id, current)
     try:
         dataset = await service.update_dataset(session, dataset_id, req, actor=current.username)
     except ValueError as e:  # 저장값과 합친 검증(AI-Ready 시간범위 앞뒤) — 변경은 커밋 전이라 버려진다
@@ -576,6 +605,22 @@ async def get_ai_ready_defaults(_user: OptionalUser, session: AsyncSession = Dep
         "licenses": [{"code": k, "label": v} for k, v in ai_ready.LICENSES.items()],
         "allowed_uses": [{"code": k, "label": v} for k, v in ai_ready.ALLOWED_USES.items()],
     }
+
+
+@router.get("/ai-ready/public-base")
+async def get_ai_ready_public_base(_user: CurrentUser, request: Request, session: AsyncSession = Depends(get_session)):
+    """내보내기에 쓰는 외부 공개 주소(설정 › AI-Ready) — 화면의 *API 주소* 복사용(DEF-142).
+
+    DCAT ``@id`` · 데이터 카드와 같은 값(``public_base``)이다. 설정 미리보기(``/settings/ai-ready/public-url``)는
+    관리자 전용이라, 로그인한 사용자에게는 방식과 확정된 주소만 읽기 전용으로 준다. ``mode`` 가 REQUEST 면
+    요청 주소라 화면은 자기 주소(브라우저 origin)를 그대로 써도 된다.
+    """
+    from app.catalog import public_url
+    from app.settings.service import get_config_by_category
+
+    cfg = await get_config_by_category(session, "ai_ready")
+    mode = (cfg.get(public_url.KEY_MODE) or "REQUEST").upper()
+    return {"mode": mode, "base": public_url.resolve(cfg, request)}
 
 
 @router.get("/datasets/{dataset_id}/ai-ready/suggestions")
@@ -654,7 +699,7 @@ async def put_ai_ready_judgment(
     dataset_id: int, item_key: str, req: AiReadyJudgmentRequest, current: CurrentUser,
     session: AsyncSession = Depends(get_session),
 ):
-    """체크리스트 항목의 수동 판정 저장 — 데이터셋 수정과 같은 권한(소유자(생성자) 또는 관리자). 자동 판정보다 우선한다."""
+    """체크리스트 항목의 수동 판정 저장 — 데이터셋 소유자(생성자 또는 소유자 목록) 또는 관리자. 자동 판정보다 우선한다."""
     from app.catalog import ai_ready_check
 
     await _assert_dataset_editor(session, dataset_id, current)
@@ -672,7 +717,7 @@ async def put_ai_ready_judgment(
 async def delete_ai_ready_judgment(
     dataset_id: int, item_key: str, current: CurrentUser, session: AsyncSession = Depends(get_session),
 ):
-    """수동 판정을 지워 자동 판정으로 되돌린다 — 소유자(생성자) 또는 관리자."""
+    """수동 판정을 지워 자동 판정으로 되돌린다 — 데이터셋 소유자(생성자 또는 소유자 목록) 또는 관리자."""
     from app.catalog import ai_ready_check
 
     await _assert_dataset_editor(session, dataset_id, current)
@@ -694,10 +739,14 @@ class DistributionRequest(BaseModel):
 
 
 async def _assert_dataset_editor(session: AsyncSession, dataset_id: int, current) -> None:
-    created_by = await service.get_dataset_created_by(session, dataset_id)
-    if created_by is None and not await service.dataset_exists(session, dataset_id):
-        raise HTTPException(status_code=404, detail="데이터셋을 찾을 수 없습니다.")
-    assert_owner_or_admin(current, created_by, "데이터셋")
+    """데이터셋 일반 편집 — 데이터셋 소유자(생성자 또는 소유자 목록) 또는 관리자(TODO-154).
+
+    AI-Ready 알림을 받는 사람과 같은 기준이다(DEF-138). 데이터셋이 없으면 404.
+    삭제 · 소유자 추가 · 삭제는 생성자 · 관리자만(:func:`_require_dataset_creator`).
+    """
+    from app.catalog.dataset_owner import assert_dataset_owner_or_admin
+
+    await assert_dataset_owner_or_admin(session, current, dataset_id)
 
 
 @router.get("/datasets/{dataset_id}/distributions")
@@ -714,7 +763,7 @@ async def list_distributions(dataset_id: int, _user: OptionalUser, session: Asyn
 async def create_distribution(
     dataset_id: int, req: DistributionRequest, current: CurrentUser, session: AsyncSession = Depends(get_session),
 ):
-    """배포본 추가 — 소유자(생성자) 또는 관리자. 접속 URL 필수, 체크섬은 알고리즘별 16진수 길이를 검사한다."""
+    """배포본 추가 — 데이터셋 소유자 또는 관리자. 접속 URL 필수, 체크섬은 알고리즘별 16진수 길이를 검사한다."""
     from app.catalog import ai_ready_export
 
     await _assert_dataset_editor(session, dataset_id, current)
@@ -728,12 +777,38 @@ async def create_distribution(
     return ai_ready_export.distribution_dict(row)
 
 
+class DistributionOrderRequest(BaseModel):
+    ids: list[int]
+
+
+@router.post("/datasets/{dataset_id}/distributions/reorder", dependencies=[Depends(require_dataset_feature("datasets.edit"))])
+async def reorder_distributions(
+    dataset_id: int, req: DistributionOrderRequest, current: CurrentUser, session: AsyncSession = Depends(get_session),
+):
+    """배포본 순서 바꾸기 — 이 데이터셋 배포본 id 전부를 새 순서로. 데이터셋 소유자(생성자 또는 소유자 목록) 또는 관리자.
+
+    DCAT · Croissant · 데이터 카드 · 페더레이션 상세가 이 순서를 따른다. 목록이 서버와 다르면 409.
+    """
+    from app.catalog import ai_ready_export
+
+    await _assert_dataset_editor(session, dataset_id, current)
+    try:
+        rows = await ai_ready_export.reorder_distributions(session, dataset_id, req.ids)
+    except ValueError as e:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail=str(e))
+    await session.commit()
+    for r in rows:
+        await session.refresh(r)
+    return [ai_ready_export.distribution_dict(r) for r in rows]
+
+
 @router.put("/datasets/{dataset_id}/distributions/{dist_id}", dependencies=[Depends(require_dataset_feature("datasets.edit"))])
 async def update_distribution(
     dataset_id: int, dist_id: int, req: DistributionRequest, current: CurrentUser,
     session: AsyncSession = Depends(get_session),
 ):
-    """배포본 수정(전체 교체) — 소유자(생성자) 또는 관리자."""
+    """배포본 수정(전체 교체) — 데이터셋 소유자(생성자 또는 소유자 목록) 또는 관리자."""
     from app.catalog import ai_ready_export
 
     await _assert_dataset_editor(session, dataset_id, current)
@@ -753,7 +828,7 @@ async def update_distribution(
 async def delete_distribution(
     dataset_id: int, dist_id: int, current: CurrentUser, session: AsyncSession = Depends(get_session),
 ):
-    """배포본 삭제 — 소유자(생성자) 또는 관리자."""
+    """배포본 삭제 — 데이터셋 소유자(생성자 또는 소유자 목록) 또는 관리자."""
     from app.catalog import ai_ready_export
 
     await _assert_dataset_editor(session, dataset_id, current)
@@ -779,7 +854,7 @@ async def list_dataset_versions(dataset_id: int, _user: OptionalUser, session: A
 async def delete_dataset_version(
     dataset_id: int, version_id: int, current: CurrentUser, session: AsyncSession = Depends(get_session),
 ):
-    """잘못 남긴 버전 이력 한 줄 삭제 — 소유자(생성자) 또는 관리자. 데이터셋의 현재 버전 값은 바꾸지 않는다."""
+    """잘못 남긴 버전 이력 한 줄 삭제 — 데이터셋 소유자(생성자 또는 소유자 목록) 또는 관리자. 현재 버전 값은 바꾸지 않는다."""
     from sqlalchemy import delete as sql_delete
 
     from app.catalog.models import DatasetVersion
@@ -796,11 +871,8 @@ async def delete_dataset_version(
 
 @router.delete("/datasets/{dataset_id}", dependencies=[Depends(require_feature("datasets.delete"))])
 async def delete_dataset(dataset_id: int, current: CurrentUser, session: AsyncSession = Depends(get_session)):
-    """데이터셋 삭제 — 소유자(생성자) 또는 관리자만."""
-    created_by = await service.get_dataset_created_by(session, dataset_id)
-    if created_by is None and not await service.get_dataset(session, dataset_id):
-        raise HTTPException(status_code=404, detail="데이터셋을 찾을 수 없습니다.")
-    assert_owner_or_admin(current, created_by, "데이터셋")
+    """데이터셋 삭제 — 생성자 또는 관리자만(소유자 목록 사용자는 403, TODO-154)."""
+    await _require_dataset_creator(current, session, dataset_id)
     if not await service.delete_dataset(session, dataset_id):
         raise HTTPException(status_code=404, detail="데이터셋을 찾을 수 없습니다.")
     return {"status": "ok", "message": "Dataset deleted"}
@@ -810,7 +882,7 @@ async def delete_dataset(dataset_id: int, current: CurrentUser, session: AsyncSe
 # 리니지
 # ---------------------------------------------------------------------------
 
-@router.get("/datasources/{datasource_id}/erd")
+@router.get("/datasources/{datasource_id}/erd", dependencies=[NotManual])
 async def get_datasource_erd(
     datasource_id: int, _user: CurrentUser, session: AsyncSession = Depends(get_session),
 ):
@@ -1175,12 +1247,15 @@ async def get_dataset_lineage(dataset_id: int, session: AsyncSession = Depends(g
 # ---------------------------------------------------------------------------
 
 async def _require_dataset_editor(current, session: AsyncSession, dataset_id: int) -> None:
-    """태그·소유자·용어 연결 — 데이터셋 수정과 같은 기준(생성자 또는 관리자). 데이터셋이 없으면 404."""
-    created_by = await service.get_dataset_created_by(session, dataset_id)
-    if created_by is None and not await service.dataset_exists(session, dataset_id):
-        logger.warning("데이터셋 편집 대상 없음: dataset_id=%d user=%s", dataset_id, current.username)
-        raise HTTPException(status_code=404, detail="데이터셋을 찾을 수 없습니다.")
-    assert_owner_or_admin(current, created_by, "데이터셋")
+    """태그 · 용어 연결 · 스키마 · 속성 · 샘플 — 데이터셋 수정과 같은 기준(생성자 · 소유자 목록 · 관리자). 없으면 404."""
+    await _assert_dataset_editor(session, dataset_id, current)
+
+
+async def _require_dataset_creator(current, session: AsyncSession, dataset_id: int) -> None:
+    """데이터셋 삭제 · 소유자 추가 · 삭제 — 생성자 또는 관리자만(권한 상승 방지, TODO-154). 없으면 404."""
+    from app.catalog.dataset_owner import assert_dataset_creator_or_admin
+
+    await assert_dataset_creator_or_admin(session, current, dataset_id)
 
 
 @router.post("/datasets/{dataset_id}/tags/{tag_id}", dependencies=[Depends(require_dataset_feature("datasets.edit"))])
@@ -1217,8 +1292,8 @@ async def remove_dataset_tag(current: CurrentUser,
 async def add_dataset_owner(current: CurrentUser,
     dataset_id: int, req: OwnerCreate, session: AsyncSession = Depends(get_session)
 ):
-    """데이터셋에 소유자를 추가한다."""
-    await _require_dataset_editor(current, session, dataset_id)
+    """데이터셋에 소유자를 추가한다 — 생성자 또는 관리자만(소유자 목록 사용자는 403)."""
+    await _require_dataset_creator(current, session, dataset_id)
     owner = await service.add_dataset_owner(session, dataset_id, req)
     if not owner:
         raise HTTPException(status_code=404, detail="데이터셋을 찾을 수 없습니다.")
@@ -1229,8 +1304,8 @@ async def add_dataset_owner(current: CurrentUser,
 async def remove_dataset_owner(current: CurrentUser,
     dataset_id: int, owner_id: int, session: AsyncSession = Depends(get_session)
 ):
-    """데이터셋에서 소유자를 제거한다."""
-    await _require_dataset_editor(current, session, dataset_id)
+    """데이터셋에서 소유자를 제거한다 — 생성자 또는 관리자만(소유자 목록 사용자는 403)."""
+    await _require_dataset_creator(current, session, dataset_id)
     if not await service.remove_dataset_owner(session, owner_id, dataset_id):
         raise HTTPException(status_code=404, detail="소유자를 찾을 수 없습니다.")
     return {"status": "ok"}
@@ -1268,8 +1343,13 @@ async def update_schema_fields(
     fields: list[SchemaFieldCreate],
     current: CurrentUser,
     session: AsyncSession = Depends(get_session),
+    clear_empty: bool = Query(False, description="화면 편집 — 보낸 논리명 · 설명이 비어 있으면 지운다(수집은 빈 값이면 기존 값 유지)"),
 ):
-    """데이터셋의 스키마 필드 전체를 교체한다 — 소유자(생성자) 또는 관리자. 데이터셋이 없으면 404."""
+    """데이터셋의 스키마 필드 전체를 교체한다 — 소유자(생성자 또는 소유자 목록) 또는 관리자. 데이터셋이 없으면 404.
+
+    수집(metadata-sync)은 원천 코멘트가 없으면 빈 설명을 보내므로 기본은 빈 논리명 · 설명이면 기존 값을 둔다.
+    화면의 스키마 편집은 ``clear_empty=true`` 로 비운 칸을 지운다(DEF-166).
+    """
     await _require_dataset_editor(current, session, dataset_id)
     # 같은 field_path 가 중복되면 저장(첫 항목)과 변경 이력(마지막 항목)이 어긋나므로 거절
     paths = [f.field_path for f in fields]
@@ -1279,10 +1359,16 @@ async def update_schema_fields(
         raise HTTPException(
             status_code=422, detail=f"중복된 field_path 가 있습니다: {', '.join(dups)}",
         )
-    return await service.update_schema_fields(
-        session, dataset_id,
-        [f.model_dump() for f in fields],
-    )
+    # 단위·산정기준은 요청에 키가 있을 때만 넘긴다 — 키가 없는 호출(수집 어댑터·이전 화면)은 담당자 값을 보존
+    payload = []
+    for f in fields:
+        d = f.model_dump()
+        # 화면 편집(clear_empty)의 논리명 · 설명도 보낸 키만 — 보내지 않은 칸까지 지우지 않게
+        for k in ("unit", "calculation") + (("display_name", "description") if clear_empty else ()):
+            if k not in f.model_fields_set:
+                d.pop(k)
+        payload.append(d)
+    return await service.update_schema_fields(session, dataset_id, payload, clear_empty=clear_empty)
 
 
 @router.put("/datasets/{dataset_id}/properties", response_model=list[DatasetPropertyResponse], dependencies=[Depends(require_dataset_feature("datasets.edit"))])
@@ -1292,7 +1378,7 @@ async def update_dataset_properties(
     current: CurrentUser,
     session: AsyncSession = Depends(get_session),
 ):
-    """데이터셋의 속성 전체를 교체한다 — 소유자(생성자) 또는 관리자. 데이터셋이 없으면 404.
+    """데이터셋의 속성 전체를 교체한다 — 소유자(생성자 또는 소유자 목록) 또는 관리자. 데이터셋이 없으면 404.
 
     metadata-sync 어댑터가 매 sync 마다 datasource-specific 메타를 갱신하기 위해 사용
     (예: Iceberg 의 current_snapshot_id / last_updated_ms). ``argus.`` 내부 키는 payload 에
@@ -1373,7 +1459,7 @@ async def upload_sample_data(
     current: CurrentUser,
     session: AsyncSession = Depends(get_session),
 ):
-    """데이터셋의 CSV 샘플 데이터 파일을 업로드한다 — 소유자(생성자) 또는 관리자."""
+    """데이터셋의 CSV 샘플 데이터 파일을 업로드한다 — 소유자(생성자 또는 소유자 목록) 또는 관리자."""
     await _require_dataset_editor(current, session, dataset_id)
     dataset = await service.get_dataset(session, dataset_id)
     if not dataset:
@@ -1498,7 +1584,7 @@ async def convert_sample_to_parquet(
     current: CurrentUser,
     session: AsyncSession = Depends(get_session),
 ):
-    """기존 CSV 샘플을 parquet 포맷으로 변환한다 — 소유자(생성자) 또는 관리자.
+    """기존 CSV 샘플을 parquet 포맷으로 변환한다 — 소유자(생성자 또는 소유자 목록) 또는 관리자.
 
     저장된 구분자 설정(delimiter.json — 구분자·헤더 유무·인코딩·인용 문자)을 그대로 적용한다.
     """
@@ -1578,7 +1664,7 @@ async def delete_sample_data(
     current: CurrentUser,
     session: AsyncSession = Depends(get_session),
 ):
-    """데이터셋의 샘플 데이터(parquet 또는 CSV)를 삭제한다 — 소유자(생성자) 또는 관리자."""
+    """데이터셋의 샘플 데이터(parquet 또는 CSV)를 삭제한다 — 소유자(생성자 또는 소유자 목록) 또는 관리자."""
     await _require_dataset_editor(current, session, dataset_id)
     dataset = await service.get_dataset(session, dataset_id)
     if not dataset:
@@ -1642,7 +1728,7 @@ async def save_delimiter_config(
     current: CurrentUser,
     session: AsyncSession = Depends(get_session),
 ):
-    """데이터셋 샘플 데이터의 구분자/파싱 설정을 저장한다 — 소유자(생성자) 또는 관리자."""
+    """데이터셋 샘플 데이터의 구분자/파싱 설정을 저장한다 — 소유자(생성자 또는 소유자 목록) 또는 관리자."""
     await _require_dataset_editor(current, session, dataset_id)
     dataset = await service.get_dataset(session, dataset_id)
     if not dataset:

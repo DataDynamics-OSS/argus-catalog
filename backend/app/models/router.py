@@ -22,7 +22,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import AdminUser, CurrentUser, OptionalUser, TokenUser
+from app.core.auth import AdminUser, CurrentUser, OptionalUser, PermissionDenied, TokenUser
 from app.core.database import get_session
 from app.models import service
 from app.models.schemas import (
@@ -73,11 +73,11 @@ async def assert_model_editor(current: TokenUser, session: AsyncSession, model_n
         raise HTTPException(status_code=404, detail=f"모델 '{model_name}'을(를) 찾을 수 없습니다.")
     if not (current.is_admin or current.username in {model.created_by, model.owner} - {None, ""}):
         logger.warning("모델 쓰기 거부: %s (요청자 %s)", model_name, current.username)
-        raise HTTPException(status_code=403, detail="모델의 소유자 또는 관리자만 수행할 수 있습니다.")
+        raise PermissionDenied("모델의 소유자 또는 관리자만 수행할 수 있습니다.", user=current, kind="OWNER", key="모델 소유자")
     # 역할의 기능 권한(수정 models.edit · 삭제 models.delete, 기본 허용형)도 본다(TODO-122)
     if not await check_feature(session, current, feature):
         logger.warning("모델 쓰기 거부(기능 권한 %s): %s (요청자 %s)", feature, model_name, current.username)
-        raise HTTPException(status_code=403, detail=f"기능 권한이 없습니다: {feature}")
+        raise PermissionDenied(f"기능 권한이 없습니다: {feature}", user=current, kind="FEATURE", key=feature)
     return model
 
 
@@ -420,7 +420,7 @@ async def update_version_stage(current: CurrentUser,
         if not await check_feature_granted(session, current, PROMOTE_FEATURE):
             logger.warning("스테이지 변경 거부(운영 승격 권한 없음): %s v%d %s → %s by %s",
                            model_name, version, ver.stage, stage, current.username)
-            raise HTTPException(status_code=403, detail=f"기능 권한이 없습니다: {PROMOTE_FEATURE} (운영 단계 변경)")
+            raise PermissionDenied(f"기능 권한이 없습니다: {PROMOTE_FEATURE} (운영 단계 변경)", user=current, kind="FEATURE", key=PROMOTE_FEATURE)
 
     ver.stage = stage
     ver.stage_changed_at = datetime.now(timezone.utc)

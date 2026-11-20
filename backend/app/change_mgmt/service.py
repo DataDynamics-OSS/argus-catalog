@@ -10,6 +10,8 @@ from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from temporalio.client import Client, WorkflowExecutionStatus
+from temporalio.exceptions import WorkflowAlreadyStartedError
 
 from app.catalog.models import DatasetSchema
 from app.change_mgmt import models, schemas, temporal_client
@@ -433,6 +435,69 @@ async def count_inbox(session: AsyncSession, username: str) -> int:
 # Temporal 워크플로우 트리거
 # ---------------------------------------------------------------------------
 
+class WorkflowIdConflictError(Exception):
+    """상신하려는 CR 의 워크플로우 ID 를 다른 실행이 쓰고 있어 기동할 수 없다(라우터가 409 로 안내).
+
+    메시지는 사용자에게 그대로 보인다.
+    """
+
+
+# 삭제된 CR 의 워크플로우를 강제 종료할 때 Temporal 이력에 남기는 사유
+ORPHAN_TERMINATE_REASON = "변경 요청이 삭제됨"
+
+
+async def _running_workflow_owner(client: Client, workflow_id: str) -> tuple[str, int | None] | None:
+    """실행 중인 워크플로우의 (run_id, 기동 입력의 cr_id) — 실행 중이 아니면 None.
+
+    cr_id 는 이력 첫 이벤트(WorkflowExecutionStarted)의 입력에서 읽는다. 읽지 못하면 cr_id 는 None.
+    """
+    desc = await client.get_workflow_handle(workflow_id).describe()
+    if desc.status != WorkflowExecutionStatus.RUNNING:
+        return None
+    handle = client.get_workflow_handle(workflow_id, run_id=desc.run_id)
+    cr_id: int | None = None
+    try:
+        async for event in handle.fetch_history_events(page_size=1):
+            payloads = event.workflow_execution_started_event_attributes.input.payloads
+            decoded = await client.data_converter.decode(payloads, [WorkflowInput])
+            cr_id = int(decoded[0].cr_id)
+            break
+    except (IndexError, AttributeError, TypeError, ValueError, RuntimeError) as e:
+        logger.warning("워크플로우 기동 입력을 읽지 못함: workflow=%s: %s", workflow_id, e)
+    return desc.run_id, cr_id
+
+
+async def _clear_orphan_workflow(
+    session: AsyncSession, client: Client, cr: models.ChangeRequest, workflow_id: str,
+) -> None:
+    """같은 ID 로 실행 중인 워크플로우가 삭제된 CR 의 것(고아)이면 강제 종료한다(DEF-187).
+
+    CR 코드는 "올해 가장 큰 번호 + 1" 이라 마지막 CR 이 데이터셋 삭제로 연쇄 삭제되면 번호를 다시 쓴다.
+    지워진 CR 의 워크플로우가 아직 실행 중이면(워커가 없어 취소 Signal 이 처리되지 않은 경우 등)
+    같은 ID 로 기동할 수 없다. 기동 입력의 cr_id 로 주인을 확인해, DB 에 없는 CR 의 것만 끝낸다 —
+    이 CR 자신(동시 상신)이거나 살아 있는 CR 의 것이면 건드리지 않고 ``WorkflowIdConflictError``.
+    """
+    owner = await _running_workflow_owner(client, workflow_id)
+    if owner is None:  # 그 사이 끝났다 — 다시 기동하면 된다
+        return
+    run_id, owner_cr_id = owner
+    if owner_cr_id == cr.id:
+        raise WorkflowIdConflictError("이미 상신 처리 중인 변경 요청입니다. 새로고침 후 상태를 확인하세요.")
+    alive = owner_cr_id is None or (await session.execute(
+        select(models.ChangeRequest.id).where(models.ChangeRequest.id == owner_cr_id)
+    )).scalar_one_or_none() is not None
+    if alive:
+        logger.error("워크플로우 ID 충돌 — 주인을 확인할 수 없어 그대로 둠: cr=%s workflow=%s run=%s owner_cr_id=%s",
+                     cr.cr_code, workflow_id, run_id, owner_cr_id)
+        raise WorkflowIdConflictError(
+            f"변경 요청 코드 {cr.cr_code} 의 결재 워크플로우({workflow_id})가 이미 실행 중이라 상신할 수 없습니다. "
+            "관리자에게 워크플로우 정리를 요청하거나, 변경 요청을 새로 만들어 상신하세요."
+        )
+    logger.warning("삭제된 CR 의 워크플로우가 남아 있어 강제 종료: workflow=%s run=%s owner_cr_id=%s (새 CR id=%d)",
+                   workflow_id, run_id, owner_cr_id, cr.id)
+    await client.get_workflow_handle(workflow_id, run_id=run_id).terminate(reason=ORPHAN_TERMINATE_REASON)
+
+
 async def submit_cr(
     session: AsyncSession, cr: models.ChangeRequest, notify_channels: list[str]
 ) -> str:
@@ -440,6 +505,9 @@ async def submit_cr(
 
     반환값은 Temporal Workflow ID(``cr-{cr_code}``). 워크플로우 기동이 먼저라 기동 실패(RPCError)
     시 CR 상태는 바뀌지 않는다. flush 만 하고 커밋은 호출 측.
+
+    같은 ID 의 워크플로우가 이미 실행 중이면(코드가 재사용된 경우) 삭제된 CR 의 고아 워크플로우만
+    끝내고 다시 기동한다. 그 밖에는 ``WorkflowIdConflictError`` — 예전에는 500 이었다(DEF-187).
     """
     client = temporal_client.get_client()
     workflow_id = f"cr-{cr.cr_code}"
@@ -455,12 +523,24 @@ async def submit_cr(
         notify_channels=notify_channels,
     )
 
-    await client.start_workflow(
-        ChangeApprovalWorkflow.run,
-        input,
-        id=workflow_id,
-        task_queue=temporal_client.TASK_QUEUE,
-    )
+    async def _start() -> None:
+        await client.start_workflow(
+            ChangeApprovalWorkflow.run,
+            input,
+            id=workflow_id,
+            task_queue=temporal_client.TASK_QUEUE,
+        )
+
+    try:
+        await _start()
+    except WorkflowAlreadyStartedError:
+        await _clear_orphan_workflow(session, client, cr, workflow_id)
+        try:
+            await _start()
+        except WorkflowAlreadyStartedError as e:  # 정리 직후 다른 요청이 먼저 기동(동시 상신)
+            raise WorkflowIdConflictError(
+                "이미 상신 처리 중인 변경 요청입니다. 새로고침 후 상태를 확인하세요."
+            ) from e
 
     cr.status = schemas.CRStatus.SUBMITTED.value
     cr.workflow_id = workflow_id
@@ -540,27 +620,40 @@ async def in_flight_workflow_ids(session: AsyncSession, dataset_ids: list[int]) 
     )).scalars().all())
 
 
-async def cancel_workflows_best_effort(workflow_ids: list[str]) -> int:
-    """데이터셋·데이터 소스 삭제로 CR 이 연쇄 삭제될 때 진행 중 워크플로우에 취소 Signal 을 보낸다.
+async def terminate_orphan_workflow(workflow_id: str) -> None:
+    """삭제된 CR 의 워크플로우를 강제 종료한다(RPCError 는 호출 측이 처리).
 
-    예전에는 워크플로우가 그대로 남아 결재 대기·예정 시각 대기를 이어갔다(IT CHG-T26).
+    취소 Signal 은 워커가 처리해야 끝나므로, 워커가 없거나 밀려 있으면 워크플로우가 실행 중으로 남아
+    같은 코드를 다시 쓰는 CR 의 상신을 막는다(DEF-187). CR 행이 이미 없어 남길 상태도 없으니
+    서버에서 바로 끝낸다.
+    """
+    logger.debug("삭제된 CR 의 워크플로우 강제 종료: workflow=%s", workflow_id)
+    client = temporal_client.get_client()
+    await client.get_workflow_handle(workflow_id).terminate(reason=ORPHAN_TERMINATE_REASON)
+
+
+async def cancel_workflows_best_effort(workflow_ids: list[str]) -> int:
+    """데이터셋·데이터 소스 삭제로 CR 이 연쇄 삭제될 때 진행 중 워크플로우를 강제 종료한다.
+
+    예전에는 워크플로우가 그대로 남아 결재 대기·예정 시각 대기를 이어갔고(IT CHG-T26), 그 뒤에는
+    취소 Signal 만 보내 워커가 처리하지 못하면 실행 중으로 남았다(DEF-187).
     삭제는 막지 않는다 — Temporal 미연결·호출 실패는 로그만 남긴다(남은 워크플로우의 액티비티는
-    없는 CR 을 건너뛴다, ``activities.py``). 보낸 건수를 반환한다.
+    없는 CR 을 건너뛰고, 같은 코드의 새 CR 을 상신할 때 ``submit_cr`` 이 정리한다). 끝낸 건수를 반환한다.
     """
     if not workflow_ids:
         return 0
     if not temporal_client.is_connected():
-        logger.warning("Temporal 미연결 — 삭제된 CR 의 워크플로우 %d건을 취소하지 못했습니다: %s",
+        logger.warning("Temporal 미연결 — 삭제된 CR 의 워크플로우 %d건을 종료하지 못했습니다: %s",
                        len(workflow_ids), ", ".join(workflow_ids))
         return 0
     sent = 0
     for wf in workflow_ids:
         try:
-            await cancel_cr(wf)
+            await terminate_orphan_workflow(wf)
             sent += 1
         except Exception as e:  # noqa: BLE001 — 이미 종료된 워크플로우(NOT_FOUND) 등
-            logger.warning("삭제된 CR 의 워크플로우 취소 실패: workflow=%s: %s", wf, e)
-    logger.info("삭제된 CR 의 워크플로우 취소 Signal: requested=%d sent=%d", len(workflow_ids), sent)
+            logger.warning("삭제된 CR 의 워크플로우 종료 실패: workflow=%s: %s", wf, e)
+    logger.info("삭제된 CR 의 워크플로우 강제 종료: requested=%d terminated=%d", len(workflow_ids), sent)
     return sent
 
 
@@ -598,7 +691,7 @@ async def dataset_creator(session: AsyncSession, dataset_id: int) -> tuple[bool,
 
 
 async def can_ack_notification(session: AsyncSession, log: models.NotificationLog, user) -> bool:
-    """통지 ACK 를 할 수 있는 사람인지 — 관리자, 변경 요청자, 대상 데이터셋 소유자, 그 통지의 수신자 본인(DEF-122).
+    """통지 ACK 를 할 수 있는 사람인지 — 관리자, 변경 요청자, 대상 데이터셋 소유자(생성자 · 소유자 목록), 그 통지의 수신자 본인(DEF-122).
 
     수신자 본인은 로그의 ``recipient`` · 참조자 이메일 · 소비자 연락 이메일 중 하나가 내 이메일 또는 사용자 이름과
     같을 때다(이메일 대소문자 무시).
@@ -614,6 +707,10 @@ async def can_ack_notification(session: AsyncSession, log: models.NotificationLo
             return True
         if ((await dataset_creator(session, cr.dataset_id))[1] or "").lower() in me:
             return True
+        from app.catalog.dataset_owner import is_dataset_owner
+
+        if cr.dataset_id is not None and await is_dataset_owner(session, cr.dataset_id, user.username):
+            return True  # 소유자 목록 사용자(TODO-154)
     targets = [log.recipient]
     if log.referrer_id:
         ref = await session.get(models.ChangeReferrer, log.referrer_id)

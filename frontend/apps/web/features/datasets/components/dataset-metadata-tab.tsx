@@ -22,6 +22,7 @@ import { DatasetVersionHistoryButton } from "./dataset-version-history"
 import { type DatasetDetail } from "../data/schema"
 import { TagInput } from "@/components/tag-input"
 import { joinCsv, splitCsv } from "@/lib/text-list"
+import { scrollToAndFlash } from "@/lib/focus-flash"
 
 const NONE = "__none__" // Select 에서 "미지정" 표현 (빈 문자열 SelectItem 불가)
 
@@ -111,6 +112,7 @@ type FormState = {
   ingestion_mode: string
   update_type: string
   freshness_sla: string
+  last_ingested_at: string // datetime-local 값(브라우저 지역 시각, "YYYY-MM-DDTHH:mm"), 비면 ""
   retention_days: string
   purge_days: string
   data_category: string
@@ -152,9 +154,25 @@ type FormState = {
   missing_data_info: string
   missing_value_notation: string
   privacy_measures: string
+  social_impact: string
+  risk_mitigation: string
 }
 
 const presence = (v: boolean | null | undefined) => (v == null ? "" : v ? "true" : "false")
+
+// 최종 적재 시각 — 서버 ISO(UTC) ↔ datetime-local 입력값(브라우저 지역 시각)
+const pad2 = (n: number) => String(n).padStart(2, "0")
+function toLocalInput(iso: string | null | undefined): string {
+  if (!iso) return ""
+  const d = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso}Z`)  // 시간대 없는 값은 UTC 로 본다
+  if (Number.isNaN(d.getTime())) return ""
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+}
+function fromLocalInput(v: string): string | null {
+  if (!v.trim()) return null
+  const d = new Date(v)
+  return Number.isNaN(d.getTime()) ? null : d.toISOString()
+}
 
 function initForm(d: DatasetDetail): FormState {
   const s = (v: string | null | undefined) => v ?? ""
@@ -168,6 +186,7 @@ function initForm(d: DatasetDetail): FormState {
     ingestion_mode: s(d.ingestion_mode),
     update_type: s(d.update_type),
     freshness_sla: s(d.freshness_sla),
+    last_ingested_at: toLocalInput(d.last_ingested_at),
     retention_days: n(d.retention_days),
     purge_days: n(d.purge_days),
     data_category: d.data_category || "STRUCTURED",
@@ -208,6 +227,8 @@ function initForm(d: DatasetDetail): FormState {
     missing_data_info: s(d.missing_data_info),
     missing_value_notation: s(d.missing_value_notation),
     privacy_measures: s(d.privacy_measures),
+    social_impact: s(d.social_impact),
+    risk_mitigation: s(d.risk_mitigation),
   }
 }
 
@@ -218,6 +239,7 @@ export function DatasetMetadataTab({
   onSaved,
   extraGroup,
   canEdit = true,
+  focusField = null,
 }: {
   dataset: DatasetDetail
   onSaved: (updated: DatasetDetail) => void
@@ -225,8 +247,17 @@ export function DatasetMetadataTab({
   extraGroup?: MetaGroup
   /** 편집 가능 여부 — 데이터셋 소유자 또는 관리자(서버 PUT 과 같은 기준). false 면 읽기 전용(입력 비활성, 저장 버튼 없음). */
   canEdit?: boolean
+  /** 이 항목(줄 이름) 으로 스크롤 · 강조 — AI-Ready 체크리스트 링크의 `?field=`(TODO-151). */
+  focusField?: string | null
 }) {
   const [form, setForm] = useState<FormState>(() => initForm(dataset))
+
+  // 가리킨 항목으로 스크롤 · 강조 — 탭이 그려진 다음
+  useEffect(() => {
+    if (!focusField) return
+    const t = window.setTimeout(() => scrollToAndFlash("meta-field", focusField), 50)
+    return () => window.clearTimeout(t)
+  }, [focusField])
   const [saving, setSaving] = useState(false)
   const [aiDefaults, setAiDefaults] = useState<AiReadyDefaults | null>(null)
   const [suggesting, setSuggesting] = useState(false)
@@ -261,6 +292,7 @@ export function DatasetMetadataTab({
         ingestion_mode: strOrNull(form.ingestion_mode),
         update_type: strOrNull(form.update_type),
         freshness_sla: strOrNull(form.freshness_sla),
+        last_ingested_at: fromLocalInput(form.last_ingested_at),
         retention_days: numOrNull(form.retention_days),
         purge_days: numOrNull(form.purge_days),
         data_category: strOrNull(form.data_category),
@@ -301,6 +333,8 @@ export function DatasetMetadataTab({
         missing_data_info: strOrNull(form.missing_data_info),
         missing_value_notation: strOrNull(form.missing_value_notation),
         privacy_measures: strOrNull(form.privacy_measures),
+        social_impact: strOrNull(form.social_impact),
+        risk_mitigation: strOrNull(form.risk_mitigation),
       })
       setForm(initForm(updated)) // 서버가 다듬은 값(언어 소문자·이용 유형 순서 등)으로 맞춘다
       onSaved(updated)
@@ -421,6 +455,20 @@ export function DatasetMetadataTab({
     </div>
   )
 
+  // 최종 적재 시각 — AI-Ready 최소 요건 '갱신 주기' 판정에 쓴다(DEF-139). 적재를 마치면 '지금' 으로 남긴다.
+  const lastIngestedControl = (
+    <div className="flex items-center gap-1.5">
+      <Input type="datetime-local" className="h-9 min-w-0 flex-1 text-sm" value={form.last_ingested_at}
+        onChange={(e) => set("last_ingested_at", e.target.value)} aria-label="최종 적재 시각" />
+      {canEdit && (
+        <Button type="button" variant="outline" size="sm" className="h-9 shrink-0 text-xs"
+          onClick={() => set("last_ingested_at", toLocalInput(new Date().toISOString()))}>
+          지금
+        </Button>
+      )}
+    </div>
+  )
+
   // --- AI-Ready 컨트롤 ---
   const def = aiDefaults?.defaults
   const licenses = aiDefaults?.licenses ?? FALLBACK_LICENSES
@@ -533,6 +581,7 @@ export function DatasetMetadataTab({
         { label: "수집 방식", control: sel("ingestion_mode", MODE), desc: "배치: 정해진 주기에 모아 일괄 적재 · 스트리밍: 이벤트 발생 즉시 연속 적재 · CDC: 원천 변경분(insert/update/delete)만 감지해 반영 · 수동: 사람이 직접 적재" },
         { label: "갱신 유형", control: sel("update_type", UPDATE), desc: "적재 모드 — FULL: 매번 전체 재적재(기존 대체) · INCREMENTAL(증분): 마지막 이후 신규+변경분 반영(추가·수정 모두) · APPEND(추가): 기존은 그대로 두고 신규 행만 덧붙임(수정 없음) · UPSERT(병합): 키 기준 있으면 수정, 없으면 삽입" },
         { label: "최신성 SLA", control: txtInput("freshness_sla", "예: 매일 06:00까지"), desc: "데이터가 최신이어야 하는 기준 시점" },
+        { label: "최종 적재 시각", control: lastIngestedControl, desc: "마지막으로 데이터를 적재·갱신한 시각(브라우저 지역 시각). AI-Ready 최소 요건 '갱신 주기'가 수집 주기와 이 시각으로 판정합니다 — 적재할 때마다 갱신하세요. 프로그램은 데이터셋 수정 API 의 last_ingested_at 으로 남길 수 있습니다." },
         { label: "보존 기한(일)", control: intInput("retention_days", "비우면 영구"), desc: "데이터 보관 기간(일). 비우면 영구 보관" },
         { label: "삭제 주기(일)", control: intInput("purge_days", "비우면 없음"), desc: "보존 기한이 지난 데이터를 삭제하는 주기(일). 비우면 자동 삭제 없음" },
       ],
@@ -545,7 +594,7 @@ export function DatasetMetadataTab({
         { label: "압축", control: sel("compression", COMPRESSION), desc: "압축 방식 — GZIP/SNAPPY/ZSTD/BZIP2/LZ4 또는 없음" },
         { label: "인코딩", control: sel("encoding", ENCODINGS), desc: "문자 인코딩 (예: UTF-8, EUC-KR, MS949, CP949 등)" },
         { label: "행 수", control: intInput("row_count", "숫자"), desc: "데이터셋의 레코드(행) 수" },
-        { label: "바이트 크기", control: byteSizeControl, desc: "데이터셋 전체 크기 (숫자 + 단위, 저장은 bytes 로 환산)" },
+        { label: "용량", control: byteSizeControl, desc: "데이터셋 전체 크기 (숫자 + 단위, 저장은 bytes 로 환산)" },
         { label: "파일 수", control: intInput("file_count", "숫자"), desc: "데이터셋을 구성하는 파일/객체 수" },
       ],
     },
@@ -604,6 +653,8 @@ export function DatasetMetadataTab({
         { label: "결측 정보", control: missingControl, desc: "결측 비율·사유·처리 방식 (rai:dataCollectionMissingData). '프로파일에서 채우기'는 최신 프로파일의 컬럼별 결측률을 넣습니다" },
         { label: "결측·특수값 표기", control: txtInput("missing_value_notation", "예: NULL, -9999=측정불가"), desc: "결측·특수값을 어떻게 적는지 — 표기 규칙 통일은 체크리스트 필수 항목" },
         { label: "개인정보 보호조치", control: areaInput("privacy_measures", "예: 주민번호 삭제, 연령 5세 범주화, 적정성 검토 완료(2025-03)"), desc: "개인정보가 있으면 비식별·가명처리 방식과 적정성 검토 여부 (체크리스트 필수)" },
+        { label: "사회적 영향", control: areaInput("social_impact", "예: 대중교통 노선 조정 근거로 쓰임. 지역 간 서비스 격차를 키울 수 있음"), desc: "이 데이터를 활용할 때 기대되는 사회적 효과와 우려 (rai:dataSocialImpact). 데이터 카드 '사용 시 고려사항'에 들어갑니다" },
+        { label: "리스크 완화 권고", control: areaInput("risk_mitigation", "예: 개인 단위 재식별 시도 금지, 소지역 통계는 표본 수를 함께 보고"), desc: "이용자가 위험을 줄이려고 지켜야 할 조치. 데이터 카드 '사용 시 고려사항'에 들어갑니다" },
       ],
     },
     {
@@ -647,7 +698,7 @@ export function DatasetMetadataTab({
           <tbody className="[&>tr:last-child>td]:border-b-0">
             {groups.map((g) =>
               g.rows.map((r, ri) => (
-                <tr key={`${g.name}-${r.label}`}>
+                <tr key={`${g.name}-${r.label}`} data-meta-field={r.label}>
                   {ri === 0 && (
                     <td rowSpan={g.rows.length}
                       className={`border-r bg-muted/30 px-3 py-2 align-top font-medium ${g === groups[groups.length - 1] ? "" : "border-b"}`}>

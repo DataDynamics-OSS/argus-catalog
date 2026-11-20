@@ -21,8 +21,11 @@ Trino 연결이 없는 데이터셋은 품질 워커가 원천 DB 를 직접 읽
   - REFERENTIAL  참조 데이터셋이 **같은 원본 데이터 소스**에 있을 때 — 원본에 조인 쿼리를 하나 낸다(``referential_sql``).
   - CUSTOM_PYTHON  품질 워커의 플러그인 함수 ``fn(df, params)`` — 워커가 읽은 행으로 pandas DataFrame 을 만들어 부른다.
 
+  - DIVERSITY · COMPOSITE_UNIQUE  값(키) 묶음별 행 수를 원천에서 다시 집계하는 쿼리를 하나 낸다(``group_counts_sql`` —
+    다양성 ``diversity_sql``, 여러 컬럼 키 ``composite_unique_sql``). 결과 한 행은 Trino 경로와 같은 모양이다.
+
 FUNCTION(Trino 에 등록한 함수)·CUSTOM_SQL(Trino 에서 실행)은 직접 진단하지 않는다. CONTINUITY(데이터 연속성)는 명세가 없고
-언제나 원천 집계로 센다(``aggregate`` — 날짜 · 시각 컬럼이나 형식을 적은 문자열 날짜만).
+언제나 원천 집계로 센다(``aggregate`` — 날짜 · 시각 컬럼이나 형식을 적은 문자열 날짜만, 주 단위는 날짜 · 시각 컬럼만).
 
 원천 유형: PostgreSQL · MySQL · MariaDB · Oracle · SQL Server(``DIRECT_SOURCE_TYPES``). Oracle · SQL Server 는 DB 마다 뜻이
 같은 집계(행 수 · NULL 수 · 최신성 · 데이터 연속성)만 원천에서 세고, 나머지는 행을 읽어 워커가 센다 — 문자열 같음 · 정렬 규칙(SQL Server 의
@@ -33,6 +36,7 @@ from __future__ import annotations
 
 import json
 import re as _re
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from app.quality import rule_sql
@@ -46,9 +50,12 @@ from app.quality.rule_sql import (
 )
 
 # 명세(probe)로 계산하는 유형 — 최신성(FRESHNESS) · 데이터 연속성(CONTINUITY)은 늘 원천 집계로 센다
-PROBE_TYPES = tuple(t for t in rule_sql.TRINO_CHECK_TYPES if t not in ("FUNCTION", "REFERENTIAL", "CONTINUITY"))
+# 다양성 · 여러 컬럼 키는 묶음별 집계 쿼리를 따로 낸다(``diversity_sql`` · ``composite_unique_sql``)
+_GROUPED_TYPES = ("DIVERSITY", "COMPOSITE_UNIQUE")
+PROBE_TYPES = tuple(t for t in rule_sql.TRINO_CHECK_TYPES
+                    if t not in ("FUNCTION", "REFERENTIAL", "CONTINUITY", *_GROUPED_TYPES))
 # 직접 진단으로 평가할 수 있는 유형
-DIRECT_CHECK_TYPES = (*PROBE_TYPES, "FRESHNESS", "REFERENTIAL", "CUSTOM_PYTHON", "CONTINUITY")
+DIRECT_CHECK_TYPES = (*PROBE_TYPES, "FRESHNESS", "REFERENTIAL", "CUSTOM_PYTHON", "CONTINUITY", *_GROUPED_TYPES)
 # 어느 한 경로라도 평가하는 유형 — 품질 탭이 만드는 모든 유형
 ENGINE_CHECK_TYPES = tuple(dict.fromkeys((*rule_sql.TRINO_PATH_TYPES, *DIRECT_CHECK_TYPES)))
 
@@ -398,7 +405,10 @@ def aggregate(rule: RuleSpec, column_types: dict[str, str] | None, source_type: 
         if family is None:
             return None  # JSON · 배열 · 이진 등 — 워커처럼 값의 같음을 맞출 수 없다
         key = _text_key(source_type, col, family) if family in ("text", "enum") else col
-        dup = f"{key} IN (SELECT {key} FROM {from_} WHERE {col} IS NOT NULL GROUP BY {key} HAVING count(*) > 1)"
+        # 중복 키는 파생 테이블로 한 번 감싼다 — MySQL 8 은 IN 하위 쿼리의 GROUP BY 식(바이트 키)을 바깥 행과 잇는
+        # 변환에서 ONLY_FULL_GROUP_BY 오류(1055)를 낸다
+        dup = (f"{key} IN (SELECT k FROM (SELECT {key} AS k FROM {from_} WHERE {col} IS NOT NULL GROUP BY {key} "
+               "HAVING count(*) > 1) d)")
         return Aggregate((f"count(DISTINCT {key})",), sample(dup, order_by=key))
     if check in ("MIN_VALUE", "MAX_VALUE"):
         if not _is_numeric(family):
@@ -465,7 +475,16 @@ _ORACLE_TRUNC = {"HOUR": "HH", "DAY": "DD", "MONTH": "MM", "YEAR": "YYYY"}
 
 
 def _period_key(source_type: str, unit: str, trunc: str, col: str) -> str:
-    """날짜 · 시각 값을 단위의 처음으로 자르는 식 — DB 마다 함수가 다르다."""
+    """날짜 · 시각 값을 단위의 처음으로 자르는 식 — DB 마다 함수가 다르다. 주(WEEK)는 월요일(ISO 주)로 자른다."""
+    if unit == "WEEK":
+        if _is_mysql(source_type):
+            return f"DATE_SUB(DATE({col}), INTERVAL WEEKDAY({col}) DAY)"  # WEEKDAY: 월요일 0
+        if source_type == "oracle":
+            return f"TRUNC({col}, 'IW')"
+        if source_type == "mssql":
+            # 기준일 1900-01-01 이 월요일 — 지난 날 수를 7 로 내려 다시 더한다(DATEFIRST 설정과 상관없음)
+            return f"DATEADD(day, DATEDIFF(day, 0, {col}) / 7 * 7, 0)"
+        return f"date_trunc('week', {col})"
     if _is_mysql(source_type):
         return f"DATE_FORMAT({col}, '{_MYSQL_TRUNC[unit]}')"
     if source_type == "oracle":
@@ -497,6 +516,9 @@ def _continuity(rule: RuleSpec, column_type: str, family: str | None, source_typ
     c = rule_sql.continuity_spec(rule.expected_value)
     if column_type.strip().lower().startswith(_TEMPORAL_PREFIXES) or family in _TEMPORAL_BASES:
         key = _period_key(source_type, c.unit, c.trunc, col)
+    elif family == "text" and c.prefix_len and c.unit == "WEEK":
+        raise ValueError("원천 직접 진단의 주(WEEK) 단위 연속성은 날짜 · 시각 타입 컬럼만 봅니다 — 문자열 날짜는 DAY 단위로 보거나 "
+                         "Trino 가 연결된 데이터셋에서 진단하세요")
     elif family == "text" and c.prefix_len:
         # 형식과 자릿수 · 구분자가 같은 값만 — 다른 모양(2024-01-05 를 YYYYMMDD 로)의 앞부분이 최소 · 최대가 되지 않게
         key = (f"CASE WHEN {_trimmed(source_type, col)} LIKE '{c.like}' "
@@ -505,6 +527,50 @@ def _continuity(rule: RuleSpec, column_type: str, family: str | None, source_typ
         raise ValueError(f"'{rule.column_name}' 는 날짜 · 시각 타입이 아닙니다 — 문자열 날짜면 기대값에 형식을 적으세요 "
                          f"(예: {c.unit} YYYYMMDD)")
     return Aggregate((f"count(DISTINCT {key})", f"min({key})", f"max({key})"))
+
+
+def _group_key(source_type: str, column_types: dict[str, str] | None, column: str) -> Callable[[str], str]:
+    """묶을 때의 컬럼 식 — Trino · 워커처럼 대소문자 · 끝 공백을 구분해 묶는다. MySQL 계열 문자열은 바이트로(기본 정렬
+    규칙이 대소문자를 무시한다), SQL Server 문자열도 값의 바이트(``VARBINARY``)로 — 기본 정렬 규칙이 대소문자를 무시하고,
+    어느 정렬 규칙이든 ``=`` · ``GROUP BY`` 가 끝 공백을 무시한다(프로파일의 고유값 수와 같은 식). PostgreSQL(결정적
+    정렬) · Oracle(``NLS_COMP=BINARY`` 기본)은 컬럼 그대로."""
+    family = type_family(_lookup(column_types, column)[1])
+    if _is_mysql(source_type) and family in ("text", "enum"):
+        return lambda c: _text_key(source_type, c, family)
+    if source_type == "mssql" and family == "text":
+        return lambda c: f"CAST({c} AS VARBINARY(MAX))"
+    return lambda c: c
+
+
+def diversity_sql(source_type: str, table: tuple[str | None, str], column: str,
+                  column_types: dict[str, str] | None) -> str:
+    """데이터 · 라벨 다양성 — 값마다 행 수를 세어 다시 집계. 결과 한 행 ``[진단 건수, 최빈값 건수, 가장 적은 값 건수, 고유값 수]``."""
+    name = _column(column, column_types)
+    col = quote_ident(source_type, name)
+    key = _group_key(source_type, column_types, name)
+    return rule_sql.group_counts_sql(source_table(source_type, *table), [key(col)], f"{col} IS NOT NULL",
+                                     rule_sql.DIVERSITY_SELECT)
+
+
+def composite_unique_sql(source_type: str, table: tuple[str | None, str], expected: str | None,
+                         column_types: dict[str, str] | None, samples: int) -> tuple[str, str]:
+    """여러 컬럼 키 유일성 — 키 묶음마다 행 수를 세어 다시 집계. (결과 한 행 ``[진단 건수, 키가 겹치는 행 수]`` 쿼리, 위반 행
+    샘플 쿼리). 키 컬럼 가운데 하나라도 NULL 인 행은 세지 않는다(SQL 의 UNIQUE 제약과 같다)."""
+    names = [_column(c, column_types) for c in rule_sql.composite_columns(expected)]
+    quoted = [quote_ident(source_type, n) for n in names]
+    keys = [_group_key(source_type, column_types, n) for n in names]
+    present = " AND ".join(f"{q} IS NOT NULL" for q in quoted)
+    from_ = source_table(source_type, *table)
+    count = rule_sql.group_counts_sql(from_, [k(q) for k, q in zip(keys, quoted)], present, rule_sql.COMPOSITE_SELECT)
+    # 샘플 조인 — 컬럼마다 묶을 때와 같은 식으로 비교한다
+    by_column = dict(zip(quoted, keys))
+
+    def key(c: str) -> str:
+        return by_column[c.removeprefix("c.")](c)
+
+    sample = rule_sql.duplicate_keys_sample(from_, quoted, key, present)
+    rest = sample.removeprefix("SELECT c.* ")
+    return count, limited_select(source_type, "c.*", rest, samples)
 
 
 def aggregate_sql(source_type: str, table: tuple[str | None, str], exprs: list[str]) -> str:

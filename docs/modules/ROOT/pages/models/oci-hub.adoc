@@ -8,7 +8,6 @@ OCI Manifest 모델 저장소를 더한 공간입니다. 사용하는 프레임�
 
 이 문서는 처음 사용하는 분을 기준으로 순서대로 설명합니다. **고급 사용자** 상자와 맨 끝 부록은 처음에는 건너뛰어도 됩니다.
 
-// TODO: screenshot — 새 카드 모양으로 다시 찍기
 image::models-oci-hub/model-list.png[OCI 모델 허브 — 모델 카드 목록, 900]
 
 toc::[]

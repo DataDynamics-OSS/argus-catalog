@@ -2,6 +2,10 @@
 import type { QualityDefinitionWrite, QualityIndicator } from "@/features/quality/api"
 import { CHECK_TYPE_LABEL } from "@/features/quality/check-types"
 import { decodeList } from "@/lib/text-list"
+import { codeGroupRef } from "@/features/datasets/quality-rules"
+
+/** 다양성 — 기준값(최빈값 비율 상한 %)을 비우면 쓰는 값. 서버 `rule_sql.DEFAULT_DIVERSITY_MAX` 와 같다. */
+export const DEFAULT_DIVERSITY_MAX = 90
 
 /**
  * 기준값을 받는 방식 — none: 기준값 없음, date: 날짜 형식 선택, number: 숫자, text: 그대로 적음,
@@ -49,13 +53,18 @@ export const DEFINITION_TYPE_META: Record<string, DefinitionTypeMeta> = {
     hint: "예: 999999 입력 후 Enter — 비우면 흔한 자리채움 값(999999 · -999 · N/A · 없음 …)", optional: true, usesThreshold: true,
   },
   CONTINUITY: {
-    label: CHECK_TYPE_LABEL.CONTINUITY!, expected: "text", expectedLabel: "기간 단위 (HOUR · DAY · MONTH · YEAR, 문자열 날짜면 뒤에 형식)",
-    hint: "예: DAY · MONTH · DAY YYYYMMDD · MONTH YYYY-MM", optional: false, usesThreshold: true,
+    label: CHECK_TYPE_LABEL.CONTINUITY!, expected: "text",
+    expectedLabel: "기간 단위 (HOUR · DAY · WEEK · MONTH · YEAR, 문자열 날짜면 뒤에 형식)",
+    hint: "예: DAY · WEEK · MONTH · DAY YYYYMMDD · MONTH YYYY-MM", optional: false, usesThreshold: true,
+  },
+  DIVERSITY: {
+    label: CHECK_TYPE_LABEL.DIVERSITY!, expected: "number", expectedLabel: "가장 많은 값의 비율 상한 (%, 선택)",
+    hint: `예: 80 — 비우면 ${DEFAULT_DIVERSITY_MAX}`, optional: true, usesThreshold: false,
   },
 }
 
-const CONTINUITY_RE = /^(HOUR|DAY|MONTH|YEAR)(\s+\S.*)?$/i
-const CONTINUITY_UNIT_LABEL: Record<string, string> = { HOUR: "시간", DAY: "일", MONTH: "월", YEAR: "연" }
+const CONTINUITY_RE = /^(HOUR|DAY|WEEK|MONTH|YEAR)(\s+\S.*)?$/i
+const CONTINUITY_UNIT_LABEL: Record<string, string> = { HOUR: "시간", DAY: "일", WEEK: "주", MONTH: "월", YEAR: "연" }
 
 /** 지표를 정의할 수 있는 분류만. */
 export function definableCategories(indicators: QualityIndicator[]): QualityIndicator[] {
@@ -80,8 +89,16 @@ export function criteriaText(d: { check_type: string; expected_value: string | n
       return `정규식 ${expected}`
     case "FUNCTION":
       return `Trino 함수 ${expected}`
-    case "ACCEPTED_VALUES":
-      return `허용 값 ${decodeList(expected).join(" · ")}`
+    case "ACCEPTED_VALUES": {
+      const group = codeGroupRef(expected)
+      return group != null ? `표준 코드 그룹 #${group} 의 코드 값` : `허용 값 ${decodeList(expected).join(" · ")}`
+    }
+    case "DIVERSITY":
+      return `가장 많은 값 ${expected ? expected.replace(/%$/, "") : DEFAULT_DIVERSITY_MAX}% 이하`
+    case "COMPOSITE_UNIQUE": {
+      const key = `키 (${decodeList(expected).join(", ")})`
+      return d.threshold >= 100 ? `${key} 중복 없음` : `${key} 겹치지 않는 행 ${d.threshold}% 이상`
+    }
     case "MIN_VALUE":
       return `${expected} 이상`
     case "MAX_VALUE":
@@ -139,7 +156,10 @@ export function definitionFormError(form: DefinitionForm): string | null {
   if (!meta.optional && !expected) return `${meta.expectedLabel}을(를) 적으세요.`
   if (meta.expected === "number" && Number.isNaN(Number(expected))) return "기준값은 숫자여야 합니다."
   if (form.checkType === "CONTINUITY" && !CONTINUITY_RE.test(expected)) {
-    return "기간 단위는 HOUR · DAY · MONTH · YEAR 중 하나로 시작해야 합니다(문자열 날짜면 뒤에 형식, 예: DAY YYYYMMDD)."
+    return "기간 단위는 HOUR · DAY · WEEK · MONTH · YEAR 중 하나로 시작해야 합니다(문자열 날짜면 뒤에 형식, 예: DAY YYYYMMDD)."
+  }
+  if (form.checkType === "DIVERSITY" && expected && !(Number(expected) > 0 && Number(expected) <= 100)) {
+    return "가장 많은 값의 비율 상한은 0 보다 크고 100 이하인 숫자(%)입니다."
   }
   if (meta.usesThreshold) {
     const t = Number(form.threshold)

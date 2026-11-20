@@ -97,15 +97,17 @@ export type SuggestionItem = {
   created_at: string | null
   /** 적용하면 바뀔 대상의 지금 값 — 태그·PII 는 JSON 문자열 (features/datasets/ai-suggestions.ts 참고) */
   current_text?: string | null
+  /** 제안 근거 — AI-Ready 초안의 관련법령 · 허용 이용 유형을 고른 이유 */
+  reason?: string | null
 }
 
-/** AI-Ready 초안 항목 — 편향 · 한계 · 관련법령 (TODO-096 6단계) */
-export type AiReadyDraftField = "data_biases" | "known_limitations" | "legal_basis"
+/** AI-Ready 초안 항목 — 편향 · 한계 · 관련법령 · 개인정보 보호조치 · 허용 이용 유형 (TODO-096) */
+export type AiReadyDraftField = "data_biases" | "known_limitations" | "legal_basis" | "privacy_measures" | "allowed_uses"
 
 export type AiReadyDraftResult = {
   dataset_id: number
   /** 만든 초안 — 적용 대기 제안(AI 제안 목록에서 적용) */
-  drafts: { field: AiReadyDraftField; label: string; text: string; log_id: number }[]
+  drafts: { field: AiReadyDraftField; label: string; text: string; log_id: number; reason?: string | null }[]
   /** 만들지 않은 항목과 사유(이미 값 있음 · 법령 목록 없음 · 해당 법령 없음) */
   skipped: { field: AiReadyDraftField; label: string; reason: string }[]
   /** 관련법령을 고른 근거 */
@@ -117,7 +119,7 @@ export type AiReadyDraftResult = {
 // API functions
 // ---------------------------------------------------------------------------
 
-/** 편향 · 한계 · 관련법령 초안 — force 면 값이 있는 항목도 다시 쓴다. 결과는 제안으로만 남는다. */
+/** AI-Ready 항목 초안 — force 면 값이 있는 항목도 다시 쓴다. 결과는 제안으로만 남는다. */
 export async function generateAiReadyDrafts(
   datasetId: number,
   req: { fields?: AiReadyDraftField[]; force?: boolean } = {},

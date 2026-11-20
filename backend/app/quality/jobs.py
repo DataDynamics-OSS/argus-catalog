@@ -379,6 +379,9 @@ async def _fill_children(session: AsyncSession, responses: list[QualityJobRunRes
         resp.rules_evaluated = sum(run.rules_evaluated or 0 for run, _ in items)
         scores = [float(run.score) for run, _ in items if run.score is not None]
         resp.score = round(sum(scores) / len(scores), 2) if scores else None
+        # 저장된 runs_failed 는 성공 아닌 끝난 실행(실패·일부 실패·중지) — 중지는 따로 센다(DEF-156)
+        resp.runs_cancelled = sum(1 for run, _ in items if run.status == "CANCELLED")
+        resp.runs_failed = max(0, resp.runs_failed - resp.runs_cancelled)
         if len(items) == 1:
             run, dataset_name = items[0]
             resp.run_id, resp.dataset_id = run.id, run.dataset_id

@@ -1,6 +1,6 @@
 {
   "name": "argus-catalog-manual",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Argus Catalog — Antora-based user manual (HTML + PDF).",
   "private": true,
   "scripts": {

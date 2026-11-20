@@ -1,5 +1,6 @@
 "use client"
 
+import { datasourceTypeLabel } from "@/features/datasources/datasource-configs"
 import { Tip } from "@/components/tip"
 import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
@@ -37,8 +38,9 @@ import { notifyAlertsChanged } from "@/features/alerts/events"
 import {
   ALERT_TYPE_LABEL, CHANNEL_LABEL, SCOPE_LABEL, SEVERITY_LABEL, STATUS_LABEL, STATUS_TONE, TRIGGER_LABEL, labelOf,
 } from "@/features/alerts/labels"
-import { type DatasetTab, datasetHref } from "@/features/datasets/links"
+import { type DatasetFocus, type DatasetTab, datasetHref } from "@/features/datasets/links"
 import { fetchDataset } from "@/features/datasets/api"
+import { datasetOwnerLabels } from "@/features/datasets/permissions"
 
 const BASE = "/api/v1/alerts"
 const RULES_FEATURE = "alerts.rules"
@@ -395,7 +397,7 @@ function AlertsTab({ focusId }: { focusId: string | null }) {
                   <TableCell>
                     {alert.affected_dataset_name ? (
                       <div className="text-sm">
-                        <span >{alert.affected_datasource_type}</span>
+                        <span >{datasourceTypeLabel(alert.affected_datasource_type)}</span>
                         <p className="font-medium truncate">{alert.affected_dataset_name}</p>
                       </div>
                     ) : <span className="text-sm text-muted-foreground">-</span>}
@@ -463,8 +465,12 @@ function AlertsTab({ focusId }: { focusId: string | null }) {
 // Alert detail
 // ---------------------------------------------------------------------------
 
+// 출처 화면의 메뉴 — 그 메뉴를 막은 역할에게는 링크 대신 글자만 보인다(DEF-158)
+const ENTITY_MENU: Record<string, string> = { datasource: "datasources", mcp_deployment: "mcp-servers" }
+
 function EntityLink({ type, entityRef }: { type: string; entityRef: string | null }) {
-  const href = entityHref(type, entityRef)
+  const { isMenuAllowed } = usePermissions()
+  const href = isMenuAllowed(ENTITY_MENU[type] ?? null) ? entityHref(type, entityRef) : null
   const label = `${entityLabel(type)} · ${entityRef ?? ""}`
   return href ? <Link href={href} className="text-primary hover:underline">{label}</Link> : <span>{label}</span>
 }
@@ -493,7 +499,8 @@ function AlertDetailDialog({ alert, busy, onClose, onChangeStatus }: {
     if (!targetId) return
     let alive = true
     fetchDataset(targetId)
-      .then((d) => { if (alive) setOwners(d.owners.map((o) => o.owner_name)) })
+      // 소유자 목록 + 생성자 — 알림 수신 · 처리 권한과 같은 소유자 기준(DEF-138)
+      .then((d) => { if (alive) setOwners(datasetOwnerLabels(d)) })
       .catch(() => { if (alive) setOwners([]) })
     return () => { alive = false }
   }, [targetId])
@@ -516,7 +523,7 @@ function AlertDetailDialog({ alert, busy, onClose, onChangeStatus }: {
               ["규칙", alert.rule_name ?? (alert.rule_id ? `#${alert.rule_id}` : "(삭제된 규칙)")],
               ["출처", alert.entity_type
                 ? <EntityLink key="src" type={alert.entity_type} entityRef={alert.entity_ref} />
-                : <DatasetLink key="src" id={alert.source_dataset_id} name={alert.source_dataset_name} type={alert.source_datasource_type} tab={alertSourceTab(alert.alert_type)} />],
+                : <DatasetLink key="src" id={alert.source_dataset_id} name={alert.source_dataset_name} type={alert.source_datasource_type} tab={alertSourceTab(alert.alert_type)} focus={alertSourceFocus(alert.alert_type, alert.change_detail)} />],
               ["영향", alert.affected_dataset_id
                 ? <DatasetLink key="aff" id={alert.affected_dataset_id} name={alert.affected_dataset_name} type={alert.affected_datasource_type} tab={alertAffectedTab(alert.alert_type)} />
                 : <span key="aff" className="text-muted-foreground">-</span>],
@@ -566,8 +573,21 @@ function alertSourceTab(alertType: string): DatasetTab | undefined {
   if (alertType === "SCHEMA_CHANGE") return "history"
   if (alertType === "QUALITY_FAILED") return "quality"
   if (alertType === "AI_READY_UNMET") return "ai-ready"
-  if (alertType === "REPORT_RECEIVED" || alertType === "REPORT_DUE") return "comments"
+  if (REPORT_ALERTS.has(alertType)) return "comments"
   return undefined
+}
+
+const REPORT_ALERTS = new Set(["REPORT_RECEIVED", "REPORT_DUE", "REPORT_CLOSED"])
+
+/** 신고 알림은 상세의 comment_id 로 그 댓글을 가리킨다(TODO-151). */
+function alertSourceFocus(alertType: string, detail: string | null): DatasetFocus | undefined {
+  if (!REPORT_ALERTS.has(alertType) || !detail) return undefined
+  try {
+    const id = Number((JSON.parse(detail) as { comment_id?: unknown })?.comment_id)
+    return Number.isInteger(id) && id > 0 ? { comment: id } : undefined
+  } catch {
+    return undefined
+  }
 }
 
 function alertAffectedTab(alertType: string): DatasetTab | undefined {
@@ -576,12 +596,17 @@ function alertAffectedTab(alertType: string): DatasetTab | undefined {
   return undefined
 }
 
-function DatasetLink({ id, name, type, tab }: { id: number | null; name: string | null; type: string | null; tab?: DatasetTab }) {
+function DatasetLink({ id, name, type, tab, focus }: {
+  id: number | null; name: string | null; type: string | null; tab?: DatasetTab; focus?: DatasetFocus
+}) {
+  // 데이터셋 메뉴를 막은 역할에게는 링크 대신 글자만(DEF-158)
+  const { isMenuAllowed } = usePermissions()
   if (!id) return <span>-</span>
   if (!name) return <span >(삭제된 데이터셋)</span>
+  if (!isMenuAllowed("datasets")) return <span>{type ? `${datasourceTypeLabel(type)}.` : ""}{name}</span>
   return (
-    <Link href={datasetHref(id, tab)} className="text-primary hover:underline">
-      {type ? `${type}.` : ""}{name}
+    <Link href={datasetHref(id, tab, focus)} className="text-primary hover:underline">
+      {type ? `${datasourceTypeLabel(type)}.` : ""}{name}
     </Link>
   )
 }
@@ -834,7 +859,7 @@ function RulesTab({ canManage, version, onAddRule, onEditRule }: {
                   <li>① <b>범위</b> 매칭 — 전체 / 데이터 소스 / 데이터셋 / 태그 / 리니지 중 대상이 속하는지 확인
                     (MCP 트리거는 전체·데이터 소스만). 범위 대상이 삭제된 규칙은 발동하지 않습니다.</li>
                   <li>② <b>트리거</b> 평가 — 모든 변경 / 지정한 변경 유형(추가·변경·삭제) / 감시 컬럼 / 컬럼 매핑 변경 / 품질 실패 / MCP finding</li>
-                  <li>③ <b>심각도</b> 결정 — 자동 판정(컬럼 삭제=심각, 타입 변경=경고 등) 또는 규칙의 강제 지정 값</li>
+                  <li>③ <b>심각도</b> 결정 — 자동 판정(컬럼 삭제=치명, 타입 변경=경고 등) 또는 규칙의 강제 지정 값</li>
                 </ul>
               </div>
 

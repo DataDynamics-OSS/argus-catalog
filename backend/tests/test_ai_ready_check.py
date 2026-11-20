@@ -210,6 +210,12 @@ def test_bare_dataset_fails_required(env):
     assert sum(1 for i in ai_ready_check.COMMON_ITEMS if i.level == "REQUIRED") == 15
     assert items["C01"]["status"] == "FAIL" and "비어" in items["C01"]["evidence"]
     assert items["C05"]["status"] == "FAIL" and "라이선스" in items["C05"]["evidence"] and "배포본" in items["C05"]["evidence"]
+    # 소유자가 혼자 채울 수 없는 항목은 누가 어디서 채우는지 알린다(TODO-149) — 최소 요건 '필수 메타데이터'도 같은 문장
+    ev = items["C05"]["evidence"]
+    assert "taxonomies.map" in ev and "분류 체계" in ev, ev
+    assert "소관기관 — 관리자" in ev and "시스템에 조직을 지정" in ev, ev
+    meta = next(x for x in body["min_requirements"]["checks"] if x["key"] == "metadata")
+    assert "taxonomies.map" in meta["detail"]
     assert items["C04"]["status"] == "PASS" and "/dcat" in items["C04"]["evidence"]
     assert items["C27"]["status"] is None and items["C33"]["status"] is None
     assert items["C09"]["status"] is None and items["C09"]["source"] is None  # 규칙이 없어 판정 필요
@@ -234,6 +240,7 @@ def test_filled_dataset_passes_auto_items(env):
     assert items["C22"]["status"] == "NA" and items["C24"]["status"] == "NA"
     assert items["C07"]["status"] == "NA"  # 1GB 미만
     assert items["C21"]["status"] == "FAIL" and "편향" in items["C21"]["evidence"]  # 편향·한계가 비어 있음
+    assert "알려진 편향 또는 한계가 비어" in items["C21"]["evidence"], "조사는 받침에 맞춰(DEF-146)"
     # 필수 15: C22 는 해당없음, 나머지 모두 적정 → 14/14 (기한 넘긴 신고가 생기면 C31 미흡 — test_ai_ready_feedback)
     assert body["required"] == {"passed": 14, "total": 14, "rate": 100.0}
     mr = {x["key"]: x["met"] for x in body["min_requirements"]["checks"]}
@@ -279,6 +286,81 @@ def test_pii_needs_privacy_measures(env):
     assert items["C22"]["status"] == "FAIL" and "보호조치" in items["C22"]["evidence"]
     assert items["C24"]["status"] is None  # 개인정보가 있으면 수동 판정 필요
     assert items["T5"]["status"] == "FAIL"
+
+
+def test_measure_columns_need_unit_for_c08(env):
+    """C08 데이터 사전 — 설명 80% 와 함께 측정값 컬럼(숫자형, 키 · 코드 제외)의 단위 80% 이상이어야 적정."""
+    c, _who, ids, run = env
+
+    async def _go(db):
+        db.add_all([
+            cm.DatasetSchema(dataset_id=ids["bare"], field_path="id", field_type="INTEGER", description="번호",
+                             is_primary_key="true", ordinal=0),
+            cm.DatasetSchema(dataset_id=ids["bare"], field_path="store_id", field_type="INTEGER", description="매장", ordinal=1),
+            cm.DatasetSchema(dataset_id=ids["bare"], field_path="amount", field_type="DECIMAL", description="판매 금액", ordinal=2),
+            cm.DatasetSchema(dataset_id=ids["bare"], field_path="name", field_type="STRING", description="이름", ordinal=3),
+        ])
+    run(_go)
+    item = _items(c.get(f"{V1}/catalog/datasets/{ids['bare']}/ai-ready/check").json())["C08"]
+    assert item["status"] == "FAIL", item
+    assert "측정값 컬럼 단위 0/1개" in item["evidence"] and "단위 80% 미만" in item["evidence"]
+    assert "산정기준 0개" in item["evidence"]
+
+    async def _unit(db):
+        from sqlalchemy import select
+        col = (await db.execute(select(cm.DatasetSchema).where(cm.DatasetSchema.field_path == "amount"))).scalar_one()
+        col.unit = "원"
+        col.calculation = "판매가 × 수량"
+    run(_unit)
+    item = _items(c.get(f"{V1}/catalog/datasets/{ids['bare']}/ai-ready/check").json())["C08"]
+    assert item["status"] == "PASS", item
+    assert "측정값 컬럼 단위 1/1개(100%)" in item["evidence"] and "산정기준 1개" in item["evidence"]
+
+
+def test_measure_column_detection():
+    m = ai_ready_check.is_measure_column
+    assert m("price", "DECIMAL(10,2)", "false") and m("rental_rate", "NUMBER", "false") and m("paid", "INT", "false")
+    for name in ("id", "user_id", "userId", "area_cd", "seq_no", "CUSTOMER_ID", "storeNo"):
+        assert not m(name, "INTEGER", "false"), name
+    assert not m("amount", "INTEGER", "true")      # 기본키
+    assert not m("amount", "STRING", "false")      # 숫자형 아님
+
+
+def test_schema_unit_and_calculation_survive_resync(env):
+    """단위 · 산정기준은 키가 있을 때만 바뀐다 — 수집(키 없음)은 보존, 편집 화면은 null 로 지운다."""
+    c, _who, ids, _run = env
+    url = f"{V1}/catalog/datasets/{ids['bare']}/schema"
+    r = c.put(url, json=[{"field_path": "amount", "field_type": "NUMBER", "unit": " 원 ", "calculation": "판매가 × 수량"}])
+    assert r.status_code == 200, r.text
+    assert r.json()[0]["unit"] == "원" and r.json()[0]["calculation"] == "판매가 × 수량"
+    # metadata-sync 처럼 단위 · 산정기준 키 없이 다시 보냄 — 담당자 값 보존
+    r = c.put(url, json=[{"field_path": "amount", "field_type": "DECIMAL", "description": "원천 코멘트"}])
+    assert r.status_code == 200, r.text
+    f = r.json()[0]
+    assert f["field_type"] == "DECIMAL" and f["unit"] == "원" and f["calculation"] == "판매가 × 수량"
+    # 편집 화면이 비운 값을 보냄 — 지움
+    r = c.put(url, json=[{"field_path": "amount", "field_type": "DECIMAL", "unit": None, "calculation": ""}])
+    assert r.json()[0]["unit"] is None and r.json()[0]["calculation"] is None
+
+
+def test_schema_description_cleared_only_by_edit_screen(env):
+    """DEF-166 — 수집은 빈 논리명 · 설명이면 기존 값을 두고, 화면 편집(clear_empty=true)은 비운 칸을 지운다."""
+    c, _who, ids, _run = env
+    url = f"{V1}/catalog/datasets/{ids['bare']}/schema"
+    r = c.put(url, json=[{"field_path": "amount", "field_type": "NUMBER", "display_name": "금액", "description": "판매 금액"}])
+    assert r.status_code == 200, r.text
+    # 수집처럼 원천 코멘트 없이(빈 값 · null) — 담당자 값 보존
+    for desc in ("", None):
+        f = c.put(url, json=[{"field_path": "amount", "field_type": "NUMBER", "display_name": "", "description": desc}]).json()[0]
+        assert f["display_name"] == "금액" and f["description"] == "판매 금액"
+    # 화면 편집이 비움 — 지움
+    r = c.put(f"{url}?clear_empty=true", json=[{"field_path": "amount", "field_type": "NUMBER", "display_name": "", "description": ""}])
+    assert r.status_code == 200, r.text
+    assert r.json()[0]["display_name"] is None and r.json()[0]["description"] is None
+    # 화면 편집이라도 키를 보내지 않은 속성은 그대로(값을 넣으면 바뀜)
+    c.put(url, json=[{"field_path": "amount", "field_type": "NUMBER", "description": "다시 적음"}])
+    f = c.put(f"{url}?clear_empty=true", json=[{"field_path": "amount", "field_type": "NUMBER", "display_name": "금액"}]).json()[0]
+    assert f["display_name"] == "금액" and f["description"] == "다시 적음"
 
 
 def test_manual_judgment_overrides_and_reverts(env):
@@ -390,3 +472,33 @@ def test_overview_and_scopes_follow_ai_ready_menu(env):
     assert c.get(f"{V1}/catalog/datasets/{ids['bare']}/ai-ready/check").status_code == 200
     who["user"] = _tu("root", admin=True)
     assert c.get(f"{V1}/catalog/ai-ready/overview").status_code == 200
+
+
+def test_manual_dataset_creator_points_to_catalog_screen(env):
+    """수동 데이터셋(직접 등록 카탈로그)은 소관기관을 카탈로그 화면에서 시스템으로 지정하라고 안내하고, 지정하면 채워진다(DEF-CAT-001)."""
+    c, _who, _ids, run = env
+    made: dict = {}
+
+    async def _mk(db):
+        m = cm.Datasource(datasource_id="cat-manual", name="엑셀 자료", type="manual", origin="PROD")
+        db.add(m)
+        await db.flush()
+        d = cm.Dataset(urn="cat-manual.x.dataset", name="x", datasource_id=m.id, status="active", created_by="alice")
+        db.add(d)
+        await db.flush()
+        made.update(src=m.id, ds=d.id)
+    run(_mk)
+    ev = _items(c.get(f"{V1}/catalog/datasets/{made['ds']}/ai-ready/check").json())["C05"]["evidence"]
+    assert "catalogs.manage" in ev and "카탈로그의 시스템을 지정" in ev and "데이터 소스 화면에서" not in ev, ev
+
+    async def _assign(db):
+        org = cm.Organization(name="재무팀", code="fin")
+        db.add(org)
+        await db.flush()
+        sysm = cm.System(name="회계 시스템", org_id=org.id)
+        db.add(sysm)
+        await db.flush()
+        (await db.get(cm.Datasource, made["src"])).system_id = sysm.id
+    run(_assign)
+    ev = _items(c.get(f"{V1}/catalog/datasets/{made['ds']}/ai-ready/check").json())["C05"]["evidence"]
+    assert "소관기관" not in ev, ev

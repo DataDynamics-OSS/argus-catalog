@@ -16,6 +16,7 @@ finalize / import) 은 INFO 로 영향 받은 모델명·식별자를 함께 기
 
 import asyncio
 import datetime as _dt
+import errno
 import json
 import logging
 
@@ -694,11 +695,57 @@ async def start_hf_import(session: AsyncSession, **kwargs) -> ImportResponse:
     return ImportResponse(name=name, version=version, status="importing")
 
 
+def _hf_import_failure_reason(e: Exception, hf_model_id: str, revision: str) -> str:
+    """HF 가져오기 실패 예외 → 화면에 보일 사유(``extra_metadata.error``).
+
+    예외 원문에는 내부 주소(저장소 엔드포인트) · 서버 경로가 섞이므로 그대로 내보내지 않고(DEF-175)
+    종류별 안내 문구로 바꾼다. 원문은 호출 측이 서버 로그에 남긴다. HF 쪽 연결 오류가 저장소 장애로
+    읽히지 않게, 예외 종류(HuggingFace · HTTP 클라이언트 / 저장소 클라이언트)를 먼저 가린다.
+    """
+    from huggingface_hub.errors import (
+        GatedRepoError,
+        RepositoryNotFoundError,
+        RevisionNotFoundError,
+    )
+
+    from app.models.model_store import STORAGE_DOWN, storage_unavailable
+
+    if isinstance(e, OciUpstreamError):  # 이미 사용자 문구
+        return str(e)
+    if isinstance(e, GatedRepoError):  # RepositoryNotFoundError 의 하위 클래스이므로 먼저
+        return f"'{hf_model_id}' 은(는) 접근 승인이 필요한(gated) 모델입니다."
+    if isinstance(e, RepositoryNotFoundError):
+        return f"HuggingFace 에서 '{hf_model_id}' 모델을 찾을 수 없습니다(이름 또는 비공개 여부 확인)."
+    if isinstance(e, RevisionNotFoundError):
+        return f"'{hf_model_id}' 에 revision '{revision}' 이(가) 없습니다."
+
+    kind = type(e).__name__
+    module = type(e).__module__.split(".")[0]
+    if module in ("huggingface_hub", "httpx", "httpcore", "requests", "urllib3"):
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        if isinstance(status, int):
+            return f"HuggingFace 에서 모델 파일을 내려받지 못했습니다(HTTP {status})."
+        return f"HuggingFace 에 연결할 수 없습니다({kind}). 서버의 외부 네트워크 · 프록시 설정을 확인하세요."
+    if module in ("botocore", "aiobotocore", "boto3", "aiohttp"):
+        if storage_unavailable(e):
+            return STORAGE_DOWN
+        code = (getattr(e, "response", None) or {}).get("Error", {}).get("Code") or kind
+        return f"오브젝트 스토리지에 모델 파일을 저장하지 못했습니다({code}). 저장소 설정과 권한을 확인하세요."
+    if isinstance(e, asyncio.TimeoutError):
+        return "가져오기 시간이 초과되었습니다. 잠시 후 다시 가져오세요."
+    if isinstance(e, OSError) and e.errno == errno.ENOSPC:
+        return "서버의 임시 디스크 공간이 부족해 모델 파일을 내려받지 못했습니다."
+    if storage_unavailable(e):
+        return STORAGE_DOWN
+    return f"가져오는 중 오류가 발생했습니다({kind}). 자세한 내용은 서버 로그를 확인하세요."
+
+
 async def _run_hf_import(model_id: int, name: str, version: int, hf_model_id: str, revision: str) -> None:
     """백그라운드 가져오기 본체 — 요청 세션이 끝난 뒤 실행되므로 자체 DB 세션을 사용한다.
 
     성공: 버전 ready + manifest·통계 기록, 모델의 빈 framework·description·readme 보충, draft 면 approved.
-    실패: 부분 업로드 정리 후 버전 failed + ``extra_metadata.error``. 예외를 밖으로 올리지 않는다.
+    실패: 부분 업로드 정리 후 버전 failed + ``extra_metadata.error``(``_hf_import_failure_reason`` 의 안내 문구,
+    원문은 서버 로그). 예외를 밖으로 올리지 않는다.
     """
     from app.core.database import async_session
     from app.models import model_store
@@ -708,7 +755,9 @@ async def _run_hf_import(model_id: int, name: str, version: int, hf_model_id: st
             hf_model_id=hf_model_id, model_name=name, version=version, revision=revision,
         )
     except Exception as e:  # noqa: BLE001 — 어떤 실패든 버전 상태로 남긴다
-        logger.error("HF 가져오기 실패: %s -> %s v%d: %s", hf_model_id, name, version, e)
+        # 원문(내부 주소 · 경로 포함)은 서버 로그에만 남기고, 화면에는 안내 문구만 보인다
+        logger.error("HF 가져오기 실패: %s -> %s v%d: %s: %s", hf_model_id, name, version, type(e).__name__, e)
+        reason = _hf_import_failure_reason(e, hf_model_id, revision)
         try:
             await _delete_s3_prefix(settings.os_bucket, f"{name}/v{version}/")
         except Exception as ce:  # noqa: BLE001
@@ -719,7 +768,7 @@ async def _run_hf_import(model_id: int, name: str, version: int, hf_model_id: st
             ))).scalars().first()
             if ver:
                 ver.status = "failed"
-                ver.extra_metadata = {**(ver.extra_metadata or {}), "error": str(e)[:1000]}
+                ver.extra_metadata = {**(ver.extra_metadata or {}), "error": reason[:1000]}
                 await session.commit()
         return
 

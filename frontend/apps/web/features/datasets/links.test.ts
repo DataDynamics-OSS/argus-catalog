@@ -17,6 +17,13 @@ describe("datasetHref", () => {
     expect(datasetHref(7, "overview")).toBe("/dashboard/datasets/7")
     expect(datasetHref(7, "nope" as never)).toBe("/dashboard/datasets/7")
   })
+  it("댓글 · 메타데이터 항목을 가리킬 수 있다(TODO-151)", () => {
+    expect(datasetHref(7, "comments", { comment: 42 })).toBe("/dashboard/datasets/7?tab=comments&comment=42")
+    expect(datasetHref(7, "metadata", { field: "라이선스" }))
+      .toBe(`/dashboard/datasets/7?tab=metadata&field=${encodeURIComponent("라이선스")}`)
+    expect(datasetHref(7, "comments", { comment: null })).toBe("/dashboard/datasets/7?tab=comments")
+    expect(datasetHref(7, undefined, { comment: 1 })).toBe("/dashboard/datasets/7")
+  })
   it("isDatasetTab 은 개요를 탭 값으로 보지 않는다", () => {
     expect(isDatasetTab("lineage")).toBe(true)
     expect(isDatasetTab("overview")).toBe(false)

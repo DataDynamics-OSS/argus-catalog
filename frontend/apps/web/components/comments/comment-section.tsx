@@ -15,6 +15,7 @@ import {
 } from "@/features/comments/api"
 import { useAuth } from "@/features/auth"
 import { usePermissions } from "@/features/permissions/use-permissions"
+import { scrollToAndFlash } from "@/lib/focus-flash"
 import { errorMessage, notifyError } from "@/lib/notify"
 import { CommentEditor } from "./comment-editor"
 import { CommentItem } from "./comment-item"
@@ -28,6 +29,8 @@ type CommentSectionProps = {
   pageSize?: number
   /** 오류 신고·개선 요청의 처리 상태를 바꿀 수 있는지 — 데이터셋 소유자(생성자)·관리자(TODO-096 4단계). */
   canHandleReports?: boolean
+  /** 이 댓글이 있는 쪽을 열고 스크롤 · 강조한다 — 신고 · 알림 링크의 `?comment=`(TODO-151). */
+  focusCommentId?: number | null
 }
 
 export function CommentSection({
@@ -35,6 +38,7 @@ export function CommentSection({
   entityId,
   pageSize = 5,
   canHandleReports = false,
+  focusCommentId = null,
 }: CommentSectionProps) {
   const { user } = useAuth()
   // 댓글 쓰기 · 답글 · 편집은 역할의 기능 권한 comments.write(기본 허용형, 서버와 같은 기준 — TODO-122)
@@ -54,14 +58,14 @@ export function CommentSection({
 
   const totalPages = Math.ceil(total / pageSize)
 
-  const load = useCallback(async (p: number) => {
+  const load = useCallback(async (p: number, focus?: number | null) => {
     try {
       setLoading(true)
       setLoadError(null)
-      const data: PaginatedComments = await fetchComments(entityType, entityId, p, pageSize)
+      const data: PaginatedComments = await fetchComments(entityType, entityId, p, pageSize, focus)
       setComments(data.items)
       setTotal(data.total)
-      setPage(p)
+      setPage(data.page || p)
     } catch (err) {
       console.error("Failed to load comments:", err)
       setLoadError(errorMessage(err) ?? "")
@@ -70,9 +74,22 @@ export function CommentSection({
     }
   }, [entityType, entityId, pageSize])
 
+  // 가리킨 댓글이 있으면 그 쪽을 연다
+  const [pendingFocus, setPendingFocus] = useState<number | null>(null)
   useEffect(() => {
-    load(1)
-  }, [load])
+    setPendingFocus(focusCommentId)
+    load(1, focusCommentId)
+  }, [load, focusCommentId])
+
+  // 그려진 뒤 가리킨 댓글로 스크롤 · 강조(한 번만)
+  useEffect(() => {
+    if (loading || pendingFocus == null) return
+    const t = window.setTimeout(() => {
+      scrollToAndFlash("comment-id", pendingFocus)
+      setPendingFocus(null)
+    }, 50)
+    return () => window.clearTimeout(t)
+  }, [loading, pendingFocus, comments])
 
   const handlePost = useCallback(async (
     content: string, contentPlain: string, category: string,

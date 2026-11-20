@@ -189,6 +189,21 @@ export type FederatedDatasetMetadata = {
   glossary?: string[]
   // 확장 메타데이터(생명주기·물리·거버넌스·비즈니스·사용·품질·요약·비고) — 값 있는 항목만
   extended?: Record<string, unknown> | null
+  // 배포본(순서대로) — peer 가 노출할 때만. 배포본을 모르는 구버전 peer 는 보내지 않는다
+  distributions?: FederatedDistribution[] | null
+}
+
+/** peer 배포본 한 개 — 로컬 배포본(`DatasetDistribution`)에서 id·시각을 뺀 값. */
+export type FederatedDistribution = {
+  title: string | null
+  description: string | null
+  format: string | null
+  media_type: string | null
+  access_url: string
+  download_url: string | null
+  byte_size: number | null
+  checksum_algorithm: string | null
+  checksum: string | null
 }
 
 export type FederatedSample = {

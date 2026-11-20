@@ -40,7 +40,7 @@ from app.quality.schemas import QualityRuleCreate, QualityRuleUpdate
 
 _TABLES = (
     cm.Organization, cm.System, cm.Datasource, cm.Catalog, cm.CatalogConnection,
-    cm.DatasourceConfiguration, cm.Dataset,
+    cm.DatasourceConfiguration, cm.Dataset, cm.Owner,
     cm.DatasetSchema, cm.DatasetProperty, QualityDefinition, QualityRule, QualityResult, QualityScore, DataProfile,
 )
 

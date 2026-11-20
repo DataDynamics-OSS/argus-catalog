@@ -54,7 +54,7 @@ toc::[]
 
 image::federation/export-policy.png[노출 설정 탭 — 그룹별 제공 항목 체크리스트, 900]
 
-* 기본값은 전체(25개) 노출입니다. 아래 **저장** 옆에 `N개 항목 노출` 이 표시됩니다.
+* 기본값은 전체(26개) 노출입니다. 아래 **저장** 옆에 `N개 항목 노출` 이 표시됩니다.
 
 image::federation/export-policy-saved.png[DDL 을 해제하고 저장한 결과, 900]
 
@@ -65,8 +65,12 @@ image::federation/export-policy-saved.png[DDL 을 해제하고 저장한 결과,
 | 기본정보 | 설명 · 정규화 이름 · 테이블 유형 · 저장 포맷 · 상태 · 환경(origin) · 동기화 여부 · 확장 메타데이터
 | 스키마 | 스키마(컬럼 목록), 컬럼 타입 · Null 허용 · 기본키(PK) · Unique · Indexed · Partition Key · Distribution Key · PII 타입 · 컬럼 설명
 | 거버넌스/관계 | 태그 · 오너 · 속성(properties) · 용어집(glossary) · 리니지
-| 데이터 | 샘플 데이터 · DDL
+| 데이터 | 샘플 데이터 · DDL · 배포본
 |===
+
+**배포본** 은 데이터셋 AI-Ready 탭의 xref:catalog/datasets.adoc#help-dataset-distributions[배포본](접속 · 내려받기 주소, 형식, 크기, 체크섬)입니다.
+주소가 기관 내부 서버를 가리킬 수 있어 항목을 따로 두었습니다. 노출 설정을 한 번이라도 저장한 인스턴스에서는 이 항목이 꺼진 채로 남으므로,
+다른 허브에 배포본을 보여 주려면 **배포본** 을 체크하고 저장하세요(저장한 적이 없으면 기본값대로 노출).
 
 === 상대 허브에서는 어떻게 보이나요
 
@@ -91,7 +95,7 @@ image::federation/observability.png[관측성 탭 — 요약 카드와 peer 상�
 |===
 | 항목 | 의미
 
-| 인스턴스 (활성) | 등록된 peer 수와 그중 `ACTIVE` 수
+| 인스턴스 (활성) | 등록된 peer 수와 그중 *활성*(`ACTIVE`) 수
 | 미러 데이터셋 · 미러 리니지 엣지 | 가져온 미러 규모
 | 회로 열림(breaker) | 지금 회로가 열려 있는 peer 수
 | 표: 인스턴스 · 모드 · 미러(DS/리니지) | peer 별 미러 규모
@@ -99,7 +103,7 @@ image::federation/observability.png[관측성 탭 — 요약 카드와 peer 상�
 | 표: Breaker | `정상` 또는 `열림 (연속 실패 수)`
 |===
 
-image::federation/observability-breaker-open.png[peer 정지 후 회로 열림, 900]
+image::federation/observability-breaker-open.png[연결되지 않는 peer 의 회로 열림, 900]
 
 image::federation/observability-failed.png[최근 동기화 실패와 사유, 900]
 

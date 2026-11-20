@@ -295,6 +295,28 @@ async def test_view_only_does_not_close_delegated_admin_menus(factory):
         assert await perm.check_feature(s, ALICE, "datasets.sample-view")
 
 
+async def test_view_only_only_for_menus_with_write_features(factory):
+    """편집 기능이 없는 메뉴(대시보드 · 내 결재함 · 즐겨찾기 · AI-Ready 점검)는 보기 전용을 저장하지 않고 /me 에도 내지 않는다(DEF-162)."""
+    no_effect = ("dashboard", "my-approvals", "apis-favorites", "ai-ready")
+    for key in no_effect:
+        assert not perm._viewable_menu(key), key
+    assert perm._viewable_menu("changes") and perm._viewable_menu("datasets")
+    assert not perm._viewable_menu("users")
+    async with factory() as s:
+        # 예전에 저장된 행이 남아 있어도 /me 의 readonly_menus 에는 나오지 않는다
+        s.add_all([Permission(kind="MENU_VIEW", perm_key=k, role_id="argus-user") for k in (*no_effect, "changes")])
+        await s.commit()
+        me = await perm.get_my_permissions(ALICE, s)
+        assert me["readonly_menus"] == ["changes"]
+        assert "changes.approve" in me["denied_features"]
+    box = {"user": ADMIN}
+    async with _client(factory, box) as c:
+        r = await c.put("/api/v1/permissions/menu-views",
+                        json={**{k: ["argus-user"] for k in no_effect}, "changes": ["argus-user"]})
+        assert r.status_code == 200
+        assert (await c.get("/api/v1/permissions/menu-views")).json() == {"changes": ["argus-user"]}
+
+
 # ---------------------------------------------------------------------------
 # 거부 감사 · 저장 충돌
 # ---------------------------------------------------------------------------

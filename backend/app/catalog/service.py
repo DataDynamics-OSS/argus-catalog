@@ -15,7 +15,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.catalog import ai_ready
-from app.core.text_list import encode_list
+from app.catalog.datasource_metadata import MANUAL_DATASOURCE_TYPE
 from app.catalog.models import (
     DataPipeline,
     Dataset,
@@ -74,6 +74,7 @@ from app.catalog.schemas import (
     TagUsage,
     TagUsageRef,
 )
+from app.core.text_list import encode_list
 from app.schema_registry.changes import mark_changed as mark_avro_changed
 
 logger = logging.getLogger(__name__)
@@ -127,13 +128,19 @@ async def _datasource_response(session: AsyncSession, datasource: Datasource) ->
     return resp
 
 
-async def list_datasources(session: AsyncSession) -> list[DatasourceResponse]:
-    """등록된 모든 데이터 소스를 이름순으로 조회한다(소속 시스템 이름 포함)."""
-    rows = (await session.execute(
+async def list_datasources(session: AsyncSession, include_manual: bool = False) -> list[DatasourceResponse]:
+    """등록된 데이터 소스를 이름순으로 조회한다(소속 시스템 이름 포함).
+
+    수동 등록 데이터 소스(``type=manual``, 카탈로그 내부용 — TODO-CAT-001)는 ``include_manual`` 일 때만.
+    """
+    stmt = (
         select(Datasource, System.name)
         .outerjoin(System, System.id == Datasource.system_id)
         .order_by(Datasource.name)
-    )).all()
+    )
+    if not include_manual:
+        stmt = stmt.where(Datasource.type != MANUAL_DATASOURCE_TYPE)
+    rows = (await session.execute(stmt)).all()
     out = []
     for ds, system_name in rows:
         resp = DatasourceResponse.model_validate(ds)
@@ -1122,6 +1129,18 @@ async def _build_dataset_response(
         except (ValueError, TypeError):
             pass
 
+    # 소속 카탈로그 · 수동 데이터셋 원천 매핑(TODO-CAT-001)
+    from app.catalog.catalogs_service import is_manual_datasource
+    from app.catalog.models import Catalog
+    catalog_name = None
+    if dataset.catalog_id is not None:
+        catalog_name = await session.scalar(select(Catalog.name).where(Catalog.id == dataset.catalog_id))
+    is_manual = is_manual_datasource(datasource)
+    source_map = None
+    if is_manual:
+        from app.catalog.source_maps import get_map
+        source_map = await get_map(session, dataset.id)
+
     return DatasetResponse(
         id=dataset.id,
         urn=dataset.urn,
@@ -1129,6 +1148,10 @@ async def _build_dataset_response(
         name=dataset.name,
         display_name=dataset.display_name,
         datasource=await _datasource_response(session, datasource),
+        catalog_id=dataset.catalog_id,
+        catalog_name=catalog_name,
+        is_manual=is_manual,
+        source_map=source_map,
         summary=dataset.summary,
         description=dataset.description,
         origin=dataset.origin,
@@ -1208,18 +1231,37 @@ async def create_dataset(session: AsyncSession, req: DatasetCreate, created_by: 
     ``{datasource_id}.{path}`` 로 저장한다. 커밋 후 임베딩을 요청하고 쿼리 리니지를 점증 해석한다
     (해석 실패는 경고만). 데이터 소스가 없으면 ``ValueError``.
     """
-    # URN 생성을 위한 데이터 소스 조회
-    result = await session.execute(select(Datasource).where(Datasource.id == req.datasource_id))
-    datasource = result.scalars().first()
-    if not datasource:
-        logger.warning("데이터셋 생성 거부 — 데이터 소스 없음: datasource_id=%d name=%s", req.datasource_id, req.name)
-        raise ValueError(f"Datasource with id {req.datasource_id} not found")
+    from app.catalog.catalogs_service import (
+        ManualMappedError,
+        ensure_can_own_datasets,
+        is_manual_datasource,
+        resolve_dataset_datasource,
+    )
+    if req.catalog_id is not None:
+        # 카탈로그로 등록(TODO-CAT-001) — ARGUS 카탈로그면 수동 등록 데이터 소스, 아니면 카탈로그의 SYNC 데이터 소스
+        datasource = await resolve_dataset_datasource(
+            session, req.catalog_id, req.origin.value if req.origin is not None else None)
+    else:
+        # URN 생성을 위한 데이터 소스 조회
+        result = await session.execute(select(Datasource).where(Datasource.id == req.datasource_id))
+        datasource = result.scalars().first()
+        if not datasource:
+            logger.warning("데이터셋 생성 거부 — 데이터 소스 없음: datasource_id=%d name=%s", req.datasource_id, req.name)
+            raise ValueError(f"Datasource with id {req.datasource_id} not found")
 
     # 엔진 데이터 소스는 SYNC 연결(엔진 경유 수집)이 있어야 데이터셋을 가진다 — 없으면 CatalogConflictError(409)
-    from app.catalog.catalogs_service import ensure_can_own_datasets
     await ensure_can_own_datasets(session, datasource)
 
     path = req.qualified_name or req.name
+    if req.is_synced:
+        if is_manual_datasource(datasource):
+            raise ManualMappedError("수동 등록 데이터 소스에는 수집 데이터셋을 만들 수 없습니다.")
+        # 수동 데이터셋에 매핑된 테이블은 수집이 만들지 않는다(설계 6장 — 한 테이블에 데이터셋 하나)
+        from app.catalog.source_maps import find_mapping_for_path
+        mapped = await find_mapping_for_path(session, datasource.id, path)
+        if mapped is not None:
+            raise ManualMappedError(
+                f"'{path}' 는 수동 데이터셋(id={mapped.dataset_id})에 매핑되어 있어 수집하지 않습니다.")
     urn = _generate_urn(datasource.datasource_id, path)
     qualified_name = f"{datasource.datasource_id}.{path}"
 
@@ -1230,8 +1272,8 @@ async def create_dataset(session: AsyncSession, req: DatasetCreate, created_by: 
         urn=urn,
         name=req.name,
         display_name=req.display_name,
-        datasource_id=req.datasource_id,
-        catalog_id=await sync_catalog_id(session, req.datasource_id),
+        datasource_id=datasource.id,
+        catalog_id=await sync_catalog_id(session, datasource.id),
         summary=req.summary,
         description=req.description,
         created_by=created_by,
@@ -1268,6 +1310,8 @@ async def create_dataset(session: AsyncSession, req: DatasetCreate, created_by: 
             is_partition_key=field.is_partition_key,
             is_distribution_key=field.is_distribution_key,
             ordinal=field.ordinal or idx,
+            unit=_curated(field.unit),
+            calculation=_curated(field.calculation),
         )
         session.add(schema_field)
 
@@ -1504,6 +1548,8 @@ async def list_datasets(
     page: int = 1,
     page_size: int = 20,
     card: bool = False,
+    catalog_id: int | None = None,
+    manual: bool | None = None,
 ) -> PaginatedDatasets:
     """선택적 필터·페이지네이션으로 데이터셋 목록을 조회한다.
 
@@ -1515,7 +1561,9 @@ async def list_datasets(
     ``datasource``(datasource_id)·``origin``·``status``·``tag_id`` 는 쉼표로 여러 값을 줄 수 있다(하나라도 맞으면 포함).
     ``term_id`` 는 해당 용어집 용어가 연결된 데이터셋.
     ``card`` 면 카드 보기용으로 앞쪽 컬럼 이름(최대 ``COLUMN_PREVIEW``개)도 채운다.
+    ``catalog_id`` 는 소속 카탈로그, ``manual`` 은 수동 데이터셋(True)만 / 수동 제외(False) — TODO-CAT-001.
     """
+    from app.catalog.models import Catalog
     base = (
         select(
             Dataset.id,
@@ -1524,6 +1572,8 @@ async def list_datasets(
             Dataset.display_name,
             Datasource.name.label("datasource_name"),
             Datasource.type.label("datasource_type"),
+            Dataset.catalog_id,
+            Catalog.name.label("catalog_name"),
             Dataset.summary,
             Dataset.description,
             Dataset.origin,
@@ -1534,7 +1584,14 @@ async def list_datasets(
             Dataset.updated_at,
         )
         .join(Datasource, Dataset.datasource_id == Datasource.id)
+        .outerjoin(Catalog, Catalog.id == Dataset.catalog_id)
     )
+    if catalog_id is not None:
+        base = base.where(Dataset.catalog_id == catalog_id)
+    if manual is True:
+        base = base.where(Datasource.type == MANUAL_DATASOURCE_TYPE)
+    elif manual is False:
+        base = base.where(Datasource.type != MANUAL_DATASOURCE_TYPE)
 
     if search:
         # 검색어의 % _ 는 글자로 매칭(와일드카드로 해석하면 "%" 하나로 전체가 나온다)
@@ -1641,6 +1698,17 @@ async def list_datasets(
         search, datasource, status, org_id, system_id, category_id, total, page, len(rows),
     )
 
+    # 수동 데이터셋의 원천 매핑 상태(한 번에) — UNMAPPED / UNCHECKED / check_status
+    manual_ids = [r.id for r in rows if r.datasource_type == MANUAL_DATASOURCE_TYPE]
+    map_status: dict[int, str] = {}
+    if manual_ids:
+        from app.catalog.models import DatasetSourceMap
+        for did, st in (await session.execute(
+            select(DatasetSourceMap.dataset_id, DatasetSourceMap.check_status)
+            .where(DatasetSourceMap.dataset_id.in_(manual_ids))
+        )).all():
+            map_status[did] = st or "UNCHECKED"
+
     # 개수 정보를 포함한 요약 구성(행마다 집계 쿼리 3회 — 페이지 크기만큼만)
     items = []
     for row in rows:
@@ -1662,6 +1730,10 @@ async def list_datasets(
             display_name=row.display_name,
             datasource_name=row.datasource_name,
             datasource_type=row.datasource_type,
+            catalog_id=row.catalog_id,
+            catalog_name=row.catalog_name,
+            source_map_status=(map_status.get(row.id, "UNMAPPED")
+                               if row.datasource_type == MANUAL_DATASOURCE_TYPE else None),
             summary=row.summary,
             description=row.description,
             origin=row.origin,
@@ -1841,6 +1913,19 @@ async def remove_dataset_glossary_term(
 
 # 동기화가 알 수 없는(사용자·AI 가 채우는) 컬럼 속성은 빈 값이 오면 기존 값을 유지한다.
 _SCHEMA_KEEP_IF_EMPTY = ("display_name", "description")
+# 담당자만 쓰는 데이터 사전 속성(단위·산정기준, 체크리스트 C08) — 원천에 없는 값이라 수집은 키를 보내지 않는다.
+# 키가 있을 때만 바꾸고(빈 값이면 지움), 키가 없으면 그대로 둔다 → 재수집(metadata-sync·내장 sync·변경 요청)이 덮어쓰지 않음.
+_SCHEMA_CURATED = ("unit", "calculation")
+
+
+def _curated(value) -> str | None:
+    """단위·산정기준 값 정리 — 앞뒤 공백을 떼고 빈 값은 None."""
+    if value is None:
+        return None
+    value = str(value).strip()
+    return value or None
+
+
 _SCHEMA_SYNC_ATTRS = (
     "field_type", "native_type", "nullable", "is_primary_key", "is_unique", "is_indexed",
     "is_partition_key", "is_distribution_key", "ordinal",
@@ -1852,6 +1937,7 @@ async def apply_schema_fields(
     dataset_id: int,
     existing: list[DatasetSchema],
     fields: list[dict],
+    clear_empty: bool = False,
 ) -> list[DatasetSchema]:
     """스키마 필드를 ``field_path`` 기준으로 diff-upsert 한다(전체 삭제 후 재삽입 대신).
 
@@ -1859,7 +1945,10 @@ async def apply_schema_fields(
       (``catalog_term_column_mapping.schema_id``, ON DELETE CASCADE)과 ``pii_type`` 등
       동기화 대상이 아닌 값이 보존된다.
     - ``display_name``/``description`` 은 빈 값이 오면 기존 값 유지(원본 코멘트가 없을 때
-      사용자 입력을 지우지 않음). 값이 있으면 원본 값으로 갱신.
+      사용자 입력을 지우지 않음). 값이 있으면 원본 값으로 갱신. ``clear_empty`` (화면의 스키마 편집)면 단위 · 산정기준처럼
+      키가 있을 때 빈 값으로 지운다(DEF-166).
+    - ``unit``/``calculation``(데이터 사전, 담당자 큐레이션)은 dict 에 키가 있을 때만 바꾼다 — 빈 값이면 지움.
+      수집 경로는 키를 보내지 않으므로 재수집해도 보존된다.
     - 그 밖의 동기화 속성은 dict 에 키가 있을 때만 갱신(백엔드 내장 sync 처럼 파티션/분산 키를
       모르는 호출자가 기존 값을 지우지 않도록).
     - 사라진 컬럼만 삭제, 새 컬럼만 추가.
@@ -1894,13 +1983,20 @@ async def apply_schema_fields(
                 is_partition_key=data.get("is_partition_key", "false"),
                 is_distribution_key=data.get("is_distribution_key", "false"),
                 ordinal=data.get("ordinal", idx),
+                unit=_curated(data.get("unit")),
+                calculation=_curated(data.get("calculation")),
             )
             session.add(row)
         else:
+            for attr in _SCHEMA_CURATED:
+                if attr in data:
+                    setattr(row, attr, _curated(data[attr]))
             for attr in _SCHEMA_KEEP_IF_EMPTY:
                 value = data.get(attr)
                 if value:
                     setattr(row, attr, value)
+                elif clear_empty and attr in data:
+                    setattr(row, attr, None)
             for attr in _SCHEMA_SYNC_ATTRS:
                 if attr in data and data[attr] is not None:
                     setattr(row, attr, data[attr])
@@ -1913,7 +2009,7 @@ async def apply_schema_fields(
 
 
 async def update_schema_fields(
-    session: AsyncSession, dataset_id: int, fields: list[dict]
+    session: AsyncSession, dataset_id: int, fields: list[dict], clear_empty: bool = False,
 ) -> list[SchemaFieldResponse]:
     """데이터셋의 스키마 필드 전체를 교체한다(요청에 없는 필드는 삭제).
 
@@ -1952,7 +2048,7 @@ async def update_schema_fields(
 
     # 전체 삭제 후 재삽입 대신 field_path 기준 diff-upsert — 표준 용어 매핑·pii_type·
     # 사용자 설명이 재동기화마다 사라지지 않도록.
-    new_fields = await apply_schema_fields(session, dataset_id, old_fields, fields)
+    new_fields = await apply_schema_fields(session, dataset_id, old_fields, fields, clear_empty=clear_empty)
 
     await session.commit()
     logger.info("스키마 필드 교체: dataset_id=%d before=%d after=%d", dataset_id, len(old_fields), len(new_fields))
@@ -2083,7 +2179,7 @@ async def get_catalog_stats(session: AsyncSession, tz: str | None = None) -> Cat
     )).scalar() or 0
 
     total_datasources = (await session.execute(
-        select(func.count()).select_from(Datasource)
+        select(func.count()).select_from(Datasource).where(Datasource.type != MANUAL_DATASOURCE_TYPE)
     )).scalar() or 0
 
     total_tags = (await session.execute(

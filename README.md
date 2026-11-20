@@ -4,6 +4,7 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+[![Community](https://img.shields.io/badge/community-Facebook%20Group-1877F2.svg?logo=facebook&logoColor=white)](https://www.facebook.com/groups/1171954241854408/)
 
 **Argus Catalog** 는 회사 안에 흩어진 데이터·ML 모델·API·AI 에이전트를 **한 곳에서 찾고, 이해하고, 관리하는**
 오픈소스 메타데이터 플랫폼입니다. 데이터 카탈로그와 MLflow 호환 모델 레지스트리를 한 제품으로 묶었고,
@@ -49,28 +50,29 @@ docker compose -f deploy/docker-compose.yml up -d --build
 
 | 대분류 | 중분류 | 소분류 |
 |--------|--------|--------|
-| **데이터 카탈로그** | 데이터 소스 | 조직 → 시스템 → 데이터 소스 트리 · 11종 데이터 소스(MySQL·PostgreSQL·Oracle·SQL Server·Hive·Impala·Trino·StarRocks·Greenplum·Kudu·Iceberg REST) 등록 · 연결 테스트 · 메타데이터 동기화 · 데이터 소스 전체 ER 다이어그램 · 삭제 전 영향 확인 |
-| | 데이터셋 | 목록 · 검색 · 필터(표 · 카드 보기) · 개요 · 스키마 · DDL · 샘플 데이터 · 스키마 편집과 변경 이력 · 확장 메타데이터(민감도 · 보존 · 규제 태그 등) · 소유자 · 태그 · 용어 연결 · 커스텀 속성 · 댓글 |
+| **데이터 카탈로그** | 카탈로그 | 데이터 소스와 함께 생기는 카탈로그 · 직접 등록 카탈로그(데이터 소스 없이 만들고 시스템 · 소관기관 지정) · 수집(SYNC) · 조회 엔진(QUERY) 연결 |
+| | 데이터 소스 | 조직 → 시스템 → 데이터 소스 트리 · 11종 데이터 소스(MySQL·PostgreSQL·Oracle·SQL Server·Hive·Impala·Trino·StarRocks·Greenplum·Kudu·Iceberg REST) 등록 · 연결 테스트 · 메타데이터 동기화 · 데이터 소스 전체 ER 다이어그램 · 삭제 전 영향 확인 |
+| | 데이터셋 | 목록 · 검색 · 필터(표 · 카드 보기) · 개요 · 스키마 · DDL · 샘플 데이터 · 스키마 편집과 변경 이력 · 컬럼 단위 · 산정기준(데이터 사전) · 수동 데이터셋 직접 등록과 원천 매핑(겹침 · 스키마 확인, 원천 스키마 가져오기) · 확장 메타데이터(민감도 · 보존 · 규제 태그 등) · 소유자 · 태그 · 용어 연결 · 커스텀 속성 · 댓글 |
 | | 리니지 · 관계 | 리니지 그래프(컬럼 매핑 · 파이프라인) · 조인 관계 그래프 · ER 다이어그램(FK) · 쿼리 수집기(Hive·Impala·Trino·StarRocks) 기반 관계 분석 |
-| | 분류 체계 | 분류체계 · 분류 트리(드래그 정렬) · 데이터셋 매핑 · 분류별 / 미분류 데이터셋 |
+| | 분류 체계 | 분류체계 · 분류 트리(드래그 정렬) · 데이터셋 매핑 · 데이터셋 여러 개를 분류로 끌어 놓기(이동 · 복사) · 분류에서 바로 데이터셋 등록 · 분류별 / 미분류 데이터셋 |
 | | 검색 | 통합 검색(데이터셋 · 용어 · AI Agent · API · MCP) · 키워드 + 임베딩 시맨틱(하이브리드) 검색 · 임베딩 재계산 |
 | | 스키마 · 적재 코드 | Avro 스키마(편집 · 외부 조회 API) · Confluent 호환 스키마 레지스트리 · 적재 코드 자동 생성(PySpark · Kestra · Airflow) |
 | | 대시보드 | 핵심 지표 카드 · 데이터 소스 유형 · 환경별 분포 · 신규 데이터셋 추이 · 최근 데이터셋 |
 | **데이터 품질** | 프로파일링 | 컬럼 통계(행 수 · NULL · 고유값 · 최소/최대 · 최빈값) — 품질 워커가 수집 |
-| | 품질 규칙 | 필수값 · 중복 · 범위 · 허용 값 · 정규식 · 날짜 형식 · 글자 깨짐 · 공백 · 더미 값 · 연속성 · 컬럼 간 비교 · 논리관계 · 참조관계 · 최신성 · Trino 함수 · 커스텀 SQL / Python · 규칙 추천 · 진단 쿼리 보기 |
+| | 품질 규칙 | 필수값 · 중복 · 여러 컬럼 키 고유값 · 범위 · 허용 값(표준 코드 그룹 참조) · 값 분포 다양성 · 정규식 · 날짜 형식 · 글자 깨짐 · 공백 · 더미 값 · 연속성 · 컬럼 간 비교 · 논리관계 · 참조관계 · 최신성 · Trino 함수 · 커스텀 SQL / Python · 규칙 추천 · 진단 쿼리 보기 |
 | | 정밀 진단 | 품질 워커의 전수 진단 — Trino 경로 또는 원천 직접(PostgreSQL · MySQL · Oracle · SQL Server) · 위반 샘플 · 실행 현황 · 취소 · 다시 실행 |
 | | 품질 지표 | 공공데이터 품질관리 지침 진단 기준 16개 · AI-Ready 품질 지표(완전성 · 일관성 · 적시성 · 유효성 등) · 기본 지표 · 컬럼 할당 |
 | | 품질 진단 작업 | 데이터셋 · 지표 단위 작업 · 주기 실행(매시간 · 매일 · 매주 · 매월) · 프로파일 함께 수집 · 작업 이력 |
 | | 리포트 · 점수 | 오류율 · 진단 기준별 · 지표별 · 규칙별 리포트 · 엑셀 · PDF 내려받기 · 품질 점수와 추이 · 업스트림 품질 경고 |
-| **AI-Ready 공공데이터** | AI 활용 메타데이터 | 행정안전부 「공공데이터의 인공지능 친화적 관리 가이드라인」 항목(제공기관 · 라이선스 · 허용 용도 · 시간 · 공간 범위 · 편향 · 한계 · 개인정보 조치 등) · 기관 기본값 · 데이터 버전 이력 |
+| **AI-Ready 공공데이터** | AI 활용 메타데이터 | 행정안전부 「공공데이터의 인공지능 친화적 관리 가이드라인」 항목(제공기관 · 라이선스 · 허용 용도 · 시간 · 공간 범위 · 편향 · 한계 · 사회적 영향 · 리스크 완화 · 개인정보 조치 등) · 기관 기본값 · 데이터 버전 이력 |
 | | AI-Ready 점검 | 부록 4 체크리스트 자동 판정 · 수동 판정 · 필수 / 권장 충족률 · 전체 데이터셋 점검 목록 |
-| | 배포 · 내보내기 | 배포본(접근 주소 · 형식 · 체크섬) · DCAT · Croissant 1.0 · 데이터 카드(Markdown) · 외부 공개 주소 설정 |
-| | 이용자 피드백 | 오류 신고 · 개선 요청 접수 · 처리 기한 · 처리 상태(처리 중 · 해결 · 소명) · 오류 신고 처리 화면 |
-| | AI-Ready 알림 · 초안 | 최소 요건 미충족 · 신고 접수 · 처리 기한 알림 · LLM 초안(편향 · 한계 · 관련법령) |
+| | 배포 · 내보내기 | 배포본(접근 주소 · 형식 · 체크섬 · 순서) · DCAT · Croissant 1.0 · 데이터 카드(Markdown) · 외부 공개 주소 설정 |
+| | 이용자 피드백 | 오류 신고 · 개선 요청 접수 · 처리 기한 · 처리 상태(처리 중 · 해결 · 소명) · 오류 신고 처리 화면(내 데이터셋 · 내가 낸 신고) · 신고 처리 결과 알림 |
+| | AI-Ready 알림 · 초안 | 최소 요건 미충족 · 신고 접수 · 처리 기한 알림 · LLM 초안(편향 · 한계 · 관련법령 · 개인정보 보호조치 · 허용 이용 유형, 근거 표시) |
 | **거버넌스** | 데이터 표준 | 표준 사전 · 단어 · 도메인 · 용어(형태소 분석으로 영문명 · 물리명 자동) · 코드 그룹 · 코드 값 · 준수율 · 데이터셋 표준 매핑 |
 | | 용어집 · 태그 | 용어집 분류 트리 · 용어 · 데이터셋 연결 · 태그(색상 · 사용처) |
 | | 변경 관리 | 변경 요청(스키마 변경 · 유형 · 우선순위) · 영향 분석(다운스트림 · 소비자) · 순차 결재(승인 · 반려 · 위임) · 예약 적용 · 소비자 통지 · 내 결재함 |
-| | 알림 | 알림 규칙(범위 · 트리거: 스키마 변경 · 컬럼 감시 · 품질 실패 · 수집 실패 · AI-Ready) · 채널(화면 · Webhook · 이메일 · Slack/Mattermost) · 헤더 알림 벨 |
+| | 알림 | 알림 규칙(범위 · 트리거: 스키마 변경 · 컬럼 감시 · 품질 실패 · 수집 실패 · AI-Ready · 신고 처리 결과) · 채널(화면 · Webhook · 이메일 · Slack/Mattermost) · 헤더 알림 벨 |
 | **API · AI 자산** | API 카탈로그 | OpenAPI 3 / Swagger 2 스펙 등록 · 수동 등록(GraphQL · gRPC · SOAP · Webhook · 이벤트) · 버전 비교(Breaking 경고) · 린팅 · 시험 호출 · 사용량 · 즐겨찾기 · 리니지 · 자격증명 암호화 보관 |
 | | AI Agent | 에이전트 등록 · 버전 · 상태 이력 · 평가와 평판 점수 · 에이전트 카드(A2A) · 정의 파일 일괄 반영 · 미등록 에이전트 발견 · 실행 계층 연동(정책 번들 · 훅 이벤트) |
 | | MCP Server | 서버 정의 · 배포 · 도구 수집(manifest · MCP 프로토콜) · 승인 정책 · 정책 번들 배포 · 감사 이벤트 · 통제 현황 · 보안 finding |
@@ -80,13 +82,68 @@ docker compose -f deploy/docker-compose.yml up -d --build
 | **AI** | 메타데이터 생성 | LLM(OpenAI · Anthropic · Ollama)으로 요약 · 설명 · 컬럼 설명 · 태그 · PII 감지 · 미리보기 후 적용 · 일괄 생성 |
 | | AI 어시스턴트 | 대화형 질의 · 카탈로그 도구(검색 · 스키마 · ER · 품질 · 리니지 · 용어 · 표준 준수 · SQL 검증) · 사용자 권한 그대로 조회 |
 | **페더레이션** | 인스턴스 연합 | 인스턴스 등록(HARVEST · HYBRID · LIVE) · 가져오기(증분 · 전체) · 상태 점검 |
-| | 탐색 · 승격 | 통합 검색 · 탐색 · 원격 데이터셋 상세(스키마 · 샘플 · DDL · 리니지) · 로컬로 가져오기 · 노출 정책 · 관측(서킷 브레이커) |
+| | 탐색 · 승격 | 통합 검색 · 탐색 · 원격 데이터셋 상세(스키마 · 샘플 · DDL · 리니지 · 배포본) · 로컬로 가져오기 · 노출 정책 · 관측(서킷 브레이커) |
 | **운영 · 보안** | 인증 · 사용자 | 로컬 · Keycloak(OIDC) 인증 · 비밀번호 정책 · 로그인 잠금 · API 키(역할 · 범위 · 만료) · 사용자 관리 · LDAP 사용자 동기화 |
 | | 권한 | 메뉴 · 기능 권한(역할별) · 사용자 정의 역할 · 메뉴 보기 전용 · 관리 기능 위임 · 권한 거부 감사 |
-| | 설정 · 감사 | 오브젝트 스토리지 · 임베딩 · LLM · 이메일 · 알림 채널 · CORS · 외부 API 캐시 · 설정 값 출처 · 설정 변경 이력 · 관리 감사 로그 |
+| | 설정 · 감사 | 오브젝트 스토리지 · 임베딩 · LLM · 이메일 · 알림 채널 · CORS · 외부 API 캐시 · 설정 값 출처 · 설정 변경 이력 · 감사 로그 화면(사용자 · 설정 · 권한 · 운영 — 범주 · 작업자 · 기간, 보기 권한 위임) |
 
 화면별 사용법은 사용자 매뉴얼([`docs/`](docs), Antora)에 정리돼 있습니다.
 모델 반입·조회는 Python SDK 와 `argus-model` CLI([`sdk/`](sdk))로도 할 수 있습니다.
+
+## 화면 둘러보기
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src=".github/images/dashboard.png" alt="대시보드 — 데이터셋·데이터 소스·태그·용어집 현황과 신규 데이터셋 추이"><br>
+      <sub><b>대시보드</b> — 데이터셋·데이터 소스·태그·용어집 현황과 신규 데이터셋 추이</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src=".github/images/search-hybrid.png" alt="통합 검색 — 키워드 + 임베딩 시맨틱(하이브리드) 검색 — 데이터셋·용어·API·에이전트를 한 번에"><br>
+      <sub><b>통합 검색</b> — 키워드 + 임베딩 시맨틱(하이브리드) 검색 — 데이터셋·용어·API·에이전트를 한 번에</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src=".github/images/lineage.png" alt="리니지 — 테이블 간 데이터 흐름과 쿼리 기반 관계를 그래프로"><br>
+      <sub><b>리니지</b> — 테이블 간 데이터 흐름과 쿼리 기반 관계를 그래프로</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src=".github/images/quality-report.png" alt="데이터 품질 리포트 — 품질 점수·오류율, 관리지침 진단 영역·기준·규칙별 결과, PDF·엑셀 내려받기"><br>
+      <sub><b>데이터 품질 리포트</b> — 품질 점수·오류율, 관리지침 진단 영역·기준·규칙별 결과, PDF·엑셀 내려받기</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src=".github/images/ai-ready.png" alt="AI-Ready 점검 — 공공데이터 AI 친화 가이드라인 체크리스트 자동 판정과 충족률"><br>
+      <sub><b>AI-Ready 점검</b> — 공공데이터 AI 친화 가이드라인 체크리스트 자동 판정과 충족률</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src=".github/images/ai-column-description.png" alt="AI 메타데이터 생성 — LLM 이 만든 컬럼 설명을 미리 보고 골라 적용"><br>
+      <sub><b>AI 메타데이터 생성</b> — LLM 이 만든 컬럼 설명을 미리 보고 골라 적용</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src=".github/images/taxonomy-drag.png" alt="분류 체계 — 데이터셋 여러 개를 골라 분류로 끌어 놓기(이동 · Ctrl 복사)"><br>
+      <sub><b>분류 체계</b> — 데이터셋 여러 개를 골라 분류로 끌어 놓기(이동 · Ctrl 복사)</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src=".github/images/api-catalog.png" alt="API 카탈로그 — OpenAPI·GraphQL·Webhook 등 API 를 카드로 탐색, 상태·버전·엔드포인트 수"><br>
+      <sub><b>API 카탈로그</b> — OpenAPI·GraphQL·Webhook 등 API 를 카드로 탐색, 상태·버전·엔드포인트 수</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src=".github/images/ai-agents.png" alt="AI Agent 카탈로그 — 에이전트 목록·위험 등급·정보 완성도와 거버넌스 지표"><br>
+      <sub><b>AI Agent 카탈로그</b> — 에이전트 목록·위험 등급·정보 완성도와 거버넌스 지표</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src=".github/images/ai-assistant.png" alt="AI 어시스턴트 — 카탈로그를 대화로 조회 — SQL 검증으로 조회 쿼리만 허용"><br>
+      <sub><b>AI 어시스턴트</b> — 카탈로그를 대화로 조회 — SQL 검증으로 조회 쿼리만 허용</sub>
+    </td>
+  </tr>
+</table>
 
 ## 저장소 구성
 
@@ -152,6 +209,11 @@ LLM(Ollama 등)을 연결합니다 — 설정 예시는 [`ai-service/.env.exampl
 
 [Semantic Versioning](https://semver.org/lang/ko/) 을 따르며, 루트 `VERSION` 파일이 단일 기준입니다.
 규칙과 릴리스 절차는 [VERSIONING.md](VERSIONING.md) 를 참고하세요.
+
+## 커뮤니티
+
+질문·사용 경험·새 소식은 Facebook 그룹 **[Argus Platform (Data & AI)](https://www.facebook.com/groups/1171954241854408/)** 에서 나눕니다.
+버그와 기능 제안은 GitHub Issues 로 남겨 주세요.
 
 ## 라이선스
 

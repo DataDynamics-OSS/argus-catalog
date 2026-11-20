@@ -227,3 +227,28 @@ def test_quality_definition_writes_use_quality_manage():
         assert inspect.signature(fn).parameters["_guard"].annotation is q.MenuUser, fn.__name__
     for fn in (q.assign_definition, q.unassign_definition):
         assert inspect.signature(fn).parameters["user"].annotation is q.RuleManager, fn.__name__
+
+
+# ---------------------------------------------------------------------------
+# 관리 › 감사 로그 메뉴 (TODO-152)
+# ---------------------------------------------------------------------------
+
+async def test_audit_menu_opens_by_audit_view_only(factory):
+    assert "audit" in perm.ADMIN_MENUS and perm.ADMIN_MENU_GRANTS["audit"] == ("audit.view",)
+    async with factory() as s:
+        me = await perm.get_my_permissions(SUPER, s)
+        assert "audit" in me["denied_menus"], "미설정이면 관리자만"
+        await _only_superuser(s, "FEATURE", "audit.view")
+        me = await perm.get_my_permissions(SUPER, s)
+        assert "audit" not in me["denied_menus"] and "users" in me["denied_menus"], "audit.view 만으로 사용자 관리는 안 열린다"
+        assert await perm.check_menu(s, SUPER, "audit")
+        assert not await perm.check_menu(s, ALICE, "audit")
+
+
+def test_audit_api_uses_audit_view():
+    """감사 로그 API 는 메뉴와 같은 키(audit.view)로 강제한다 — 범주 필터에 권한(permissions)도 있다."""
+    from app.audit import router as audit_router
+    from app.audit import service as audit_service
+
+    assert 'require_feature_granted("audit.view")' in inspect.getsource(audit_router.list_audit_logs)
+    assert "permissions" in audit_service.CATEGORIES

@@ -185,8 +185,8 @@ async def _run_delete_cancels() -> None:
             raise RPCError("unavailable", RPCStatusCode.UNAVAILABLE, b"")
         sent.append(wf)
 
-    saved = (service.cancel_cr, temporal_client.is_connected)
-    service.cancel_cr = cancel_cr
+    saved = (service.terminate_orphan_workflow, temporal_client.is_connected)
+    service.terminate_orphan_workflow = cancel_cr
     temporal_client.is_connected = lambda: mode["connected"]
     engine, factory = await _make_db()
     try:
@@ -216,7 +216,7 @@ async def _run_delete_cancels() -> None:
             assert await db.scalar(select(func.count()).select_from(chm.ChangeRequest)) == 0
             assert await service.in_flight_workflow_ids(db, []) == []
     finally:
-        service.cancel_cr, temporal_client.is_connected = saved
+        service.terminate_orphan_workflow, temporal_client.is_connected = saved
         await engine.dispose()
 
 
@@ -245,13 +245,13 @@ def test_delete_datasource_cancels_in_flight_workflows() -> None:
             await db.commit()
             assert await catalog_service.delete_datasource(db, ds.id, force=True)
 
-    saved = (service.cancel_cr, temporal_client.is_connected)
-    service.cancel_cr = cancel_cr
+    saved = (service.terminate_orphan_workflow, temporal_client.is_connected)
+    service.terminate_orphan_workflow = cancel_cr
     temporal_client.is_connected = lambda: True
     try:
         asyncio.run(run())
     finally:
-        service.cancel_cr, temporal_client.is_connected = saved
+        service.terminate_orphan_workflow, temporal_client.is_connected = saved
     assert sent == ["wf-1"]
 
 

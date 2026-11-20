@@ -125,12 +125,13 @@ export function VersionsTab({
 
                 <div className="shrink-0 text-right">
                   {canEdit ? (
+                    // 폭은 글자에 맞춘다 — 고정 폭이면 "스테이지 없음" · "운영 (권한 필요)" 이 잘린다(DEF-174)
                     <Select
                       value={v.stage}
                       onValueChange={(val) => onStageChange(v, val as ModelStage)}
                       disabled={saving || (v.stage === "PRODUCTION" && !canPromote)}
                     >
-                      <SelectTrigger size="sm" className="w-[120px]" aria-label={`v${v.version} 스테이지`}>
+                      <SelectTrigger size="sm" className="min-w-[130px]" aria-label={`v${v.version} 스테이지`}>
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>

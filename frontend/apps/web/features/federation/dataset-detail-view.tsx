@@ -13,6 +13,7 @@ import {
   GitBranch,
   Globe,
   Loader2,
+  Package,
 } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
@@ -41,11 +42,14 @@ import {
   TabsTrigger,
 } from "@workspace/ui/components/tabs"
 import { CodeViewer } from "@/components/code-viewer"
+import { RichTextViewer } from "@/components/comments/rich-text-viewer"
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { usePermissions } from "@/features/permissions/use-permissions"
 import { DatasetMetadataSummary } from "@/features/datasets/components/dataset-metadata-summary"
 import type { DatasetDetail } from "@/features/datasets/data/schema"
+import { descriptionToHtml } from "@/features/datasets/description"
 import { ddlTitle } from "@/features/datasets/ddl"
+import { DistributionTable } from "@/features/datasets/components/ai-ready-export-section"
 import { OriginText } from "@/features/datasets/components/origin-text"
 import { datasetStatus } from "@/features/datasets/status"
 
@@ -313,9 +317,9 @@ export function FederationDatasetDetailView({ urn }: { urn: string }) {
   // 상세 설명 — 노출 시에만 children 으로 전달(undefined 면 섹션 자체 숨김).
   const descNode =
     show("description") && meta.description ? (
-      <p className="text-sm whitespace-pre-wrap">
-        {meta.description}
-      </p>
+      // 로컬 상세 개요 탭과 같은 변환 · 뷰어(DEF-191). 원격 설명은 다른 카탈로그가 보낸 신뢰할 수 없는 값이라
+      // 반드시 정화하는 뷰어(``RichTextViewer`` — DOMPurify)로만 그린다. 직접 HTML 로 주입하지 않는다.
+      <RichTextViewer html={descriptionToHtml(meta.description)} />
     ) : undefined
 
   const flagCols = SCHEMA_FLAG_COLS.filter((c) => show(c.key))
@@ -329,6 +333,8 @@ export function FederationDatasetDetailView({ urn }: { urn: string }) {
   const showSample = peerShows("sample") && canUseFeature("datasets.sample-view")
   const showLineage = peerShows("lineage")
   const showDdl = show("ddl") && !!meta.ddl && canUseFeature("datasets.ddl-view")
+  // 배포본 — peer 가 노출하고 허브가 표시할 때, 하나라도 있을 때만(구버전 peer 는 보내지 않음)
+  const distributions = show("distributions") ? (meta.distributions ?? []) : []
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
@@ -390,7 +396,7 @@ export function FederationDatasetDetailView({ urn }: { urn: string }) {
               <span className="font-medium">
                 {local.display_name || local.name || urn}
               </span>{" "}
-              의 메타데이터·스키마·샘플(노출 범위 내)을 로컬 데이터셋으로 생성합니다.
+              의 메타데이터·스키마·배포본·샘플(노출 범위 내)을 로컬 데이터셋으로 생성합니다.
             </p>
             <p className="text-xs">
               가져온 데이터셋은 원본과 동기화되지 않는 로컬 사본입니다.
@@ -454,6 +460,11 @@ export function FederationDatasetDetailView({ urn }: { urn: string }) {
           {showDdl && (
             <TabsTrigger value="ddl" className="gap-1.5">
               <Code2 className="h-4 w-4" /> DDL
+            </TabsTrigger>
+          )}
+          {distributions.length > 0 && (
+            <TabsTrigger value="distributions" className="gap-1.5">
+              <Package className="h-4 w-4" /> 배포본 ({distributions.length})
             </TabsTrigger>
           )}
           {showLineage && (
@@ -615,6 +626,13 @@ export function FederationDatasetDetailView({ urn }: { urn: string }) {
                 />
               </CardContent>
             </Card>
+          </TabsContent>
+        )}
+
+        {/* 배포본 — 로컬 AI-Ready 탭의 배포본 표와 같은 모양(읽기 전용) */}
+        {distributions.length > 0 && (
+          <TabsContent value="distributions" className="mt-4 overflow-auto">
+            <DistributionTable rows={distributions} />
           </TabsContent>
         )}
 

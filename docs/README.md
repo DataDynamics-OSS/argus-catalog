@@ -132,6 +132,33 @@ docs/
 이미지는 따로 등록할 필요 없이 경로 규칙만 맞추면 됩니다.
 페이지의 `image::<slug>/<file>.png[...]` 라인 경로에 맞춰
 `modules/ROOT/assets/images/<slug>/<file>.png` 위치에 PNG 파일을 떨어뜨리면
-빌드 시 자동으로 반영됩니다. 기존 스크린샷이 없는 자리에는 `.gitkeep` 또는 TODO 주석이 남아 있을 수 있습니다.
+빌드 시 자동으로 반영됩니다.
 
-어디에 스크린샷이 필요한지는 각 페이지의 `// TODO: screenshot - ...` 주석이 알려 줍니다.
+
+### 스크린샷 다시 찍기
+
+화면 캡처는 `tools/screenshots/` 의 스크립트로 찍습니다. 공용 도구 `lib.mjs`(로그인 · 캡처 · API 호출)와
+영역별 스크립트 `<영역>.mjs`(이미지 폴더 이름과 같음)가 있고, 스크립트가 필요한 상황을 만들고 → 찍고 → 지웁니다.
+
+```bash
+# 준비: 통합 테스트 스택(design/integration-test/scripts/it.sh up), playwright + Chromium
+cd docs/tools/screenshots
+export PLAYWRIGHT_DIR=/path/to/dir-with-node_modules   # playwright 를 설치한 폴더(없으면 docs/node_modules)
+export CHROMIUM_PATH=/path/to/chrome-headless-shell    # 생략하면 playwright 기본 브라우저
+
+node catalog-datasets.mjs                      # 그 영역 전부
+ONLY=detail,more-menu node catalog-datasets.mjs   # 이름을 골라서
+UI=http://127.0.0.1:3000 API=http://127.0.0.1:4600/api/v1 node catalog-dashboard.mjs   # 다른 인스턴스
+```
+
+- 기본 대상은 통합 테스트 스택(`127.0.0.1:46300` / `46600`, `admin` / `admin`)이고 화면 크기는 1440×900 입니다.
+  admin 비밀번호가 다른 환경(데모 환경 등)은 `ARGUS_USER` · `ARGUS_PASSWORD` 로 계정을 줍니다.
+- **한 번에 하나씩** 돌립니다. 여러 스크립트가 같은 이름의 임시 데이터를 만들고 지웁니다(특히
+  `governance-ai-agent-catalog.mjs` 와 `governance-mcp-server-catalog.mjs`).
+- 스크립트마다 머리 주석에 준비 사항과 환경 변수(`RESET`, `CLEANUP`, `GROUP` 등)가 있습니다. 먼저 읽습니다.
+- 스택에 없는 기능이 필요한 그림은 준비가 따로 필요합니다: 품질 진단(품질 워커 —
+  `design/integration-test/04-data-quality.md` 의 준비), AI 생성 · AI 어시스턴트(LLM), 의미 검색(임베딩), Keycloak 로그인.
+  `demo-*.mjs` 는 LLM · 임베딩 · 품질 워커가 갖춰진 다른 환경을 `UI` · `API` 로 지정해 찍는 스크립트입니다.
+- MCP 스크립트 두 개는 도구 5개짜리 manifest 를 가져와 시드 서버 `kafka-mcp` 의 나머지 도구를 "서버에서 사라짐" 으로
+  만듭니다. 실행 뒤 `DELETE /mcp-servers/kafka-mcp/tools/{id}`(전부) → `POST /mcp-servers/seed-forge` 로 되돌립니다.
+- 찍은 그림은 열어서 확인합니다(로딩 표시 · 오류 토스트 · 잘림, 본문 설명과 맞는지).

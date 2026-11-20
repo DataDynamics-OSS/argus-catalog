@@ -98,6 +98,7 @@ class ReportItem(BaseModel):
     handled_by: str | None = None
     overdue: bool = False
     reply_count: int = 0
+    can_handle: bool = False  # 현재 사용자가 처리할 수 있는지(데이터셋 소유자 · 관리자)
 
 
 class ReportPage(BaseModel):

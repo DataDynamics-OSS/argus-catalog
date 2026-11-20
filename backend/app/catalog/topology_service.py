@@ -13,6 +13,7 @@ import re
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.catalog.datasource_metadata import MANUAL_DATASOURCE_TYPE
 from app.catalog.models import Dataset, Datasource, Organization, System
 from app.catalog.schemas import (
     OrganizationCreate,
@@ -256,10 +257,15 @@ async def update_system(
 
 
 async def count_system_datasources(session: AsyncSession, system_id: int) -> int:
-    """시스템에 배정된 데이터 소스 수 — 삭제 가드용."""
+    """시스템에 배정된 데이터 소스 수 — 삭제 가드용.
+
+    직접 등록 카탈로그의 수동 등록 데이터 소스(TODO-CAT-001)는 트리에 보이지 않아 세지 않는다 — 시스템을 지우면 그 카탈로그의
+    소속 시스템만 비워진다(FK SET NULL).
+    """
     return int(
         await session.scalar(
-            select(func.count(Datasource.id)).where(Datasource.system_id == system_id)
+            select(func.count(Datasource.id)).where(
+                Datasource.system_id == system_id, Datasource.type != MANUAL_DATASOURCE_TYPE)
         ) or 0
     )
 
@@ -319,7 +325,10 @@ async def get_topology(session: AsyncSession) -> TopologyResponse:
         )
     ).scalars().all()
     datasources = (
-        await session.execute(select(Datasource).order_by(Datasource.name))
+        # 카탈로그 수동 등록 데이터 소스(TODO-CAT-001)는 카탈로그에 딸린 내부 데이터 소스라 트리에서 뺀다
+        await session.execute(
+            select(Datasource).where(Datasource.type != MANUAL_DATASOURCE_TYPE).order_by(Datasource.name)
+        )
     ).scalars().all()
     # 데이터셋 수 (datasource_id 별 집계) 1쿼리
     counts_rows = (

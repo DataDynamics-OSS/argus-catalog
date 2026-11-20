@@ -15,7 +15,16 @@ from datetime import datetime
 from enum import Enum
 from typing import Annotated
 
+import email_validator
 from pydantic import BaseModel, EmailStr, Field
+
+# 폐쇄망·사내 도메인 ``.local`` 이메일 허용 (DEF-AUTH-001).
+# email-validator 는 IANA 특수 용도 도메인(.local 등)을 "special-use or reserved name" 으로 거부한다.
+# 그런데 서버가 만드는 기본 관리자 이메일이 ``admin@argus.local`` 이고 사내 AD 도메인도 흔히 ``.local`` 이라,
+# 그대로 두면 이런 계정은 프로필 저장(``UserModifyRequest``)이 422 로 실패한다.
+# 이 목록은 검증할 때마다 읽히므로 여기서 빼면 ``EmailStr`` 에 바로 적용된다. 메일 발송 가능 여부는 검사하지 않는다.
+if "local" in email_validator.SPECIAL_USE_DOMAIN_NAMES:
+    email_validator.SPECIAL_USE_DOMAIN_NAMES.remove("local")
 
 
 class UserStatus(str, Enum):

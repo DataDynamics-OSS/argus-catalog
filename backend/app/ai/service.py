@@ -398,8 +398,9 @@ def _log_entry(
     prompt_tokens: int | None = None,
     completion_tokens: int | None = None,
     field_name: str | None = None,
+    reason: str | None = None,
 ) -> AIGenerationLog:
-    """AIGenerationLog 항목을 생성."""
+    """AIGenerationLog 항목을 생성. ``reason`` 은 제안 근거(AI-Ready 초안의 관련법령 · 허용 이용 유형)."""
     return AIGenerationLog(
         entity_type=entity_type,
         entity_id=entity_id,
@@ -412,6 +413,7 @@ def _log_entry(
         model=model_name,
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
+        reason=reason,
     )
 
 
@@ -621,6 +623,29 @@ async def generate_dataset_summary(
     }
 
 
+_MD_FENCE = re.compile(r"```[A-Za-z0-9_-]*")
+_MD_LINE_PREFIX = re.compile(r"^\s*(?:#{1,6}\s+|[-*+]\s+|>\s+|\d+\.\s+)")
+_MD_STAR_EMPHASIS = re.compile(r"(\*{1,3})(?=\S)(.+?)(?<=\S)\1")
+
+
+def plain_column_description(text) -> str:
+    """LLM 이 낸 컬럼 설명을 한 줄 평문으로 정리한다(DEF-197).
+
+    컬럼 설명은 스키마 표 · 데이터 사전에 그대로 나오는 평문이라 마크다운 기호(``**굵게**``, 백틱, 제목 · 목록 머리)를
+    걷어 내고 줄바꿈을 공백으로 합친다. 밑줄은 식별자(``customer_id``)에 쓰이므로 건드리지 않는다.
+    """
+    if not isinstance(text, str):
+        return ""
+    lines = []
+    for line in _MD_FENCE.sub("", text).splitlines():
+        line = _MD_LINE_PREFIX.sub("", line).strip()
+        if line:
+            lines.append(line)
+    out = " ".join(lines).replace("`", "")
+    out = _MD_STAR_EMPHASIS.sub(r"\2", out)
+    return " ".join(out.split())
+
+
 async def generate_column_descriptions(
     session: AsyncSession,
     dataset_id: int,
@@ -692,7 +717,7 @@ async def generate_column_descriptions(
 
     for cr in col_results:
         name = cr.get("name", "")
-        desc = cr.get("description", "")
+        desc = plain_column_description(cr.get("description", ""))
         conf = cr.get("confidence", 0.5)
 
         col_info = col_name_map.get(name.lower())
@@ -1020,7 +1045,7 @@ async def bulk_generate(
     if datasource_id:
         query = query.where(Dataset.datasource_id == datasource_id)
     if empty_only:
-        # 비어 있는 것 — 설명을 만들면 설명이 빈 데이터셋, AI-Ready 초안만 만들면 편향 · 한계 · 관련법령 중 하나가 빈 데이터셋
+        # 비어 있는 것 — 설명을 만들면 설명이 빈 데이터셋, AI-Ready 초안만 만들면 초안 항목(ai_ready_drafts.FIELDS) 중 하나가 빈 데이터셋
         if types == ["ai_ready"]:
             query = query.where(ai_ready_drafts.missing_filter())
         else:
@@ -1164,6 +1189,7 @@ async def get_suggestions(session: AsyncSession, dataset_id: int) -> list[dict]:
             "model": log.model,
             "created_at": log.created_at.isoformat() if log.created_at else None,
             "current_text": current_of(log),
+            "reason": log.reason,
         }
         for log in logs
     ]
@@ -1197,7 +1223,7 @@ async def _apply_log(session: AsyncSession, log: AIGenerationLog) -> bool:
             ds.summary = log.generated_text.strip()[:200]
 
     elif log.generation_type == ai_ready_drafts.GENERATION_TYPE:
-        # AI-Ready 초안(편향 · 한계 · 관련법령) — 그 항목에 그대로 넣는다(TODO-096 6단계)
+        # AI-Ready 초안(편향 · 한계 · 관련법령 · 개인정보 보호조치 · 허용 이용 유형) — 그 항목에 넣는다(TODO-096)
         ds = (await session.execute(select(Dataset).where(Dataset.id == log.entity_id))).scalars().first()
         if ds:
             ai_ready_drafts.apply_draft(ds, log.field_name, log.generated_text)

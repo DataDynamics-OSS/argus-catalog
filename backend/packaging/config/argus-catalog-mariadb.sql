@@ -2847,6 +2847,9 @@ ALTER TABLE catalog_datasets ADD COLUMN IF NOT EXISTS known_limitations TEXT NUL
 ALTER TABLE catalog_datasets ADD COLUMN IF NOT EXISTS missing_data_info TEXT NULL COMMENT '결측 비율·사유·처리 방식 (rai:dataCollectionMissingData)';
 ALTER TABLE catalog_datasets ADD COLUMN IF NOT EXISTS missing_value_notation VARCHAR(100) NULL COMMENT '결측·특수값 표기 규칙';
 ALTER TABLE catalog_datasets ADD COLUMN IF NOT EXISTS privacy_measures TEXT NULL COMMENT '개인정보 보호조치 — 비식별·가명처리 방식, 적정성 검토';
+-- 데이터 카드 '사용 시 고려사항' (TODO-150)
+ALTER TABLE catalog_datasets ADD COLUMN IF NOT EXISTS social_impact TEXT NULL COMMENT '사회적 영향 — 활용 시 기대 효과·우려 (rai:dataSocialImpact)';
+ALTER TABLE catalog_datasets ADD COLUMN IF NOT EXISTS risk_mitigation TEXT NULL COMMENT '리스크 완화 권고 — 이용자가 지킬 조치';
 
 -- AI-Ready 체크리스트 수동 판정 (TODO-096 2단계, app/catalog/ai_ready_check.py). 자동 판정은 저장하지 않고 조회 때 계산한다.
 CREATE TABLE IF NOT EXISTS catalog_ai_ready_judgment (
@@ -2902,3 +2905,33 @@ CREATE TABLE IF NOT EXISTS catalog_dataset_version (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '수정 시각'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='데이터 버전 이력';
 CREATE INDEX IF NOT EXISTS ix_catalog_dataset_version_dataset_id ON catalog_dataset_version (dataset_id);
+
+-- 데이터 사전 — 컬럼 단위·산정기준 (TODO-096, 체크리스트 C08). 담당자가 쓰는 값이라 수집(metadata-sync)이 덮어쓰지 않는다.
+ALTER TABLE catalog_dataset_schemas ADD COLUMN IF NOT EXISTS unit VARCHAR(50) NULL COMMENT '단위 — 원, %, km, 명 등 (데이터 사전, Croissant sc:unitText). 수집이 덮어쓰지 않음';
+ALTER TABLE catalog_dataset_schemas ADD COLUMN IF NOT EXISTS calculation TEXT NULL COMMENT '산정기준 — 값을 계산·집계하는 방식 (데이터 사전). 수집이 덮어쓰지 않음';
+
+-- AI 제안의 근거 (TODO-096) — AI-Ready 초안의 관련법령 · 허용 이용 유형을 고른 이유. 제안 창에 보여 준다.
+ALTER TABLE catalog_ai_generation_log ADD COLUMN IF NOT EXISTS reason TEXT NULL COMMENT '제안 근거 — AI-Ready 초안의 관련법령 · 허용 이용 유형을 고른 이유 (없으면 NULL)';
+
+-- 수동 데이터셋 · 데이터 소스 매핑 (TODO-CAT-001, design/catalog-registration-design.md 4.2, 재실행 안전).
+-- 수동 데이터셋(ARGUS 카탈로그의 수동 등록 데이터 소스 type='manual' 소속)이 실제로 어느 데이터 소스의 어느 테이블인지.
+-- 매핑해도 데이터셋 소속 · URN 은 그대로이고, 수집은 매핑된 경로의 테이블을 건너뛴다.
+CREATE TABLE IF NOT EXISTS catalog_dataset_source_maps (
+    id INT AUTO_INCREMENT PRIMARY KEY COMMENT 'PK',
+    dataset_id INT NOT NULL COMMENT '수동 데이터셋 catalog_datasets(id) 참조 (데이터셋당 하나)',
+    datasource_id INT NOT NULL COMMENT '실제 데이터 소스 catalog_datasources(id) 참조',
+    remote_path VARCHAR(500) NOT NULL COMMENT '원천 경로 (수집 URN 의 path 와 같은 모양, 대소문자 보존) — 데이터 소스 안에서 유일(비교는 대소문자 무시)',
+    check_status VARCHAR(20) NULL COMMENT '마지막 원천 확인 결과 (MATCH/DIFF/NOT_FOUND/UNREACHABLE/UNSUPPORTED, NULL=확인 안 함)',
+    check_detail TEXT NULL COMMENT '스키마 비교 상세 JSON (추가 · 누락 · 타입 다른 컬럼)',
+    checked_at TIMESTAMP NULL COMMENT '마지막 원천 확인 시각',
+    created_by VARCHAR(200) NULL COMMENT '매핑한 사용자',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '생성 시각',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '수정 시각',
+    CONSTRAINT uq_dataset_source_map_dataset UNIQUE (dataset_id),
+    CONSTRAINT uq_dataset_source_map_path UNIQUE (datasource_id, remote_path),
+    FOREIGN KEY (dataset_id) REFERENCES catalog_datasets(id) ON DELETE CASCADE,
+    FOREIGN KEY (datasource_id) REFERENCES catalog_datasources(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='수동 데이터셋 → 실제 데이터 소스 · 원천 경로 매핑 (수집은 매핑된 경로를 건너뜀)';
+CREATE INDEX IF NOT EXISTS ix_catalog_dataset_source_maps_datasource_id ON catalog_dataset_source_maps (datasource_id);
+-- 수집 실행의 건너뜀 수 — 수동 데이터셋에 원천 매핑된 테이블은 수집하지 않는다(TODO-CAT-001)
+ALTER TABLE catalog_datasource_sync_runs ADD COLUMN IF NOT EXISTS skipped_count INT NOT NULL DEFAULT 0 COMMENT '수동 데이터셋에 원천 매핑돼 건너뛴 테이블 수';

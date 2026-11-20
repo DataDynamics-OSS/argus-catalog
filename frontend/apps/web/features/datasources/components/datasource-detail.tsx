@@ -318,7 +318,7 @@ export function DatasourceDetail({
 
       {/* 저장 줄 — 고친 내용이 있을 때 화면 아래에 붙는다(이름만 고쳐도 끝까지 내려가지 않게) */}
       {dirty && (
-        <div className="sticky bottom-0 z-10 -mx-1 flex items-center gap-2 border-t bg-background/95 px-1 py-2 backdrop-blur">
+        <div className="sticky -bottom-4 z-10 -mx-1 flex items-center gap-2 border-t bg-background/95 px-1 py-2 backdrop-blur">
           <span className="text-sm text-amber-700 dark:text-amber-400">저장 안 된 변경이 있습니다</span>
           {!configValid && <span className="text-xs text-destructive">필수 연결 설정을 채우세요</span>}
           <span className="ml-auto flex gap-2">

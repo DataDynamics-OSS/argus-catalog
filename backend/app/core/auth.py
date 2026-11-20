@@ -620,16 +620,31 @@ async def get_optional_user(request: Request) -> TokenUser | None:
         return None
 
 
+class PermissionDenied(HTTPException):
+    """권한 거부 403 — 감사 로그(권한 범주, ``permission.denied``)에 남길 정보를 싣는다(DEF-159).
+
+    기록은 앱의 HTTP 예외 처리기(:func:`app.permissions.router.audit_permission_denied`)가 한다 — 가드가
+    세션 · 요청 없이(동기 함수 등) 불려도 메뉴 · 기능 권한 거부와 같은 형식으로 남기고, 코어(auth)가 감사
+    모듈을 불러 순환 import 가 생기지 않게 하기 위함. 호출 측이 잡아 다른 길로 처리하면 기록하지 않는다.
+
+    - ``kind``: ``ADMIN``(관리자 전용) · ``OWNER``(소유자 확인) · ``DELEGATE``(위임 범위) · ``FEATURE``
+    - ``key``: 거부한 권한 — 감사 로그의 대상(target)
+    """
+
+    def __init__(self, detail: str, *, user, kind: str, key: str):
+        super().__init__(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+        self.user = user
+        self.kind = kind
+        self.key = key
+
+
 async def require_superuser(
     user: Annotated[TokenUser, Depends(get_current_user)],
 ) -> TokenUser:
     """FastAPI 의존성: 슈퍼유저 또는 관리자 역할을 요구한다."""
     if not (user.is_admin or user.is_superuser):
         logger.warning("인가 거부(슈퍼유저/관리자 필요): username=%s role=%s", user.username, user.role)
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="슈퍼유저 또는 관리자 역할이 필요합니다.",
-        )
+        raise PermissionDenied("슈퍼유저 또는 관리자 역할이 필요합니다.", user=user, kind="ADMIN", key="슈퍼유저 · 관리자 전용")
     return user
 
 
@@ -639,10 +654,7 @@ async def require_admin(
     """FastAPI 의존성: 현재 사용자가 관리자 역할을 가질 것을 요구한다."""
     if not user.is_admin:
         logger.warning("인가 거부(관리자 필요): username=%s role=%s", user.username, user.role)
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="관리자 역할이 필요합니다.",
-        )
+        raise PermissionDenied("관리자 역할이 필요합니다.", user=user, kind="ADMIN", key="관리자 전용")
     return user
 
 
@@ -664,7 +676,5 @@ def assert_owner_or_admin(current: "TokenUser", created_by: str | None,
     if created_by and created_by == current.username:
         return
     logger.warning("소유권 거부: user=%s owner=%s target=%s", current.username, created_by, what)
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail=f"{what}의 소유자 또는 관리자만 수행할 수 있습니다.",
-    )
+    raise PermissionDenied(f"{what}의 소유자 또는 관리자만 수행할 수 있습니다.",
+                           user=current, kind="OWNER", key=f"{what} 소유자")

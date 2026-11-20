@@ -120,6 +120,7 @@ export function SyncPanel({
     const done = runs.find((r) => r.id === watched)
     if (!done || ACTIVE_SYNC_STATUSES.has(done.status)) return
     const counts = `생성 ${done.created_count} · 갱신 ${done.updated_count} · 제거 ${done.removed_count}`
+      + (done.skipped_count ? ` · 건너뜀 ${done.skipped_count}(수동 데이터셋에 매핑됨)` : "")
     if (done.status === "SUCCEEDED") toast.success("수집을 마쳤습니다.", { description: counts })
     else if (done.status === "PARTIAL") toast.warning("수집을 마쳤지만 일부 항목을 수집하지 못했습니다.", { description: `${counts} · 실패 ${done.failed_count}` })
     else if (done.status === "FAILED") notifyError(done.error_message, "수집하지 못했습니다.")

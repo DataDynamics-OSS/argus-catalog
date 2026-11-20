@@ -11,9 +11,8 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai import service
+from app.ai import ai_ready_drafts, service
 from app.ai.conversations import ConversationStore
-from app.ai import ai_ready_drafts
 from app.ai.schemas import (
     AiReadyDraftRequest,
     AiReadyDraftResponse,
@@ -48,7 +47,7 @@ from app.ai.service import (
     reject_suggestion,
     suggest_tags,
 )
-from app.core.auth import AdminUser, CurrentUser, assert_owner_or_admin
+from app.core.auth import AdminUser, CurrentUser
 from app.core.database import get_session
 from app.permissions.router import require_feature
 
@@ -58,18 +57,14 @@ router = APIRouter(prefix="/ai", tags=["ai"])
 
 
 async def _require_dataset_editor(current, session: AsyncSession, dataset_id: int) -> None:
-    """AI 생성·제안 적용은 데이터셋 수정과 같은 기준 — 생성자 또는 관리자. 데이터셋이 없으면 404.
+    """AI 생성·제안 적용은 데이터셋 수정과 같은 기준 — 생성자 · 소유자 목록 · 관리자(TODO-154). 없으면 404.
 
     생성 결과(제안)도 데이터셋 메타데이터를 바꾸는 입력이고 LLM 비용이 드므로, 화면(작업 메뉴)과
     같이 편집 권한이 있는 사용자만 부를 수 있다.
     """
-    from app.catalog import service as catalog_service
+    from app.catalog.dataset_owner import assert_dataset_owner_or_admin
 
-    created_by = await catalog_service.get_dataset_created_by(session, dataset_id)
-    if created_by is None and not await catalog_service.dataset_exists(session, dataset_id):
-        logger.warning("AI 생성 권한 확인: 데이터셋 없음 dataset_id=%d", dataset_id)
-        raise HTTPException(status_code=404, detail="데이터셋을 찾을 수 없습니다.")
-    assert_owner_or_admin(current, created_by, "데이터셋")
+    await assert_dataset_owner_or_admin(session, current, dataset_id)
 
 
 async def _require_suggestion_editor(current, session: AsyncSession, suggestion_ids: list[int]) -> None:
@@ -426,9 +421,9 @@ async def api_ai_ready_drafts(_guard: CurrentUser,
     body: AiReadyDraftRequest = AiReadyDraftRequest(),
     _perm=Depends(require_feature("ai.generate")), session: AsyncSession = Depends(get_session),
 ):
-    """AI-Ready 서술형 항목(편향 · 한계 · 관련법령) 초안 — 적용 대기 제안으로 남는다(TODO-096 6단계).
+    """AI-Ready 항목(편향 · 한계 · 관련법령 · 개인정보 보호조치 · 허용 이용 유형) 초안 — 적용 대기 제안으로 남는다(TODO-096).
 
-    관련법령은 설정 › AI-Ready 의 법령 목록 안에서만 고른다. 데이터셋 소유자 또는 관리자만.
+    관련법령은 설정 › AI-Ready 의 법령 목록 안에서만, 허용 이용 유형은 정해진 코드 안에서만 고른다. 데이터셋 소유자 또는 관리자만.
     """
     await _require_dataset_editor(_guard, session, dataset_id)
     try:

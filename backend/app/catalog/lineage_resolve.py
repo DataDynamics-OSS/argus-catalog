@@ -19,6 +19,10 @@ target_dataset_id 는 NULL 로 둔다. 카탈로그 lineage API 는 이 dataset_
 이름 매칭: 데이터셋 qualified_name 이 lineage 테이블명과 (1) 정확히 같거나 (2) ``.테이블명``
 으로 끝나면 그 데이터셋으로 본다(대소문자 무시). 한 범위에서 여러 데이터셋이 맞으면 id 가 작은
 데이터셋, 이미 채워진 쪽은 건드리지 않는다(first-wins).
+
+수동 데이터셋 원천 매핑(TODO-CAT-001): 데이터 소스 X 의 경로 P 에 매핑된 수동 데이터셋은 X 의 SYNC 카탈로그에
+있는 ``{X}.{P}`` 데이터셋처럼 해석 대상에 넣는다(``_mapped_rows``). 매핑된 테이블은 수집이 데이터셋을 만들지
+않으므로, 엔진 쿼리의 그 테이블은 수동 데이터셋에 붙는다.
 """
 
 from __future__ import annotations
@@ -195,9 +199,7 @@ async def resolve_query_lineage_for_engine(session: AsyncSession, engine_key: st
         scopes |= {ec.scope(r.datasource_id, r.target_catalog) for r in rows}
         datasets = await _datasets_in(session, sorted(s for s in scopes if isinstance(s, int)))
         if _GLOBAL in scopes:  # 엔진이 등록되지 않은 경우(호출자가 모르는 식별자를 넘김) — 전체에서 찾는다
-            datasets = (await session.execute(text(
-                "SELECT id, qualified_name, catalog_id FROM catalog_datasets WHERE qualified_name IS NOT NULL"
-            ))).fetchall()
+            datasets = await _all_datasets(session)
         total, _ = await _apply(session, rows, ec, _build_index(datasets))
     if total or cleared:
         await session.commit()
@@ -206,14 +208,77 @@ async def resolve_query_lineage_for_engine(session: AsyncSession, engine_key: st
 
 
 async def _datasets_in(session: AsyncSession, catalog_ids: list[int]) -> list:
-    """카탈로그들의 (id, qualified_name, catalog_id)."""
+    """카탈로그들의 (id, qualified_name, catalog_id) — 그 카탈로그로 매핑된 수동 데이터셋 포함."""
     if not catalog_ids:
         return []
     stmt = text(
         "SELECT id, qualified_name, catalog_id FROM catalog_datasets "
         "WHERE qualified_name IS NOT NULL AND catalog_id IN :ids"
     ).bindparams(bindparam("ids", expanding=True))
-    return (await session.execute(stmt, {"ids": catalog_ids})).fetchall()
+    rows = list((await session.execute(stmt, {"ids": catalog_ids})).fetchall())
+    return rows + await _mapped_rows(session, catalog_ids)
+
+
+async def _all_datasets(session: AsyncSession) -> list:
+    """모든 데이터셋의 (id, qualified_name, catalog_id) — 매핑된 수동 데이터셋의 원천 이름 포함."""
+    rows = list((await session.execute(text(
+        "SELECT id, qualified_name, catalog_id FROM catalog_datasets WHERE qualified_name IS NOT NULL"
+    ))).fetchall())
+    return rows + await _mapped_rows(session, None)
+
+
+async def _mapped_rows(session: AsyncSession, catalog_ids: list[int] | None, dataset_id: int | None = None) -> list:
+    """원천 매핑된 수동 데이터셋 → (dataset_id, ``{데이터 소스 식별자}.{경로}``, 그 데이터 소스의 SYNC 카탈로그).
+
+    매핑 테이블이 아직 없는 설치(DDL 미적용)에서는 빈 목록.
+    """
+    sql = ("SELECT m.dataset_id, d.datasource_id, m.remote_path, c.catalog_id "
+           "FROM catalog_dataset_source_maps m "
+           "JOIN catalog_datasources d ON d.id = m.datasource_id "
+           "LEFT JOIN catalog_catalog_connections c ON c.datasource_id = m.datasource_id AND c.role = 'SYNC'")
+    conds, params = [], {}
+    if catalog_ids is not None:
+        conds.append("c.catalog_id IN :ids")
+        params["ids"] = catalog_ids
+    if dataset_id is not None:
+        conds.append("m.dataset_id = :did")
+        params["did"] = dataset_id
+    if conds:
+        sql += " WHERE " + " AND ".join(conds)
+    stmt = text(sql)
+    if catalog_ids is not None:
+        stmt = stmt.bindparams(bindparam("ids", expanding=True))
+    try:
+        # savepoint — 실패해도 호출자의 미커밋 변경은 그대로 둔다
+        async with session.begin_nested():
+            rows = (await session.execute(stmt, params)).fetchall()
+    except Exception as e:  # noqa: BLE001 — 매핑 테이블이 없는 이전 스키마
+        logger.debug("원천 매핑 조회 생략: %s", e)
+        return []
+    return [(did, f"{key}.{path}", cid) for did, key, path, cid in rows]
+
+
+async def resolve_lineage_for_mapping(session: AsyncSession, dataset_id: int) -> int:
+    """수동 데이터셋의 원천 매핑이 바뀐 뒤 — 이 데이터셋에 붙은 칸을 비우고 매핑 이름으로 다시 해석한다.
+
+    비운 칸은 데이터셋 자신의 이름으로도 다시 해석된다(매핑을 해제한 경우). 채운 칸 수를 반환한다.
+    """
+    cleared = 0
+    for col in ("source_dataset_id", "target_dataset_id"):
+        res = await session.execute(text(
+            f"UPDATE argus_query_lineage SET {col} = NULL WHERE {col} = :did"), {"did": dataset_id})
+        cleared += res.rowcount or 0
+    if cleared:
+        await session.commit()
+    total = 0
+    for did, qn, cid in await _mapped_rows(session, None, dataset_id):
+        total += await resolve_lineage_for_dataset(session, did, qn, cid)
+    own = (await session.execute(text(
+        "SELECT qualified_name, catalog_id FROM catalog_datasets WHERE id = :did"), {"did": dataset_id})).first()
+    if own is not None:
+        total += await resolve_lineage_for_dataset(session, dataset_id, own[0], own[1])
+    logger.info("매핑 리니지 재해석: dataset=%d 비움=%d 채움=%d", dataset_id, cleared, total)
+    return total
 
 
 async def resolve_query_lineage_for_catalog(session: AsyncSession, catalog_id: int | None) -> int:
@@ -250,9 +315,7 @@ async def resolve_all_query_lineage(session: AsyncSession) -> dict:
         f"SELECT {_ROW_COLS} FROM argus_query_lineage "
         "WHERE source_dataset_id IS NULL OR target_dataset_id IS NULL"
     ))).fetchall()
-    datasets = (await session.execute(text(
-        "SELECT id, qualified_name, catalog_id FROM catalog_datasets WHERE qualified_name IS NOT NULL"
-    ))).fetchall()
+    datasets = await _all_datasets(session)
     logger.info("쿼리 리니지 해석 시작: rows=%d datasets=%d", len(rows), len(datasets))
     ec = await load_engine_catalogs(session)
     resolved, no_catalog = await _apply(session, rows, ec, _build_index(datasets))

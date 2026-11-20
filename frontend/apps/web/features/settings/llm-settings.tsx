@@ -417,15 +417,15 @@ export function LLMSettings() {
               variant="outline"
               onClick={() => handleBulkGenerate(["ai_ready"])}
               disabled={generating || !enabled}
-              title="비어 있는 편향 · 한계 · 관련법령의 초안을 씁니다"
+              title="비어 있는 편향 · 한계 · 관련법령 · 개인정보 보호조치 · 허용 이용 유형의 초안을 씁니다"
             >
               {generating ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Sparkles className="h-4 w-4 mr-1" />}
               AI-Ready 초안
             </Button>
           </div>
           <p className="text-xs">
-            설명 · 전체 생성은 설명이 비어 있는 데이터셋만 처리되며, 결과는 즉시 적용됩니다. AI-Ready 초안은 편향 · 한계 · 관련법령 중
-            하나라도 빈 데이터셋을 처리하고, 결과는 적용하지 않고 각 데이터셋의 AI 제안으로 남깁니다(담당자가 읽고 적용).
+            설명 · 전체 생성은 설명이 비어 있는 데이터셋만 처리되며, 결과는 즉시 적용됩니다. AI-Ready 초안은 편향 · 한계 · 관련법령 · 개인정보 보호조치 ·
+            허용 이용 유형 중 하나라도 빈 데이터셋을 처리하고, 결과는 적용하지 않고 각 데이터셋의 AI 제안으로 남깁니다(담당자가 읽고 적용).
           </p>
         </CardContent>
       </Card>

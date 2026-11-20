@@ -32,8 +32,8 @@ logger = logging.getLogger(__name__)
 def _log_missing_cr(activity_name: str, cr_id: int) -> None:
     """CR 이 없을 때 — 데이터셋·데이터 소스 삭제로 연쇄 삭제된 경우(IT CHG-T26).
 
-    예전에는 ValueError 로 재시도(5회) 끝에 워크플로우가 실패했다. 삭제 시 취소 Signal 을 보내지만
-    (``service.cancel_workflows_best_effort``) Temporal 이 내려가 있었거나 Signal 전에 실행된
+    예전에는 ValueError 로 재시도(5회) 끝에 워크플로우가 실패했다. 삭제 시 워크플로우를 강제 종료하지만
+    (``service.cancel_workflows_best_effort``) Temporal 이 내려가 있었거나 종료 전에 실행된
     액티비티도 있으니, 액티비티는 없는 CR 을 오류 없이 건너뛴다.
     """
     logger.warning("%s: CR 이 없음(삭제됨) — 건너뜀 cr_id=%s", activity_name, cr_id)

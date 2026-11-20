@@ -35,6 +35,7 @@ import {
 import { useAuth } from "@/features/auth"
 import { unlockUser } from "../api"
 import { type User } from "../data/schema"
+import { useCanAssignRole } from "../use-role-options"
 import { useUsers } from "./users-provider"
 
 type DataTableRowActionsProps = {
@@ -49,7 +50,9 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   // Keycloak 모드에서는 비밀번호를 Keycloak 에서 관리(서버도 400)
   const local = authType === "local"
   const isSelf = !!user && user.username === row.original.username
-  // 사용자 관리를 위임받은 사람(관리자 아님)은 관리자 계정을 다룰 수 없다(서버도 403, TODO-123)
+  // 사용자 관리를 위임받은 사람(관리자 아님)은 자기가 줄 수 없는 역할(관리자 · 슈퍼유저 등)의 계정을 다룰 수 없다
+  // — 본인은 예외(서버도 403, TODO-123 · DEF-163)
+  const canAssignRole = useCanAssignRole(!!user?.is_admin, user?.username)
   // 로그인 실패 반복으로 잠긴 계정 — 로컬 인증에서만 잠긴다
   const locked = local && !!row.original.lockedUntil
   const handleUnlock = async () => {
@@ -61,8 +64,11 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
       notifyError(e, "계정 잠금을 해제하지 못했습니다.")
     }
   }
-  if (!user?.is_admin && row.original.role === "argus-admin") return null
+  if (!isSelf && !canAssignRole(row.original.role)) return null
   return (
+    // 행을 누르면 선택되므로(users-table) 메뉴 단추 · 항목 클릭이 행으로 올라가지 않게 막는다
+    // — 메뉴 항목은 포털에 그려져도 React 이벤트는 이 트리를 따라 올라온다(DEF-173)
+    <div onClick={(e) => e.stopPropagation()}>
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
         <Button
@@ -113,5 +119,6 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+    </div>
   )
 }

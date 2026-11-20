@@ -12,4 +12,4 @@
 from argus_catalog_sdk.client import ApiError, ModelClient
 
 __all__ = ["ApiError", "ModelClient"]
-__version__ = "0.8.0"
+__version__ = "0.9.0"

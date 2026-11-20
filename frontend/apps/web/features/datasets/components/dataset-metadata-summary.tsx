@@ -40,6 +40,7 @@ const DS_TYPE_LABEL: Record<string, string> = {
   oracle: "Oracle", mssql: "SQL Server", sqlserver: "SQL Server", trino: "Trino", presto: "Presto",
   hive: "Hive", impala: "Impala", bigquery: "BigQuery", snowflake: "Snowflake", redshift: "Redshift",
   mongodb: "MongoDB", kafka: "Kafka", clickhouse: "ClickHouse", databricks: "Databricks",
+  manual: "수동 등록", // 카탈로그에 직접 등록한 데이터셋(TODO-CAT-001)
 }
 const dsTypeLabel = (t?: string | null) => (t ? (DS_TYPE_LABEL[t.toLowerCase()] ?? t) : "—")
 

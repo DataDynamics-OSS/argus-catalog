@@ -41,7 +41,7 @@ def test_notification_ack() -> None:
     async def _seed() -> int:
         async with engine.begin() as conn:
             await conn.run_sync(lambda sc: cm.Base.metadata.create_all(
-                sc, tables=_with_fk_targets([chm.NotificationLog.__table__])))
+                sc, tables=_with_fk_targets([chm.NotificationLog.__table__, cm.Owner.__table__])))
         async with factory() as db:
             src = cm.Datasource(datasource_id="m", name="m", type="mysql")
             db.add(src)
@@ -107,7 +107,7 @@ def test_ack_and_consumer_need_recipient_or_owner() -> None:
     async def _seed() -> dict:
         async with engine.begin() as conn:
             await conn.run_sync(lambda sc: cm.Base.metadata.create_all(
-                sc, tables=_with_fk_targets([chm.NotificationLog.__table__, Permission.__table__])))
+                sc, tables=_with_fk_targets([chm.NotificationLog.__table__, Permission.__table__, cm.Owner.__table__])))
         async with factory() as db:
             src = cm.Datasource(datasource_id="m", name="m", type="mysql")
             db.add(src)

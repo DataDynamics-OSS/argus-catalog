@@ -129,6 +129,22 @@ async def ai_app(monkeypatch):
     monkeypatch.setattr(catalog_service, "get_dataset_created_by", created_by)
     monkeypatch.setattr(catalog_service, "dataset_exists", exists)
 
+    # 편집 가드(app.catalog.dataset_owner, TODO-154)는 DB 를 직접 본다 — 같은 가짜 데이터로 바꾼다
+    from fastapi import HTTPException
+
+    from app.catalog import dataset_owner
+
+    async def exists_or_404(session, dataset_id):
+        if dataset_id not in owners:
+            raise HTTPException(status_code=404, detail="데이터셋을 찾을 수 없습니다.")
+        return owners[dataset_id]
+
+    async def is_owner(session, dataset_id, username):
+        return owners.get(dataset_id) == username
+
+    monkeypatch.setattr(dataset_owner, "_dataset_exists_or_404", exists_or_404)
+    monkeypatch.setattr(dataset_owner, "is_dataset_owner", is_owner)
+
     # 권한 검사를 통과하면 서비스가 부르는 지점 — 400 으로 끝내 통과 여부만 본다
     async def passed(*a, **k):
         raise ValueError("passed")
@@ -183,7 +199,7 @@ async def test_ai_generate_requires_dataset_editor(ai_app, kind):
     who["user"] = ALICE
     assert (await _call(app, "POST", f"/api/v1/ai/datasets/1/{kind}", json={})).status_code == 400   # 본인 것
     r = await _call(app, "POST", f"/api/v1/ai/datasets/2/{kind}", json={})                          # 남의 것
-    assert r.status_code == 403 and "소유자 또는 관리자" in r.json()["detail"]
+    assert r.status_code == 403 and "또는 관리자" in r.json()["detail"]
     assert (await _call(app, "POST", f"/api/v1/ai/datasets/99/{kind}", json={})).status_code == 404
     who["user"] = ADMIN
     assert (await _call(app, "POST", f"/api/v1/ai/datasets/2/{kind}", json={})).status_code == 400

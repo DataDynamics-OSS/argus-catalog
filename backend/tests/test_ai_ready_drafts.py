@@ -4,6 +4,7 @@
 - 법령 목록: 설정 문자열 해석 · 검증, LLM 이 고른 이름 중 목록에 있는 것만
 - 프롬프트: 프로파일 통계는 싣고 샘플 행은 싣지 않음, PII 컬럼의 값(범위 · 상위 값)은 싣지 않음
 - 생성: 빈 항목만(force 면 다시), 목록이 없으면 관련법령 건너뜀, 제안으로만 남음
+- 개인정보 보호조치 · 허용 이용 유형: 정해진 코드만(모르는 값 버림), 개인정보 없음이면 보호조치 건너뜀, 근거는 제안 로그 reason
 - 적용: 제안 목록의 현재 값, 적용하면 그 항목에 들어감
 - 설정 API 의 법령 목록 검증
 
@@ -130,7 +131,8 @@ async def test_generate_drafts_only_empty_fields_and_laws_from_list(make, monkey
     assert res["drafts"][0]["text"] == "- 강남구가 80% 로 치우침\n- 2024년 한 해만 있음", "목록이면 한 줄씩"
     assert res["drafts"][1]["text"] == "개인정보 보호법", "목록 밖 법령(도로교통법)은 버린다"
     assert res["legal_reason"] == "phone 컬럼이 전화번호(PII)" and res["confidence"] == 0.7
-    assert [s_["field"] for s_ in res["skipped"]] == ["known_limitations"], "값이 있는 항목은 건너뜀"
+    assert [s_["field"] for s_ in res["skipped"]] == ["known_limitations", "privacy_measures", "allowed_uses"], \
+        "값이 있는 항목은 건너뜀 — 응답에 없는 항목(보호조치 · 이용 유형)은 쓰지 못함"
 
     (prompt,) = prompts
     assert "known_limitations" not in prompt.split("Respond in JSON")[1], "건너뛴 항목은 묻지 않는다"
@@ -162,6 +164,8 @@ async def test_force_no_laws_and_nothing_to_do(make, monkeypatch) -> None:
         (await s.execute(select(CatalogConfiguration))).scalars().one().config_value = ""
         ds = await s.get(Dataset, 1)
         ds.data_biases = "있음"
+        ds.privacy_measures = "가명처리"
+        ds.allowed_uses = "VIEW"
         await s.commit()
         res = await ai_ready_drafts.generate_drafts(s, 1)
     assert res["drafts"] == [] and len(calls) == 1, "만들 항목이 없으면 LLM 을 부르지 않는다"
@@ -193,12 +197,77 @@ async def test_bulk_generate_ai_ready_targets_missing_fields(make, monkeypatch) 
     _llm(monkeypatch, {"data_biases": "- 편향", "legal_basis": []})
     async with make() as s:
         s.add(Dataset(id=2, urn="ds.full", name="full", datasource_id=1, data_biases="a", known_limitations="b",
-                      legal_basis="c", description="설명 있음"))
+                      legal_basis="c", privacy_measures="d", allowed_uses="", description="설명 있음"))
         await s.commit()
         res = await service.bulk_generate(s, ["ai_ready"], apply=True)
-    assert res["total"] == 1 and res["results"][0]["dataset_id"] == 1, "세 항목이 다 찬 데이터셋은 빠진다"
+    assert res["total"] == 1 and res["results"][0]["dataset_id"] == 1, \
+        "초안 항목이 다 찬 데이터셋은 빠진다 — 허용 이용 유형의 빈 목록('모두 허용하지 않음')도 값"
     async with make() as s:
         assert (await s.get(Dataset, 1)).data_biases is None, "일괄 생성도 제안으로만"
+
+
+def test_pick_uses() -> None:
+    pick = ai_ready_drafts.pick_uses
+    assert pick(["AI_TRAINING", "view", "판매", "분석"]) == ["VIEW", "ANALYSIS", "AI_TRAINING"], "정의 순서, 화면 이름도, 모르는 값은 버림"
+    assert pick("ai-training, COMBINE") == ["COMBINE", "AI_TRAINING"]
+    assert pick("AI 학습") == ["AI_TRAINING"]
+    assert pick(None) == [] and pick(["모두"]) == [] and pick(3) == []
+
+
+async def test_privacy_and_allowed_uses_drafts_with_reason(make, monkeypatch) -> None:
+    prompts: list[str] = []
+    _llm(monkeypatch, {
+        "privacy_measures": ["phone: 가명처리 또는 삭제 후 제공", "재식별 위험 검토 필요"],
+        "allowed_uses": ["VIEW", "ANALYSIS", "SELL"],
+        "allowed_uses_reason": "phone(PII) 때문에 AI 학습은 가명처리 뒤에",
+        "legal_basis": ["개인정보 보호법"],
+        "legal_reason": "phone 컬럼이 전화번호",
+    }, prompts)
+    async with make() as s:
+        res = await ai_ready_drafts.generate_drafts(s, 1, fields=["privacy_measures", "allowed_uses", "legal_basis"])
+    by = {d["field"]: d for d in res["drafts"]}
+    assert by["privacy_measures"]["text"] == "- phone: 가명처리 또는 삭제 후 제공\n- 재식별 위험 검토 필요"
+    assert by["allowed_uses"]["text"] == "VIEW,ANALYSIS", "정해진 코드만 — SELL 은 버림"
+    assert by["allowed_uses"]["reason"] == "phone(PII) 때문에 AI 학습은 가명처리 뒤에"
+    assert by["legal_basis"]["reason"] == "phone 컬럼이 전화번호" and by["privacy_measures"]["reason"] is None
+    (prompt,) = prompts
+    assert "AI_TRAINING (AI 학습)" in prompt and "allowed_uses_reason" in prompt and "privacy_measures" in prompt
+    assert "010-" not in prompt, "샘플 · PII 값은 싣지 않는다"
+
+    async with make() as s:
+        items = {i["field_name"]: i for i in await service.get_suggestions(s, 1)}
+        assert items["legal_basis"]["reason"] == "phone 컬럼이 전화번호", "근거는 제안 목록에 함께"
+        assert items["allowed_uses"]["reason"].startswith("phone(PII)") and items["allowed_uses"]["current_text"] is None
+        await service.apply_suggestions(s, [by["allowed_uses"]["log_id"], by["privacy_measures"]["log_id"]])
+    async with make() as s:
+        ds = await s.get(Dataset, 1)
+        assert ds.allowed_uses == "VIEW,ANALYSIS" and ds.privacy_measures.startswith("- phone")
+
+
+async def test_allowed_uses_invalid_and_privacy_skip(make, monkeypatch) -> None:
+    _llm(monkeypatch, {"allowed_uses": ["SELL", "EVERYTHING"], "privacy_measures": "- 없음"})
+    async with make() as s:
+        ds = await s.get(Dataset, 1)
+        ds.contains_pii = "false"
+        await s.commit()
+        res = await ai_ready_drafts.generate_drafts(s, 1, fields=["allowed_uses", "privacy_measures"])
+    assert res["drafts"] == []
+    reasons = {x["field"]: x["reason"] for x in res["skipped"]}
+    assert "개인정보가 없다고" in reasons["privacy_measures"]
+    assert "이용 유형을 고르지 못했습니다" in reasons["allowed_uses"]
+
+    async with make() as s:
+        ds = await s.get(Dataset, 1)
+        ds.allowed_uses = ""  # '모두 허용하지 않음'도 정한 값
+        await s.commit()
+        res = await ai_ready_drafts.generate_drafts(s, 1, fields=["allowed_uses"])
+    assert res["skipped"][0]["reason"] == "이미 값이 있습니다."
+
+    ds = Dataset()
+    with pytest.raises(ValueError, match="정해진 코드가 없습니다"):
+        ai_ready_drafts.apply_draft(ds, "allowed_uses", "SELL")
+    ai_ready_drafts.apply_draft(ds, "allowed_uses", "AI_TRAINING,VIEW")
+    assert ds.allowed_uses == "VIEW,AI_TRAINING"
 
 
 def test_settings_validate_laws() -> None:

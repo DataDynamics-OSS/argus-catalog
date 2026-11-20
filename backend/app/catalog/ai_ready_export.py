@@ -33,7 +33,6 @@ from app.catalog.models import (
     DatasetTag,
     Datasource,
     Organization,
-    Owner,
     System,
     Tag,
 )
@@ -241,6 +240,22 @@ async def update_distribution(session: AsyncSession, dataset_id: int, dist_id: i
     return row
 
 
+async def reorder_distributions(session: AsyncSession, dataset_id: int, ids: list[int]) -> list[DatasetDistribution]:
+    """배포본 순서 바꾸기 — ``ids`` 는 이 데이터셋 배포본 id 전부를 새 순서로. 틀리면 ValueError(사용자 문구).
+
+    순서(``ordinal``)는 DCAT ``dcat:distribution``·Croissant ``distribution``·데이터 카드·페더레이션 상세가 따른다.
+    """
+    rows = await list_distributions(session, dataset_id)
+    if len(ids) != len(set(ids)) or set(ids) != {r.id for r in rows}:
+        raise ValueError("배포본 목록이 바뀌었습니다. 새로 고친 뒤 다시 시도하세요.")
+    by_id = {r.id: r for r in rows}
+    for i, dist_id in enumerate(ids):
+        by_id[dist_id].ordinal = i
+    await session.flush()
+    logger.info("배포본 순서 변경: dataset_id=%d ids=%s", dataset_id, ids)
+    return [by_id[i] for i in ids]
+
+
 async def delete_distribution(session: AsyncSession, dataset_id: int, dist_id: int) -> bool:
     row = await session.get(DatasetDistribution, dist_id)
     if row is None or row.dataset_id != dataset_id:
@@ -307,9 +322,10 @@ async def _bundle(session: AsyncSession, dataset_id: int, *, with_check: bool = 
         select(Category.name).join(DatasetCategory, DatasetCategory.category_id == Category.id)
         .where(DatasetCategory.dataset_id == dataset_id).order_by(Category.name)
     )).all()]
-    b.owners = [(n, t) for n, t in (await session.execute(
-        select(Owner.owner_name, Owner.owner_type).where(Owner.dataset_id == dataset_id).order_by(Owner.id)
-    )).all()]
+    # 소유자 목록 + (목록에 없으면) 생성자 — 체크리스트 C30 · 알림과 같은 소유자 기준(DEF-138)
+    from app.catalog.dataset_owner import owner_names
+
+    b.owners = await owner_names(session, dataset_id, ds.created_by)
     b.distributions = await list_distributions(session, dataset_id)
     for src, tgt, sname, tname in (await session.execute(
         select(DatasetLineage.source_dataset_id, DatasetLineage.target_dataset_id,
@@ -444,6 +460,7 @@ def _dcat_dataset(b: _Bundle, base: str) -> dict:
     put("rai:dataBiases", ds.data_biases)
     put("rai:knownLimitations", ds.known_limitations)
     put("rai:dataCollectionMissingData", ds.missing_data_info)
+    put("rai:dataSocialImpact", ds.social_impact)
     if ds.quality_score is not None:
         out["dqv:hasQualityMeasurement"] = {
             "@type": "dqv:QualityMeasurement", "dqv:isMeasurementOf": {"@id": "argus:qualityScore"},
@@ -545,6 +562,7 @@ async def build_croissant(session: AsyncSession, dataset_id: int, base: str) -> 
     put("rai:dataLimitations", ds.known_limitations)
     put("rai:dataCollectionMissingData", ds.missing_data_info)
     put("rai:personalSensitiveInformation", ds.privacy_measures)
+    put("rai:dataSocialImpact", ds.social_impact)
     syn = _bool(ds.contains_synthetic)
     if syn is not None:
         out["rai:hasSyntheticData"] = syn
@@ -575,9 +593,14 @@ async def build_croissant(session: AsyncSession, dataset_id: int, base: str) -> 
     for c in b.columns:
         f: dict = {"@type": "cr:Field", "@id": f"{rs_id}/{c.field_path}", "name": c.field_path,
                    "dataType": croissant_type(c.field_type)}
+        # 데이터 사전 — 단위는 schema.org unitText, 산정기준은 Croissant 에 맞는 속성이 없어 설명 뒤에 붙인다
         desc = c.description or c.display_name
+        if c.calculation:
+            desc = f"{desc}\n산정기준: {c.calculation}" if desc else f"산정기준: {c.calculation}"
         if desc:
             f["description"] = desc
+        if c.unit:
+            f["sc:unitText"] = c.unit
         if tabular:
             f["source"] = {"fileObject": {"@id": tabular}, "extract": {"column": c.field_path}}
         fields.append(f)
@@ -691,10 +714,10 @@ async def build_data_card(session: AsyncSession, dataset_id: int, base: str) -> 
     section("사용 시 고려사항", [
         ("권장·사용 범위", _cell(uses, f"{meta} '허용 이용 유형'")),
         ("비권장/주의 사용", _cell(ds.rights, f"{meta} '저작권·이용 조건'")),
-        ("사회적 영향", _TODO.format(where="담당자 작성(Argus 에 항목 없음)")),
+        ("사회적 영향", _cell(ds.social_impact, f"{meta} '사회적 영향'")),
         ("편향성 및 한계", _cell(bias_limit, f"{meta} '알려진 편향'·'한계'")),
         ("기술적 제약", _cell(ds.missing_data_info, f"{meta} '결측 정보'")),
-        ("리스크 완화 권고", _TODO.format(where="담당자 작성(Argus 에 항목 없음)")),
+        ("리스크 완화 권고", _cell(ds.risk_mitigation, f"{meta} '리스크 완화 권고'")),
     ])
 
     code = b.eff("license")
@@ -708,18 +731,20 @@ async def build_data_card(session: AsyncSession, dataset_id: int, base: str) -> 
                                f"{meta} '버전'·'버전 노트'")),
         ("관련 문서", _cell(ds.landing_page, f"{meta} '제공시스템 URL'")),
     ])
-    section("기술적 사양", [
-        ("재현성", _TODO.format(where="담당자 작성(전처리·생성 파이프라인 설명)")),
-        ("환경 설정", _TODO.format(where="담당자 작성")),
-        ("매개변수/규칙", _TODO.format(where="담당자 작성")),
-    ])
+    # 기술적 사양(재현성·환경 설정·매개변수/규칙)은 학습용으로 가공·생성한 데이터의 파이프라인을 다시 돌리는 정보다.
+    # 원천 데이터를 등록하는 카탈로그에는 해당하지 않는 경우가 많아 칸마다 "작성 필요"를 두지 않고 안내 한 줄만 둔다(TODO-150).
+    lines += ["## 기술적 사양", "",
+              "해당하는 경우에만 작성합니다 — 학습용으로 가공·생성한 데이터라면 재현 방법(전처리·생성 파이프라인), "
+              "실행 환경, 매개변수·규칙을 함께 제공하세요. 정제·전처리 과정은 '데이터셋 생성' 절을 봅니다.", ""]
 
     if b.columns:
-        lines += ["## 필드 정의", "", "| 컬럼 | 논리명 | 타입 | NULL | 키 | 설명 |", "|---|---|---|---|---|---|"]
+        lines += ["## 필드 정의", "", "| 컬럼 | 논리명 | 타입 | 단위 | NULL | 키 | 설명 | 산정기준 |",
+                  "|---|---|---|---|---|---|---|---|"]
         for c in b.columns:
             key = "PK" if str(c.is_primary_key).lower() == "true" else ""
             lines.append(f"| {_md(c.field_path)} | {_md(c.display_name or '')} | {_md(c.native_type or c.field_type)} | "
-                         f"{'Y' if str(c.nullable).lower() == 'true' else 'N'} | {key} | {_md(c.description or '')} |")
+                         f"{_md(c.unit or '')} | {'Y' if str(c.nullable).lower() == 'true' else 'N'} | {key} | "
+                         f"{_md(c.description or '')} | {_md(c.calculation or '')} |")
         lines.append("")
 
     if b.versions:
@@ -740,6 +765,6 @@ async def build_data_card(session: AsyncSession, dataset_id: int, base: str) -> 
 
 __all__ = [
     "MEDIA_TYPES", "CHECKSUM_ALGORITHMS", "media_type", "croissant_type", "normalize_distribution", "distribution_dict",
-    "list_distributions", "create_distribution", "update_distribution", "delete_distribution",
+    "list_distributions", "create_distribution", "update_distribution", "delete_distribution", "reorder_distributions",
     "build_dcat", "build_dcat_catalog", "build_croissant", "build_data_card",
 ]

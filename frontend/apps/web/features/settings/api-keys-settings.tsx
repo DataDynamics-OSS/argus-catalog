@@ -51,7 +51,7 @@ import {
 import { notifyError, notifySuccess } from "@/lib/notify"
 import { copyText } from "@/lib/clipboard"
 import { useAuth } from "@/features/auth"
-import { useRoleOptions } from "@/features/users/use-role-options"
+import { useCanAssignRole, useRoleOptions } from "@/features/users/use-role-options"
 
 // 기본 역할 — 사용자 정의 역할(TODO-124)은 useRoleOptions 로 뒤에 붙는다
 const ROLES = [
@@ -88,7 +88,10 @@ type Confirm = { kind: "rotate" | "revoke"; key: ApiKeyInfo } | null
 
 export function ApiKeysSettings() {
   // API 키 관리를 위임받은 사람(관리자 아님)은 관리자 역할 키를 다룰 수 없다(서버도 403, TODO-123)
-  const isAdmin = !!useAuth().user?.is_admin
+  const { user } = useAuth()
+  const isAdmin = !!user?.is_admin
+  // 위임받은 사람은 기본 사용자 역할과 자기 역할의 키만 다룬다(서버 403, DEF-163)
+  const canAssignRole = useCanAssignRole(isAdmin, user?.username)
   const roleOptions = useRoleOptions()
   const [keys, setKeys] = useState<ApiKeyInfo[]>([])
   const [scopes, setScopes] = useState<ApiKeyScope[]>([])
@@ -218,7 +221,7 @@ export function ApiKeysSettings() {
                       <TableCell className="text-right">
                         {k.status === "revoked" ? (
                           <span className="text-xs">{fmt(k.revoked_at)} · {k.revoked_by}</span>
-                        ) : !isAdmin && k.role_id === "argus-admin" ? (
+                        ) : !canAssignRole(k.role_id) ? (
                           <span className="text-xs">관리자만 변경</span>
                         ) : (
                           <div className="flex items-center justify-end gap-2">
@@ -286,7 +289,8 @@ function CreateDialog({ open, scopes, onClose, onCreated }: {
   const [name, setName] = useState("")
   const [description, setDescription] = useState("")
   const [role, setRole] = useState("argus-user")
-  const isAdmin = !!useAuth().user?.is_admin
+  const { user } = useAuth()
+  const canAssignRole = useCanAssignRole(!!user?.is_admin, user?.username)
   // 사용자 정의 역할(TODO-124) — 기능을 좁힌 역할을 키에 주면 키가 쓸 수 있는 기능도 그만큼 좁아진다
   const customRoles = useRoleOptions().filter((r) => r.custom)
   const [selected, setSelected] = useState<string[]>(["catalog:read"])
@@ -343,7 +347,7 @@ function CreateDialog({ open, scopes, onClose, onCreated }: {
               <Select value={role} onValueChange={(v) => v && setRole(v)}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {[...ROLES, ...customRoles].filter((r) => isAdmin || r.value !== "argus-admin")
+                  {[...ROLES, ...customRoles].filter((r) => canAssignRole(r.value))
                     .map((r) => <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>)}
                 </SelectContent>
               </Select>

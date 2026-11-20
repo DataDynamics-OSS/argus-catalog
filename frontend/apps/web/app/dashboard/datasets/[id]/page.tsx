@@ -113,6 +113,7 @@ import { datasetStatus } from "@/features/datasets/status"
 import { ORIGINS, originLabel } from "@/features/datasets/origin"
 import { OriginText } from "@/features/datasets/components/origin-text"
 import { SyncedBadge } from "@/features/datasets/components/synced-badge"
+import { SourceMapSection } from "@/features/catalogs/components/source-map-section"
 import type { DatasetDetail, GlossaryTerm, SchemaField, Tag } from "@/features/datasets/data/schema"
 import { useAuth } from "@/features/auth"
 import { SampleDataTab } from "@/features/datasets/components/sample-data-tab"
@@ -121,6 +122,7 @@ import { DatasourceSpecificCard } from "@/features/datasets/components/datasourc
 import { generateAvroSchema, pathFromUrn } from "@/features/datasets/avro"
 import { CommentEditor } from "@/components/comments/comment-editor"
 import { RichTextViewer } from "@/components/comments/rich-text-viewer"
+import { descriptionToHtml } from "@/features/datasets/description"
 import { CodeViewer } from "@/components/code-viewer"
 import { SchemaEditGrid, type EditableField } from "@/features/datasets/components/schema-edit-grid"
 import { LineageTab } from "@/features/datasets/components/lineage-tab"
@@ -134,7 +136,7 @@ import { PySparkTab } from "@/features/datasets/components/pyspark-tab"
 import { KestraFlowTab } from "@/features/datasets/components/kestra-flow-tab"
 import { AirflowDagTab } from "@/features/datasets/components/airflow-dag-tab"
 import { DatasetMetadataTab } from "@/features/datasets/components/dataset-metadata-tab"
-import { canManageDataset } from "@/features/datasets/permissions"
+import { canManageDataset, isDatasetOwner } from "@/features/datasets/permissions"
 import { AiSuggestionsButton } from "@/features/datasets/components/ai-suggestions-dialog"
 import { draftResultMessage } from "@/features/datasets/ai-suggestions"
 import { DatasetMetadataSummary } from "@/features/datasets/components/dataset-metadata-summary"
@@ -156,6 +158,8 @@ import { AgentUsagePanel } from "@/features/ai-agents/components/ai-agents-skill
 import { useHelpTopic } from "@/features/help/help-context"
 import { DATASET_TAB_TOPICS } from "@/features/help/topics"
 import { type DatasetTab, datasetHref, datasetListHref, isDatasetTab } from "@/features/datasets/links"
+import { normalizeSchemaRow } from "@/features/datasets/schema-edit-fields"
+import { indexFromSource } from "@/features/datasets/schema-key-flags"
 import { SearchInput } from "@/components/search-input"
 
 
@@ -182,6 +186,8 @@ function newField(ordinal: number): EditableField {
     is_indexed: "false",
     is_partition_key: "false",
     ordinal,
+    unit: "",
+    calculation: "",
   }
 }
 
@@ -198,7 +204,11 @@ function toEditable(f: SchemaField): EditableField {
     is_unique: f.is_unique ?? "false",
     is_indexed: f.is_indexed ?? "false",
     is_partition_key: f.is_partition_key ?? "false",
+    // 수집된 일반 인덱스는 다른 칸을 고쳐도 유지한다(DEF-DSET-002)
+    index_from_source: indexFromSource(f),
     ordinal: f.ordinal,
+    unit: f.unit ?? "",
+    calculation: f.calculation ?? "",
   }
 }
 
@@ -220,10 +230,13 @@ function DatasetDetailContent() {
   const router = useRouter()
   const datasetId = Number(params.id)
   const [dataset, setDataset] = useState<DatasetDetail | null>(null)
-  // 소유권 게이팅 — admin 이거나 데이터셋 생성자(소유자)면 수정/삭제 가능. 역할의 기능 권한
-  // (datasets.edit · schema-edit · sample-manage · delete)은 아래 canUseFeature 와 함께 본다(TODO-122).
-  // 서버가 동일 규칙을 강제하므로 UI 는 발견성 용도.
-  const isOwner = canManageDataset(user, dataset?.created_by)
+  // 소유권 게이팅 — 데이터셋 소유자(생성자 또는 소유자 목록 사용자, 관리자 포함)는 일반 편집(메타데이터 · 스키마 ·
+  // 샘플 · 품질 · AI 생성 · AI-Ready · 오류 신고 처리)을 한다(DEF-138, TODO-154). 삭제와 소유자 추가 · 삭제는
+  // 생성자 · 관리자만(isCreator) — 목록 사용자가 다른 사람을 소유자로 올려 권한을 넓히지 못하게 한다.
+  // 역할의 기능 권한(datasets.edit · schema-edit · sample-manage · delete)은 아래 canUseFeature 와 함께 본다(TODO-122).
+  // 서버(`app.catalog.dataset_owner`)가 같은 규칙을 강제하므로 UI 는 발견성 용도.
+  const isOwner = isDatasetOwner(user, dataset)
+  const isCreator = canManageDataset(user, dataset?.created_by)
   const [categories, setCategories] = useState<DatasetCategoryRef[]>([])  // 매핑된 분류(경로·id)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -256,6 +269,9 @@ function DatasetDetailContent() {
   const searchParams = useSearchParams()
   const tabParam = searchParams.get("tab")
   const requestedTab: string = isDatasetTab(tabParam) ? tabParam : "overview"
+  // 탭 안에서 가리킬 곳(TODO-151) — 댓글 탭 ?comment=<id>, 메타데이터 탭 ?field=<항목 이름>
+  const focusComment = Number(searchParams.get("comment")) || null
+  const focusField = searchParams.get("field")
   const setActiveTab = useCallback(
     (tab: string) => router.replace(datasetHref(datasetId, tab as DatasetTab), { scroll: false }),
     [router, datasetId],
@@ -264,7 +280,8 @@ function DatasetDetailContent() {
   const canManage = isOwner && canUseFeature("datasets.edit")
   const canEditSchema = isOwner && canUseFeature("datasets.schema-edit")
   const canManageSample = isOwner && canUseFeature("datasets.sample-manage")
-  const canDelete = isOwner && canUseFeature("datasets.delete")
+  const canDelete = isCreator && canUseFeature("datasets.delete")
+  const canManageOwners = isCreator && canUseFeature("datasets.edit")
   // 이 데이터셋에 없는 탭(DDL 이 없거나 샘플 권한이 없음)을 주소로 받으면 개요를 보여 준다
   const activeTab =
     (requestedTab === "ddl" && dataset && !dataset.ddl) ||
@@ -370,7 +387,7 @@ function DatasetDetailContent() {
   const [aiSuggestionsRefresh, setAiSuggestionsRefresh] = useState(0)
   const bumpAiSuggestions = () => setAiSuggestionsRefresh((n) => n + 1)
 
-  // AI-Ready 초안(편향 · 한계 · 관련법령) — 결과는 언제나 승인 대기 제안. 메뉴는 값이 있는 항목도 다시 쓴다(force),
+  // AI-Ready 초안(편향 · 한계 · 관련법령 · 개인정보 보호조치 · 허용 이용 유형) — 결과는 언제나 승인 대기 제안. 메뉴는 값이 있는 항목도 다시 쓴다(force),
   // AI-Ready 탭의 단추는 빈 항목만(TODO-096 6단계)
   const [aiDrafting, setAiDrafting] = useState(false)
   const runAiReadyDrafts = async (force: boolean) => {
@@ -727,19 +744,24 @@ function DatasetDetailContent() {
 
   // 빈 필드 path/type 행은 저장에서 제외. ordinal 은 클라이언트 표시 순서를 그대로 부여한다.
   const saveSchema = async () => {
-    const valid = editFields.filter((f) => f.field_path.trim() && f.field_type.trim())
+    // 비운 칸이 null 로 남아 있어도 저장이 멈추지 않게 문자열로 맞춘다(DEF-DSET-001)
+    const valid = editFields.map(normalizeSchemaRow).filter((f) => f.field_path.trim() && f.field_type.trim())
     const payload = valid.map((f, idx) => ({
       field_path: f.field_path.trim(),
-      display_name: f.display_name.trim() || undefined,
+      // 논리명 · 설명은 비우면 빈 값으로 보내 지운다(clear_empty, DEF-166)
+      display_name: f.display_name.trim(),
       field_type: f.field_type.trim(),
       native_type: f.native_type.trim() || undefined,
-      description: f.description.trim() || undefined,
+      description: f.description.trim(),
       nullable: f.nullable,
       is_primary_key: f.is_primary_key,
       is_unique: f.is_unique,
       is_indexed: f.is_indexed,
       is_partition_key: f.is_partition_key,
       ordinal: idx,
+      // 단위 · 산정기준은 비우면 null 로 보내 지운다(설명과 달리 수집이 채우지 않는 담당자 값)
+      unit: f.unit.trim() || null,
+      calculation: f.calculation.trim() || null,
     }))
     try {
       setSchemaSaving(true)
@@ -1037,8 +1059,14 @@ function DatasetDetailContent() {
                 <StatusBadge {...datasetStatus(dataset.status ?? "active")} />
                 <Badge variant="outline"><OriginText origin={dataset.origin ?? "PROD"} /></Badge>
                 {dataset.is_synced === "true" && <SyncedBadge />}
+                {/* 직접 등록한 카탈로그의 데이터셋(TODO-CAT-001) — 수집하지 않는다, 원천 매핑은 개요 탭 */}
+                {dataset.is_manual && (
+                  <Tip label={`${dataset.catalog_name ?? "카탈로그"} 에 직접 등록 — 메타데이터를 수집하지 않습니다`}>
+                    <Badge variant="info">수동 등록</Badge>
+                  </Tip>
+                )}
                 {/* 승인 대기 AI 제안 — 대기 건이 있을 때만 버튼(건수 배지)이 보인다.
-                    승인·거절은 서버와 같이 데이터셋 생성자·관리자만(canManage). */}
+                    승인·거절은 서버와 같이 데이터셋 소유자·관리자만(canManage). */}
                 {canManage && (
                   <AiSuggestionsButton
                     datasetId={datasetId}
@@ -1255,7 +1283,8 @@ function DatasetDetailContent() {
               {descEditing ? (
                 <CommentEditor
                   key={`desc-edit-${datasetId}-${dataset.updated_at}`}
-                  initialContent={dataset.description ?? ""}
+                  // 마크다운 · 평문 설명은 HTML 로 바꿔 넣는다 — 그대로 넣으면 편집기에서도 한 문단으로 뭉친다(DEF-181)
+                  initialContent={descriptionToHtml(dataset.description)}
                   showCategory={false}
                   placeholder="설명을 작성하세요…"
                   submitLabel="저장"
@@ -1285,7 +1314,7 @@ function DatasetDetailContent() {
                   onClick={canManage ? startDescEdit : undefined}
                   title={canManage ? "클릭하여 편집" : undefined}
                 >
-                  <RichTextViewer html={dataset.description} />
+                  <RichTextViewer html={descriptionToHtml(dataset.description)} />
                 </div>
               ) : canManage ? (
                 <p
@@ -1299,6 +1328,11 @@ function DatasetDetailContent() {
                 <p className="text-sm px-2 py-1 -mx-2 text-muted-foreground italic">설명이 없습니다.</p>
               )}
             </DatasetMetadataSummary>
+            {dataset.is_manual && (
+              <div id="source-map" className="mt-8 scroll-mt-4">
+                <SourceMapSection dataset={dataset} onChanged={() => void load(false)} />
+              </div>
+            )}
           </TabsContent>
 
           {/* =============== Metadata tab — 확장 메타데이터 편집 =============== */}
@@ -1307,12 +1341,13 @@ function DatasetDetailContent() {
               dataset={dataset}
               onSaved={setDataset}
               canEdit={canManage}
+              focusField={focusField}
               extraGroup={{
                 name: "분류 · 소유",
                 rows: [
                   {
                     label: "소유자",
-                    desc: "데이터 소유자(기술/업무 책임자·스튜어드). 즉시 반영됩니다.",
+                    desc: "데이터 소유자(기술/업무 책임자·스튜어드). 목록 사용자도 데이터셋을 편집합니다. 추가·삭제는 생성자·관리자만, 즉시 반영됩니다.",
                     control: (
                       <div className="flex flex-col gap-2">
                         <div className="flex flex-wrap gap-1.5">
@@ -1321,7 +1356,7 @@ function DatasetDetailContent() {
                               <Badge key={o.id} variant="secondary" className="gap-1">
                                 {o.owner_name}
                                 <span className="text-[11px]">· {o.owner_type.replaceAll("_", " ")}</span>
-                                {canManage && (
+                                {canManageOwners && (
                                   <Tip label="소유자 제거"><button className="ml-0.5 hover:opacity-70" onClick={() => handleRemoveOwner(o.id)} aria-label="소유자 제거">
                                     <X className="h-3 w-3" />
                                   </button></Tip>
@@ -1332,7 +1367,7 @@ function DatasetDetailContent() {
                             <span className="text-xs text-muted-foreground">없음</span>
                           )}
                         </div>
-                        {canManage && <div className="flex items-center gap-1.5">
+                        {canManageOwners && <div className="flex items-center gap-1.5">
                           <Select value={ownerType} onValueChange={setOwnerType}>
                             <SelectTrigger size="sm" className="h-7 w-[140px] text-xs"><SelectValue /></SelectTrigger>
                             <SelectContent>
@@ -1561,6 +1596,8 @@ function DatasetDetailContent() {
                           <TableHead className="w-[50px] text-center">분산</TableHead>
                           <TableHead className="w-[50px] text-center">Null</TableHead>
                           <TableHead>설명</TableHead>
+                          <TableHead>단위</TableHead>
+                          <TableHead>산정기준</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -1628,6 +1665,10 @@ function DatasetDetailContent() {
                                 {field.description || "-"}
                               </span>
                             </TableCell>
+                            <TableCell className="text-sm whitespace-nowrap">{field.unit || "-"}</TableCell>
+                            <TableCell className="text-sm min-w-[160px] max-w-[320px]">
+                              <span className="whitespace-pre-wrap break-words">{field.calculation || "-"}</span>
+                            </TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
@@ -1691,7 +1732,13 @@ function DatasetDetailContent() {
 
           {/* =============== Quality tab =============== */}
           <TabsContent value="quality" className="mt-4">
-            <QualityTab datasetId={datasetId} columns={dataset.schema_fields.map((f) => f.field_path)} canManage={isOwner} />
+            <QualityTab datasetId={datasetId} columns={dataset.schema_fields.map((f) => f.field_path)} canManage={isOwner}
+              manual={Boolean(dataset.is_manual)}
+              onOpenSourceMap={() => {
+                setActiveTab("overview")
+                // 개요 탭이 그려진 뒤 원천 매핑 영역으로
+                window.setTimeout(() => document.getElementById("source-map")?.scrollIntoView({ behavior: "smooth" }), 50)
+              }} />
           </TabsContent>
 
           <TabsContent value="ai-ready" className="mt-4">
@@ -1727,6 +1774,7 @@ function DatasetDetailContent() {
               entityType="dataset"
               entityId={String(datasetId)}
               canHandleReports={isOwner && canUseFeature("data-reports.handle")}
+              focusCommentId={focusComment}
             />
           </TabsContent>
         </Tabs>
@@ -1850,8 +1898,9 @@ function DatasetDetailContent() {
           </DialogHeader>
           {aiDescResult && (
             <div className="space-y-4">
-              <div className="rounded-md border p-3 text-sm whitespace-pre-wrap bg-muted/50">
-                {aiDescResult.description}
+              {/* 개요 탭과 같은 변환 · 뷰어로 서식대로 보여 준다(DEF-191). 적용 때 저장되는 값은 원문 그대로다 */}
+              <div className="rounded-md border p-3 bg-muted/50 max-h-[60vh] overflow-y-auto">
+                <RichTextViewer html={descriptionToHtml(aiDescResult.description)} />
               </div>
               <div className="flex items-center gap-4 text-xs">
                 <span>신뢰도: {(aiDescResult.confidence * 100).toFixed(0)}%</span>
@@ -1872,7 +1921,8 @@ function DatasetDetailContent() {
 
       {/* AI Column Descriptions Preview Dialog */}
       <Dialog open={aiDialogOpen && aiDialogType === "columns"} onOpenChange={(open) => { if (!open) { setAiDialogOpen(false); setAiColsResult(null) } }}>
-        <DialogContent className="max-w-2xl max-h-[70vh] overflow-y-auto">
+        {/* 목록만 세로로 스크롤하고 버튼 줄은 항상 보이게, 설명 칸은 줄바꿈해 창 너비 안에(DEF-196) */}
+        <DialogContent className="flex max-h-[80vh] max-w-2xl flex-col">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Sparkles className="h-4 w-4" />
@@ -1880,26 +1930,28 @@ function DatasetDetailContent() {
             </DialogTitle>
           </DialogHeader>
           {aiColsResult && (
-            <div className="space-y-4">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-[150px]">컬럼</TableHead>
-                    <TableHead>생성된 설명</TableHead>
-                    <TableHead className="w-[60px] text-right">신뢰도</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {aiColsResult.columns.map((col) => (
-                    <TableRow key={col.field_path}>
-                      <TableCell className="font-mono text-xs">{col.field_path}</TableCell>
-                      <TableCell className="text-sm">{col.description}</TableCell>
-                      <TableCell className="text-right text-xs">{(col.confidence * 100).toFixed(0)}%</TableCell>
+            <div className="flex min-h-0 flex-1 flex-col gap-4">
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                <Table className="table-fixed">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-[150px]">컬럼</TableHead>
+                      <TableHead>생성된 설명</TableHead>
+                      <TableHead className="w-[60px] text-right">신뢰도</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-              <div className="flex items-center gap-2 justify-end">
+                  </TableHeader>
+                  <TableBody>
+                    {aiColsResult.columns.map((col) => (
+                      <TableRow key={col.field_path}>
+                        <TableCell className="break-all align-top font-mono text-xs whitespace-normal">{col.field_path}</TableCell>
+                        <TableCell className="align-top text-sm break-words whitespace-normal">{col.description}</TableCell>
+                        <TableCell className="text-right align-top text-xs">{(col.confidence * 100).toFixed(0)}%</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+              <div className="flex shrink-0 items-center justify-end gap-2">
                 <Button variant="outline" size="sm" onClick={() => { setAiDialogOpen(false); setAiColsResult(null) }}>
                   닫기
                 </Button>

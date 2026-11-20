@@ -11,7 +11,8 @@
 메뉴 보기 전용(``MENU_VIEW``): 열린 메뉴를 보기만 하게 한다 — 서버 API 차단 메뉴는 쓰기 요청을 403,
 그 메뉴의 편집 기능(``WRITE_FEATURE_MENUS``)은 서버 · 화면 모두 막는다. 공용 메뉴(표준 · 용어집 · 태그 · 오류 신고)는
 메뉴가 막혀도 조회 API 는 열어 두되 편집 기능(``SHARED_MENU_FEATURES``)은 막는다.
-권한 거부(403)는 감사 로그(권한 범주, ``permission.denied``)에 사용자 · 권한마다 1분에 한 번 남긴다.
+권한 거부(403)는 감사 로그(권한 범주, ``permission.denied``)에 사용자 · 권한마다 1분에 한 번 남긴다 — 메뉴 · 기능
+가드뿐 아니라 :class:`~app.core.auth.PermissionDenied` 로 거부하는 관리자 전용 · 소유자 확인 · 위임 범위 가드도(DEF-159).
 
 조회(me)는 "차단 목록"을 돌려준다: open-by-default 라 프런트가 전체
 레지스트리를 알 필요 없이, 명시 설정 중 내 역할이 빠진 key 만 숨기면 된다.
@@ -22,7 +23,7 @@
   의존성을 걸어 API 직접 호출도 403 으로 막는다. 여러 메뉴가 함께 쓰는 공용 API(/catalog 등)는
   다른 화면을 깨뜨리므로 서버 차단 대상이 아니다 — 권한 관리 화면에 "화면만" 으로 표시된다.
 - 관리 메뉴(``ADMIN_MENUS``: 사용자·설정·권한 관리)는 매트릭스로 열 수 없다(항상 관리자 전용,
-  각 API 가 AdminUser 로 강제). 예외로 ``ADMIN_MENU_GRANTS`` 의 메뉴(메타데이터 수집 · 데이터 품질 · 사용자 관리 · 설정)는
+  각 API 가 AdminUser 로 강제). 예외로 ``ADMIN_MENU_GRANTS`` 의 메뉴(메타데이터 수집 · 데이터 품질 · 사용자 관리 · 설정 · 감사 로그)는
   연결된 기능 중 하나라도 명시 허용받은 역할에도 열린다(TODO-123). 권한 관리 메뉴는 항상 관리자 전용.
 
 예외 — ``DEFAULT_DENY_FEATURES`` 의 기능은 반대로 **명시 허용형**이다. 설정이 없으면
@@ -47,7 +48,7 @@ from sqlalchemy import delete as sql_delete
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import AdminUser, CurrentUser, OptionalUser
+from app.core.auth import AdminUser, CurrentUser, OptionalUser, PermissionDenied
 from app.core.database import get_session
 from app.permissions import roles as custom_roles
 from app.permissions.models import Permission
@@ -87,6 +88,8 @@ DEFAULT_DENY_FEATURES: set[str] = {
     "users.manage", "audit.view",
     # 분류 체계 — 데이터셋 매핑을 정의 편집(taxonomies.edit)에서 떼어 냄(TODO-138)
     "taxonomies.map",
+    # 카탈로그 등록 · 연결, 수동 데이터셋 원천 매핑(TODO-CAT-001) — 데이터 소스 관리 권한 없이 맡길 수 있게
+    "catalogs.manage",
     "settings.llm", "settings.embedding", "settings.assistant", "settings.ai-ready", "settings.notify",
     "settings.mail", "settings.object-storage", "settings.metadata-sync", "settings.cache", "settings.api-keys",
 }
@@ -100,7 +103,8 @@ SETTINGS_DELEGATE_FEATURES: tuple[str, ...] = (
 # 관리 메뉴 — 항상 관리자 전용(매트릭스 대상 아님). 저장 시 무시한다.
 # MLflow·OCI 모델 파일(저장소 전체 탐색)도 관리자 전용 — 일반 사용자는 모델 상세의 파일 탭으로 본다.
 # 플러그인이 관리자 전용 메뉴를 선언하면 여기에 더해진다(register_plugin_permissions) — 그래서 frozenset 이 아니다.
-ADMIN_MENUS: set[str] = {"users", "settings", "permissions", "mlflow-files", "oci-files", "sync-runs", "quality-runs"}
+ADMIN_MENUS: set[str] = {"users", "settings", "permissions", "mlflow-files", "oci-files", "sync-runs", "quality-runs",
+                         "audit"}
 
 # 관리 메뉴 중 기능 권한을 명시 허용받은 역할에도 여는 메뉴 → 그 기능 key.
 # 메타데이터 수집(진행·결과 화면)은 수집 권한(datasources.sync)을 받은 사람도 본다(TODO-074) —
@@ -109,11 +113,13 @@ ADMIN_MENUS: set[str] = {"users", "settings", "permissions", "mlflow-files", "oc
 # 데이터 품질은 품질 관리 권한(quality.manage, 명시 허용형)을 받은 사람이 작업 · 진행 · 결과를 보고 취소 · 다시 실행한다.
 # 데이터셋 품질 탭의 진단 실행(quality.run, 기본 허용형)과는 따로 둔다(DEF-128).
 # 사용자 관리는 users.manage, 설정은 위임 키 중 하나(TODO-123). 값은 "이 중 하나라도" 허용받으면 연다.
+# 감사 로그(전 범주 — 사용자 · 설정 · 권한 · 운영)는 audit.view 를 받으면 연다(TODO-152). 조회 API 도 같은 키로 강제한다.
 ADMIN_MENU_GRANTS: dict[str, tuple[str, ...]] = {
     "sync-runs": ("datasources.sync",),
     "quality-runs": ("quality.manage",),
     "users": ("users.manage",),
     "settings": SETTINGS_DELEGATE_FEATURES,
+    "audit": ("audit.view",),
 }
 
 # 편집 기능 → 소속 메뉴(TODO-124). 메뉴가 보기 전용인 역할은 이 기능을 쓸 수 없다(서버 · 화면 모두).
@@ -127,6 +133,7 @@ WRITE_FEATURE_MENUS: dict[str, str] = {
     "data-reports.handle": "data-reports",
     **dict.fromkeys(("federation.manage", "federation.import"), "federation"),
     "datasources.manage": "datasources",
+    "catalogs.manage": "catalogs",
     **dict.fromkeys(("models.register", "models.edit", "models.delete", "models.promote"), "models"),
     **dict.fromkeys(("oci.register", "oci.edit", "oci.delete", "oci.import-hf"), "oci-hub"),
     **dict.fromkeys(("agents.register", "agents.edit", "agents.bulk-edit", "agents.delete"), "ai-agents"),
@@ -193,6 +200,8 @@ FEATURE_KEYS: set[str] = {
     "standards.map", "aiready.judge", "changes.rollback", "alerts.ack",
     # 권한 5단계(TODO-138) — 데이터셋 ↔ 분류 매핑(명시 허용형)
     "taxonomies.map",
+    # 카탈로그 등록 · 연결, 수동 데이터셋 원천 매핑(TODO-CAT-001, 명시 허용형)
+    "catalogs.manage",
 }
 
 
@@ -216,9 +225,21 @@ async def _get_matrix(session: AsyncSession, kind: str) -> dict[str, list[str]]:
     return result
 
 
+def _viewable_menu(key: str) -> bool:
+    """보기 전용을 둘 수 있는 메뉴인가 — 관리 메뉴가 아니고 막을 편집 기능(``WRITE_FEATURE_MENUS``)이 있는 메뉴.
+
+    대시보드 · 내 결재함 · 즐겨찾기 · AI-Ready 점검은 편집 기능이 없어 보기 전용이 효과가 없다(DEF-162).
+    결재(``changes.approve``)는 변경 관리 메뉴의 기능이라 내 결재함 보기 전용으로 막지 않는다 — 결재를 막으려면 기능 권한을 끈다.
+    프런트 권한 관리 화면의 ``VIEWABLE_MENUS`` 와 같은 기준.
+    """
+    return key not in ADMIN_MENUS and key in WRITE_FEATURE_MENUS.values()
+
+
 def _storable_key(kind: str, key: str) -> bool:
-    """저장 가능한 key 인지 — MENU · MENU_VIEW 는 관리 메뉴 제외 전부, FEATURE 는 ``FEATURE_KEYS`` 에 있는 것만."""
-    if kind in ("MENU", VIEW_KIND):
+    """저장 가능한 key 인지 — MENU 는 관리 메뉴 제외 전부, MENU_VIEW 는 보기 전용이 뜻 있는 메뉴만, FEATURE 는 ``FEATURE_KEYS`` 에 있는 것만."""
+    if kind == VIEW_KIND:
+        return _viewable_menu(key)
+    if kind == "MENU":
         return key not in ADMIN_MENUS
     return key in FEATURE_KEYS
 
@@ -389,7 +410,8 @@ async def get_my_permissions(current: CurrentUser, session: AsyncSession = Depen
     admin_menus = {m for m in ADMIN_MENUS if not granted_features.intersection(ADMIN_MENU_GRANTS.get(m, ()))}
     denied_menu_set = set(denied_menus) | admin_menus
     readonly_menus = sorted(k for (kind, k), roles in by_key.items()
-                            if kind == VIEW_KIND and my_role in roles and k not in denied_menu_set)
+                            if kind == VIEW_KIND and my_role in roles and k not in denied_menu_set
+                            and _viewable_menu(k))
     # 보기 전용 메뉴의 편집 기능, 메뉴가 막힌 공용 메뉴의 편집 기능은 쓸 수 없다
     readonly = set(readonly_menus)
     for key, menu in WRITE_FEATURE_MENUS.items():
@@ -446,17 +468,24 @@ async def _feature_blocked_by_menu(session: AsyncSession, current, feature_key: 
 
 # 같은 사용자 · 같은 권한의 거부는 이 시간(초)에 한 번만 감사 로그에 남긴다 — 화면이 되풀이해 부를 때 로그가 넘치지 않게
 _DENY_AUDIT_WINDOW = 60.0
-_deny_seen: dict[tuple[str, str, str], float] = {}
+_deny_seen: dict[tuple[str, ...], float] = {}
+
+
+# 감사 요약에 쓰는 거부 종류 이름 — 메뉴 · 기능 가드 밖의 403 도 같은 형식으로 남긴다(DEF-159)
+_DENY_KIND_LABELS = {"MENU": "메뉴", "FEATURE": "기능", "ADMIN": "관리자 전용", "OWNER": "소유자", "DELEGATE": "위임 범위"}
 
 
 async def audit_denied(session: AsyncSession | None, current, kind: str, key: str, path: str | None = None) -> None:
     """권한 거부(403)를 감사 로그(권한 범주, ``permission.denied``)에 남긴다(TODO-124). 실패해도 예외를 내지 않는다.
 
-    요청 세션으로 기록한다 — 거부는 핸들러 전에 일어나 그 세션에 쓰지 않은 변경이 없다.
+    요청 세션으로 기록한다 — 거부는 핸들러 전에 일어나 그 세션에 쓰지 않은 변경이 없다. ``session`` 이
+    None 이면 감사 모듈이 별도 세션을 연다. 메뉴 · 기능은 사용자 · 권한마다, 관리자 전용 · 소유자 · 위임 범위
+    거부(키가 여러 API 에 같음)는 사용자 · 권한 · 경로마다 1분에 한 번 남긴다.
     """
     if current is None:
         return
-    seen_key = (str(current.username), kind, key)
+    seen_key = (str(current.username), kind, key) if kind in ("MENU", "FEATURE") \
+        else (str(current.username), kind, key, path or "")
     now = time.monotonic()
     if now - _deny_seen.get(seen_key, -_DENY_AUDIT_WINDOW) < _DENY_AUDIT_WINDOW:
         return
@@ -464,12 +493,27 @@ async def audit_denied(session: AsyncSession | None, current, kind: str, key: st
         _deny_seen.clear()
     _deny_seen[seen_key] = now
     from app.audit.service import record
-    label = "메뉴" if kind == "MENU" else "기능"
+    label = _DENY_KIND_LABELS.get(kind, kind)
     await record(
         session, current, "permissions", "permission.denied", target=key,
         summary=f"권한 거부({label}): {key}" + (f" — {path}" if path else ""),
         detail={"kind": kind, "key": key, "path": path, "role": _my_role(current) if not current.is_admin else None},
     )
+
+
+async def audit_permission_denied(request: Request | None, exc: Exception) -> None:
+    """앱 HTTP 예외 처리기에서 부른다 — :class:`~app.core.auth.PermissionDenied` 403 을 감사 로그에 남긴다(DEF-159).
+
+    관리자 전용(``require_admin``) · 소유자 확인(``assert_owner_or_admin``) · 데이터셋 직접 등록 · 사용자 관리와
+    API 키의 위임 범위 가드처럼 세션 없이 거부하는 곳도 메뉴 · 기능 거부와 같은 형식으로 남긴다. 별도 세션으로
+    기록하고(요청 세션은 이미 닫혔을 수 있다), 어떤 실패도 응답을 바꾸지 않는다.
+    """
+    if not isinstance(exc, PermissionDenied):
+        return
+    try:
+        await audit_denied(None, exc.user, exc.kind, exc.key, _path(request))
+    except Exception as e:  # noqa: BLE001 — 감사 실패가 403 응답을 바꾸지 않도록
+        logger.error("권한 거부 감사 실패: kind=%s key=%s: %s", exc.kind, exc.key, e)
 
 
 async def check_feature(session: AsyncSession, current, feature_key: str) -> bool:
@@ -630,7 +674,8 @@ async def check_dataset_create(session: AsyncSession, current) -> str | None:
 async def require_dataset_create(current: CurrentUser, session: AsyncSession = Depends(get_session)):
     """FastAPI 의존성 — 데이터셋 직접 등록 권한(:func:`check_dataset_create`)이 없으면 403."""
     if (reason := await check_dataset_create(session, current)) is not None:
-        raise HTTPException(status_code=403, detail=reason)
+        logger.warning("데이터셋 직접 등록 거부(403): user=%s", current.username)
+        raise PermissionDenied(reason, user=current, kind="FEATURE", key=DATASET_CREATE_FEATURE)
     return current
 
 

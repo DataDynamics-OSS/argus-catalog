@@ -48,6 +48,35 @@ def test_distribution_crud_and_validation(env):
     assert c.get(f"{V1}/catalog/datasets/99999/distributions").status_code == 404
 
 
+def test_distribution_reorder(env):
+    """순서 바꾸기 — id 전부를 새 순서로, 목록이 다르면 409, 소유자·관리자만. DCAT·Croissant 가 순서를 따른다."""
+    c, who, ids, _run = env
+    url = f"{V1}/catalog/datasets/{ids['bare']}/distributions"
+    a = c.post(url, json={"title": "A", "access_url": "https://x.go.kr/a"}).json()
+    b = c.post(url, json={"title": "B", "access_url": "https://x.go.kr/b"}).json()
+    d = c.post(url, json={"title": "C", "access_url": "https://x.go.kr/c"}).json()
+    assert [x["title"] for x in c.get(url).json()] == ["A", "B", "C"]
+
+    r = c.post(f"{url}/reorder", json={"ids": [d["id"], a["id"], b["id"]]})
+    assert r.status_code == 200, r.text
+    assert [x["title"] for x in r.json()] == ["C", "A", "B"] and [x["ordinal"] for x in r.json()] == [0, 1, 2]
+    assert [x["title"] for x in c.get(url).json()] == ["C", "A", "B"]
+    dcat = c.get(f"{V1}/external/datasets/{ids['bare']}/dcat").json()
+    assert [x["dct:title"] for x in dcat["dcat:distribution"]] == ["C", "A", "B"]
+    cro = c.get(f"{V1}/external/datasets/{ids['bare']}/croissant").json()
+    assert [x["name"] for x in cro["distribution"]] == ["C", "A", "B"]
+
+    # 빠진 id · 겹친 id · 다른 데이터셋 id → 409, 순서는 그대로
+    for bad in ([a["id"], b["id"]], [a["id"], a["id"], b["id"]], [a["id"], b["id"], d["id"], 99999]):
+        assert c.post(f"{url}/reorder", json={"ids": bad}).status_code == 409, bad
+    assert [x["title"] for x in c.get(url).json()] == ["C", "A", "B"]
+
+    who["user"] = _tu("mallory")
+    assert c.post(f"{url}/reorder", json={"ids": [a["id"], b["id"], d["id"]]}).status_code == 403
+    who["user"] = _tu("alice")
+    assert c.post(f"{V1}/catalog/datasets/99999/distributions/reorder", json={"ids": []}).status_code == 404
+
+
 def test_dcat_export(env):
     c, _who, ids, run = env
     run(_fill_everything(ids["bare"], ids["src"]))
@@ -113,6 +142,57 @@ def test_data_card(env):
         assert heading in text, heading
     assert "공공누리 제1유형" in text and "| gu | " in text and "필수 항목 충족률: 100.0%" in text
     assert "샘플 레코드는 카드에 넣지 않습니다" in text
+
+
+def test_unit_and_calculation_in_croissant_and_data_card(env):
+    """데이터 사전 — 단위는 Croissant Field 의 sc:unitText, 산정기준은 설명 뒤. 데이터 카드 '필드 정의'에 단위 · 산정기준 칸."""
+    c, _who, ids, run = env
+    run(_fill_everything(ids["bare"], ids["src"]))
+
+    async def _go(db):
+        import app.catalog.models as cm
+        db.add(cm.DatasetSchema(dataset_id=ids["bare"], field_path="pop", field_type="INTEGER", description="인구 수",
+                                unit="명", calculation="주민등록 인구 합계", ordinal=2))
+        db.add(cm.DatasetSchema(dataset_id=ids["bare"], field_path="rate", field_type="DOUBLE", unit="%",
+                                calculation="전입 / 인구 × 100", ordinal=3))
+    run(_go)
+    d = c.get(f"{V1}/external/datasets/{ids['bare']}/croissant").json()
+    fields = {f["name"]: f for f in d["recordSet"][0]["field"]}
+    assert fields["pop"]["sc:unitText"] == "명"
+    assert fields["pop"]["description"] == "인구 수\n산정기준: 주민등록 인구 합계"
+    assert fields["rate"]["description"] == "산정기준: 전입 / 인구 × 100"
+    assert "sc:unitText" not in fields["gu"]
+    text = c.get(f"{V1}/external/datasets/{ids['bare']}/data-card").text
+    assert "| 컬럼 | 논리명 | 타입 | 단위 | NULL | 키 | 설명 | 산정기준 |" in text
+    assert "| pop |  | INTEGER | 명 | Y |  | 인구 수 | 주민등록 인구 합계 |" in text
+
+
+def test_data_card_social_impact_and_risk_fields(env):
+    """TODO-150 — 사회적 영향·리스크 완화 권고는 메타데이터 항목, 기술적 사양은 '작성 필요' 칸 없이 안내 한 줄."""
+    c, _who, ids, _run = env
+    url = f"{V1}/catalog/datasets/{ids['bare']}"
+    text = c.get(f"{V1}/external/datasets/{ids['bare']}/data-card").text
+    assert "| 사회적 영향 | _작성 필요 — 메타데이터 탭 '사회적 영향'_ |" in text
+    assert "| 리스크 완화 권고 | _작성 필요 — 메타데이터 탭 '리스크 완화 권고'_ |" in text
+    tech = text.split("## 기술적 사양", 1)[1].split("\n## ", 1)[0]
+    assert "작성 필요" not in tech and "해당하는 경우에만" in tech
+    for k in ("재현성", "환경 설정", "매개변수/규칙"):
+        assert f"| {k} |" not in text
+
+    r = c.put(url, json={"social_impact": " 교통 정책 수립에 쓰임 ", "risk_mitigation": "개인 단위 재식별 시도 금지"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["social_impact"] == "교통 정책 수립에 쓰임" and body["risk_mitigation"] == "개인 단위 재식별 시도 금지"
+    text = c.get(f"{V1}/external/datasets/{ids['bare']}/data-card").text
+    assert "| 사회적 영향 | 교통 정책 수립에 쓰임 |" in text and "| 리스크 완화 권고 | 개인 단위 재식별 시도 금지 |" in text
+    cr = c.get(f"{V1}/external/datasets/{ids['bare']}/croissant").json()
+    assert cr["rai:dataSocialImpact"] == "교통 정책 수립에 쓰임"
+    dcat = c.get(f"{V1}/external/datasets/{ids['bare']}/dcat").json()
+    assert dcat["rai:dataSocialImpact"] == "교통 정책 수립에 쓰임"
+    assert "개인 단위 재식별 시도 금지" not in str(dcat)  # 리스크 완화 권고는 대응 속성이 없어 카드에만
+
+    assert c.put(url, json={"social_impact": None}).status_code == 200  # 명시한 null 은 지움
+    assert c.get(url).json()["social_impact"] is None
 
 
 def test_checklist_items_follow_distributions(env):

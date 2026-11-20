@@ -38,15 +38,26 @@ _NUMERIC_TYPES = {"NUMBER", "INT", "INTEGER", "BIGINT", "SMALLINT", "TINYINT", "
 _TRINO_TIME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})(\.\d+)?(?: (UTC|[+-]\d{2}:\d{2}))?$")
 # 집계를 내지 않는 복합 타입 — NULL 수만 센다
 _COMPLEX_RE = re.compile(r"^(ARRAY|STRUCT|MAP|ROW|UNION|JSON|LIST|RECORD)\b", re.IGNORECASE)
+# 원천 직접 경로에서 NULL 수만 세는 타입 — Oracle LOB 은 count(DISTINCT) · min · max 를 받지 않고(ORA-22849),
+# SQL Server XML 은 같음 · 크기 비교가 없다
+_DIRECT_NONNULL_ONLY = {"oracle": ("CLOB", "NCLOB", "BLOB", "BFILE", "LONG"), "mssql": ("XML",)}
+# SQL Server 의 예전 큰 객체 타입은 count 부터 받지 않는다(8117) — 같은 값의 (MAX) 타입으로 바꿔 센다.
+# BIT 는 min · max 를 받지 않아 0 · 1 의 정수로 센다
+_MSSQL_CASTS = {"TEXT": "VARCHAR(MAX)", "NTEXT": "NVARCHAR(MAX)", "IMAGE": "VARBINARY(MAX)", "XML": "NVARCHAR(MAX)",
+                "BIT": "TINYINT"}
 
 
 def _base(field_type: str | None) -> str:
     return re.split(r"[\s(<]", (field_type or "").strip().upper(), maxsplit=1)[0]
 
 
-def column_stats(field_type: str | None, native_type: str | None) -> tuple[str, ...]:
-    """컬럼에서 셀 통계 — ``nonnull`` · ``distinct`` · ``min`` · ``max`` · ``avg`` 의 부분 집합(이 순서)."""
+def column_stats(field_type: str | None, native_type: str | None, source_type: str | None = None) -> tuple[str, ...]:
+    """컬럼에서 셀 통계 — ``nonnull`` · ``distinct`` · ``min`` · ``max`` · ``avg`` 의 부분 집합(이 순서).
+
+    ``source_type`` 은 원천 직접 경로의 원천 유형(Trino 경로는 None) — 원천 DB 가 집계하지 못하는 타입을 뺀다."""
     if _COMPLEX_RE.match((field_type or "").strip()) or _COMPLEX_RE.match((native_type or "").strip()):
+        return ("nonnull",)
+    if _base(native_type or field_type) in _DIRECT_NONNULL_ONLY.get(source_type or "", ()):
         return ("nonnull",)
     stats = ["nonnull", "distinct"]
     from app.quality.service import _is_binary_type
@@ -59,9 +70,11 @@ def column_stats(field_type: str | None, native_type: str | None) -> tuple[str, 
     return tuple(stats)
 
 
-def _expr(stat: str, col: str, direct: bool, text: "_Text | None" = None, source_type: str = "") -> str:
+def _expr(stat: str, col: str, direct: bool, text: "_Text | None" = None, source_type: str = "",
+          lob: bool = False) -> str:
     if stat == "nonnull":
-        return f"count({col})"
+        # Oracle LOB 은 count(col) 도 받지 않는다(ORA-22849) — IS NOT NULL 은 된다
+        return f"count(CASE WHEN {col} IS NOT NULL THEN 1 END)" if lob else f"count({col})"
     if stat == "distinct":
         return f"count(DISTINCT {text.key if text else col})"
     if stat == "avg":
@@ -144,12 +157,17 @@ def profile_step(table: TableRef, columns: list[list], *, direct: bool, source_t
     exprs = ["count(*)"]
     fallback, top = [], []
     for name, field_type, native_type in columns:
-        stats = column_stats(field_type, native_type)
+        stats = column_stats(field_type, native_type, q.source_type if direct else None)
         col = q.ident(name)
         family = rule_direct.type_family(native_type or field_type) if direct else None
+        cast = _MSSQL_CASTS.get(_base(native_type or field_type)) if direct and q.source_type == "mssql" else None
+        if cast:
+            col = f"CAST({col} AS {cast})"
+            family = rule_direct.type_family(cast)
         text = _Text(q.source_type, col, family) if family in ("text", "enum") else None
         start = len(exprs)
-        own = [_expr(s, col, direct, text, q.source_type if direct else "") for s in stats]
+        lob = direct and q.source_type == "oracle" and _base(native_type or field_type) in _DIRECT_NONNULL_ONLY["oracle"]
+        own = [_expr(s, col, direct, text, q.source_type if direct else "", lob) for s in stats]
         exprs += own
         fallback.append({"key": f"{PROFILE_KEY}:col:{name}", "label": f"프로파일 {name}",
                          "sql": f"SELECT count(*), {', '.join(own)} FROM {q.from_}"})
@@ -200,15 +218,18 @@ def _percent(n: int, total: int) -> float:
     return round(n / total * 100, 2) if total > 0 else 0.0
 
 
-def read_profile(columns: list[list], results: dict[str, dict]) -> tuple[int | None, list[ColumnProfile], list[str]]:
-    """워커 결과 → (행 수, 컬럼 프로파일, 통계를 내지 못한 컬럼). 행 수를 하나도 얻지 못했으면 행 수 None."""
+def read_profile(columns: list[list], results: dict[str, dict], source_type: str | None = None,
+                 ) -> tuple[int | None, list[ColumnProfile], list[str]]:
+    """워커 결과 → (행 수, 컬럼 프로파일, 통계를 내지 못한 컬럼). 행 수를 하나도 얻지 못했으면 행 수 None.
+
+    ``source_type`` 은 ``profile_step`` 에 준 것과 같게(원천 직접 경로의 원천 유형, Trino 경로는 None)."""
     main = (results.get(PROFILE_KEY) or {}).get("row")
     row_count: int | None = _int(main[0]) if main else None
     profiles: list[ColumnProfile] = []
     missing: list[str] = []
     pos = 1
     for name, field_type, native_type in columns:
-        stats = column_stats(field_type, native_type)
+        stats = column_stats(field_type, native_type, source_type)
         values: list | None = None
         if main:
             values = list(main[pos:pos + len(stats)])

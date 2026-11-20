@@ -335,7 +335,8 @@ def test_preview_matches_the_query_the_run_executes(tmp_path) -> None:
 
 def test_preview_explains_when_trino_table_is_unknown(tmp_path) -> None:
     sm = _make_sessionmaker(str(tmp_path / "q.db"))
-    ds_id, _ = asyncio.run(_seed(sm, [], connect=False))
+    # 원천을 직접 읽을 수 없는 유형(Hive)이라 원천 직접 경로도 없다 — 원천 직접이면 원천 방언으로 보인다(DEF-152)
+    ds_id, _ = asyncio.run(_seed(sm, [], connect=False, source_type="hive"))
     p = _preview(sm, check_type="NOT_NULL", column_name="use_yn", dataset_id=ds_id)
     assert not p.actual_table and 'FROM "catalog"."public"."orders"' in p.sql and "카탈로그 이름은 예시" in p.note
 

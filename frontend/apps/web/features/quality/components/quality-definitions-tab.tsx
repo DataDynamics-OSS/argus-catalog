@@ -77,8 +77,17 @@ export function QualityDefinitionsTab() {
     const kept = d.rules > 0
       ? ` 할당된 컬럼 ${d.rules}개의 규칙은 지워지지 않고, 각 데이터셋에서 직접 정한 규칙으로 남습니다.`
       : ""
+    // 이 지표를 진단 범위로 고른 작업 — 지우면 그 작업은 이 지표의 규칙을 진단하지 않는다(DEF-148)
+    const jobs = d.jobs ?? []
+    const shown = jobs.slice(0, 5).map((j) => `'${j.name}'${j.only ? "(남는 지표 없음)" : ""}`).join(", ")
+    const affected = jobs.length > 0
+      ? ` 이 지표를 진단 범위로 고른 품질 진단 작업 ${jobs.length}개(${shown}${jobs.length > 5 ? ` 외 ${jobs.length - 5}개` : ""})는`
+        + " 삭제 뒤 이 지표의 규칙을 진단하지 않습니다(남은 규칙은 '활성 규칙 전부' 범위의 작업만 진단)."
+        + (jobs.some((j) => j.only) ? " '남는 지표 없음' 작업은 진단할 규칙이 없어지므로 작업의 진단 범위를 다시 정하세요." : "")
+      : ""
     if (!(await askConfirm({
-      title: "품질 지표 삭제", description: `'${d.name}' 지표를 삭제할까요?${kept}`, confirmText: "삭제", destructive: true,
+      title: "품질 지표 삭제", description: `'${d.name}' 지표를 삭제할까요?${kept}${affected}`, confirmText: "삭제",
+      destructive: true,
     }))) return
     try {
       await deleteQualityDefinition(d.id)
@@ -134,7 +143,8 @@ export function QualityDefinitionsTab() {
             <tr>
               <th className="px-3 py-2">진단 기준</th>
               <th className="px-3 py-2">품질 지표</th>
-              <th className="px-3 py-2">진단 기준</th>
+              {/* 지표의 기준 방식 · 기대값 · 임계값을 한 줄로(criteriaText) — 첫 열 "진단 기준"(분류)과 겹치지 않게(DEF-157) */}
+              <th className="px-3 py-2">통과 조건</th>
               <th className="px-3 py-2">심각도</th>
               <th className="px-3 py-2">할당</th>
               <th className="px-3 py-2" />
@@ -170,7 +180,7 @@ export function QualityDefinitionsTab() {
                     <Columns3 className="mr-1 size-3" /> 할당
                   </Button>
                   <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setSqlOf(d)}
-                    title="이 지표가 실행하는 Trino 쿼리">
+                    title="이 지표가 실행하는 진단 쿼리(Trino 경로 예시 — 데이터셋의 컬럼을 고르면 그 데이터셋의 경로로 보여 줍니다)">
                     <Code2 className="mr-1 size-3" /> 쿼리
                   </Button>
                   {canManage && (

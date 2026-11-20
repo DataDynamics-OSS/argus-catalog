@@ -1,9 +1,9 @@
 "use client"
 
 import { Tip } from "@/components/tip"
-import { Suspense, useCallback, useEffect, useState } from "react"
+import { Suspense, useCallback, useEffect, useRef, useState, type DragEvent } from "react"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
-import { ChevronDown, ChevronRight, FolderOpen, FolderPlus, FolderTree, MoreHorizontal, Pencil, Plus, Trash2, type LucideIcon } from "lucide-react"
+import { ChevronDown, ChevronRight, Folder, FolderOpen, FolderPlus, FolderTree, Inbox, MoreHorizontal, Pencil, Plus, Trash2, type LucideIcon } from "lucide-react"
 import { notifyError, toast } from "@/lib/notify"
 
 import {
@@ -68,6 +68,7 @@ import {
 import { countCategories } from "@/features/taxonomy/tree"
 import { fetchDatasets, type PaginatedDatasets } from "@/features/datasets/api"
 import { DatasetsGrid } from "@/features/datasets/components/datasets-grid"
+import { DatasetCreateDialog } from "@/features/datasets/components/datasets-add-dialog"
 import { GridPagination } from "@/components/grid-pagination"
 import { useResizableWidth } from "@/hooks/use-resizable-width"
 import { SearchInput } from "@/components/search-input"
@@ -105,6 +106,13 @@ function taxonomyQuery(taxId: number | null, sel: Sel, page: number, size: numbe
 }
 
 // 선택한 분류 체계·분류·페이지를 주소에 남긴다 — useSearchParams 를 쓰므로 Suspense 로 감싼다.
+// 분류 노드 아이콘 — 용어집 트리와 같은 amber 폴더. 펼친 분류는 열린 폴더, 하위가 없는 분류는 옅게, 선택된 분류는 안을 채운다
+function CategoryIcon({ hasChildren, open, active }: { hasChildren: boolean; open: boolean; active: boolean }) {
+  const Icon = hasChildren && open ? FolderOpen : Folder
+  const tone = hasChildren ? "text-amber-500 dark:text-amber-400" : "text-amber-500/70 dark:text-amber-400/70"
+  return <Icon className={`h-4 w-4 shrink-0 ${tone}${active ? " fill-amber-500/20" : ""}`} />
+}
+
 type RowAction = { label: string; icon: LucideIcon; onSelect: () => void; destructive?: boolean; separatorBefore?: boolean }
 
 function renderContextActions(actions: RowAction[]) {
@@ -157,6 +165,8 @@ function TaxonomiesPageContent() {
   const { canUseFeature } = usePermissions()
   const canEdit = canUseFeature("taxonomies.edit")
   const canMap = canUseFeature("taxonomies.map")
+  // 분류에서 데이터 소스 없는 데이터셋(수동 데이터셋, TODO-CAT-001)을 바로 등록 — 데이터셋 등록 + 분류 매핑 권한
+  const canRegister = canMap && canUseFeature("datasets.create")
   // 처음 상태는 주소에서 읽고, 바뀌면 주소에 쓴다 — 데이터셋 상세에 갔다 돌아와도 같은 분류·페이지(TODO-073)
   const router = useRouter()
   const pathname = usePathname()
@@ -183,6 +193,11 @@ function TaxonomiesPageContent() {
   // 분류 트리 드래그 정렬 상태
   const [dragInfo, setDragInfo] = useState<{ id: number; parentId: number | null } | null>(null)
   const [dropTarget, setDropTarget] = useState<{ id: number; pos: "before" | "after" } | null>(null)
+  // 오른쪽 목록의 다중 선택과, 왼쪽 분류로 끌어 놓기(매핑 이동 · 복사)
+  const [checkedIds, setCheckedIds] = useState<Set<number>>(new Set())
+  const [dsDrag, setDsDrag] = useState<{ ids: number[] } | null>(null)
+  const [dsDropTarget, setDsDropTarget] = useState<number | null>(null)
+  const [dsDropping, setDsDropping] = useState(false)
   // 매핑 제거 확인 대상 데이터셋 id
   const [removeTarget, setRemoveTarget] = useState<number | null>(null)
   // 삭제 확인 대상 — 분류(우클릭 삭제)·분류체계(삭제 버튼)
@@ -201,6 +216,8 @@ function TaxonomiesPageContent() {
   const [mapSearch, setMapSearch] = useState("")
   const [mapResults, setMapResults] = useState<PaginatedDatasets["items"]>([])
   const [mapSelected, setMapSelected] = useState<Set<number>>(new Set())
+  // 수동 데이터셋 등록 — session 이 바뀔 때마다 대화상자를 다시 마운트해 입력을 비운다
+  const [registerDialog, setRegisterDialog] = useState({ open: false, session: 0 })
 
   const loadTaxonomies = useCallback(async () => {
     const list = await fetchTaxonomies().catch(() => [])
@@ -248,6 +265,9 @@ function TaxonomiesPageContent() {
     // queryKey 는 비교용 — 주소가 바뀌었다고 다시 쓰지 않는다
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [taxId, selected, page, pageSize, pathname, router])
+
+  // 보는 목록이 바뀌면 선택을 비운다(다른 분류 · 페이지의 행이 남아 함께 옮겨지지 않게)
+  useEffect(() => { setCheckedIds(new Set()) }, [taxId, selected, page, pageSize])
 
   // 선택 변경 시 1페이지로 복귀(트리/미분류/분류체계 전환 공통).
   const selectNode = useCallback((sel: Sel) => { setSelected(sel); setPage(1) }, [])
@@ -314,9 +334,13 @@ function TaxonomiesPageContent() {
     setMapSearch(""); setMapSelected(new Set()); setMapOpen(true)
     await runMapSearch("") // 초기 목록 로드
   }
+  // 검색 요청 번호 — 늦게 도착한 이전 검색어(처음 목록 포함)의 응답이 마지막 결과를 덮지 않게 한다(DEF-182).
+  const mapSeq = useRef(0)
   const runMapSearch = async (q: string) => {
+    const seq = ++mapSeq.current
     setMapSearch(q)
     const r = await fetchDatasets({ search: q || undefined, pageSize: 50 }).catch(() => null)
+    if (seq !== mapSeq.current) return
     setMapResults(r?.items ?? [])
   }
   const toggleMapSelect = (id: number) =>
@@ -336,6 +360,64 @@ function TaxonomiesPageContent() {
     if (selected?.kind !== "category") return
     try { await removeDatasetCategory(datasetId, selected.id); toast.success("매핑을 제거했습니다."); await refresh() }
     catch (e) { notifyError(e, "매핑을 제거하지 못했습니다.") }
+  }
+
+  // ---- 데이터셋 끌어 놓기 — 오른쪽 목록 → 왼쪽 분류 ----
+  // 선택한 행을 끌면 선택한 것 모두, 선택하지 않은 행을 끌면 그 행만. 분류를 보던 중이면 이동(그 분류의 직접 매핑 해제),
+  // Ctrl · ⌘ 를 누른 채 놓거나 전체 · 미분류에서 끌면 매핑만 더한다.
+  const sourceCategoryId = selected?.kind === "category" ? selected.id : null
+  const toggleChecked = (id: number) =>
+    setCheckedIds((s) => { const n = new Set(s); if (n.has(id)) { n.delete(id) } else { n.add(id) }; return n })
+  const toggleCheckedAll = (checked: boolean) =>
+    setCheckedIds(checked ? new Set(datasets.items.map((d) => d.id)) : new Set())
+
+  const startDatasetDrag = (e: DragEvent<HTMLTableRowElement>, row: { id: number; name: string }) => {
+    const ids = checkedIds.has(row.id) ? datasets.items.filter((d) => checkedIds.has(d.id)).map((d) => d.id) : [row.id]
+    if (!checkedIds.has(row.id)) setCheckedIds(new Set([row.id]))
+    setDsDrag({ ids })
+    e.dataTransfer.effectAllowed = "copyMove"
+    e.dataTransfer.setData("text/plain", ids.length === 1 ? row.name : `데이터셋 ${ids.length}개`)
+    // 끄는 모양 — 몇 개를 끄는지 보인다
+    const ghost = document.createElement("div")
+    ghost.textContent = ids.length === 1 ? row.name : `데이터셋 ${ids.length}개`
+    ghost.className = "fixed -top-96 rounded-md border bg-background px-2 py-1 text-sm shadow"
+    document.body.appendChild(ghost)
+    e.dataTransfer.setDragImage(ghost, 10, 10)
+    window.setTimeout(() => ghost.remove(), 0)
+  }
+  const endDatasetDrag = () => { setDsDrag(null); setDsDropTarget(null) }
+  const datasetDropAllowed = (targetId: number) => dsDrag != null && !dsDropping && targetId !== sourceCategoryId
+  const isCopyDrop = (e: { ctrlKey: boolean; metaKey: boolean }) => sourceCategoryId == null || e.ctrlKey || e.metaKey
+
+  const dropDatasets = async (target: TreeCategory, copy: boolean) => {
+    if (!dsDrag) return
+    const ids = dsDrag.ids
+    const from = copy ? null : sourceCategoryId
+    endDatasetDrag()
+    setDsDropping(true)
+    try {
+      const results = await Promise.allSettled(ids.map(async (id) => {
+        await addDatasetCategory(id, target.id)
+        // 하위 분류에서 온(직접 매핑이 아닌) 행은 이 분류에서 해제할 매핑이 없다 — 더하기만
+        if (from != null && directIds.has(id)) { await removeDatasetCategory(id, from); return "moved" }
+        return "added"
+      }))
+      const ok = results.filter((r) => r.status === "fulfilled").length
+      const failed = results.length - ok
+      const kept = from != null ? results.filter((r) => r.status === "fulfilled" && r.value === "added").length : 0
+      if (ok > 0) {
+        toast.success(`데이터셋 ${ok}개를 '${target.name}'${from != null ? "(으)로 옮겼습니다" : "에 매핑했습니다"}.` +
+          (kept > 0 ? ` 하위 분류에 매핑된 ${kept}개는 원래 매핑을 그대로 둡니다.` : ""))
+      }
+      if (failed > 0) {
+        const first = results.find((r): r is PromiseRejectedResult => r.status === "rejected")
+        notifyError(first?.reason, `데이터셋 ${failed}개를 '${target.name}'에 매핑하지 못했습니다.`)
+      }
+      setCheckedIds(new Set())
+      await refresh()
+    } finally {
+      setDsDropping(false)
+    }
   }
 
   // ---- tree render ----
@@ -386,25 +468,44 @@ function TaxonomiesPageContent() {
     const active = selected?.kind === "category" && selected.id === c.id
     const isDragging = dragInfo?.id === c.id
     const indicating = dropTarget?.id === c.id ? dropTarget.pos : null
+    const datasetOver = dsDropTarget === c.id
     return (
       <div key={c.id}>
         <ContextMenu>
           <ContextMenuTrigger asChild disabled={!canEdit}>
             <div
-              className={rowCls(active) + (isDragging ? " opacity-40" : "")}
+              className={rowCls(active) + (isDragging ? " opacity-40" : "") +
+                (datasetOver ? " bg-primary/10 ring-2 ring-inset ring-primary" : "")}
               style={{ paddingLeft: depth * 16 + 6, boxShadow: indicating === "before" ? "inset 0 2px 0 0 var(--primary)" : indicating === "after" ? "inset 0 -2px 0 0 var(--primary)" : undefined }}
               onClick={() => selectNode({ kind: "category", id: c.id })}
               draggable={canEdit}
               onDragStart={(e) => { e.stopPropagation(); setDragInfo({ id: c.id, parentId: c.parent_id }); e.dataTransfer.effectAllowed = "move" }}
               onDragEnd={() => { setDragInfo(null); setDropTarget(null) }}
               onDragOver={(e) => {
+                if (dsDrag) { // 오른쪽 목록의 데이터셋 — 이 분류에 매핑
+                  if (!datasetDropAllowed(c.id)) return
+                  e.preventDefault()
+                  e.dataTransfer.dropEffect = isCopyDrop(e) ? "copy" : "move"
+                  if (dsDropTarget !== c.id) setDsDropTarget(c.id)
+                  return
+                }
                 if (!dragInfo || dragInfo.id === c.id || dragInfo.parentId !== c.parent_id) return // 같은 부모(형제)만
                 e.preventDefault()
                 const rect = e.currentTarget.getBoundingClientRect()
                 setDropTarget({ id: c.id, pos: e.clientY - rect.top < rect.height / 2 ? "before" : "after" })
               }}
-              onDragLeave={(e) => { if (e.currentTarget === e.target) setDropTarget((t) => (t?.id === c.id ? null : t)) }}
+              onDragLeave={(e) => {
+                if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
+                setDropTarget((t) => (t?.id === c.id ? null : t))
+                setDsDropTarget((t) => (t === c.id ? null : t))
+              }}
               onDrop={(e) => {
+                if (dsDrag) {
+                  if (!datasetDropAllowed(c.id)) return
+                  e.preventDefault(); e.stopPropagation()
+                  void dropDatasets(c, isCopyDrop(e))
+                  return
+                }
                 if (!dropTarget || dropTarget.id !== c.id || !dragInfo) return
                 e.preventDefault(); e.stopPropagation()
                 handleReorder(dragInfo.id, c.id, dropTarget.pos)
@@ -414,7 +515,7 @@ function TaxonomiesPageContent() {
               <Tip label={open ? "접기" : "펼치기"}><button aria-label={open ? "접기" : "펼치기"} type="button" className="shrink-0 text-muted-foreground" onClick={(e) => { e.stopPropagation(); toggle(c.id) }}>
                 {c.children.length > 0 ? (open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />) : <span className="inline-block h-3.5 w-3.5" />}
               </button></Tip>
-              <FolderTree className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <CategoryIcon hasChildren={c.children.length > 0} open={open} active={active} />
               <span className="truncate">{c.name}</span>
               <span className="ml-auto shrink-0 rounded bg-muted px-1.5 text-xs tabular-nums">{c.dataset_count}</span>
               {canEdit && <RowMenu label={`${c.name} 메뉴`} actions={catActions(c)} />}
@@ -458,7 +559,7 @@ function TaxonomiesPageContent() {
                       <Tip label={rootOpen ? "접기" : "펼치기"}><button aria-label={rootOpen ? "접기" : "펼치기"} type="button" className="shrink-0 text-muted-foreground" onClick={(e) => { e.stopPropagation(); setRootOpen((o) => !o) }}>
                         {rootOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
                       </button></Tip>
-                      <FolderTree className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      <FolderTree className="h-4 w-4 shrink-0 text-primary" />
                       <span className="truncate font-semibold">카테고리</span>
                       {canEdit && <span className="ml-auto"><RowMenu label="카테고리 메뉴" actions={rootActions} /></span>}
                     </div>
@@ -475,7 +576,7 @@ function TaxonomiesPageContent() {
                     {tree.categories.map((c) => renderCat(c, 1))}
                     <div className={rowCls(selected?.kind === "uncategorized")} style={{ paddingLeft: 1 * 16 + 6 }} onClick={() => selectNode({ kind: "uncategorized" })}>
                       <span className="w-4 shrink-0" />
-                      <FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      <Inbox className="h-4 w-4 shrink-0 text-muted-foreground" />
                       <span className="truncate">미분류</span>
                       <span className="ml-auto shrink-0 rounded bg-muted px-1.5 text-xs tabular-nums">{tree.uncategorized_count}</span>
                     </div>
@@ -507,15 +608,48 @@ function TaxonomiesPageContent() {
                       : "데이터셋"}{" "}
                   ({datasets.total})
                 </h2>
-                {canMap && selected?.kind === "category" && (
-                  <Button size="sm" onClick={openMap}><Plus className="mr-1 h-4 w-4" /> 데이터셋 매핑</Button>
+                {selected?.kind === "category" && (canMap || canRegister) && (
+                  <span className="flex gap-2">
+                    {canRegister && (
+                      <Button size="sm" variant="outline"
+                        onClick={() => setRegisterDialog((d) => ({ open: true, session: d.session + 1 }))}>
+                        <Plus className="mr-1 h-4 w-4" /> 데이터셋 등록
+                      </Button>
+                    )}
+                    {canMap && <Button size="sm" onClick={openMap}><Plus className="mr-1 h-4 w-4" /> 데이터셋 매핑</Button>}
+                  </span>
                 )}
               </div>
               {/* 데이터셋 메뉴와 동일한 그리드를 그대로 재사용. 분류 선택 시 행 끝에 "제거"(매핑 해제, 확인 후). */}
+              {canMap && tree && datasets.items.length > 0 && (
+                <div className="flex min-h-8 flex-wrap items-center gap-2 text-sm">
+                  {checkedIds.size > 0 ? (
+                    <>
+                      <span className="font-medium">{checkedIds.size}개 선택</span>
+                      <Button size="sm" variant="ghost" className="h-7" onClick={() => setCheckedIds(new Set())}>선택 해제</Button>
+                    </>
+                  ) : null}
+                  <span className="text-xs">
+                    {dsDropping
+                      ? "매핑하는 중…"
+                      : sourceCategoryId != null
+                        ? "행을 왼쪽 분류로 끌어 놓으면 옮깁니다. Ctrl(⌘)을 누른 채 놓으면 이 분류에도 남깁니다. 여러 개는 체크한 뒤 끕니다."
+                        : "행을 왼쪽 분류로 끌어 놓으면 그 분류에 매핑합니다. 여러 개는 체크한 뒤 끕니다."}
+                  </span>
+                </div>
+              )}
               <DatasetsGrid
                 data={datasets.items}
                 onRemove={canMap && selected?.kind === "category" ? (id) => setRemoveTarget(id) : undefined}
                 canRemove={(row) => directIds.has(row.id)}
+                {...(canMap && tree ? {
+                  selectedIds: checkedIds,
+                  onToggleSelect: toggleChecked,
+                  onToggleSelectAll: toggleCheckedAll,
+                  onRowDragStart: startDatasetDrag,
+                  onRowDragEnd: endDatasetDrag,
+                  dimmedIds: dsDrag ? new Set(dsDrag.ids) : undefined,
+                } : {})}
               />
               {/* 페더레이션 탐색과 동일한 페이지네이션(서버 페이지). 데이터가 있으면 표시. */}
               {datasets.total > 0 && (() => {
@@ -573,6 +707,27 @@ function TaxonomiesPageContent() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* 데이터 소스 없는 데이터셋 등록 → 선택한 분류에 바로 매핑 (TODO-CAT-001) */}
+      {selected?.kind === "category" && (
+        <DatasetCreateDialog
+          key={`register-${registerDialog.session}`}
+          open={registerDialog.open}
+          onOpenChange={(open) => setRegisterDialog((d) => ({ ...d, open }))}
+          manualOnly
+          title="데이터셋 등록"
+          intro={<>데이터 소스 없이 데이터셋을 등록하고 분류 <b>{findNode(tree?.categories ?? [], selected.id)?.name ?? ""}</b> 에 매핑합니다.
+            직접 등록한 카탈로그에 담기며, 나중에 데이터셋 상세에서 실제 테이블에 원천 매핑할 수 있습니다.</>}
+          onCreated={async (created) => {
+            try {
+              await addDatasetCategory(created.id, selected.id)
+            } catch (e) {
+              notifyError(e, `데이터셋 '${created.name}' 은(는) 등록했지만 분류에 매핑하지 못했습니다. [데이터셋 매핑]으로 다시 매핑하세요.`)
+            }
+            await refresh()
+          }}
+        />
+      )}
 
       {/* 데이터셋 매핑 picker — 그리드 + 체크박스 다중 선택 */}
       <Dialog open={mapOpen} onOpenChange={setMapOpen}>

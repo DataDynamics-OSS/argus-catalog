@@ -20,7 +20,8 @@
 
 **AI-Ready 품질 지표** (TODO-096 5단계) — 같은 진단 기준을 「공공데이터의 인공지능 친화적 관리 가이드라인」 §2.3 의 6개 지표
 (완전성 · 일관성 · 정확성 · 적시성 · 유효성 · 유일성)와 세부 지표로도 묶는다(``Indicator.ai_ready``). 리포트가 두 기준으로
-같은 진단 결과를 보여 준다. 관리지침 기준 밖의 두 기준(더미 값 — 통계적 타당성, 데이터 연속성 — 적시성)은 AI-Ready 를 위해 더했다.
+같은 진단 결과를 보여 준다. 관리지침 기준 밖의 네 기준(더미 값 — 통계적 타당성, 데이터 연속성 — 적시성, 값 분포 다양성 —
+완전성 › 데이터 · 라벨 다양성, 여러 컬럼 키 중복 — 유일성)은 AI-Ready 를 위해 더했다.
 """
 
 from __future__ import annotations
@@ -93,8 +94,14 @@ INDICATORS: tuple[Indicator, ...] = (
               "999999 · -999 · N/A 처럼 값이 없음을 대신 적은 자리채움 값이 얼마나 섞여 있는지 — 임계값으로 허용 비율을 정한다",
               ai_ready=("AI_VALIDITY", "통계적 타당성")),
     Indicator("CONTINUITY", "데이터 연속성", "OTHER", ("CONTINUITY",),
-              "날짜 · 일시 컬럼의 처음부터 마지막까지 시간 · 일 · 월 · 연 단위로 빠진 기간(시계열 공백)이 있는지",
+              "날짜 · 일시 컬럼의 처음부터 마지막까지 시간 · 일 · 주 · 월 · 연 단위로 빠진 기간(시계열 공백)이 있는지",
               ai_ready=("AI_TIMELINESS", "데이터 연속성")),
+    Indicator("DIVERSITY", "값 분포 다양성", "OTHER", ("DIVERSITY",),
+              "범주 · 라벨 컬럼에서 한 값이 지나치게 많은지(가장 많은 값의 비율) — 학습 데이터의 클래스 쏠림. 상한(%)은 기준값으로 정한다",
+              ai_ready=("AI_COMPLETENESS", "데이터 · 라벨 다양성")),
+    Indicator("COMPOSITE_KEY", "여러 컬럼 키 중복", "OTHER", ("COMPOSITE_UNIQUE",),
+              "여러 컬럼을 묶은 식별 키(예: 기준일자 + 지역코드)가 겹치는 행이 있는지",
+              ai_ready=("AI_UNIQUENESS", "데이터 유일성")),
 )
 
 _BY_KEY = {i.key: i for i in INDICATORS}
@@ -128,7 +135,7 @@ _WORD_RE = re.compile(r"[A-Za-z]+")
 # 나머지(컬럼 간 비교·논리관계·계산식·참조관계·건수)는 테이블마다 내용이 달라 데이터셋에서 직접 만든다.
 DEFINABLE_TYPES: frozenset[str] = frozenset({
     "BROKEN_TEXT", "WHITESPACE", "NOT_NULL", "UNIQUE", "DATE_FORMAT", "REGEX", "ACCEPTED_VALUES", "MIN_VALUE", "MAX_VALUE",
-    "FUNCTION", "DUMMY_VALUE", "CONTINUITY",
+    "FUNCTION", "DUMMY_VALUE", "CONTINUITY", "DIVERSITY",
 })
 
 # 분류 → 그 분류의 컬럼에 흔한 이름 끝 단어. 할당할 컬럼을 추천할 때 쓴다(``suggests``).
@@ -136,6 +143,8 @@ _SUFFIX_HINTS: dict[str, frozenset[str]] = {
     "DATE": frozenset({"YMD", "YM", "DT", "DE", "DATE", "DAY", "DTTM", "DTM", "TM", "TIME"}),
     # 연속성 — 시계열의 기준 날짜 컬럼(기준일자·기준연월 등)
     "CONTINUITY": frozenset({"YMD", "YM", "DT", "DE", "DATE", "DAY", "DTTM", "DTM"}),
+    # 다양성 — 범주 · 라벨 컬럼(구분 · 유형 · 상태 · 등급 · 라벨)
+    "DIVERSITY": frozenset({"CD", "CODE", "SE", "TYPE", "STATUS", "LABEL", "CLASS", "CLS", "GRADE", "GRD", "CATEGORY", "KIND"}),
     "NUMBER": frozenset({"NO", "NUM", "TELNO", "TEL", "PHONE", "ZIP", "FAX", "FAXNO", "BRNO", "BIZNO", "POSTAL", "MOBILE"}),
 }
 

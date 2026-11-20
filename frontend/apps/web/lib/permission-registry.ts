@@ -80,9 +80,10 @@ export const SETTINGS_DELEGATE_FEATURES = [
 
 const CORE_MENU_REGISTRY: MenuEntry[] = [
   { key: "dashboard", label: "대시보드", group: "데이터 카탈로그", url: "/dashboard" },
-  { key: "datasets", label: "데이터셋", group: "데이터 카탈로그", url: "/dashboard/datasets" },
-  { key: "datasources", label: "데이터 소스", group: "데이터 카탈로그", url: "/dashboard/datasources" },
   { key: "taxonomies", label: "분류 체계", group: "데이터 카탈로그", url: "/dashboard/taxonomies", serverWrite: true },
+  { key: "datasets", label: "데이터셋", group: "데이터 카탈로그", url: "/dashboard/datasets" },
+  { key: "catalogs", label: "카탈로그", group: "데이터 카탈로그", url: "/dashboard/catalogs" },
+  { key: "datasources", label: "데이터 소스", group: "데이터 카탈로그", url: "/dashboard/datasources" },
   { key: "changes", label: "변경 관리", group: "데이터 카탈로그", url: "/dashboard/changes" },
   { key: "my-approvals", label: "내 결재함", group: "데이터 카탈로그", url: "/dashboard/my-approvals" },
   { key: "federation", label: "페더레이션", group: "데이터 카탈로그", url: "/dashboard/federation", serverEnforced: true },
@@ -98,12 +99,14 @@ const CORE_MENU_REGISTRY: MenuEntry[] = [
   { key: "glossary", label: "용어집", group: "거버넌스", url: "/dashboard/glossary", serverWrite: true },
   { key: "tags", label: "태그", group: "거버넌스", url: "/dashboard/tags", serverWrite: true },
   { key: "alerts", label: "알림", group: "거버넌스", url: "/dashboard/alerts", serverEnforced: true },
-  { key: "ai-ready", label: "AI-Ready 점검", group: "거버넌스", url: "/dashboard/ai-ready" },
+  // 전용 prefix 가 없어 SERVER_ENFORCED_MENUS 에는 없지만 overview · scopes API 가 require_menu("ai-ready") 로 403(DEF-126, DEF-162)
+  { key: "ai-ready", label: "AI-Ready 점검", group: "거버넌스", url: "/dashboard/ai-ready", serverEnforced: true },
   { key: "data-reports", label: "오류 신고 처리", group: "거버넌스", url: "/dashboard/data-reports", serverWrite: true },
   { key: "users", label: "사용자 관리", group: "관리", url: "/dashboard/users", adminOnly: true, grantedBy: ["users.manage"] },
   { key: "sync-runs", label: "메타데이터 수집", group: "관리", url: "/dashboard/sync-runs", adminOnly: true, grantedBy: ["datasources.sync"] },
   { key: "quality-runs", label: "데이터 품질", group: "관리", url: "/dashboard/quality-runs", adminOnly: true, grantedBy: ["quality.manage"] },
   { key: "settings", label: "설정", group: "관리", url: "/dashboard/settings", adminOnly: true, grantedBy: SETTINGS_DELEGATE_FEATURES },
+  { key: "audit", label: "감사 로그", group: "관리", url: "/dashboard/audit", adminOnly: true, grantedBy: ["audit.view"] },
   { key: "permissions", label: "권한 관리", group: "관리", url: "/dashboard/permissions", adminOnly: true },
 ]
 
@@ -189,6 +192,7 @@ export const FEATURE_REGISTRY: FeatureEntry[] = [
   { key: "federation.manage", label: "페더레이션 관리", menuKey: "federation", description: "인스턴스 등록 · 수정 · 삭제, 수집 · 재동기화, 노출 설정, 관측성 (미설정 시 관리자만)", defaultDeny: true },
   { key: "federation.import", label: "원격 데이터셋 가져오기", menuKey: "federation", description: "원격 데이터셋을 로컬 데이터셋으로 가져오기 (미설정 시 관리자만)", defaultDeny: true },
   // 데이터 소스
+  { key: "catalogs.manage", label: "카탈로그 관리", menuKey: "catalogs", description: "카탈로그 만들기 · 수정 · 삭제, 엔진 연결, 수동 데이터셋의 원천 매핑 (미설정 시 관리자만, 데이터 소스 관리 권한으로도 가능)", defaultDeny: true },
   { key: "datasources.manage", label: "데이터 소스 관리", menuKey: "datasources", description: "데이터 소스·조직·시스템 생성/수정/삭제, 접속 설정 저장 (미설정 시 관리자만)", defaultDeny: true },
   { key: "datasources.connection", label: "연결 설정 조회", menuKey: "datasources", description: "접속 정보(호스트·계정 등, 비밀번호는 항상 마스킹) (미설정 시 관리자만)", defaultDeny: true, view: true },
   { key: "datasources.sync", label: "메타데이터 동기화", menuKey: "datasources", description: "원본 스키마 동기화 실행 (미설정 시 관리자만)", defaultDeny: true },
@@ -246,7 +250,7 @@ export const FEATURE_REGISTRY: FeatureEntry[] = [
   { key: "ai.generate", label: "AI 메타데이터 생성", menuKey: "datasets", description: "데이터셋 설명·요약·컬럼·태그·PII 생성 (자기 데이터셋만 — LLM 호출 비용)" },
   // 관리 기능 위임(TODO-123) — 모두 명시 허용형. 인증 · CORS · 권한 관리 · 역할 변경은 관리자 고정
   { key: "users.manage", label: "사용자 관리", menuKey: "users", description: "사용자 관리 메뉴 — 사용자 추가 · 정보 수정 · 비밀번호 재설정 · 활성 · 비활성 · 잠금 해제 · 삭제 (관리자 계정 · 역할 변경은 관리자만)", defaultDeny: true },
-  { key: "audit.view", label: "관리 감사 로그 조회", menuKey: "users", description: "사용자 · 설정 · 권한 변경 감사 로그 보기 (미설정 시 관리자만)", defaultDeny: true },
+  { key: "audit.view", label: "관리 감사 로그 조회", menuKey: "audit", description: "관리 › 감사 로그 메뉴와 변경 이력 단추 — 사용자 · 설정 · 권한(변경 · 거부) · 운영 작업 감사 로그 보기 (미설정 시 관리자만)", defaultDeny: true },
   { key: "settings.llm", label: "LLM 설정", menuKey: "settings", description: "설정 › LLM / AI — 제공자 · 모델 · 키 저장, 연결 시험 (미설정 시 관리자만)", defaultDeny: true },
   { key: "settings.embedding", label: "임베딩 설정", menuKey: "settings", description: "설정 › 임베딩 — 제공자 · 모델, 연결 시험 (미설정 시 관리자만)", defaultDeny: true },
   { key: "settings.assistant", label: "AI 어시스턴트 설정", menuKey: "settings", description: "설정 › AI 어시스턴트 (미설정 시 관리자만)", defaultDeny: true },

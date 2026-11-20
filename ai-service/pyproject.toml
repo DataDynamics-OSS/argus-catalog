@@ -1,7 +1,7 @@
 # Argus Catalog AI Service — 표준 라이브러리만 사용하므로 런타임 의존성이 없다.
 [project]
 name = "argus-catalog-ai-service"
-version = "0.8.0"
+version = "0.9.0"
 description = "Argus Catalog AI 서비스 — AI 어시스턴트 서버와 LLM 기반 메타데이터 생성 (독립 실행)"
 requires-python = ">=3.10"
 dependencies = []

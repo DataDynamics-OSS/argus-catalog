@@ -111,3 +111,15 @@ def test_assigning_across_datasets_needs_every_dataset(tmp_path) -> None:
 def test_dataset_without_creator_is_admin_only(tmp_path) -> None:
     sm, ds_id, rule_id, definition_id = _setup(tmp_path, owner=None)
     assert set(_writes(TestClient(_app(sm, _user("bob"))), ds_id, rule_id, definition_id).values()) == {403}
+
+
+def test_owner_list_user_can_change_quality(tmp_path) -> None:
+    """소유자 목록 사용자도 품질을 바꾼다(TODO-154) — "이름 (아이디)" 형식. 생성자가 없는 데이터셋도 마찬가지."""
+    sm, ds_id, rule_id, definition_id = _setup(tmp_path, owner=None)
+
+    async def add_owner(s):
+        s.add(cm.Owner(dataset_id=ds_id, owner_name="캐롤 (carol)", owner_type="TECHNICAL_OWNER"))
+    _run(sm, add_owner)
+    codes = _writes(TestClient(_app(sm, _user("carol"))), ds_id, rule_id, definition_id)
+    assert 403 not in codes.values(), codes
+    assert set(_writes(TestClient(_app(sm, _user("dave"))), ds_id, rule_id, definition_id).values()) == {403}

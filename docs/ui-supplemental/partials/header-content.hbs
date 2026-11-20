@@ -1,7 +1,9 @@
 <header class="header">
   <nav class="navbar">
     <div class="navbar-brand">
-      <a class="navbar-item" href="{{{or site.url siteRootPath}}}">{{site.title}}</a>
+{{!-- DEF-DOC-001: 기본 UI 는 제목을 사이트 루트(siteRootPath → /manual/)로 연결한다. 웹 UI 의 Next.js public/ 은 디렉터리 주소에
+     index.html 을 붙여 주지 않아 404 가 나므로, 툴바 홈 아이콘처럼 시작 페이지(site.homeUrl)로 바로 연결한다. --}}
+      <a class="navbar-item" href="{{#if site.homeUrl}}{{{relativize site.homeUrl}}}{{else}}{{{or site.url siteRootPath}}}{{/if}}">{{site.title}}</a>
       {{#if env.SITE_SEARCH_PROVIDER}}
       <div class="navbar-item search hide-for-print">
         <div id="search-field" class="field">

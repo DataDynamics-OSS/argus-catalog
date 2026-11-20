@@ -31,6 +31,8 @@ type ErdRelation = {
 type ErdData = { tables: ErdTable[]; relations: ErdRelation[] }
 
 const MAX_VISIBLE_COLUMNS = 10
+// 화면 맞춤이 줄일 수 있는 최소 배율 — 테이블 수십 개짜리 데이터 소스도 한 화면에 들어오게
+const MIN_ZOOM = 0.1
 
 // ---------------------------------------------------------------------------
 // 테이블 노드 — PK 🔑 / FK 🔗 / nullable ? 표기, 컬럼 많으면 접기
@@ -358,7 +360,10 @@ export function ErdTab({ datasetId, datasourceId }: { datasetId?: number; dataso
             onEdgesChange={onEdgesChange}
             nodeTypes={nodeTypes}
             fitView
-            fitViewOptions={{ padding: 0.15, maxZoom: 1 }}
+            // 기본 최소 배율(0.5)로는 테이블이 많은 다이어그램이 화면에 다 들어오지 않는다 —
+            // 전체가 보일 때까지 줄어들게 하고, 읽을 때는 사용자가 확대한다.
+            minZoom={MIN_ZOOM}
+            fitViewOptions={{ padding: 0.15, minZoom: MIN_ZOOM, maxZoom: 1 }}
             proOptions={{ hideAttribution: true }}
             nodesConnectable={false}
           >

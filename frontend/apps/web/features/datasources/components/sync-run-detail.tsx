@@ -214,6 +214,7 @@ export function SyncRunDetailDialog({ runId, onOpenChange, showDatasourceLink = 
               <dd>
                 {run.progress_done}{run.progress_total ? ` / ${run.progress_total}` : ""} · 생성 {run.created_count} · 갱신{" "}
                 {run.updated_count} · 제거 {run.removed_count} · 실패 {run.failed_count}
+                {run.skipped_count ? ` · 건너뜀 ${run.skipped_count} (수동 데이터셋에 매핑된 테이블)` : ""}
               </dd>
               {run.cancel_requested_by && (
                 <>

@@ -75,8 +75,27 @@ describe("품질 지표 정의", () => {
     expect(definitionPayload(dummy)).toMatchObject({ expected_value: null, threshold: 99 })
     const cont = (expected: string) => definitionFormError(form({ category: "CONTINUITY", checkType: "CONTINUITY", expected }))
     expect(cont("")).toContain("기간 단위")
-    expect(cont("WEEK")).toContain("HOUR · DAY · MONTH · YEAR")
+    expect(cont("FORTNIGHT")).toContain("HOUR · DAY · WEEK · MONTH · YEAR")
     expect(cont("day YYYYMMDD")).toBeNull()
+    expect(cont("week")).toBeNull()
+    expect(of("CONTINUITY", "WEEK")).toBe("빠진 주 없음")
+  })
+
+  it("AI-Ready 다양성 · 여러 컬럼 키 · 표준 코드 그룹 기준", () => {
+    const of = (check_type: string, expected_value: string | null, threshold = 100) =>
+      criteriaText({ check_type, expected_value, threshold })
+    expect(of("DIVERSITY", null)).toBe("가장 많은 값 90% 이하")
+    expect(of("DIVERSITY", "80")).toBe("가장 많은 값 80% 이하")
+    expect(of("COMPOSITE_UNIQUE", '["base_ymd","area_cd"]')).toBe("키 (base_ymd, area_cd) 중복 없음")
+    expect(of("COMPOSITE_UNIQUE", "a,b", 99)).toBe("키 (a, b) 겹치지 않는 행 99% 이상")
+    expect(of("ACCEPTED_VALUES", '{"code_group_id": 7}')).toBe("표준 코드 그룹 #7 의 코드 값")
+    const div = (expected: string) => definitionFormError(form({ category: "DIVERSITY", checkType: "DIVERSITY", expected }))
+    expect(div("")).toBeNull()
+    expect(div("80")).toBeNull()
+    expect(div("0")).toContain("100 이하")
+    expect(div("150")).toContain("100 이하")
+    expect(definitionPayload(form({ category: "DIVERSITY", checkType: "DIVERSITY", expected: "", threshold: "50" })))
+      .toMatchObject({ expected_value: null, threshold: 100 })
   })
 
   it("유형이 쓰지 않는 값은 보내지 않는다", () => {

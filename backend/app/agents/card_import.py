@@ -281,6 +281,13 @@ def _skills(raw: list[dict]) -> list[dict]:
     return out
 
 
+def _url_name(source_url: str) -> str:
+    """소개 정보 주소에서 이름 후보 — 경로의 마지막 구간(카드 파일 이름 · .well-known 은 뺌), 없으면 호스트."""
+    parts = urlsplit(source_url)
+    segments = [s for s in parts.path.split("/") if s and s != ".well-known" and not s.lower().endswith(".json")]
+    return (slugify(segments[-1]) if segments else "") or slugify(parts.hostname or "")
+
+
 def card_to_doc(card: dict, source_url: str, *, name: str | None = None, owner: str | None = None,
                 department: str | None = None, category: str | None = None) -> tuple[dict, list[str]]:
     """소개 정보 → 정의 문서. (문서, 안내 문구). 소유자·부서·분류가 없으면 null 로 둔다(채워야 반영 가능)."""
@@ -290,7 +297,7 @@ def card_to_doc(card: dict, source_url: str, *, name: str | None = None, owner: 
     legacy_catalog = any(k in card for k in ("display_name", "auth_method"))
     raw_name = card["name"].strip()
     agent_name = (slugify(name or "") or slugify(_str(ext.get("name"), 255) or "") or slugify(raw_name)
-                  or slugify(urlsplit(source_url).hostname or "") or "agent")
+                  or _url_name(source_url) or "agent")
     if not name and not ext.get("name") and agent_name != raw_name:
         notes.append(f"이름 '{raw_name}' 을(를) 카탈로그 이름 형식에 맞춰 '{agent_name}' 로 바꿨습니다.")
 

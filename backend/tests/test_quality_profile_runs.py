@@ -24,6 +24,8 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 import app.catalog.models as cm
+from app.core.auth import TokenUser
+from app.permissions.models import Permission
 from app.quality import profiling, runs
 from app.quality.models import DataProfile, QualityRun
 from app.quality.rule_sql import TableRef
@@ -95,6 +97,37 @@ def test_direct_text_stats_count_bytes_like_trino() -> None:
 
 
 # ---------------------------------------------------------------- B: 결과 읽기
+
+def test_direct_profile_handles_lob_and_legacy_types() -> None:
+    """원천 DB 가 집계하지 못하는 타입 — Oracle LOB 은 NULL 수만(count(LOB) 도 ORA-22849 라 IS NOT NULL 로 센다),
+    SQL Server 의 TEXT · NTEXT · IMAGE · XML 은 (MAX) 타입으로, BIT 는 정수로 바꿔 센다(실제 DB 에서 확인)."""
+    table = TableRef("", "S", "T")
+    ora_cols = [["C", "STRING", "CLOB"], ["B", "BINARY", "BLOB"], ["N", "NUMBER", "NUMBER(10)"]]
+    ora = profiling.profile_step(table, ora_cols, direct=True, source_type="oracle")
+    assert ora["sql"] == ('SELECT count(*), count(CASE WHEN "C" IS NOT NULL THEN 1 END), '
+                          'count(CASE WHEN "B" IS NOT NULL THEN 1 END), count("N"), count(DISTINCT "N"), min("N"), '
+                          'max("N"), avg("N") FROM "S"."T"')
+    assert [t["key"] for t in ora["top"]] == ["profile:top:N"]
+    # 같은 컬럼이 Trino 경로면 Trino 가 문자열로 센다 — 통계를 빼지 않는다
+    assert profiling.column_stats("STRING", "CLOB") == ("nonnull", "distinct", "min", "max")
+    count, cols, missing = profiling.read_profile(ora_cols, {"profile": {"row": [3, 2, 1, 3, 3, 1, 9, 5]}},
+                                                  source_type="oracle")
+    assert (count, missing) == (3, [])
+    assert [(c.null_count, c.unique_count, c.max_value) for c in cols] == [(1, 0, None), (2, 0, None), (0, 3, "9")]
+
+    ms_cols = [["t", "STRING", "TEXT"], ["nt", "STRING", "NTEXT"], ["img", "BINARY", "IMAGE"], ["x", "STRING", "XML"],
+               ["b", "BOOLEAN", "BIT"]]
+    ms = profiling.profile_step(TableRef("", "dbo", "t"), ms_cols, direct=True, source_type="mssql")
+    sql = ms["sql"]
+    assert "count(CAST([t] AS VARCHAR(MAX)))" in sql
+    assert "count(DISTINCT CAST(CAST([nt] AS NVARCHAR(MAX)) AS VARBINARY(MAX)))" in sql
+    assert "min(CAST([nt] AS NVARCHAR(MAX)) COLLATE Latin1_General_BIN2)" in sql
+    assert "count(DISTINCT CAST([img] AS VARBINARY(MAX)))" in sql and "min(CAST([img]" not in sql
+    assert "count(CAST([x] AS NVARCHAR(MAX)))" in sql and "DISTINCT CAST([x]" not in sql
+    assert "min(CAST([b] AS TINYINT)), max(CAST([b] AS TINYINT))" in sql
+    top = {t["key"]: t["sql"] for t in ms["top"]}
+    assert top["profile:top:t"].startswith("SELECT TOP (5) min(CAST([t] AS VARCHAR(MAX))), count(*)")
+
 
 def test_read_profile_from_combined_row_and_top_values() -> None:
     row = [10, 9, 2, "N", "Y", 10, 10, Decimal("1.50"), "99.00", 42.123456, 3, 3, 0]
@@ -217,6 +250,25 @@ def test_trino_profile_run_saves_profile_and_row_count(tmp_path, monkeypatch) ->
     queries = client.get(f"/api/v1/quality/runs/{run_id}/queries").json()
     assert [q["key"] for q in queries] == ["profile", "profile:top:use_yn", "profile:top:amt"]
     assert client.get(f"/api/v1/quality/runs/{run_id}/results").json() == []
+
+    # DEF-164 — 샘플 보기 권한이 없으면 최솟값 · 최댓값 · 최빈값을 빼고 통계만, 추천도 값이 드러나는 후보는 뺀다
+    assert profile["values_hidden"] is False and amt["min_value"] == "0.00"
+    recs = {r["check_type"] for r in client.get(f"/api/v1/quality/datasets/{ds_id}/rules/recommendations").json()}
+    assert "ACCEPTED_VALUES" in recs
+
+    async def _restrict(sess):
+        sess.add(Permission(kind="FEATURE", perm_key="datasets.sample-view", role_id="argus-superuser"))
+        await sess.commit()
+    _run(sm, _restrict)
+    bob = TestClient(_app(sm, TokenUser(sub="9", username="bob", roles=["argus-user"])))
+    hidden = bob.get(f"/api/v1/quality/datasets/{ds_id}/profile").json()
+    assert hidden["values_hidden"] is True and hidden["row_count"] == 1000
+    h_yn, h_amt = hidden["columns"]
+    assert (h_yn["min_value"], h_yn["max_value"], h_yn["top_values"]) == (None, None, None)
+    assert (h_amt["min_value"], h_amt["mean_value"], h_yn["null_count"]) == (None, 12.5, 10)
+    h_recs = bob.get(f"/api/v1/quality/datasets/{ds_id}/rules/recommendations").json()
+    assert "ACCEPTED_VALUES" not in {r["check_type"] for r in h_recs}
+    assert all("0.00" not in r["reason"] for r in h_recs)
 
 
 def test_profile_run_falls_back_per_column_and_reports_partial(tmp_path, monkeypatch) -> None:

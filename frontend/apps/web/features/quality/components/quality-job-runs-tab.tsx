@@ -72,7 +72,7 @@ function JobRunChildren({ jobRun, onOpenRun }: { jobRun: QualityJobRun; onOpenRu
   // 작업 실행의 집계가 바뀔 때마다(진행 중) 다시 읽는다
   useEffect(() => {
     void load()
-  }, [load, jobRun.status, jobRun.runs_succeeded, jobRun.runs_failed, jobRun.profiles_succeeded, jobRun.profiles_failed])
+  }, [load, jobRun.status, jobRun.runs_succeeded, jobRun.runs_failed, jobRun.runs_cancelled, jobRun.profiles_succeeded, jobRun.profiles_failed])
 
   if (runs == null) {
     return error ? (
@@ -163,7 +163,7 @@ function JobRunChildren({ jobRun, onOpenRun }: { jobRun: QualityJobRun; onOpenRu
 /** 진행 칸 — 실행 현황과 같은 모양: 실행 중이면 쿼리 진행 막대, 끝났으면 상태 배지. */
 function JobRunProgressCell({ run }: { run: QualityJobRun }) {
   if (run.status === "RUNNING") {
-    const finished = run.runs_succeeded + run.runs_failed
+    const finished = run.runs_succeeded + run.runs_failed + run.runs_cancelled
     const pct = run.progress_total ? Math.min(100, Math.round((run.progress_done / run.progress_total) * 100)) : null
     if (pct === null) {
       return <span >{run.runs_total > 1 ? `데이터셋 ${finished}/${run.runs_total}` : "대기"}</span>
@@ -189,6 +189,7 @@ function JobRunProgressCell({ run }: { run: QualityJobRun }) {
         <span >
           데이터셋 성공 {run.runs_succeeded}
           {run.runs_failed > 0 && <span className="text-destructive"> · 실패 {run.runs_failed}</span>}
+          {run.runs_cancelled > 0 && <span> · 중지 {run.runs_cancelled}</span>}
           {run.skipped_total > 0 && <span className="text-destructive"> · 시작 못 함 {run.skipped_total}</span>}
         </span>
       )}

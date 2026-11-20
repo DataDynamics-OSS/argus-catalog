@@ -26,6 +26,10 @@ type DatasetListParams = {
   pageSize?: number
   /** 카드 보기용 필드(컬럼 미리보기)도 받는다 */
   card?: boolean
+  /** 소속 카탈로그 id (TODO-CAT-001) */
+  catalogId?: number
+  /** true = 수동 데이터셋만, false = 수동 데이터셋 제외 */
+  manual?: boolean
 }
 
 export type PaginatedDatasets = {
@@ -54,6 +58,8 @@ export async function fetchDatasets(
   query.set("page", String(params?.page ?? 1))
   query.set("page_size", String(params?.pageSize ?? 20))
   if (params?.card) query.set("card", "true")
+  if (params?.catalogId) query.set("catalog_id", String(params.catalogId))
+  if (params?.manual !== undefined) query.set("manual", String(params.manual))
 
   const res = await authFetch(`${BASE}/datasets?${query.toString()}`)
   if (!res.ok) throw new Error(`데이터셋을 불러오지 못했습니다. (HTTP ${res.status})`)
@@ -75,7 +81,9 @@ export async function fetchDataset(id: number): Promise<DatasetDetail> {
 export async function createDataset(payload: {
   name: string
   display_name?: string
-  datasource_id: number
+  /** datasource_id · catalog_id 중 정확히 하나 — 카탈로그로 등록하면 직접 등록한 카탈로그는 수동 데이터셋이 된다(TODO-CAT-001) */
+  datasource_id?: number
+  catalog_id?: number
   summary?: string
   description?: string
   origin?: string
@@ -99,7 +107,8 @@ export async function createDataset(payload: {
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
-    throw new Error(err.detail || `데이터셋을 생성하지 못했습니다. (HTTP ${res.status})`)
+    const detail = typeof err?.detail === "string" ? err.detail : err?.detail?.message
+    throw new Error(detail || `데이터셋을 생성하지 못했습니다. (HTTP ${res.status})`)
   }
   return res.json()
 }
@@ -159,6 +168,8 @@ export type AiReadyUpdate = {
   missing_data_info?: string | null
   missing_value_notation?: string | null
   privacy_measures?: string | null
+  social_impact?: string | null
+  risk_mitigation?: string | null
 }
 
 export type AiReadyCode = { code: string; label: string }
@@ -312,6 +323,17 @@ export async function saveDistribution(
   return res.json()
 }
 
+/** 배포본 순서 바꾸기 — 이 데이터셋 배포본 id 전부를 새 순서로. 목록이 서버와 다르면 409. */
+export async function reorderDistributions(datasetId: number, ids: number[]): Promise<DatasetDistribution[]> {
+  const res = await authFetch(`${BASE}/datasets/${datasetId}/distributions/reorder`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids }),
+  })
+  if (!res.ok) await throwOnError(res, "배포본 순서를 바꾸지 못했습니다.")
+  return res.json()
+}
+
 export async function deleteDistribution(datasetId: number, distId: number): Promise<void> {
   const res = await authFetch(`${BASE}/datasets/${datasetId}/distributions/${distId}`, { method: "DELETE" })
   if (!res.ok) await throwOnError(res, "배포본을 지우지 못했습니다.")
@@ -322,6 +344,25 @@ export type AiReadyExportKind = "dcat" | "croissant" | "data-card"
 /** 외부 연동 API 경로 — 다른 시스템이 부를 주소. 데이터셋 ID 판과 URN 판이 있다. */
 export function aiReadyExportPath(datasetId: number, kind: AiReadyExportKind): string {
   return `/api/v1/external/datasets/${datasetId}/${kind}`
+}
+
+/** 내보내기 외부 공개 주소(설정 › AI-Ready) — DCAT `@id` · 데이터 카드와 같은 값. base 는 끝이 `/`. */
+export type AiReadyPublicBase = { mode: "REQUEST" | "FQDN" | "IP" | "CUSTOM" | string; base: string }
+
+export async function fetchAiReadyPublicBase(): Promise<AiReadyPublicBase> {
+  const res = await authFetch(`${BASE}/ai-ready/public-base`)
+  if (!res.ok) await throwOnError(res, "외부 공개 주소를 불러오지 못했습니다.")
+  return res.json()
+}
+
+/**
+ * 외부 연동 API 의 전체 주소 — 설정의 외부 공개 주소를 따른다(DEF-142).
+ * 요청 주소 방식(REQUEST)이면 사용자가 보고 있는 화면 주소(origin)를 쓴다.
+ */
+export function aiReadyExportUrl(pub: AiReadyPublicBase, origin: string, datasetId: number, kind: AiReadyExportKind): string {
+  const path = aiReadyExportPath(datasetId, kind)
+  if (pub.mode === "REQUEST" || !pub.base) return `${origin}${path}`
+  return `${pub.base.replace(/\/+$/, "")}${path}`
 }
 
 export async function fetchAiReadyExport(datasetId: number, kind: AiReadyExportKind): Promise<string> {
@@ -504,8 +545,9 @@ export async function fetchDatasourceMetadata(datasourceId: number): Promise<Dat
   return res.json()
 }
 
-export async function fetchDatasources(): Promise<Datasource[]> {
-  const res = await authFetch(`${BASE}/datasources`)
+/** includeManual — 카탈로그 수동 등록 데이터 소스(TODO-CAT-001)도 받는다(데이터셋 목록 필터용) */
+export async function fetchDatasources(opts?: { includeManual?: boolean }): Promise<Datasource[]> {
+  const res = await authFetch(`${BASE}/datasources${opts?.includeManual ? "?include_manual=true" : ""}`)
   if (!res.ok) throw new Error(`데이터 소스를 불러오지 못했습니다. (HTTP ${res.status})`)
   return res.json()
 }
@@ -583,9 +625,13 @@ export async function updateDatasetSchema(
     description?: string
     nullable?: string
     ordinal?: number
+    /** 단위 · 산정기준 — 보내면 바뀌고(null 이면 지움), 빼면 서버 값이 그대로 남는다 */
+    unit?: string | null
+    calculation?: string | null
   }[]
 ): Promise<SchemaField[]> {
-  const res = await authFetch(`${BASE}/datasets/${datasetId}/schema`, {
+  // 화면 편집 — 비운 논리명 · 설명을 지운다(수집 호출은 이 표시 없이 빈 값이면 기존 값 유지, DEF-166)
+  const res = await authFetch(`${BASE}/datasets/${datasetId}/schema?clear_empty=true`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(fields),

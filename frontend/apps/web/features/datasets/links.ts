@@ -15,9 +15,19 @@ export function isDatasetTab(value: string | null | undefined): value is Dataset
   return !!value && value !== "overview" && Object.prototype.hasOwnProperty.call(DATASET_TAB_TOPICS, value)
 }
 
+/**
+ * 탭 안에서 가리킬 곳(TODO-151) — 댓글 탭은 `comment`(댓글 id, 그 쪽을 열고 스크롤 · 강조),
+ * 메타데이터 탭은 `field`(항목 이름, 그 줄로 스크롤 · 강조).
+ */
+export type DatasetFocus = { comment?: number | null; field?: string | null }
+
 /** 데이터셋 상세 주소. 탭을 주지 않거나 개요면 탭 없이. */
-export function datasetHref(id: number, tab?: DatasetTab | null): string {
-  return isDatasetTab(tab) ? `${DATASET_LIST_PATH}/${id}?tab=${tab}` : `${DATASET_LIST_PATH}/${id}`
+export function datasetHref(id: number, tab?: DatasetTab | null, focus?: DatasetFocus): string {
+  if (!isDatasetTab(tab)) return `${DATASET_LIST_PATH}/${id}`
+  const sp = new URLSearchParams({ tab })
+  if (focus?.comment != null) sp.set("comment", String(focus.comment))
+  if (focus?.field) sp.set("field", focus.field)
+  return `${DATASET_LIST_PATH}/${id}?${sp}`
 }
 
 /** 목록 조회 조건. 다중 선택 값은 배열, 나머지는 빈 문자열이면 조건 없음. */

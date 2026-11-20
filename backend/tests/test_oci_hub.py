@@ -554,9 +554,69 @@ async def test_hf_background_failure_marks_failed_and_cleans_partial_upload(api,
 
     versions = (await api.req("GET", "/oci-models/org-m/versions")).json()
     assert versions[0]["status"] == "failed"
-    assert "네트워크 끊김" in versions[0]["extra_metadata"]["error"]
+    # 알 수 없는 예외의 원문은 화면에 내보내지 않는다(DEF-175) — 종류만 알리고 서버 로그로 안내
+    error = versions[0]["extra_metadata"]["error"]
+    assert "네트워크 끊김" not in error and "RuntimeError" in error and "서버 로그" in error
     assert fake_store.deleted_prefixes == ["org-m/v1/"]
     assert (await api.req("GET", "/oci-models/org-m")).json()["status"] == "draft"
+
+
+async def test_hf_background_storage_failure_hides_internal_endpoint(api, monkeypatch, fake_store, caplog):
+    """DEF-175: 저장소 장애 사유는 MLflow 반입과 같은 한국어 공통 문구, 내부 주소가 든 원문은 서버 로그에만."""
+    from botocore.exceptions import EndpointConnectionError
+
+    real_run = service._run_hf_import
+    await _start_import_version(api, monkeypatch)
+    monkeypatch.setattr("app.core.database.async_session", api.factory)
+    monkeypatch.setattr(model_store, "import_from_huggingface", mock.AsyncMock(
+        side_effect=EndpointConnectionError(endpoint_url="http://minio:9000/model-artifacts")))
+
+    model_id = (await api.req("GET", "/oci-models/org-m")).json()["id"]
+    with caplog.at_level("ERROR", logger=service.logger.name):
+        await real_run(model_id, "org-m", 1, "org/m", "main")
+
+    ver = (await api.req("GET", "/oci-models/org-m/versions")).json()[0]
+    assert ver["status"] == "failed"
+    assert ver["extra_metadata"]["error"] == model_store.STORAGE_DOWN
+    assert "minio:9000" not in ver["extra_metadata"]["error"]
+    assert "minio:9000" in caplog.text
+
+
+def _hf_http_error(cls, status: int, url: str = "https://huggingface.co/api/models/org/m"):
+    return cls(f"{status} error for url: {url}", response=httpx.Response(status, request=httpx.Request("GET", url)))
+
+
+def test_hf_import_failure_reason_by_kind():
+    """DEF-175: 실패 사유는 종류별 안내 문구 — 원인은 알 수 있되 내부 주소 · 경로 · 원문은 넣지 않는다."""
+    from botocore.exceptions import ClientError, ConnectTimeoutError
+    from huggingface_hub.errors import (
+        GatedRepoError,
+        HfHubHTTPError,
+        RepositoryNotFoundError,
+        RevisionNotFoundError,
+    )
+
+    def reason(e):
+        return service._hf_import_failure_reason(e, "org/m", "dev")
+
+    assert "'org/m' 모델을 찾을 수 없습니다" in reason(_hf_http_error(RepositoryNotFoundError, 404))
+    assert "gated" in reason(_hf_http_error(GatedRepoError, 403))
+    assert "revision 'dev'" in reason(_hf_http_error(RevisionNotFoundError, 404))
+    assert reason(_hf_http_error(HfHubHTTPError, 503)) == "HuggingFace 에서 모델 파일을 내려받지 못했습니다(HTTP 503)."
+
+    # HF 쪽 연결 오류는 저장소 장애 문구가 아니라 HuggingFace 연결 문구로, 프록시 주소는 빼고
+    hf_down = reason(httpx.ConnectError("All connection attempts failed via http://proxy.internal:3128"))
+    assert hf_down.startswith("HuggingFace 에 연결할 수 없습니다") and "proxy.internal" not in hf_down
+
+    assert reason(ConnectTimeoutError(endpoint_url="http://10.0.0.5:9000/b")) == model_store.STORAGE_DOWN
+    denied = reason(ClientError({"Error": {"Code": "AccessDenied", "Message": "bucket model-artifacts"}}, "PutObject"))
+    assert "AccessDenied" in denied and "model-artifacts" not in denied and "PutObject" not in denied
+
+    full = reason(OSError(28, "No space left on device", "/tmp/tmpab12/model.safetensors"))
+    assert "디스크 공간" in full and "/tmp" not in full
+    unknown = reason(ValueError("bad value at /srv/argus/secret"))
+    assert "ValueError" in unknown and "/srv/argus" not in unknown
+    assert reason(service.OciUpstreamError("이미 사용자 문구")) == "이미 사용자 문구"
 
 
 async def test_hf_background_success_marks_ready_and_approves(api, monkeypatch, fake_store):

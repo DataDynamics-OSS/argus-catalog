@@ -43,7 +43,7 @@ import {
   type Topology,
   type TopologyOrganization,
 } from "@/features/topology/api"
-import { isDatasourceTypeImplemented } from "@/features/datasources/datasource-configs"
+import { isDatasourceTypeImplemented, MANUAL_DATASOURCE_TYPE } from "@/features/datasources/datasource-configs"
 import { DatasetsCardView } from "./datasets-card-view"
 import { useCanDeleteDataset } from "../use-can-delete-dataset"
 import { ViewModeToggle } from "./view-mode-toggle"
@@ -105,7 +105,7 @@ export function DatasetsTable({ data, isLoading }: DatasetsTableProps) {
 
   // 필터 선택지 — 데이터 소스·태그
   useEffect(() => {
-    fetchDatasources().then(setDatasources).catch(() => {})
+    fetchDatasources({ includeManual: true }).then(setDatasources).catch(() => {})
     fetchTags().then(setTags).catch(() => {})
   }, [])
 
@@ -152,9 +152,10 @@ export function DatasetsTable({ data, isLoading }: DatasetsTableProps) {
   const datasourceOptions = useMemo(
     () =>
       datasources
-        .filter((p) => isDatasourceTypeImplemented(p.type))
+        // 수동 등록 데이터 소스(직접 등록한 카탈로그, TODO-CAT-001)는 수집하지 않지만 데이터셋이 있으므로 거를 수 있게 둔다
+        .filter((p) => isDatasourceTypeImplemented(p.type) || p.type === MANUAL_DATASOURCE_TYPE)
         .map((p) => ({
-          label: p.name,
+          label: p.type === MANUAL_DATASOURCE_TYPE ? `${p.name} (수동 등록)` : p.name,
           value: p.datasource_id,
         })),
     [datasources]

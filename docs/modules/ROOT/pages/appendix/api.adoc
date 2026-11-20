@@ -168,6 +168,12 @@ Catalog 의 컬럼 타입은 아래 규칙에 따라 Avro 타입으로 변환됩
 | STRING | `varchar`, `text` | `string`
 | DATE | `date` | `{"type":"int","logicalType":"date"}`
 | DATE | `timestamp` | `{"type":"long","logicalType":"timestamp-millis"}`
+| DATE | `datetime`, `timestamptz` | `{"type":"long","logicalType":"timestamp-millis"}`
+| DATE | `time` | `{"type":"int","logicalType":"time-millis"}`
+| DATE | `year` | `"int"`
+| TIMESTAMP | `date` (Oracle `DATE` — 시각 포함) | `{"type":"long","logicalType":"timestamp-millis"}`
+| DOUBLE | `float` (SQL Server · Oracle `FLOAT`) | `double`
+| BINARY | `timestamp` (SQL Server rowversion) | `bytes`
 | BOOLEAN | `bool` | `boolean`
 | BYTES | `bytea`, `blob` | `bytes`
 | MAP | `json`, `jsonb` | `{"type":"map","values":"string"}`

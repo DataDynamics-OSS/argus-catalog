@@ -232,12 +232,12 @@ export function QualityRunDetailDialog({ runId, onOpenChange }: Props) {
                   { key: "종료 시각", value: run.finished_at ? fmtTime(run.finished_at) : "-" },
                   { key: "소요 시간", value: run.started_at ? fmtDuration(qualityElapsedSeconds(run)) : "-" },
                   { key: "워커", value: <span className="break-all font-mono">{run.worker_id ?? "-"}</span>, wide: true },
-                  { key: "활성 규칙", value: `${run.rules_total.toLocaleString()}개` },
+                  { key: "진단 대상 규칙", value: `${run.rules_total.toLocaleString()}개` },
                   {
                     key: "평가한 규칙",
                     value: (
                       <span title={run.rules_total > run.rules_evaluated && finished
-                        ? "나머지는 고르지 않은 진단 기준이거나 이 경로로 평가하지 않는 유형 — 직전 결과를 이어받습니다" : undefined}>
+                        ? "나머지는 이 경로로 평가하지 못했거나 쿼리가 실패한 규칙 — 직전 결과를 이어받습니다" : undefined}>
                         {run.rules_evaluated.toLocaleString()}개
                         {run.rules_total > run.rules_evaluated && finished && (
                           <span className="ml-1">(나머지는 직전 결과를 이어받음)</span>

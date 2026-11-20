@@ -18,6 +18,7 @@ REGEX)의 통과 기준은 원천 직접 경로(rule_direct)와 같다. 도메�
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from collections.abc import Callable
@@ -35,14 +36,16 @@ TRINO_CHECK_TYPES = (
     "BROKEN_TEXT", "WHITESPACE", "LOGICAL", "FORMULA", "FUNCTION",
     # AI-Ready 품질 지표(TODO-096 5단계) — 통계적 타당성(더미 값 빈도), 적시성(데이터 연속성)
     "DUMMY_VALUE", "CONTINUITY",
+    # AI-Ready 품질 지표(TODO-096) — 데이터 · 라벨 다양성(범주 쏠림), 데이터 유일성(여러 컬럼 키)
+    "DIVERSITY", "COMPOSITE_UNIQUE",
 )
 
 # Trino 경로가 평가하는 유형 — 위의 기본 유형에 커스텀 SQL(사용자가 적은 조회 쿼리)과 최신성을 더한 것.
 # 둘은 품질 지표(indicators — 관리지침 진단 기준)에 들지 않아 지표를 고르지 않은 실행에서만 평가한다.
 TRINO_PATH_TYPES = (*TRINO_CHECK_TYPES, "CUSTOM_SQL", "FRESHNESS")
 
-# 컬럼 하나를 보지 않는 유형 — 조건·식 안에 컬럼이 들어 있다
-TABLE_LEVEL_TYPES = ("ROW_COUNT", "LOGICAL")
+# 컬럼 하나를 보지 않는 유형 — 조건·식(여러 컬럼 키는 기대값의 컬럼 목록) 안에 컬럼이 들어 있다
+TABLE_LEVEL_TYPES = ("ROW_COUNT", "LOGICAL", "COMPOSITE_UNIQUE")
 
 # BROKEN_TEXT — 깨진 글자: 대체 문자(U+FFFD)와 완성형이 아닌 한글(자모만 따로 있는 호환 자모 U+3131–U+318E)
 BROKEN_TEXT_PATTERN = "[\uFFFD\u3131-\u318E]"
@@ -471,6 +474,13 @@ def check_expression(check_type: str | None, expected: str | None) -> None:
         freshness_hours(expected)
     elif check_type == "CONTINUITY":
         continuity_spec(expected)
+    elif check_type == "DIVERSITY":
+        diversity_limit(expected)
+    elif check_type == "COMPOSITE_UNIQUE":
+        composite_columns(expected)
+    elif check_type == "ACCEPTED_VALUES" and str(expected or "").lstrip().startswith("{") \
+            and code_group_ref(expected) is None:
+        raise ExpressionError('표준 코드 그룹 연결은 {"code_group_id": <번호>} 모양이어야 합니다')
 
 
 # ---------------------------------------------------------------------------
@@ -529,10 +539,14 @@ def judge_ratio(checked: int, errors: int, threshold: float, what: str, scope: s
 
 
 # 데이터 연속성 — 단위와 Trino date_trunc 단위, 문자열 날짜에서 그 단위까지의 낱말
+# 주(WEEK)는 ISO 8601 주 — 월요일에 시작한다(Trino · PostgreSQL ``date_trunc('week')``, Oracle ``TRUNC(…, 'IW')`` 와 같다).
+# 문자열 날짜는 일(DD)까지 잘라 날짜로 읽은 뒤 주로 묶는다(Trino 경로만 — 원천 직접은 날짜 · 시각 타입 컬럼만).
 CONTINUITY_UNITS: dict[str, tuple[str, str]] = {
-    "HOUR": ("hour", "HH24"), "DAY": ("day", "DD"), "MONTH": ("month", "MM"), "YEAR": ("year", "YYYY"),
+    "HOUR": ("hour", "HH24"), "DAY": ("day", "DD"), "WEEK": ("week", "DD"), "MONTH": ("month", "MM"),
+    "YEAR": ("year", "YYYY"),
 }
-CONTINUITY_LABELS = {"HOUR": "시간", "DAY": "일", "MONTH": "월", "YEAR": "연"}
+CONTINUITY_LABELS = {"HOUR": "시간", "DAY": "일", "WEEK": "주", "MONTH": "월", "YEAR": "연"}
+_UNIT_NAMES = "HOUR · DAY · WEEK · MONTH · YEAR"
 _PREFIX_DIRECTIVES = {"YYYY": "%Y", "MM": "%m", "DD": "%d", "HH24": "%H", "HH": "%H"}
 
 
@@ -565,18 +579,18 @@ def date_like_pattern(fmt: str) -> str:
 
 
 def continuity_spec(expected: str | None) -> Continuity:
-    """CONTINUITY 기대값 ``<단위> [<날짜 형식>]`` → 규칙. 단위는 HOUR·DAY·MONTH·YEAR.
+    """CONTINUITY 기대값 ``<단위> [<날짜 형식>]`` → 규칙. 단위는 HOUR·DAY·WEEK·MONTH·YEAR(WEEK 는 월요일 시작 ISO 주).
 
     날짜 형식은 문자열로 저장한 날짜 컬럼일 때만 적는다(예: ``DAY YYYYMMDD``, ``MONTH YYYY-MM``) — 형식 앞에서부터 단위까지를
     잘라 같은 기간을 묶는다. 그래서 형식이 큰 단위부터(연 → 월 → 일 → 시) 이어져야 한다. 틀리면 ``ExpressionError``.
     """
     text = str(expected or "").strip()
     if not text:
-        raise ExpressionError("expected_value 에 단위가 필요합니다 — HOUR · DAY · MONTH · YEAR (문자열 날짜면 뒤에 형식, 예: DAY YYYYMMDD)")
+        raise ExpressionError(f"expected_value 에 단위가 필요합니다 — {_UNIT_NAMES} (문자열 날짜면 뒤에 형식, 예: DAY YYYYMMDD)")
     unit, _, fmt = text.partition(" ")
     unit = unit.upper()
     if unit not in CONTINUITY_UNITS:
-        raise ExpressionError(f"연속성 단위는 HOUR · DAY · MONTH · YEAR 중 하나입니다: {unit}")
+        raise ExpressionError(f"연속성 단위는 {_UNIT_NAMES} 중 하나입니다: {unit}")
     trunc, token = CONTINUITY_UNITS[unit]
     fmt = fmt.strip().upper()
     if not fmt:
@@ -619,7 +633,7 @@ def _as_datetime(v, c: Continuity) -> datetime | None:
         try:
             return datetime.strptime(text, c.prefix_format)
         except ValueError:
-            return None
+            pass  # 주(WEEK) 단위의 문자열 날짜는 Trino 가 날짜로 읽어 자른 시각 값을 돌려준다
     try:
         return datetime.fromisoformat(text.replace(" UTC", "")).replace(tzinfo=None)
     except ValueError:
@@ -635,6 +649,11 @@ def continuity_periods(first: datetime, last: datetime, unit: str) -> int:
     days = (last.date() - first.date()).days
     if unit == "DAY":
         return days + 1
+    if unit == "WEEK":
+        # 두 날짜가 든 주의 월요일 사이 — 집계가 월요일로 잘라 주지만, 잘리지 않은 값이 와도 같은 답
+        first_monday = first.date() - timedelta(days=first.weekday())
+        last_monday = last.date() - timedelta(days=last.weekday())
+        return (last_monday - first_monday).days // 7 + 1
     return days * 24 + last.hour - first.hour + 1
 
 
@@ -653,12 +672,114 @@ def judge_continuity(c: Continuity, threshold: float, scope: str) -> Callable[[i
                                          "문자열 날짜면 기대값에 형식을 적고, 형식이 틀린 값은 날짜 형식 규칙으로 먼저 진단하세요")
         expected = continuity_periods(first, last, c.unit)
         missing = max(expected - present, 0)
-        cut = {"YEAR": 4, "MONTH": 7, "DAY": 10, "HOUR": 13}[c.unit]
+        cut = {"YEAR": 4, "MONTH": 7, "WEEK": 10, "DAY": 10, "HOUR": 13}[c.unit]
         span = f"{first:%Y-%m-%d %H}"[:cut] + " ~ " + f"{last:%Y-%m-%d %H}"[:cut]
         out = judge_ratio(expected, missing, threshold, f"{label} 단위 빈 기간({span}, 있는 기간 {present:,}개)", scope)
         return Outcome(out.passed, f"빈 {label} {missing:,}개", out.detail, checked_count=expected, error_count=missing)
 
     return judge
+
+
+# ---------------------------------------------------------------------------
+# AI-Ready 품질 지표 (TODO-096) — 데이터 · 라벨 다양성, 여러 컬럼 키 유일성, 표준 코드 그룹 연결
+# ---------------------------------------------------------------------------
+
+# 다양성 — 기대값(최빈값 비율 상한 %)을 비우면 쓰는 값. 한 값이 90% 를 넘으면(나머지 값을 모두 합쳐 10% 미만) 쏠렸다고 본다
+DEFAULT_DIVERSITY_MAX = 90.0
+# 여러 컬럼 키에 적을 수 있는 컬럼 수 상한
+COMPOSITE_MAX_COLUMNS = 16
+# 키 묶음별 행 수(n)를 다시 집계하는 쿼리의 SELECT — Trino 와 원천 직접(PostgreSQL · MySQL · Oracle · SQL Server)이 같은 식을 쓴다.
+# 다양성: [진단 건수, 최빈값 건수, 가장 적은 값의 건수, 고유값 수], 여러 컬럼 키: [진단 건수, 키가 겹치는 행 수]
+DIVERSITY_SELECT = "COALESCE(SUM(n), 0), MAX(n), MIN(n), COUNT(*)"
+COMPOSITE_SELECT = "COALESCE(SUM(n), 0), COALESCE(SUM(CASE WHEN n > 1 THEN n ELSE 0 END), 0)"
+
+
+def diversity_limit(expected: str | None) -> float:
+    """DIVERSITY 기대값 → 최빈값 비율 상한(%). 비우면 ``DEFAULT_DIVERSITY_MAX``. 0 초과 100 이하가 아니면 ``ExpressionError``."""
+    text = str(expected or "").strip().rstrip("%").strip()
+    if not text:
+        return DEFAULT_DIVERSITY_MAX
+    try:
+        limit = float(text)
+    except ValueError:
+        limit = math.nan
+    if not math.isfinite(limit) or not 0 < limit <= 100:
+        raise ExpressionError(f"최빈값 비율 상한은 0 보다 크고 100 이하인 숫자(%)입니다: {expected}")
+    return limit
+
+
+def judge_diversity(limit: float, scope: str) -> Callable[[int, list], Outcome]:
+    """집계 ``[진단 건수(NULL 제외), 최빈값 건수, 가장 적은 값의 건수, 고유값 수]`` → 판정.
+
+    가장 많은 값의 비율(최빈값 건수 ÷ 진단 건수)이 상한 이하이면 통과. 오류 건수는 상한을 넘친 최빈값 행 수 — 그만큼 줄어야
+    상한 안에 든다. 가이드라인의 '최다/최소 클래스 비율'은 설명에 함께 적는다(판정에는 쓰지 않음 — 오타 같은 드문 값 하나에
+    크게 흔들린다)."""
+    cap = Decimal(str(limit))
+
+    def judge(_total: int, values: list) -> Outcome:
+        checked, top, least, distinct = (_int(v) for v in values[:4])
+        if checked == 0:
+            return Outcome(True, "값 없음", f"값 분포 — NULL 이 아닌 값이 없어 진단할 분포가 없습니다 ({scope})",
+                           checked_count=0, error_count=0)
+        share = top / checked * 100
+        passed = Decimal(top) * 100 <= cap * checked
+        excess = 0 if passed else top - int(cap * checked / 100)
+        ratio = f"{top / least:,.1f}:1" if least else "-"
+        return Outcome(
+            passed, f"최빈값 {share:.1f}%",
+            f"가장 많은 값의 비율 {share:.2f}% (상한 {limit:g}%) — 최빈값 {top:,}건 / 진단 {checked:,}건, 고유값 {distinct:,}개, "
+            f"최다/최소 빈도 {ratio} ({scope})",
+            checked_count=checked, error_count=excess,
+        )
+
+    return judge
+
+
+def composite_columns(expected: str | None) -> list[str]:
+    """COMPOSITE_UNIQUE 기대값(컬럼 이름 JSON 배열 — 예전 쉼표 구분도 읽음) → 키 컬럼 목록. 둘 이상이어야 한다."""
+    columns = decode_list(expected)
+    if len(columns) < 2:
+        raise ExpressionError("여러 컬럼 키에는 컬럼을 둘 이상 적어야 합니다 — 컬럼 하나는 고유값(UNIQUE) 규칙을 쓰세요")
+    if len({c.lower() for c in columns}) != len(columns):
+        raise ExpressionError("여러 컬럼 키에 같은 컬럼을 두 번 적었습니다")
+    if len(columns) > COMPOSITE_MAX_COLUMNS:
+        raise ExpressionError(f"여러 컬럼 키의 컬럼은 {COMPOSITE_MAX_COLUMNS}개까지입니다")
+    return columns
+
+
+def group_counts_sql(from_: str, keys: list[str], present: str, select: str) -> str:
+    """키 묶음별 행 수(``n``)를 다시 집계하는 쿼리 — 표준 SQL 이라 Trino 와 원천 DB 가 함께 읽는다."""
+    return f"SELECT {select} FROM (SELECT count(*) AS n FROM {from_} WHERE {present} GROUP BY {', '.join(keys)}) g"
+
+
+def duplicate_keys_sample(from_: str, columns: list[str], key: Callable[[str], str], present: str) -> str:
+    """여러 컬럼 키가 겹치는 행 — ``key(열 식)`` 은 비교할 식(원천 방언의 문자열 바이트 비교 등). LIMIT 은 호출자가 붙인다."""
+    inner = ", ".join(f"{key(c)} AS k{i}" for i, c in enumerate(columns))
+    group = ", ".join(key(c) for c in columns)
+    on = " AND ".join(f"{key('c.' + c)} = d.k{i}" for i, c in enumerate(columns))
+    order = ", ".join(f"c.{c}" for c in columns)
+    return (f"SELECT c.* FROM {from_} c JOIN (SELECT {inner} FROM {from_} WHERE {present} GROUP BY {group} "
+            f"HAVING count(*) > 1) d ON {on} ORDER BY {order}")
+
+
+def code_group_ref(expected: str | None) -> int | None:
+    """ACCEPTED_VALUES 기대값이 표준 코드 그룹 연결(``{"code_group_id": 12}``)이면 그룹 번호, 아니면(값 목록) None.
+
+    연결한 규칙의 허용 값은 진단을 요청할 때 그 그룹의 사용 중인 코드 값으로 풀어 실행에 남긴다(``execution``)."""
+    text = str(expected or "").strip()
+    if not text.startswith("{"):
+        return None
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        return None
+    group = parsed.get("code_group_id") if isinstance(parsed, dict) else None
+    return group if isinstance(group, int) and not isinstance(group, bool) and group > 0 else None
+
+
+def code_group_expected(group_id: int) -> str:
+    """표준 코드 그룹 연결의 저장 값."""
+    return json.dumps({"code_group_id": int(group_id)})
 
 
 def extra_characters_pattern(expected: str | None) -> str | None:
@@ -851,6 +972,26 @@ def compile_rule(
 
         return Compiled(rule.id, (), judge_rows, label=label)
 
+    if check == "COMPOSITE_UNIQUE":
+        try:
+            keys = composite_columns(expected)
+        except ExpressionError as e:
+            return Outcome(False, "N/A", str(e))
+        missing = [k for k in keys if not _lookup(column_types, k)[0]]
+        if missing:
+            return Outcome(False, "N/A", f"스키마에 '{missing[0]}' 컬럼이 없습니다")
+        quoted = [quote_ident(k) for k in keys]
+        present = " AND ".join(f"{q} IS NOT NULL" for q in quoted)
+        what = f"키 ({', '.join(keys)}) 가 겹치는 행"
+
+        def judge_composite(_total: int, values: list) -> Outcome:
+            return judge_ratio(_int(values[0]), _int(values[1]), rule.threshold, what, scope)
+
+        sample_query = duplicate_keys_sample(table.sql, quoted, lambda c: c, present)
+        return Compiled(rule.id, (), judge_composite, label=f"COMPOSITE_UNIQUE({', '.join(keys)})",
+                        own_sql=group_counts_sql(table.sql, quoted, present, COMPOSITE_SELECT),
+                        sample_sql=f"{sample_query} LIMIT {SAMPLE_ROWS}")
+
     if check == "LOGICAL":
         try:
             when, then = parse_logical(expected, column_types)
@@ -946,13 +1087,20 @@ def compile_rule(
     text = _as_text(column, column_type)
 
     if check == "ACCEPTED_VALUES":
+        group = code_group_ref(expected)
+        if group is not None:
+            # 진단 요청 때 코드 값으로 풀지 못한 연결(execution._resolve_code_groups) — 그룹이 지워졌거나 코드 값이 없다
+            return Outcome(False, "N/A", f"표준 코드 그룹 #{group} 의 코드 값을 읽지 못했습니다 — 그룹이 지워졌거나 사용 중인 "
+                                         "코드 값이 없습니다")
         accepted = accepted_values(expected)
         if not accepted:
             return Outcome(False, "N/A", "expected_value 에 허용 값 목록(쉼표 구분)이 필요합니다")
         in_list = ", ".join(string_literal(v) for v in accepted)
+        # 표준 코드 그룹은 값이 많을 수 있다 — 판정 설명에는 앞의 몇 개만
+        shown = f"{accepted}" if len(accepted) <= 10 else f"{accepted[:10]} 외 {len(accepted) - 10}개"
 
         def judge_accepted(_total: int, values: list) -> Outcome:
-            return _violations(_int(values[0]), _int(values[1]), f"허용 값 {accepted}", scope)
+            return _violations(_int(values[0]), _int(values[1]), f"허용 값 {shown}", scope)
 
         return Compiled(
             rule.id,
@@ -1066,6 +1214,14 @@ def compile_rule(
 
         return Compiled(rule.id, (f"count({col})", f"count_if({bad})"), judge_dummy, label=label, sample_sql=sample(bad))
 
+    if check == "DIVERSITY":
+        try:
+            limit = diversity_limit(expected)
+        except ExpressionError as e:
+            return Outcome(False, "N/A", str(e))
+        return Compiled(rule.id, (), judge_diversity(limit, scope), label=label,
+                        own_sql=group_counts_sql(table.sql, [col], f"{col} IS NOT NULL", DIVERSITY_SELECT))
+
     if check == "CONTINUITY":
         try:
             c = continuity_spec(expected)
@@ -1074,6 +1230,11 @@ def compile_rule(
         temporal = column_type.strip().lower().startswith(_TEMPORAL_PREFIXES)
         if temporal:
             key = f"date_trunc('{c.trunc}', CAST({col} AS timestamp))"
+        elif c.prefix_len and c.unit == "WEEK":
+            # 일까지 잘라 날짜로 읽고 주의 월요일로 — 달력에 없는 날짜(try 가 NULL)는 세지 않는다
+            shape = date_format_spec(c.date_format).shape
+            day = f"try(date_parse(substr({text}, 1, {c.prefix_len}), {string_literal(c.prefix_format or '')}))"
+            key = f"CASE WHEN regexp_like({text}, {string_literal(shape)}) THEN date_trunc('week', {day}) END"
         elif c.prefix_len:
             shape = date_format_spec(c.date_format).shape
             key = f"CASE WHEN regexp_like({text}, {string_literal(shape)}) THEN substr({text}, 1, {c.prefix_len}) END"

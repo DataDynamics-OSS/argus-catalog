@@ -310,7 +310,11 @@ _UC_ERROR_CODES = {
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     """Unity Catalog 호환 API(``/api/2.1/unity-catalog``) 의 오류는 UC 형식
     ``{"error_code", "message"}`` 로 돌려준다 — MLflow 클라이언트가 ``INTERNAL_ERROR`` 대신
-    ``UNAUTHENTICATED`` 등으로 사유를 표시한다. 그 외 경로는 FastAPI 기본 처리."""
+    ``UNAUTHENTICATED`` 등으로 사유를 표시한다. 그 외 경로는 FastAPI 기본 처리.
+
+    권한 거부(:class:`~app.core.auth.PermissionDenied`)는 응답 전에 감사 로그에 남긴다(DEF-159)."""
+    from app.permissions.router import audit_permission_denied
+    await audit_permission_denied(request, exc)
     if not request.url.path.startswith(_UC_PREFIX):
         return await _default_http_exception_handler(request, exc)
     logger.debug("UC 호환 API 오류 응답 변환: path=%s status=%d", request.url.path, exc.status_code)

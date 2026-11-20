@@ -48,14 +48,19 @@ const POLL_MS = 5000
 
 function LastRunCell({ run }: { run: QualityJobRun | null }) {
   if (!run) return <span className="text-xs text-muted-foreground">실행한 적 없음</span>
-  const finished = run.runs_succeeded + run.runs_failed
+  const finished = run.runs_succeeded + run.runs_failed + run.runs_cancelled
   return (
     <div className="grid gap-0.5 text-xs">
       <span className="flex items-center gap-1.5">
         <StatusBadge tone={QUALITY_JOB_RUN_STATUS_TONE[run.status]}>{QUALITY_JOB_RUN_STATUS_LABEL[run.status]}</StatusBadge>
         {run.status === "RUNNING"
           ? <span>데이터셋 {finished}/{run.runs_total}</span>
-          : run.runs_total > 0 && <span>성공 {run.runs_succeeded} · 실패 {run.runs_failed}</span>}
+          : run.runs_total > 0 && (
+            <span>
+              성공 {run.runs_succeeded} · 실패 {run.runs_failed}
+              {run.runs_cancelled > 0 && ` · 중지 ${run.runs_cancelled}`}
+            </span>
+          )}
         {run.checked_count != null && (
           <span className={run.error_rate ? "text-destructive" : ""}>오류율 {fmtErrorRate(run.error_rate)}</span>
         )}
@@ -192,7 +197,15 @@ export function QualityJobsTab() {
                   <td className="px-3 py-2 text-xs" title={j.targets.map((t) => t.label).join("\n")}>
                     {describeTargets(j.targets)}
                   </td>
-                  <td className="max-w-56 px-3 py-2 text-xs">{describeMeasured(j, indicators)}</td>
+                  <td className="max-w-56 px-3 py-2 text-xs">
+                    {describeMeasured(j, indicators)}
+                    {(j.deleted_definition_ids?.length ?? 0) > 0 && (
+                      // 지운 지표는 이름 대신 "삭제된 지표 #N" — 그 규칙은 이 작업이 더는 진단하지 않는다(DEF-148)
+                      <div className="mt-0.5 text-amber-700 dark:text-amber-400">
+                        지운 지표 {j.deleted_definition_ids!.length}개는 더 이상 진단하지 않습니다 — 작업을 수정해 진단 범위를 다시 정하세요.
+                      </div>
+                    )}
+                  </td>
                   <td className="px-3 py-2 text-xs">{describeSchedule(j)}</td>
                   <td className="px-3 py-2 text-xs">
                     {j.next_run_at ? fmtTime(j.next_run_at) : <span className="text-muted-foreground">-</span>}

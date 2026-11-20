@@ -10,10 +10,10 @@
  */
 
 import { Tip } from "@/components/tip"
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useState, type ReactNode } from "react"
 import Markdown from "react-markdown"
 import remarkGfm from "remark-gfm"
-import { Copy, Download, Eye, Loader2, Pencil, Plus, Trash2 } from "lucide-react"
+import { ArrowDown, ArrowUp, Copy, Download, Eye, Loader2, Pencil, Plus, Trash2 } from "lucide-react"
 
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
@@ -38,8 +38,9 @@ import { DetailSection } from "@/components/detail-section"
 import { errorMessage, notifyError, notifySuccess } from "@/lib/notify"
 
 import {
-  aiReadyExportPath, deleteDistribution, fetchAiReadyExport, fetchDistributions, saveDistribution,
-  type AiReadyExportKind, type DatasetDistribution, type DistributionInput,
+  aiReadyExportUrl, deleteDistribution, fetchAiReadyExport, fetchAiReadyPublicBase, fetchDistributions, reorderDistributions,
+  saveDistribution,
+  type AiReadyExportKind, type AiReadyPublicBase, type DatasetDistribution, type DistributionInput,
 } from "../api"
 import { copyText } from "@/lib/clipboard"
 
@@ -93,10 +94,29 @@ export function DistributionsCard({
     }
   }
 
+  // 순서 바꾸기 — 화면을 먼저 바꾸고 서버에 전체 순서를 보낸다(실패하면 다시 불러옴). 내보내기·데이터 카드가 이 순서를 따른다.
+  const [moving, setMoving] = useState(false)
+  const move = async (index: number, delta: -1 | 1) => {
+    if (!rows) return
+    const next = [...rows]
+    const [item] = next.splice(index, 1)
+    next.splice(index + delta, 0, item!)
+    setRows(next)
+    setMoving(true)
+    try {
+      setRows(await reorderDistributions(datasetId, next.map((d) => d.id)))
+    } catch (e) {
+      notifyError(e, "배포본 순서를 바꾸지 못했습니다.")
+      load()
+    } finally {
+      setMoving(false)
+    }
+  }
+
   return (
     <DetailSection
       title="배포본"
-      description="데이터를 받는 곳입니다. DCAT·Croissant 로 내보낼 때 들어가고, 내려받기 URL·체크섬이 있으면 C27·C33 이 적정이 됩니다."
+      description="데이터를 받는 곳입니다. DCAT·Croissant 로 내보낼 때 이 순서대로 들어가고, 내려받기 URL·체크섬이 있으면 C27·C33 이 적정이 됩니다."
       actions={canManage ? (
         <Button size="sm" variant="outline" onClick={() => setEditing("new")}>
           <Plus className="mr-1 h-4 w-4" /> 배포본 추가
@@ -111,56 +131,29 @@ export function DistributionsCard({
           </div>
         )}
         {rows && rows.length > 0 && (
-          <div className="overflow-hidden rounded-md border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>이름</TableHead>
-                <TableHead className="w-24">형식</TableHead>
-                <TableHead>주소</TableHead>
-                <TableHead className="w-20">크기</TableHead>
-                <TableHead className="w-28">체크섬</TableHead>
-                {canManage && <TableHead className="w-20" />}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((d) => (
-                <TableRow key={d.id} className="align-top">
-                  <TableCell className="whitespace-normal text-sm">
-                    {d.title || <span className="text-muted-foreground">(이름 없음)</span>}
-                    {d.description && <div className="text-xs">{d.description}</div>}
-                  </TableCell>
-                  <TableCell className="text-sm">
-                    {d.format ?? "-"}
-                    {d.effective_media_type && <div className="text-[11px]">{d.effective_media_type}</div>}
-                  </TableCell>
-                  <TableCell className="whitespace-normal text-xs">
-                    <div className="break-all"><span >접속 </span>{d.access_url}</div>
-                    {d.download_url && (
-                      <div className="break-all"><span >내려받기 </span>{d.download_url}</div>
-                    )}
-                  </TableCell>
-                  <TableCell className="text-sm tabular-nums">{formatBytes(d.byte_size)}</TableCell>
-                  <TableCell className="text-xs">
-                    {d.checksum ? (
-                      <span title={d.checksum}>{d.checksum_algorithm} {d.checksum.slice(0, 8)}…</span>
-                    ) : <span className="text-muted-foreground">-</span>}
-                  </TableCell>
-                  {canManage && (
-                    <TableCell className="whitespace-nowrap">
-                      <Tip label="배포본 고치기"><Button size="icon" variant="ghost" className="h-7 w-7" aria-label="배포본 고치기" onClick={() => setEditing(d)}>
-                        <Pencil className="h-3.5 w-3.5" />
-                      </Button></Tip>
-                      <Tip label="배포본 지우기"><Button size="icon" variant="ghost" className="h-7 w-7" aria-label="배포본 지우기" onClick={() => setRemoving(d)}>
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button></Tip>
-                    </TableCell>
-                  )}
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-          </div>
+          <DistributionTable
+            rows={rows}
+            actions={canManage ? (d, i) => (
+              <>
+                {rows.length > 1 && <>
+                <Tip label="위로"><Button size="icon" variant="ghost" className="h-7 w-7" aria-label="배포본 위로"
+                  disabled={i === 0 || moving} onClick={() => move(i, -1)}>
+                  <ArrowUp className="h-3.5 w-3.5" />
+                </Button></Tip>
+                <Tip label="아래로"><Button size="icon" variant="ghost" className="h-7 w-7" aria-label="배포본 아래로"
+                  disabled={i === rows.length - 1 || moving} onClick={() => move(i, 1)}>
+                  <ArrowDown className="h-3.5 w-3.5" />
+                </Button></Tip>
+                </>}
+                <Tip label="배포본 고치기"><Button size="icon" variant="ghost" className="h-7 w-7" aria-label="배포본 고치기" onClick={() => setEditing(d)}>
+                  <Pencil className="h-3.5 w-3.5" />
+                </Button></Tip>
+                <Tip label="배포본 지우기"><Button size="icon" variant="ghost" className="h-7 w-7" aria-label="배포본 지우기" onClick={() => setRemoving(d)}>
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button></Tip>
+              </>
+            ) : undefined}
+          />
         )}
 
       <DistributionDialog
@@ -185,6 +178,63 @@ export function DistributionsCard({
         </AlertDialogContent>
       </AlertDialog>
     </DetailSection>
+  )
+}
+
+/** 배포본 표 한 줄에 필요한 값 — 로컬 배포본과 페더레이션(원격) 상세가 보내는 배포본이 함께 쓴다. */
+export type DistributionRow = Pick<DatasetDistribution,
+  "title" | "description" | "format" | "media_type" | "access_url" | "download_url" | "byte_size" | "checksum_algorithm" | "checksum"
+> & { effective_media_type?: string | null }
+
+/** 배포본 표(읽기 전용). ``actions`` 를 주면 줄마다 끝 칸에 단추를 그린다. */
+export function DistributionTable<T extends DistributionRow>({
+  rows, actions,
+}: { rows: T[]; actions?: (row: T, index: number) => ReactNode }) {
+  return (
+    <div className="overflow-hidden rounded-md border">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>이름</TableHead>
+            <TableHead className="w-24">형식</TableHead>
+            <TableHead>주소</TableHead>
+            <TableHead className="w-20">크기</TableHead>
+            <TableHead className="w-28">체크섬</TableHead>
+            {actions && <TableHead className="w-36" />}
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.map((d, i) => {
+            const mime = d.effective_media_type ?? d.media_type
+            return (
+              <TableRow key={(d as { id?: number }).id ?? i} className="align-top">
+                <TableCell className="whitespace-normal text-sm">
+                  {d.title || <span className="text-muted-foreground">(이름 없음)</span>}
+                  {d.description && <div className="text-xs">{d.description}</div>}
+                </TableCell>
+                <TableCell className="text-sm">
+                  {d.format ?? "-"}
+                  {mime && <div className="text-[11px]">{mime}</div>}
+                </TableCell>
+                <TableCell className="whitespace-normal text-xs">
+                  <div className="break-all"><span >접속 </span>{d.access_url}</div>
+                  {d.download_url && (
+                    <div className="break-all"><span >내려받기 </span>{d.download_url}</div>
+                  )}
+                </TableCell>
+                <TableCell className="text-sm tabular-nums">{formatBytes(d.byte_size)}</TableCell>
+                <TableCell className="text-xs">
+                  {d.checksum ? (
+                    <span title={d.checksum}>{d.checksum_algorithm} {d.checksum.slice(0, 8)}…</span>
+                  ) : <span className="text-muted-foreground">-</span>}
+                </TableCell>
+                {actions && <TableCell className="whitespace-nowrap">{actions(d, i)}</TableCell>}
+              </TableRow>
+            )
+          })}
+        </TableBody>
+      </Table>
+    </div>
   )
 }
 
@@ -352,10 +402,21 @@ export function ExportCard({ datasetId, datasetName }: { datasetId: number; data
     }
   }
 
+  // 복사하는 주소도 DCAT `@id` · 데이터 카드처럼 설정 › AI-Ready 의 외부 공개 주소를 따른다(DEF-142).
+  // 클립보드 쓰기가 클릭 직후여야 하므로 주소는 미리 받아 둔다(못 받았으면 누를 때 다시 받는다).
+  const [publicBase, setPublicBase] = useState<AiReadyPublicBase | null>(null)
+  useEffect(() => {
+    let alive = true
+    fetchAiReadyPublicBase()
+      .then((p) => { if (alive) setPublicBase(p) })
+      .catch((e) => console.warn("외부 공개 주소를 미리 불러오지 못함", e))
+    return () => { alive = false }
+  }, [])
+
   const copyPath = async (kind: AiReadyExportKind) => {
-    const url = `${window.location.origin}${aiReadyExportPath(datasetId, kind)}`
     try {
-      await copyText(url)
+      const pub = publicBase ?? await fetchAiReadyPublicBase()
+      await copyText(aiReadyExportUrl(pub, window.location.origin, datasetId, kind))
       notifySuccess("API 주소를 복사했습니다.")
     } catch (e) {
       notifyError(e, "복사하지 못했습니다.")

@@ -481,6 +481,7 @@ def _response(run: DatasourceSyncRun, ds: Datasource | None, now: datetime | Non
         progress_done=run.progress_done or 0, progress_total=run.progress_total,
         created_count=run.created_count or 0, updated_count=run.updated_count or 0,
         removed_count=run.removed_count or 0, failed_count=run.failed_count or 0,
+        skipped_count=run.skipped_count or 0,
         items_total=run.items_total or 0, error_message=run.error_message,
         requested_by=run.requested_by, cancel_requested_by=run.cancel_requested_by,
         queued_at=run.queued_at, started_at=run.started_at, finished_at=run.finished_at,
@@ -787,6 +788,7 @@ async def apply_report(session: AsyncSession, run_id: int, report: SyncRunReport
     run.progress_total = report.progress_total
     run.created_count, run.updated_count = report.created, report.updated
     run.removed_count, run.failed_count = report.removed, report.failed
+    run.skipped_count = report.skipped
     if report.status in TERMINAL:
         run.error_message = report.error_message
     if report.started_at and not run.started_at:
@@ -867,6 +869,7 @@ async def _run_builtin(run_id: int, session_factory=None) -> None:
                     run.created_count = (run.created_count or 0) + result.tables_created
                     run.updated_count = (run.updated_count or 0) + result.tables_updated
                     run.removed_count = (run.removed_count or 0) + result.tables_removed
+                    run.skipped_count = (run.skipped_count or 0) + result.tables_skipped
                     errors.extend(f"{container or '전체'}: {e}" for e in result.errors)
                 run.progress_done, run.heartbeat_at = idx + 1, _utcnow()
                 await session.commit()

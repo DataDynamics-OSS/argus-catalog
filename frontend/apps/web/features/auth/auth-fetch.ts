@@ -82,11 +82,14 @@ export async function authFetch(
  */
 export async function throwOnError(res: Response, fallback: string): Promise<never> {
   const body = (await res.json().catch(() => ({}))) as {
-    detail?: string | { msg?: string; loc?: (string | number)[] }[]
+    detail?: string | { msg?: string; loc?: (string | number)[] }[] | { code?: string; message?: string }
   }
-  // FastAPI 422 는 detail 이 [{loc, msg}] 배열 — 사람이 읽을 메시지로 바꾼다
+  // FastAPI 422 는 detail 이 [{loc, msg}] 배열 — 사람이 읽을 메시지로 바꾼다.
+  // 코드가 붙은 차단은 {code, message, ...} (예: SOURCE_MAP_CONFLICT · MANUAL_MAPPED) — message 를 쓴다
   const detail = Array.isArray(body.detail)
     ? body.detail.map((d) => (d.msg ?? "").replace(/^Value error, /, "")).filter(Boolean).join(" / ")
-    : body.detail
+    : typeof body.detail === "object" && body.detail !== null
+      ? body.detail.message
+      : body.detail
   throw new Error(detail || `${fallback} (HTTP ${res.status})`)
 }

@@ -36,6 +36,9 @@ export const schemaFieldSchema = z.object({
   is_partition_key: z.string().optional().default("false"),
   is_distribution_key: z.string().optional().default("false"),
   ordinal: z.number(),
+  /** 데이터 사전 — 단위 · 산정기준(체크리스트 C08). 담당자 값이라 수집이 덮어쓰지 않는다 */
+  unit: z.string().nullable().optional(),
+  calculation: z.string().nullable().optional(),
 })
 export type SchemaField = z.infer<typeof schemaFieldSchema>
 
@@ -83,6 +86,42 @@ export const datasourceSchema = z.object({
 })
 export type Datasource = z.infer<typeof datasourceSchema>
 
+// 수동 데이터셋의 원천 매핑(TODO-CAT-001) — 백엔드 DatasetSourceMapResponse
+export const sourceCheckStatusSchema = z.enum(["MATCH", "DIFF", "NOT_FOUND", "UNREACHABLE", "UNSUPPORTED"])
+export type SourceCheckStatus = z.infer<typeof sourceCheckStatusSchema>
+
+export const schemaColumnDiffSchema = z.object({
+  name: z.string(),
+  change: z.enum(["ONLY_SOURCE", "ONLY_MANUAL", "TYPE_DIFF"]),
+  manual_type: z.string().nullable().optional(),
+  source_type: z.string().nullable().optional(),
+})
+export type SchemaColumnDiff = z.infer<typeof schemaColumnDiffSchema>
+
+export const sourceCheckResultSchema = z.object({
+  status: sourceCheckStatusSchema,
+  message: z.string().nullable().optional(),
+  source_column_count: z.number().nullable().optional(),
+  diffs: z.array(schemaColumnDiffSchema).default([]),
+})
+export type SourceCheckResult = z.infer<typeof sourceCheckResultSchema>
+
+export const datasetSourceMapSchema = z.object({
+  dataset_id: z.number(),
+  datasource_id: z.number(),
+  datasource_key: z.string(),
+  datasource_name: z.string(),
+  datasource_type: z.string(),
+  remote_path: z.string(),
+  check_status: z.string().nullable().optional(),
+  check_detail: sourceCheckResultSchema.nullable().optional(),
+  checked_at: z.string().nullable().optional(),
+  created_by: z.string().nullable().optional(),
+  created_at: z.string().nullable().optional(),
+  updated_at: z.string().nullable().optional(),
+})
+export type DatasetSourceMap = z.infer<typeof datasetSourceMapSchema>
+
 export const datasetSummarySchema = z.object({
   id: z.number(),
   urn: z.string(),
@@ -104,6 +143,10 @@ export const datasetSummarySchema = z.object({
   updated_at: z.coerce.date(),
   // 카드 보기용(목록 조회에 card=true 일 때만) — 앞쪽 컬럼 이름
   column_preview: z.array(z.string()).nullable().optional(),
+  // 소속 카탈로그와 수동 데이터셋 매핑 상태(TODO-CAT-001) — 수동 데이터셋이 아니면 source_map_status 는 null
+  catalog_id: z.number().nullable().optional(),
+  catalog_name: z.string().nullable().optional(),
+  source_map_status: z.string().nullable().optional(),
 })
 export type DatasetSummary = z.infer<typeof datasetSummarySchema>
 
@@ -130,6 +173,11 @@ export const datasetDetailSchema = z.object({
   ddl: z.string().nullable().optional(),
   status: z.string(),
   is_synced: z.string().optional().default("false"),
+  // 소속 카탈로그 · 수동 데이터셋(직접 등록한 카탈로그) · 원천 매핑 (TODO-CAT-001)
+  catalog_id: z.number().nullable().optional(),
+  catalog_name: z.string().nullable().optional(),
+  is_manual: z.boolean().optional().default(false),
+  source_map: datasetSourceMapSchema.nullable().optional(),
   // --- 확장 메타데이터 ---
   ingestion_frequency: z.string().nullable().optional(),
   ingestion_time: z.string().nullable().optional(),
@@ -186,6 +234,8 @@ export const datasetDetailSchema = z.object({
   missing_data_info: z.string().nullable().optional(),
   missing_value_notation: z.string().nullable().optional(),
   privacy_measures: z.string().nullable().optional(),
+  social_impact: z.string().nullable().optional(),
+  risk_mitigation: z.string().nullable().optional(),
   datasource_properties: z.record(z.string(), z.unknown()).nullable().optional(),
   schema_fields: z.array(schemaFieldSchema),
   tags: z.array(tagSchema),

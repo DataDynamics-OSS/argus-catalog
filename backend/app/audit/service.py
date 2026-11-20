@@ -25,7 +25,8 @@ from app.core.sql import LIKE_ESCAPE, like_contains
 logger = logging.getLogger(__name__)
 
 # operations: 되돌릴 수 없는 운영 작업(알림 일괄 정리 등, TODO-124)
-CATEGORIES = ("users", "settings", "permissions", "operations")
+# catalogs: 카탈로그 등록 · 수정 · 삭제 · 연결, 수동 데이터셋 원천 매핑(TODO-CAT-001)
+CATEGORIES = ("users", "settings", "permissions", "operations", "catalogs")
 SECRET_CHANGED = "(변경됨)"
 
 _client_ip: contextvars.ContextVar[str | None] = contextvars.ContextVar("audit_client_ip", default=None)

@@ -33,6 +33,15 @@ logger = logging.getLogger(__name__)
 # =========================================================================== #
 
 
+STORAGE_DOWN = "오브젝트 스토리지에 연결할 수 없습니다. MinIO 실행 여부와 설정을 확인하세요."
+
+
+def storage_unavailable(e: Exception) -> bool:
+    """예외 메시지로 저장소 연결 불가 여부를 추정한다(연결·엔드포인트·타임아웃·MinIO 기본 포트 9000)."""
+    msg = str(e).lower()
+    return any(k in msg for k in ("connect", "endpoint", "timed out", "9000"))
+
+
 def _s3_prefix(model_name: str, version: int) -> str:
     """모델 버전에 대응되는 S3 key 프리픽스(``{name}/v{ver}/``) 를 생성한다."""
     return f"{model_name}/v{version}/"

@@ -11,22 +11,28 @@
           "icon": "LayoutDashboard"
         },
         {
+          "id": "taxonomies",
+          "title": "분류 체계",
+          "url": "/dashboard/taxonomies",
+          "icon": "FolderTree"
+        },
+        {
           "id": "datasets",
           "title": "데이터셋",
           "url": "/dashboard/datasets",
           "icon": "Database"
         },
         {
+          "id": "catalogs",
+          "title": "카탈로그",
+          "url": "/dashboard/catalogs",
+          "icon": "Library"
+        },
+        {
           "id": "datasources",
           "title": "데이터 소스",
           "url": "/dashboard/datasources",
           "icon": "Server"
-        },
-        {
-          "id": "taxonomies",
-          "title": "분류 체계",
-          "url": "/dashboard/taxonomies",
-          "icon": "FolderTree"
         },
         {
           "id": "changes",
@@ -179,6 +185,12 @@
           "title": "설정",
           "url": "/dashboard/settings",
           "icon": "Settings"
+        },
+        {
+          "id": "audit",
+          "title": "감사 로그",
+          "url": "/dashboard/audit",
+          "icon": "History"
         },
         {
           "id": "permissions",

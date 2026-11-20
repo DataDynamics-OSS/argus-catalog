@@ -72,7 +72,9 @@ def test_settings_validation() -> None:
 
     assert AiReadyConfig(public_mode="CUSTOM", public_url="https://catalog.go.kr/").public_url == "https://catalog.go.kr"
     with pytest.raises(ValueError, match="URL 을 넣어야"):
-        AiReadyConfig(public_mode="CUSTOM")
+        AiReadyConfig(public_mode="CUSTOM", public_url="")
+    # 주소를 보내지 않은 부분 갱신은 저장된 값과 합친 뒤 검사한다(DEF-143)
+    AiReadyConfig(public_mode="CUSTOM")
     with pytest.raises(ValueError):
         AiReadyConfig(public_mode="CUSTOM", public_url="ftp://x")
     with pytest.raises(ValueError):

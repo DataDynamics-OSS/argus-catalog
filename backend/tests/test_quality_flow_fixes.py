@@ -4,6 +4,7 @@
 - TODO-095: 데이터셋 품질 탭의 예전 진단 주기(데이터셋 속성)는 기동할 때 그 데이터셋 하나를 대상으로 하는 품질 진단
   작업으로 옮기고 속성을 지운다(예전 DEF-053 의 주기 설정 · 예약 실패 표시는 주기 스케줄러와 함께 없앴다).
 - DEF-056: 규칙을 지우면 남은 규칙의 최신 결과로 최신 점수·데이터셋 품질 상태를 다시 계산한다.
+- DEF-195: 평가된 규칙이 하나도 남지 않으면 점수를 내지 않고 진단 전(미평가) 상태로 되돌린다.
 
 실행:
     cd backend
@@ -14,11 +15,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timezone
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 import app.catalog.models as cm
 from app.core.auth import TokenUser, get_current_user
@@ -150,6 +152,11 @@ async def _scores(s, ds_id):
                             .where(QualityScore.dataset_id == ds_id))).scalar()
 
 
+async def _backdate_scores(s, ds_id):
+    await s.execute(update(QualityScore).where(QualityScore.dataset_id == ds_id)
+                    .values(scored_at=datetime(2026, 1, 1, tzinfo=timezone.utc)))
+
+
 def test_delete_rule_recomputes_score_and_status(tmp_path, _no_alerts) -> None:  # noqa: F811
     alerts = _no_alerts
     sm = _make_sessionmaker(str(tmp_path / "q.db"))
@@ -172,6 +179,63 @@ def test_delete_rule_recomputes_score_and_status(tmp_path, _no_alerts) -> None: 
     ds = _run(sm, lambda s: s.get(cm.Dataset, ds_id))
     assert ds.quality_status == "GOOD" and float(ds.quality_score) == 100.0
     assert len(alerts) == n_alerts  # 재계산은 알림을 다시 만들지 않는다
+
+
+def test_delete_all_rules_returns_dataset_to_unevaluated(tmp_path, monkeypatch, _no_alerts) -> None:  # noqa: F811
+    """DEF-195 — 규칙을 모두 지우면 "100점 · 양호" 가 아니라 진단 전(미평가) 상태로 돌아간다."""
+    sm = _make_sessionmaker(str(tmp_path / "q.db"))
+    ds_id, (r1, r2) = asyncio.run(_seed(sm, [{"check_type": "NOT_NULL"}, {"check_type": "UNIQUE"}]))
+    # 진단 두 번 — 점수 이력 2건
+    _run(sm, lambda s: service.import_results(s, ds_id, _imp((r1, True), (r2, False))))
+    _run(sm, lambda s: _backdate_scores(s, ds_id))  # SQLite 의 scored_at 은 초 단위 — 두 진단의 순서를 벌린다
+    _run(sm, lambda s: service.import_results(s, ds_id, _imp((r1, True), (r2, True))))
+    assert _run(sm, lambda s: _scores(s, ds_id)) == 2
+
+    # 일부만 지우면 남은 규칙으로 다시 계산한다(DEF-056 유지)
+    assert _run(sm, lambda s: service.delete_rule(s, r2)) is True
+    latest = _run(sm, lambda s: service.get_latest_score(s, ds_id))
+    assert (float(latest.score), latest.total_rules) == (100.0, 1)
+    ds = _run(sm, lambda s: s.get(cm.Dataset, ds_id))
+    assert (ds.quality_status, ds.quality_score) == ("GOOD", 100)
+
+    # 마지막 규칙까지 지우면 점수가 없다 — 예전 진단의 점수가 '최신 점수'로 되살아나지도 않는다
+    assert _run(sm, lambda s: service.delete_rule(s, r1)) is True
+    assert _run(sm, lambda s: service.get_latest_score(s, ds_id)) is None
+    assert _run(sm, lambda s: service.get_score_history(s, ds_id)) == []
+    assert _run(sm, lambda s: _scores(s, ds_id)) == 0
+    ds = _run(sm, lambda s: s.get(cm.Dataset, ds_id))
+    assert ds.quality_status is None and ds.quality_score is None
+    client = _client(sm, monkeypatch)
+    assert client.get(f"/api/v1/quality/datasets/{ds_id}/score").status_code == 404
+    assert client.get(f"/api/v1/quality/datasets/{ds_id}/score/history").json() == []
+
+
+def test_delete_last_evaluated_rule_with_unevaluated_rule_left(tmp_path, _no_alerts) -> None:  # noqa: F811
+    """DEF-195 — 결과가 있는 규칙을 다 지우고 진단한 적 없는 규칙만 남아도 점수를 내지 않는다."""
+    sm = _make_sessionmaker(str(tmp_path / "q.db"))
+    ds_id, (r1, _r_new) = asyncio.run(_seed(sm, [{"check_type": "NOT_NULL"}, {"check_type": "UNIQUE"}]))
+    _run(sm, lambda s: service.import_results(s, ds_id, _imp((r1, False))))
+    assert _run(sm, lambda s: s.get(cm.Dataset, ds_id)).quality_status is not None
+    assert _run(sm, lambda s: service.delete_rule(s, r1)) is True
+    assert _run(sm, lambda s: _scores(s, ds_id)) == 0
+    ds = _run(sm, lambda s: s.get(cm.Dataset, ds_id))
+    assert ds.quality_status is None and ds.quality_score is None
+
+
+def test_record_score_without_evaluated_results_records_nothing(tmp_path, _no_alerts) -> None:  # noqa: F811
+    """DEF-195 — 평가된 결과가 하나도 없는 점수 산출은 100점을 기록하지 않는다."""
+    sm = _make_sessionmaker(str(tmp_path / "q.db"))
+    ds_id, (r1,) = asyncio.run(_seed(sm, [{"check_type": "NOT_NULL"}]))
+
+    async def record(s):
+        rule = await service.get_rule(s, r1)
+        return await service._record_score(s, ds_id, [service._not_evaluated(rule, ds_id, "미평가")], "t")
+
+    resp = _run(sm, record)
+    assert (resp.score, resp.total_rules) == (None, 0)
+    assert _run(sm, lambda s: _scores(s, ds_id)) == 0
+    ds = _run(sm, lambda s: s.get(cm.Dataset, ds_id))
+    assert ds.quality_status is None and ds.quality_score is None
 
 
 def test_delete_rule_without_score_leaves_status(tmp_path) -> None:

@@ -17,8 +17,25 @@ import { errorMessage } from "@/lib/notify"
 const LINE_PX = 19
 const PADDING_PX = 16 + 14  // 위아래 여백 + 가로 스크롤 막대
 
+// 원천 유형 → 화면 이름 (원천 직접 경로의 SQL 방언)
+const SOURCE_NAMES: Record<string, string> = {
+  postgresql: "PostgreSQL", mysql: "MySQL", mariadb: "MariaDB", oracle: "Oracle", mssql: "SQL Server",
+}
+
+/** 쿼리 아래의 실행 안내 — 진단 경로(Trino · 원천 직접)마다 다르다(DEF-152) */
+function runNote(preview: QualitySqlPreview): string {
+  if (preview.engine !== "DIRECT") {
+    return "실제 진단은 같은 테이블의 규칙들을 이 쿼리 하나로 묶어 품질 워커가 Trino 에서 실행합니다."
+  }
+  const source = SOURCE_NAMES[preview.source_type ?? ""] ?? preview.source_type ?? "원천 DB"
+  if (preview.mode === "READ") {
+    return `카탈로그에 Trino 연결이 없어 품질 워커가 ${source} 를 직접 읽습니다(읽기 전용) — 같은 테이블에서 행을 읽어 판정하는 규칙들은 이 읽기 한 번으로 함께 평가합니다.`
+  }
+  return `카탈로그에 Trino 연결이 없어 품질 워커가 이 쿼리를 ${source} 에 직접 냅니다(읽기 전용) — 원천에서 세는 같은 테이블의 규칙들은 쿼리 하나로 묶습니다.`
+}
+
 /**
- * 이 유형·기준값으로 진단할 때 실행하는 Trino 쿼리와 통과 판정 방법.
+ * 이 유형·기준값으로 진단할 때 실행하는 쿼리(Trino 또는 원천 직접 경로의 원천 방언)와 통과 판정 방법.
  * 서버가 진단과 같은 코드로 만들어 준다 — 쿼리를 실행하지는 않는다. 입력이 바뀌면 잠시 뒤 다시 만든다.
  */
 export function QualitySqlPreviewBox({ request, className = "" }: { request: QualitySqlPreviewRequest | null; className?: string }) {
@@ -54,7 +71,11 @@ export function QualitySqlPreviewBox({ request, className = "" }: { request: Qua
 
   return (
     <div className={`grid gap-1.5 ${className}`}>
-      <span className="text-sm font-medium">진단 쿼리 (Trino)</span>
+      <span className="text-sm font-medium">
+        진단 쿼리 ({preview?.engine === "DIRECT"
+          ? `원천 직접 · ${SOURCE_NAMES[preview.source_type ?? ""] ?? preview.source_type ?? "원천 DB"}`
+          : "Trino"})
+      </span>
       {error ? (
         <p className="rounded border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">{error}</p>
       ) : !preview ? (
@@ -76,9 +97,7 @@ export function QualitySqlPreviewBox({ request, className = "" }: { request: Qua
           {preview.judgement && <p className="text-xs"><b>판정</b> — {preview.judgement}</p>}
           {preview.note && <p className="text-xs">{preview.note}</p>}
           {preview.sql && (
-            <p className="text-xs">
-              실제 진단은 같은 테이블의 규칙들을 이 쿼리 하나로 묶어 품질 워커가 Trino 에서 실행합니다.
-            </p>
+            <p className="text-xs">{runNote(preview)}</p>
           )}
         </>
       )}

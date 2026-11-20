@@ -41,6 +41,7 @@ import {
 } from "@/lib/permission-registry"
 import {
   FIXED_ADMIN_KEYS,
+  blockedByViewOnly,
   countChanges,
   draftToPayload,
   initDraft,
@@ -88,8 +89,14 @@ function grantedByLabel(keys: readonly string[]): string {
   return `위임 ${keys.length}개 중 하나`
 }
 
-/** 보기 전용을 둘 수 있는 메뉴 — 관리 메뉴(항상 관리자 전용)를 뺀 메뉴 */
-const VIEWABLE_MENUS = MENU_REGISTRY.filter((m) => !m.adminOnly)
+/**
+ * 보기 전용을 둘 수 있는 메뉴 — 관리 메뉴(항상 관리자 전용)를 빼고, 막을 편집 기능(blockedByViewOnly)이 있는 메뉴만.
+ * 대시보드 · 내 결재함 · 즐겨찾기 · AI-Ready 점검처럼 편집 기능이 없는 메뉴는 체크해도 효과가 없어 뺀다(DEF-162,
+ * 백엔드 ``_viewable_menu`` 와 같은 기준).
+ */
+const VIEWABLE_MENUS = MENU_REGISTRY.filter(
+  (m) => !m.adminOnly && FEATURE_REGISTRY.some((f) => f.menuKey === m.key && blockedByViewOnly(f)),
+)
 
 export default function PermissionsPage() {
   const [menuDraft, setMenuDraft] = useState<Matrix | null>(null)

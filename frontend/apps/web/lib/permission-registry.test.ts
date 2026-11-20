@@ -5,7 +5,7 @@ import { adminMenuOpenTo, FEATURE_REGISTRY, MENU_REGISTRY, SETTINGS_DELEGATE_FEA
 describe("permission-registry", () => {
   it("관리 메뉴 4종(메타데이터 수집 포함)과 모델 파일 메뉴 2종은 adminOnly (백엔드 ADMIN_MENUS 와 일치)", () => {
     const admin = MENU_REGISTRY.filter((m) => m.adminOnly).map((m) => m.key).sort()
-    expect(admin).toEqual(["mlflow-files", "oci-files", "permissions", "quality-runs", "settings", "sync-runs", "users"])
+    expect(admin).toEqual(["audit", "mlflow-files", "oci-files", "permissions", "quality-runs", "settings", "sync-runs", "users"])
   })
 
   it("기능 key 는 중복 없음", () => {
@@ -25,6 +25,7 @@ describe("permission-registry", () => {
       ["sync-runs", ["datasources.sync"]],
       ["quality-runs", ["quality.manage"]],
       ["settings", [...SETTINGS_DELEGATE_FEATURES]],
+      ["audit", ["audit.view"]],
     ])
     expect(adminMenuOpenTo("sync-runs", granted(["datasources.sync"]))).toBe(true)
     expect(adminMenuOpenTo("sync-runs", granted([]))).toBe(false)
@@ -35,6 +36,10 @@ describe("permission-registry", () => {
     expect(adminMenuOpenTo("settings", granted(["settings.mail"]))).toBe(true)
     expect(adminMenuOpenTo("settings", granted(["users.manage"]))).toBe(false)
     expect(adminMenuOpenTo("permissions", granted(["users.manage", ...SETTINGS_DELEGATE_FEATURES]))).toBe(false)
+    // 감사 로그(TODO-152) — audit.view 만 받아도 열린다. 사용자 관리는 열리지 않는다
+    expect(adminMenuOpenTo("audit", granted(["audit.view"]))).toBe(true)
+    expect(adminMenuOpenTo("audit", granted(["users.manage"]))).toBe(false)
+    expect(adminMenuOpenTo("users", granted(["audit.view"]))).toBe(false)
   })
 
   it("url → 메뉴 key 는 가장 긴 prefix", () => {

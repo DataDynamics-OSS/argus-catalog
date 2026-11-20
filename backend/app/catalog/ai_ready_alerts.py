@@ -10,20 +10,31 @@
 - ``REPORT_RECEIVED`` 오류 신고 · 개선 요청 접수 — 댓글 저장 때. ``categories``(bug · suggestion, 생략하면 둘 다).
 - ``REPORT_DUE`` 처리 기한 임박 · 넘김 — 주기 점검. ``days_before``(기본 2, 0 이면 넘김만) 일 안으로 남으면 임박(경고),
   넘기면 넘김(치명).
+- ``REPORT_CLOSED`` 처리 결과(해결 · 소명) — 상태를 바꿀 때. ``categories``(생략하면 둘 다). 수신자는 규칙 구독자와
+  **신고한 사람**이다(데이터셋 소유자는 처리한 쪽이라 더하지 않는다). 처리가 끝날 때(끝나지 않은 상태 → 해결 · 소명,
+  또는 해결 ↔ 소명)마다 규칙당 한 번.
 
 같은 규칙 · 대상(데이터셋, 신고와 단계)에 대해 마지막 알림이 미확인 · 확인 · 무시면 다시 만들지 않는다.
 조건이 풀리면(요건 충족, 신고 처리 끝남, 임박이 넘김으로 바뀜) 그 알림을 시스템이 해결로 바꾼다 — 그 뒤 다시
-조건이 생기면 새로 알린다. 무시한 알림도 조건이 풀리면 해결로 바뀐다.
+조건이 생기면 새로 알린다. 무시한 알림도 조건이 풀리면 해결로 바뀐다. 신고를 해결 · 소명하거나 분류를 바꾸거나
+지우면 그 신고의 접수 · 기한 알림을 그 자리에서 해결한다(``resolve_report_alerts``, DEF-140). 접수 알림은 신고마다
+규칙당 한 번 — 분류를 바꿨다 되돌려도 다시 만들지 않는다(DEF-141).
+
+주기 점검은 백엔드 프로세스가 여럿이어도 한 번에 하나만 돈다 — DB 잠금(PostgreSQL ``pg_try_advisory_lock`` ·
+MariaDB ``GET_LOCK``)을 못 잡은 프로세스는 그 회차를 건너뛴다(``run_checks_once``).
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
+import math
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.alert.models import AlertRule, LineageAlert
@@ -34,7 +45,8 @@ logger = logging.getLogger(__name__)
 UNMET = "AI_READY_UNMET"
 RECEIVED = "REPORT_RECEIVED"
 DUE = "REPORT_DUE"
-TRIGGERS = frozenset({UNMET, RECEIVED, DUE})
+CLOSED = "REPORT_CLOSED"
+TRIGGERS = frozenset({UNMET, RECEIVED, DUE, CLOSED})
 
 CONDITIONS = ("missing", "metadata", "freshness", "format")
 CATEGORY_LABEL = {"bug": "오류 신고", "suggestion": "개선 요청"}
@@ -44,10 +56,34 @@ CHECK_SECONDS = 3600          # 주기 점검 간격
 FIRST_CHECK_DELAY = 120       # 기동 직후에는 잠시 기다림
 SYSTEM_ACTOR = "system"
 _LIVE = ("OPEN", "ACKNOWLEDGED", "DISMISSED")   # 다시 알리지 않는 상태
+LOCK_KEY = 0x41524459         # 주기 점검 잠금 — PostgreSQL advisory lock 키('ARDY')
+LOCK_NAME = "argus_ai_ready_alerts"   # MariaDB GET_LOCK 이름
+DISPLAY_TIMEZONE = "Asia/Seoul"   # 알림 문구의 기한 날짜 시간대(DEF-144)
+
+
+def _display_tz():
+    """알림 문구에 쓰는 표시 시간대 — 화면(한국 사용자 브라우저)과 같은 날짜가 되도록 KST(DEF-144).
+
+    서버(컨테이너)는 보통 UTC 로 돌아 OS 시간대를 쓰면 KST 0~9시 접수분의 기한 날짜가 하루 이르게 나온다.
+    """
+    try:
+        return ZoneInfo(DISPLAY_TIMEZONE)
+    except ZoneInfoNotFoundError:
+        return timezone(timedelta(hours=9), "KST")
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _due_date(due: datetime) -> str:
+    """기한 날짜(표시 시간대) — 예: 2026-11-25."""
+    return due.astimezone(_display_tz()).date().isoformat()
+
+
+def _days_left(due: datetime, now: datetime) -> int:
+    """남은 일수 — 화면(``OpenDueText``)처럼 올림. 0.3일 남으면 1(D-1), 딱 기한이면 0."""
+    return max(0, math.ceil((due - now).total_seconds() / 86400))
 
 
 def _aware(v: datetime | None) -> datetime | None:
@@ -204,14 +240,18 @@ async def notify_report_received(session: AsyncSession, comment) -> int:
     tags, lineages = await _scope_facts(session, {ds.id})
     kind = CATEGORY_LABEL.get(comment.category, "신고")
     due = _aware(comment.due_at)
+    # 분류를 바꿨다 되돌려 다시 접수돼도 규칙마다 접수 알림은 한 번만(DEF-141)
+    notified = {a.rule_id for a in await _report_alerts(session, comment.id, ds.id, RECEIVED)}
     made = 0
     for rule, cfg in rules:
         cats = cfg.get("categories") or list(CATEGORY_LABEL)
         if comment.category not in cats or not _in_scope(rule, ds, tags, lineages):
             continue
+        if rule.id in notified:
+            continue
         summary = f"{kind} 접수: {ds.name} — {comment.author_name}: {_snippet(comment.content_plain)}"
         if due:
-            summary += f" (기한 {due.date().isoformat()})"
+            summary += f" (기한 {_due_date(due)})"
         await _send(session, LineageAlert(
             alert_type=RECEIVED, severity=rule.severity_override or "INFO", source_dataset_id=ds.id,
             rule_id=rule.id, change_summary=summary[:500],
@@ -222,6 +262,77 @@ async def notify_report_received(session: AsyncSession, comment) -> int:
     if made:
         logger.info("신고 접수 알림 %d건: comment_id=%s dataset_id=%s", made, comment.id, ds.id)
     return made
+
+
+CLOSED_LABEL = {"RESOLVED": "해결", "REJECTED": "소명"}
+
+
+async def notify_report_closed(session: AsyncSession, comment, status: str, resolution: str | None,
+                               actor: str | None) -> int:
+    """신고 처리가 끝났을 때(해결 · 소명) ``REPORT_CLOSED`` 규칙으로 신고한 사람에게 알린다. 커밋은 호출자.
+
+    수신자는 규칙 구독자와 신고자(작성자 아이디) — 데이터셋 소유자는 처리한 쪽이라 더하지 않는다.
+    """
+    from app.alert.service import _persist_and_dispatch
+    from app.comments.service import comment_author_username
+
+    if status not in CLOSED_LABEL:
+        return 0
+    rules = await _rules(session, CLOSED)
+    ds_id = _ds_id(comment.entity_id)
+    if not rules or ds_id is None:
+        return 0
+    ds = await session.get(Dataset, ds_id)
+    if ds is None:
+        return 0
+    tags, lineages = await _scope_facts(session, {ds.id})
+    reporter = comment_author_username(comment.author_name)
+    kind = CATEGORY_LABEL.get(comment.category, "신고")
+    made = 0
+    for rule, cfg in rules:
+        cats = cfg.get("categories") or list(CATEGORY_LABEL)
+        if comment.category not in cats or not _in_scope(rule, ds, tags, lineages):
+            continue
+        summary = f"{kind} {CLOSED_LABEL[status]}: {ds.name} — #{comment.id} {_snippet(comment.content_plain, 40)}"
+        if resolution:
+            summary += f" → {_snippet(resolution)}"
+        await _persist_and_dispatch(session, [LineageAlert(
+            alert_type=CLOSED, severity=rule.severity_override or "INFO", source_dataset_id=ds.id,
+            rule_id=rule.id, change_summary=summary[:500],
+            change_detail=json.dumps({"comment_id": comment.id, "category": comment.category, "status": status,
+                                      "resolution": resolution, "reporter": comment.author_name,
+                                      "handled_by": actor}, ensure_ascii=False, default=str),
+        )], dataset_owners=False, direct=[reporter] if reporter else None)
+        made += 1
+    if made:
+        logger.info("신고 처리 결과 알림 %d건: comment_id=%s status=%s", made, comment.id, status)
+    return made
+
+
+async def _report_alerts(session: AsyncSession, comment_id: int, dataset_id: int | None,
+                         trigger: str | None = None, statuses: tuple[str, ...] | None = None) -> list[LineageAlert]:
+    """이 신고(댓글)의 접수 · 기한 알림 — 데이터셋으로 좁힌 뒤 상세의 ``comment_id`` 로 고른다."""
+    stmt = select(LineageAlert).where(LineageAlert.alert_type.in_((trigger,) if trigger else (RECEIVED, DUE)))
+    if dataset_id is not None:
+        stmt = stmt.where(LineageAlert.source_dataset_id == dataset_id)
+    if statuses:
+        stmt = stmt.where(LineageAlert.status.in_(statuses))
+    return [a for a in (await session.execute(stmt)).scalars().all()
+            if str(_detail(a).get("comment_id")) == str(comment_id)]
+
+
+async def resolve_report_alerts(session: AsyncSession, comment, now: datetime | None = None) -> int:
+    """신고가 처리 끝남(해결 · 소명) · 신고 아님(분류 바뀜) · 삭제가 되면 그 신고의 접수 · 기한 알림을 바로 해결로(DEF-140).
+
+    매시간 점검(``evaluate_due_alerts``)을 기다리지 않는다. 처리자는 시스템. 커밋은 호출자.
+    """
+    now = now or _now()
+    alerts = await _report_alerts(session, comment.id, _ds_id(comment.entity_id), statuses=_LIVE)
+    for a in alerts:
+        _auto_resolve(a, now)
+    if alerts:
+        logger.info("신고 알림 자동 해결 %d건: comment_id=%s", len(alerts), comment.id)
+    return len(alerts)
 
 
 def _stage(due: datetime, now: datetime, days_before: int) -> str | None:
@@ -282,12 +393,12 @@ async def evaluate_due_alerts(session: AsyncSession, now: datetime | None = None
                 days = max(1, (now - due).days)
                 head, severity = f"{kind} 처리 기한 넘김({days}일)", "BREAKING"
             else:
-                left = (due - now).total_seconds() / 86400
-                head, severity = f"{kind} 처리 기한 임박({'오늘' if left < 1 else f'{int(left)}일 남음'})", "WARNING"
+                left = _days_left(due, now)
+                head, severity = f"{kind} 처리 기한 임박({'오늘까지' if left == 0 else f'{left}일 남음'})", "WARNING"
             await _send(session, LineageAlert(
                 alert_type=DUE, severity=rule.severity_override or severity, source_dataset_id=ds.id,
                 rule_id=rule.id,
-                change_summary=f"{head}: {ds.name} — #{c.id} {_snippet(c.content_plain)} (기한 {due.date().isoformat()})"[:500],
+                change_summary=f"{head}: {ds.name} — #{c.id} {_snippet(c.content_plain)} (기한 {_due_date(due)})"[:500],
                 change_detail=json.dumps({"comment_id": c.id, "stage": stage, "category": c.category,
                                           "status": c.status, "due_at": due}, ensure_ascii=False, default=str),
             ), ds)
@@ -320,16 +431,61 @@ async def run_checks(session: AsyncSession, now: datetime | None = None) -> dict
     return out
 
 
-async def alert_loop() -> None:
-    """lifespan 에서 기동 — 1시간마다 최소 요건 미충족 · 신고 기한 알림을 점검한다(규칙이 없으면 조회만)."""
-    from app.core.database import async_session
+@contextlib.asynccontextmanager
+async def _run_lock(engine):
+    """주기 점검 잠금 — 이 프로세스가 잡았으면 True. 백엔드 프로세스가 여럿일 때 같은 회차를 두 번 돌지 않게.
 
+    잠금은 전용 연결에 건 세션 잠금(PostgreSQL ``pg_try_advisory_lock`` · MariaDB ``GET_LOCK(.., 0)``)이라
+    기다리지 않고, 프로세스가 죽으면 연결과 함께 풀린다. 그 밖의 DB(SQLite 등 단일 프로세스)는 늘 True.
+    """
+    dialect = engine.dialect.name
+    if dialect not in ("postgresql", "mysql", "mariadb"):
+        yield True
+        return
+    async with engine.connect() as conn:
+        if dialect == "postgresql":
+            got = bool(await conn.scalar(text("SELECT pg_try_advisory_lock(:k)"), {"k": LOCK_KEY}))
+        else:
+            got = (await conn.scalar(text("SELECT GET_LOCK(:n, 0)"), {"n": LOCK_NAME})) == 1
+        try:
+            yield got
+        finally:
+            if got:
+                try:
+                    if dialect == "postgresql":
+                        await conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": LOCK_KEY})
+                    else:
+                        await conn.execute(text("SELECT RELEASE_LOCK(:n)"), {"n": LOCK_NAME})
+                except Exception as e:  # noqa: BLE001 — 연결을 닫으면 어차피 풀린다
+                    logger.warning("AI-Ready 알림 점검 잠금 해제 실패: %s", e)
+
+
+async def run_checks_once(engine=None, session_factory=None) -> dict[str, dict[str, int]] | None:
+    """잠금을 잡고 한 회차 점검. 다른 프로세스가 점검 중이면 건너뛰고 None."""
+    if engine is None or session_factory is None:
+        from app.core.database import async_session
+        from app.core.database import engine as default_engine
+
+        engine = engine or default_engine
+        session_factory = session_factory or async_session
+    async with _run_lock(engine) as got:
+        if not got:
+            logger.info("AI-Ready 알림 점검 건너뜀 — 다른 백엔드 프로세스가 점검 중")
+            return None
+        async with session_factory() as session:
+            return await run_checks(session)
+
+
+async def alert_loop() -> None:
+    """lifespan 에서 기동 — 1시간마다 최소 요건 미충족 · 신고 기한 알림을 점검한다(규칙이 없으면 조회만).
+
+    백엔드 프로세스가 여럿이면 잠금을 잡은 하나만 돈다(``run_checks_once``).
+    """
     logger.info("AI-Ready 알림 점검 루프 시작 (간격 %ds)", CHECK_SECONDS)
     await asyncio.sleep(FIRST_CHECK_DELAY)
     while True:
         try:
-            async with async_session() as session:
-                await run_checks(session)
+            await run_checks_once()
         except asyncio.CancelledError:
             logger.info("AI-Ready 알림 점검 루프 중지됨")
             raise

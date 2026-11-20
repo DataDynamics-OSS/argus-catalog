@@ -46,7 +46,7 @@ import { CatalogBindings } from "@/features/catalogs/components/catalog-bindings
 import { SyncScopeDialog } from "@/features/datasources/components/sync-scope-dialog"
 import { SYNC_PERMISSION_MISSING_MESSAGE } from "@/features/datasources/sync-format"
 
-const ROLE_ORDER: DatasourceRole[] = ["CATALOG", "DATABASE", "ENGINE"]
+const ROLE_ORDER: Exclude<DatasourceRole, "MANUAL">[] = ["CATALOG", "DATABASE", "ENGINE"]
 const ROLE_ICON = { CATALOG: Layers, DATABASE: Database, ENGINE: Server } as const
 // Iceberg 는 테이블 포맷 — 카탈로그 구현에 따라 실제 데이터 소스 유형이 달라진다
 // Apache Iceberg 카드 안에서 고르는 유형 — 유형 목록에는 따로 보이지 않는다

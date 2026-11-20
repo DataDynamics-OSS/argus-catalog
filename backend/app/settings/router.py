@@ -17,7 +17,8 @@ from typing import Annotated, Literal
 import aioboto3
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field, field_validator, model_validator
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import AdminUser, CurrentUser, TokenUser
@@ -568,7 +569,8 @@ class AiReadyConfig(BaseModel):
 
     @model_validator(mode="after")
     def _public(self):
-        if self.public_mode == "CUSTOM" and not self.public_url:
+        # 부분 갱신에서 public_url 을 보내지 않았으면 저장된 값과 병합한 뒤 다시 검사한다(DEF-143)
+        if self.public_mode == "CUSTOM" and not self.public_url and "public_url" in self.model_fields_set:
             raise ValueError("직접 입력 방식이면 공개 주소 URL 을 넣어야 합니다.")
         return self
 
@@ -617,6 +619,11 @@ class AiReadyConfig(BaseModel):
 @router.get("/ai-ready", response_model=AiReadyConfig)
 async def get_ai_ready_config(_guard: SettingsAiReadyUser, session: AsyncSession = Depends(get_session)):
     """AI-Ready 기관 기본값 반환(행이 없으면 기본값)."""
+    return await _load_ai_ready_config(session)
+
+
+async def _load_ai_ready_config(session: AsyncSession) -> AiReadyConfig:
+    """저장된 AI-Ready 기관 기본값(행이 없으면 기본값)."""
     cfg = await get_config_by_category(session, "ai_ready")
     return AiReadyConfig(
         publisher=cfg.get("ai_ready_publisher", ""),
@@ -660,7 +667,16 @@ async def update_ai_ready_config(_guard: SettingsAiReadyUser,
     body: AiReadyConfig,
     session: AsyncSession = Depends(get_session),
 ):
-    """AI-Ready 기관 기본값을 저장한다. 데이터셋에 써 넣지 않으므로 값이 빈 데이터셋 전체에 바로 반영된다."""
+    """AI-Ready 기관 기본값을 저장한다. 데이터셋에 써 넣지 않으므로 값이 빈 데이터셋 전체에 바로 반영된다.
+
+    보낸 필드만 바꾸고 보내지 않은 필드는 저장된 값을 그대로 둔다(DEF-143).
+    """
+    current = await _load_ai_ready_config(session)
+    try:
+        body = AiReadyConfig.model_validate(
+            {**current.model_dump(), **body.model_dump(include=body.model_fields_set)})
+    except ValidationError as e:
+        raise RequestValidationError(e.errors(include_url=False)) from e
     await update_config(session, "ai_ready", {
         "ai_ready_publisher": body.publisher,
         "ai_ready_language": body.language or "ko",

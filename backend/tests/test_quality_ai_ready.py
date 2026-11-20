@@ -76,7 +76,7 @@ def test_continuity_spec_parsing() -> None:
     assert (c.prefix_len, c.prefix_format) == (7, "%Y-%m"), "단위까지만 잘라 같은 달을 묶는다"
     c = rule_sql.continuity_spec("HOUR YYYY-MM-DD HH24:MI:SS")
     assert (c.prefix_len, c.prefix_format, c.like) == (13, "%Y-%m-%d %H", "____-__-__ __:__:__")
-    for bad in (None, "", "WEEK", "DAY DD/MM/YYYY", "DAY YYYYMM"):
+    for bad in (None, "", "FORTNIGHT", "DAY DD/MM/YYYY", "DAY YYYYMM"):
         with pytest.raises(ExpressionError):
             rule_sql.continuity_spec(bad)
 
@@ -88,7 +88,7 @@ def test_continuity_sql_for_temporal_and_string_dates() -> None:
     text = _compile("CONTINUITY", "base_ymd", "MONTH YYYYMMDD")
     assert "regexp_like" in text.exprs[0] and "substr(" in text.exprs[0] and ", 1, 6)" in text.exprs[0]
     # 문자열 컬럼인데 형식을 적지 않음 · 단위가 틀림 → 규칙 오류
-    for column, expected in (("base_ymd", "DAY"), ("paid_at", "WEEK")):
+    for column, expected in (("base_ymd", "DAY"), ("paid_at", "FORTNIGHT")):
         out = _compile("CONTINUITY", column, expected)
         assert isinstance(out, Outcome) and not out.passed
 
@@ -186,7 +186,7 @@ def test_definition_and_rule_validation() -> None:
     d = QualityDefinitionWrite(name="더미", category="DUMMY", threshold=99.0)
     assert (d.check_type, d.expected_value) == ("DUMMY_VALUE", None)
     assert QualityDefinitionWrite(name="연속", category="CONTINUITY", expected_value="day yyyymmdd").check_type == "CONTINUITY"
-    for bad in (None, "WEEK", "DAY DD-MM-YYYY"):
+    for bad in (None, "FORTNIGHT", "DAY DD-MM-YYYY"):
         with pytest.raises(ValidationError):
             QualityDefinitionWrite(name="연속", category="CONTINUITY", expected_value=bad)
     with pytest.raises(ValidationError):

@@ -13,7 +13,8 @@ from __future__ import annotations
 import io
 import json
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, tzinfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -259,11 +260,19 @@ async def job_trend(session: AsyncSession, job_id: int, limit: int = 30) -> Qual
             pair = per_run.setdefault(job_run_id, {}).setdefault(indicator.key, [0, 0])
             pair[0] += int(checked or 0)
             pair[1] += int(errors or 0)
+    # 중지된 데이터셋 실행은 실패와 따로 센다(DEF-156) — 저장된 runs_failed 에는 중지도 들어 있다
+    cancelled: dict[int, int] = dict((await session.execute(
+        select(QualityRun.job_run_id, func.count(QualityRun.id))
+        .where(QualityRun.job_run_id.in_([r.id for r in job_runs]), QualityRun.status == "CANCELLED",
+               QualityRun.kind != runs.PROFILE_KIND)
+        .group_by(QualityRun.job_run_id))).all()) if job_runs else {}
     points = []
     for r in job_runs:
+        n_cancelled = cancelled.get(r.id, 0)
         points.append(QualityJobTrendPoint(
             job_run_id=r.id, started_at=r.started_at, status=r.status,
-            runs_total=r.runs_total, runs_succeeded=r.runs_succeeded, runs_failed=r.runs_failed,
+            runs_total=r.runs_total, runs_succeeded=r.runs_succeeded,
+            runs_failed=max(0, r.runs_failed - n_cancelled), runs_cancelled=n_cancelled,
             checked_count=r.checked_count, error_count=r.error_count,
             error_rate=_rate(r.checked_count, r.error_count) if r.checked_count is not None else None,
             indicators={k: _rate(c, e) for k, (c, e) in per_run.get(r.id, {}).items()},
@@ -279,23 +288,57 @@ _STATUS = {"RUNNING": "실행 중", "QUEUED": "대기 중", "SUCCEEDED": "완료
            "CANCELLED": "중지됨", "SKIPPED": "건너뜀"}
 
 
-def _local(dt: datetime | None) -> str:
-    """엑셀에 적을 시각 — 서버의 현지 시간(서버 OS 시간대, 보통 Asia/Seoul)으로 바꾼 문자열."""
+# 화면과 같은 이름(DEF-155) — 심각도는 frontend lib/severity.ts 의 SEVERITY_LABEL,
+# 규칙 유형은 features/quality/check-types.ts 의 CHECK_TYPE_LABEL 과 같게 둔다
+SEVERITY_LABEL = {"BREAKING": "치명", "WARNING": "경고", "INFO": "정보"}
+CHECK_TYPE_LABEL = {
+    "NOT_NULL": "NULL 없음", "UNIQUE": "고유값", "BROKEN_TEXT": "글자 깨짐", "WHITESPACE": "공백·특수문자",
+    "DATE_FORMAT": "날짜 형식", "REGEX": "정규식 패턴", "FUNCTION": "Trino 함수 (UDF)", "ACCEPTED_VALUES": "허용 값 목록",
+    "MIN_VALUE": "하한 (이상)", "MAX_VALUE": "상한 (이하)", "COLUMN_COMPARE": "컬럼 간 비교", "LOGICAL": "논리관계",
+    "FORMULA": "계산식", "REFERENTIAL": "참조관계", "DUMMY_VALUE": "더미 값", "CONTINUITY": "데이터 연속성",
+    "DIVERSITY": "값 분포 다양성", "COMPOSITE_UNIQUE": "여러 컬럼 키 고유값",
+    "ROW_COUNT": "행 수 하한", "FRESHNESS": "최신성", "CUSTOM_SQL": "커스텀 SQL", "CUSTOM_PYTHON": "커스텀 Python",
+}
+# 시간대를 받지 못했거나 알 수 없는 이름일 때 — 서버 OS 시간대(컨테이너는 보통 UTC)가 아니라 화면 기본(KST)
+DEFAULT_DISPLAY_TIMEZONE = "Asia/Seoul"
+
+
+def severity_label(severity: str | None) -> str:
+    return SEVERITY_LABEL.get(severity or "", severity or "")
+
+
+def check_type_label(check_type: str | None) -> str:
+    return CHECK_TYPE_LABEL.get(check_type or "", check_type or "")
+
+
+def display_zone(tz: str | None = None) -> tzinfo:
+    """리포트 시각을 적을 시간대 — 브라우저가 보낸 IANA 이름(``tz``), 없거나 모르면 ``DEFAULT_DISPLAY_TIMEZONE``(DEF-155)."""
+    try:
+        return ZoneInfo(tz) if tz else ZoneInfo(DEFAULT_DISPLAY_TIMEZONE)
+    except (ZoneInfoNotFoundError, ValueError):
+        return ZoneInfo(DEFAULT_DISPLAY_TIMEZONE)
+
+
+def _local(dt: datetime | None, zone: tzinfo | None = None) -> str:
+    """리포트에 적을 시각 — 표시 시간대(``display_zone``)로 바꾼 문자열."""
     dt = runs._as_utc(dt)
-    return dt.astimezone().strftime("%Y-%m-%d %H:%M:%S") if dt else ""
+    return dt.astimezone(zone or display_zone()).strftime("%Y-%m-%d %H:%M:%S") if dt else ""
 
 
-def _zone() -> str:
-    """서버 현지 시간대의 이름(예: KST) — 머리글에 밝힌다."""
-    return datetime.now().astimezone().tzname() or "현지 시간"
+def _zone(zone: tzinfo | None = None) -> str:
+    """표시 시간대의 이름(예: KST) — 머리글에 밝힌다."""
+    return datetime.now(zone or display_zone()).tzname() or "현지 시간"
 
 
 def _pct(rate: float | None) -> float | str:
     return rate if rate is not None else ""
 
 
-def report_xlsx(report: QualityJobRunReport) -> bytes:
-    """리포트를 엑셀 파일로 — 시트: 요약 / 진단 기준별 / AI-Ready 지표별 / 데이터셋별 / 규칙별."""
+def report_xlsx(report: QualityJobRunReport, tz: str | None = None) -> bytes:
+    """리포트를 엑셀 파일로 — 시트: 요약 / 진단 기준별 / AI-Ready 지표별 / 데이터셋별 / 규칙별.
+
+    ``tz`` 는 시각을 적을 IANA 시간대(화면의 브라우저 시간대). 용어 · 라벨은 화면과 같게 쓴다(DEF-155).
+    """
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill
     from openpyxl.utils import get_column_letter
@@ -323,6 +366,7 @@ def report_xlsx(report: QualityJobRunReport) -> bytes:
         ws.freeze_panes = ws.cell(row=start + 1, column=1)
 
     jr = report.job_run
+    zone = display_zone(tz)
     wb = Workbook()
     ws = wb.active
     ws.title = "요약"
@@ -332,14 +376,15 @@ def report_xlsx(report: QualityJobRunReport) -> bytes:
         ("작업 실행", f"#{jr.id}"),
         ("상태", _STATUS.get(jr.status, jr.status)),
         ("시작 방식", "예약" if jr.trigger_type == "SCHEDULE" else f"수동 ({jr.requested_by or '-'})"),
-        (f"시작 ({_zone()})", _local(jr.started_at)),
-        (f"종료 ({_zone()})", _local(jr.finished_at)),
+        (f"시작 ({_zone(zone)})", _local(jr.started_at, zone)),
+        (f"종료 ({_zone(zone)})", _local(jr.finished_at, zone)),
         ("품질 지표", ", ".join(jr.definitions) or "전체"),
         ("진단 기준", ", ".join(names.get(k, k) for k in jr.indicators) or "전체"),
         ("대상 데이터셋", jr.targets_total),
         ("진단한 데이터셋", jr.runs_total),
         ("  성공", jr.runs_succeeded),
-        ("  실패·일부 실패·중지", jr.runs_failed),
+        ("  실패·일부 실패", jr.runs_failed),
+        ("  중지", jr.runs_cancelled),
         ("시작하지 못한 데이터셋", jr.skipped_total),
         ("규칙이 없어 진단하지 않은 데이터셋", jr.no_rules),
         ("평가한 규칙", report.rules_total),
@@ -382,7 +427,7 @@ def report_xlsx(report: QualityJobRunReport) -> bytes:
               _pct(g.error_rate)] for g in report.ai_ready_indicators],
           [14, 18, 22, 10, 14, 14, 14, 12])
     table(wb.create_sheet("데이터셋별"),
-          ["데이터셋", "원본", "Trino 테이블", "상태", "규칙", "실패한 규칙", "진단 건수", "오류 건수", "오류율(%)", "오류 내용"],
+          ["데이터셋", "원본", "진단 테이블", "상태", "규칙", "실패한 규칙", "진단 건수", "오류 건수", "오류율(%)", "오류 내용"],
           [[d.dataset_name or f"데이터셋 #{d.dataset_id}", d.datasource_name, d.engine_table,
             _STATUS.get(d.status, d.status), d.rules, d.failed_rules, d.checked_count, d.error_count,
             _pct(d.error_rate), d.error_message]
@@ -390,8 +435,8 @@ def report_xlsx(report: QualityJobRunReport) -> bytes:
           [30, 20, 40, 12, 8, 14, 14, 14, 12, 60])
     table(wb.create_sheet("규칙별"),
           ["데이터셋", "규칙", "유형", "컬럼", "영역·진단 기준", "품질 지표", "심각도", "결과", "진단 건수", "오류 건수", "오류율(%)", "상세"],
-          [[r.dataset_name or f"데이터셋 #{r.dataset_id}", r.rule_name, r.check_type, r.column_name,
-            r.indicator_name, r.definition_name, r.severity, "통과" if r.passed else "실패", r.checked_count, r.error_count,
+          [[r.dataset_name or f"데이터셋 #{r.dataset_id}", r.rule_name, check_type_label(r.check_type), r.column_name,
+            r.indicator_name, r.definition_name, severity_label(r.severity), "통과" if r.passed else "실패", r.checked_count, r.error_count,
             _pct(r.error_rate), r.detail]
            for r in report.rules],
           [30, 30, 18, 22, 18, 24, 10, 8, 14, 14, 12, 60])

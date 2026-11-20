@@ -1,11 +1,13 @@
 "use client"
 
+import { useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import { Bar, BarChart, LabelList, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 
 import { Card, CardContent, CardHeader, CardTitle } from "@workspace/ui/components/card"
 import { ChartTooltipBox } from "@/components/charts/chart-tooltip"
 import { AXIS_TICK, BAR_RADIUS_END, HOVER_CURSOR, SERIES } from "@/components/charts/chart-style"
+import { tooltipLeft } from "@/components/charts/tooltip-position"
 
 export type TopBarItem = {
   /** 전체 이름 (툴팁) */
@@ -54,6 +56,17 @@ export function TopBarCard({
     .slice(0, limit)
     .map((i) => ({ ...i, axis: clip(i.label || i.name) }))
   const clickable = data.some((d) => d.href)
+  // 툴팁 가로 위치는 직접 정한다 — 그림 영역(라벨 112 · 값 64 를 뺀 나머지)이 툴팁보다 좁은 카드에서
+  // Recharts 가 뒤집을 자리를 못 찾아 카드 밖으로 내보내 잘리기 때문(DEF-178)
+  const boxRef = useRef<HTMLDivElement>(null)
+  const tipRef = useRef<HTMLDivElement>(null)
+  const [tipX, setTipX] = useState<number | undefined>(undefined)
+  const placeTooltip = (e: React.MouseEvent<HTMLDivElement>) => {
+    const box = boxRef.current?.getBoundingClientRect()
+    if (!box) return
+    // 아직 그려지기 전이면 툴팁 최대 폭(max-w-64)으로 잡는다
+    setTipX(Math.round(tooltipLeft(e.clientX - box.left, tipRef.current?.offsetWidth || 256, box.width)))
+  }
 
   return (
     <Card className={className}>
@@ -67,6 +80,7 @@ export function TopBarCard({
         {data.length === 0 ? (
           <p className="flex h-[160px] items-center justify-center text-center text-sm text-muted-foreground">{empty}</p>
         ) : (
+          <div ref={boxRef} onMouseMove={placeTooltip}>
           <ResponsiveContainer width="100%" height={data.length * ROW + 8}>
             <BarChart data={data} layout="vertical" margin={{ top: 4, right: 64, bottom: 4, left: 0 }} barCategoryGap={6}>
               <XAxis type="number" hide domain={[0, "dataMax"]} />
@@ -74,10 +88,15 @@ export function TopBarCard({
               <Tooltip
                 cursor={HOVER_CURSOR}
                 isAnimationActive={false}
+                position={{ x: tipX }}
                 content={({ active, payload }) => {
                   const d = payload?.[0]?.payload as (TopBarItem & { axis: string }) | undefined
                   if (!active || !d) return null
-                  return <ChartTooltipBox title={d.name} rows={[{ key: "v", color, name: title, value: d.display }]} />
+                  return (
+                    <div ref={tipRef}>
+                      <ChartTooltipBox title={d.name} rows={[{ key: "v", color, name: title, value: d.display }]} />
+                    </div>
+                  )
                 }}
               />
               <Bar
@@ -92,6 +111,7 @@ export function TopBarCard({
               </Bar>
             </BarChart>
           </ResponsiveContainer>
+          </div>
         )}
       </CardContent>
     </Card>

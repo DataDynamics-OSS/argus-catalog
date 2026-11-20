@@ -233,7 +233,8 @@ def test_launch_queues_runs_and_settles_to_succeeded(tmp_path, monkeypatch) -> N
     assert _run(sm, lambda s: jobs.get_job(s, job.id)).last_run.id == started.id
     # 데이터셋 실행이 여럿이면 합계·평균만 — 한 실행을 가리키지 않는다
     assert (done.run_id, done.dataset_name) == (None, None)
-    assert (done.rules_total, done.rules_evaluated, done.progress_done, done.progress_total) == (3, 2, 2, 2)
+    # 규칙 수는 그 실행이 진단한 규칙만 — 고르지 않은 지표의 규칙은 분모에 넣지 않는다(DEF-149)
+    assert (done.rules_total, done.rules_evaluated, done.progress_done, done.progress_total) == (2, 2, 2, 2)
     assert done.score is not None
 
 
@@ -292,7 +293,8 @@ def test_cancel_job_run_cancels_its_runs(tmp_path) -> None:
     started = _run(sm, lambda s: jobs.run_now(s, job.id, "bob"))
     cancelled = _run(sm, lambda s: jobs.cancel_job_run(s, started.id, "carol"))
     assert cancelled.status == "CANCELLED" and cancelled.cancel_requested_by == "carol"
-    assert (cancelled.runs_succeeded, cancelled.runs_failed) == (0, 3)
+    # 중지한 데이터셋 실행은 실패와 따로 센다(DEF-156)
+    assert (cancelled.runs_succeeded, cancelled.runs_failed, cancelled.runs_cancelled) == (0, 0, 3)
     children = _run(sm, lambda s: runs.list_runs(s, job_run_id=started.id))
     assert {r.status for r in children} == {"CANCELLED"}
     with pytest.raises(jobs.JobConflictError):
@@ -743,12 +745,13 @@ def test_job_measures_only_rules_of_chosen_definitions(tmp_path, monkeypatch) ->
 
     assert _drain(sm, monkeypatch, lambda _sql: [100, 100, 4]) == 1
     run = _run(sm, lambda s: runs.get_run(s, queued[0].id))
-    assert run.status == "SUCCEEDED" and (run.rules_total, run.rules_evaluated) == (2, 1)
+    # 고르지 않은 규칙은 분모에도 넣지 않는다(DEF-149)
+    assert run.status == "SUCCEEDED" and (run.rules_total, run.rules_evaluated) == (1, 1)
     assert (run.checked_count, run.error_count) == (100, 4)
     # 작업 이력 한 줄 — 데이터셋 실행이 하나뿐이면 그 실행·데이터셋·규칙 수·품질 점수를 함께 준다
     done = _run(sm, lambda s: jobs.get_job_run(s, started.id))
     assert (done.run_id, done.dataset_id, done.dataset_name) == (run.id, ids["public.customers"], "customers")
-    assert (done.rules_total, done.rules_evaluated, done.score) == (2, 1, run.score)
+    assert (done.rules_total, done.rules_evaluated, done.score) == (1, 1, run.score)
     # 품질 점수는 이 실행에서 평가한 규칙만 센다 — 고르지 않은 규칙의 지난 결과는 넣지 않는다 (DEF-088)
     assert run.score == 0.0, "평가한 규칙 1개가 실패"
     assert done.engine_table == run.engine_table and done.progress_total == done.progress_done == 1

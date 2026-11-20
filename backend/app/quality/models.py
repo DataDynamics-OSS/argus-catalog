@@ -53,7 +53,8 @@ class QualityDefinition(Base):
 class QualityRule(Base):
     """품질 검사 규칙 정의. 지원 유형은 schemas.SUPPORTED_CHECK_TYPES — 평가는 정밀 진단(품질 워커)이 한다.
     커스텀 SQL · Trino 함수는 Trino 경로에서만, 커스텀 Python 은 원천 직접 경로에서만 평가한다.
-    더미 값(DUMMY_VALUE) · 데이터 연속성(CONTINUITY)은 AI-Ready 품질 지표(TODO-096 5단계)."""
+    더미 값(DUMMY_VALUE) · 데이터 연속성(CONTINUITY) · 값 분포 다양성(DIVERSITY) · 여러 컬럼 키 고유값(COMPOSITE_UNIQUE)는
+    AI-Ready 품질 지표(TODO-096). 허용 값(ACCEPTED_VALUES)은 표준 코드 그룹을 가리킬 수 있다(``{"code_group_id": N}``)."""
 
     __tablename__ = "catalog_quality_rule"
 
@@ -147,7 +148,7 @@ class QualityRun(Base):
     current_target = Column(String(500))  # 지금 실행 중인 쿼리 설명
     progress_done = Column(Integer, nullable=False, default=0)   # 끝난 쿼리 수
     progress_total = Column(Integer)                              # 전체 쿼리 수
-    rules_total = Column(Integer, nullable=False, default=0)      # 활성 규칙 수
+    rules_total = Column(Integer, nullable=False, default=0)      # 이 실행이 진단하는 규칙 수(고른 범위 안의 활성 규칙)
     rules_evaluated = Column(Integer, nullable=False, default=0)  # 이번 실행에서 평가한 규칙 수
     checked_count = Column(BigInteger)  # Σ 진단 건수
     error_count = Column(BigInteger)    # Σ 오류 건수
@@ -211,7 +212,7 @@ class QualityJobRun(Base):
     targets_total = Column(Integer, nullable=False, default=0)   # 대상 데이터셋 수
     runs_total = Column(Integer, nullable=False, default=0)      # 대기열에 넣은 데이터셋 실행 수
     runs_succeeded = Column(Integer, nullable=False, default=0)
-    runs_failed = Column(Integer, nullable=False, default=0)     # 실패·일부 실패·중지
+    runs_failed = Column(Integer, nullable=False, default=0)     # 실패·일부 실패·중지 — 응답은 중지를 runs_cancelled 로 뺀다
     skipped_json = Column(Text)  # 실행하지 않은 데이터셋 JSON 배열 — {"dataset_id", "name", "reason"}
     checked_count = Column(BigInteger)
     error_count = Column(BigInteger)

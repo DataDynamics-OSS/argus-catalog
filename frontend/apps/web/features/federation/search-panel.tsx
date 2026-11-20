@@ -1,5 +1,6 @@
 "use client"
 
+import { datasourceTypeLabel } from "@/features/datasources/datasource-configs"
 import { useCallback, useEffect, useRef, useState } from "react"
 import {
   AlertTriangle,
@@ -30,7 +31,7 @@ import {
   type FederatedSearchHit,
 } from "./api"
 import { errorMessage } from "@/lib/notify"
-import { markdownToPlain } from "@/features/search/excerpt"
+import { richTextToPlain } from "@/lib/plain-text"
 import { SearchInput } from "@/components/search-input"
 
 /** 페더레이션 데이터셋 상세 전체화면 경로. */
@@ -227,13 +228,13 @@ export function FederationSearchPanel({
                 </div>
                 <div className="mt-1 truncate text-xs">
                   {hit.datasource_name && <span>{hit.datasource_name}</span>}
-                  {hit.datasource_type && <span> · {hit.datasource_type}</span>}
+                  {hit.datasource_type && <span> · {datasourceTypeLabel(hit.datasource_type)}</span>}
                   {hit.origin && <span> · {hit.origin}</span>}
                 </div>
-                {/* 설명은 마크다운(## 개요, **굵게**) — 기호가 보이지 않게 평문으로 */}
+                {/* 설명은 마크다운(## 개요, **굵게**)이나 편집기 HTML — 기호 · 태그가 보이지 않게 평문으로 */}
                 {hit.description && (
                   <p className="mt-1 line-clamp-2 text-sm">
-                    {markdownToPlain(hit.description)}
+                    {richTextToPlain(hit.description)}
                   </p>
                 )}
                 <div className="mt-1 truncate font-mono text-[11px]">

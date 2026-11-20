@@ -79,6 +79,8 @@ class SyncResult:
     tables_updated: int = 0
     tables_removed: int = 0
     tables_total: int = 0
+    # 수동 데이터셋에 원천 매핑된 테이블이라 건너뛴 수(TODO-CAT-001)
+    tables_skipped: int = 0
     samples_uploaded: int = 0
     errors: list[str] = field(default_factory=list)
 
@@ -819,6 +821,62 @@ def _in_sync_scope(dataset_name: str, database: str | None) -> bool:
     return dataset_name.startswith(prefix) and "." not in dataset_name[len(prefix):]
 
 
+class SourceUnavailableError(Exception):
+    """원천 확인 불가 — 접속 설정 없음 · 비밀값 복호화 실패 · 접속 실패(메시지는 내부 주소를 싣지 않음)."""
+
+
+async def read_source_table(session: AsyncSession, datasource: Datasource, path: str) -> TableInfo | None:
+    """원천에서 테이블 하나의 메타데이터를 읽는다(수동 데이터셋 원천 확인, TODO-CAT-001). 없으면 None.
+
+    내장 수집이 지원하는 유형(mysql · postgresql)만 — 그 밖은 ``NotImplementedError``. ``path`` 는
+    ``db.table``(MySQL) · ``schema.table``(PostgreSQL) 또는 ``db.schema.table``(metadata-sync PostgreSQL)이다.
+    접속 · 설정 문제는 :class:`SourceUnavailableError`.
+    """
+    if datasource.type not in SUPPORTED_TYPES:
+        raise NotImplementedError(datasource.type)
+    parts = [p for p in path.split(".") if p]
+    if len(parts) < 2:
+        return None
+    container, table_name = parts[-2], parts[-1]
+    cfg = (await session.execute(
+        select(DatasourceConfiguration).where(DatasourceConfiguration.datasource_id == datasource.id)
+    )).scalars().first()
+    if not cfg:
+        raise SourceUnavailableError("데이터 소스에 접속 설정이 없습니다.")
+    from app.catalog.datasource_secrets import DatasourceSecretError, unseal_config
+    from app.catalog.service import (
+        _classify_connection_error,
+        connection_ssl,
+        validate_connection_target,
+    )
+    try:
+        config = unseal_config(cfg.config_json)
+    except DatasourceSecretError as e:
+        raise SourceUnavailableError(str(e)) from e
+    is_pg = datasource.type == "postgresql"
+    try:
+        host, port = validate_connection_target(config, 5432 if is_pg else 3306)
+    except ValueError as e:
+        raise SourceUnavailableError(f"접속 설정 오류: {e}") from e
+    user = config.get("username", "root")
+    password = config.get("password", "")
+    ssl_opt = connection_ssl(config, pg=is_pg)
+    try:
+        if is_pg:
+            pg_database = parts[-3] if len(parts) >= 3 else (config.get("database") or "postgres")
+            tables = await _read_pg_metadata(host, port, user, password, pg_database, container, ssl=ssl_opt)
+        else:
+            tables = await _read_mysql_metadata(host, port, user, password, container, ssl=ssl_opt)
+    except Exception as e:
+        logger.warning("원천 확인 실패 (datasource=%s path=%s): %r", datasource.datasource_id, path, e)
+        raise SourceUnavailableError(_classify_connection_error(e, _CONNECT_TIMEOUT)) from e
+    want = table_name.lower()
+    for t in tables:
+        if t.name.lower() == want and t.database.lower() == container.lower():
+            return t
+    return None
+
+
 async def sync_datasource_metadata(
     session: AsyncSession,
     datasource_id_str: str,
@@ -929,8 +987,15 @@ async def sync_datasource_metadata(
     # 4. 데이터셋 + 스키마 필드 upsert (신규 데이터셋은 데이터 소스의 SYNC 카탈로그에 소속)
     from app.catalog.catalogs_service import sync_catalog_id
     catalog_id = await sync_catalog_id(session, datasource.id)
+    # 수동 데이터셋에 원천 매핑된 테이블은 수집하지 않는다 — 한 테이블에 데이터셋 하나(TODO-CAT-001)
+    from app.catalog.source_maps import mapped_paths
+    manual_mapped = await mapped_paths(session, datasource.id)
     for table in tables:
         path = f"{table.database}.{table.name}"
+        if path.lower() in manual_mapped:
+            result.tables_skipped += 1
+            logger.debug("수동 매핑 테이블 건너뜀: datasource=%s path=%s", datasource_id_str, path)
+            continue
         urn = _generate_urn(datasource_id_str, path)
         qualified_name = f"{datasource_id_str}.{path}"
 

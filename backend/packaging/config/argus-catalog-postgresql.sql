@@ -4238,6 +4238,11 @@ COMMENT ON COLUMN catalog_datasets.known_limitations IS '한계·해석 유의�
 COMMENT ON COLUMN catalog_datasets.missing_data_info IS '결측 비율·사유·처리 방식 (rai:dataCollectionMissingData)';
 COMMENT ON COLUMN catalog_datasets.missing_value_notation IS '결측·특수값 표기 규칙';
 COMMENT ON COLUMN catalog_datasets.privacy_measures IS '개인정보 보호조치 — 비식별·가명처리 방식, 적정성 검토';
+-- 데이터 카드 '사용 시 고려사항' (TODO-150)
+ALTER TABLE catalog_datasets ADD COLUMN IF NOT EXISTS social_impact TEXT;
+ALTER TABLE catalog_datasets ADD COLUMN IF NOT EXISTS risk_mitigation TEXT;
+COMMENT ON COLUMN catalog_datasets.social_impact IS '사회적 영향 — 활용 시 기대 효과·우려 (rai:dataSocialImpact)';
+COMMENT ON COLUMN catalog_datasets.risk_mitigation IS '리스크 완화 권고 — 이용자가 지킬 조치';
 
 -- AI-Ready 체크리스트 수동 판정 (TODO-096 2단계, app/catalog/ai_ready_check.py). 자동 판정은 저장하지 않고 조회 때 계산한다.
 CREATE TABLE IF NOT EXISTS catalog_ai_ready_judgment (
@@ -4318,3 +4323,45 @@ COMMENT ON TABLE catalog_dataset_version IS '데이터 버전 이력 — 버전 
 COMMENT ON COLUMN catalog_dataset_version.version IS '버전 라벨 (owl:versionInfo)';
 COMMENT ON COLUMN catalog_dataset_version.notes IS '버전 노트 — 이전 버전 대비 변경 사항 (adms:versionNotes)';
 COMMENT ON COLUMN catalog_dataset_version.created_by IS '버전을 붙인 사용자';
+
+-- 데이터 사전 — 컬럼 단위·산정기준 (TODO-096, 체크리스트 C08). 담당자가 쓰는 값이라 수집(metadata-sync)이 덮어쓰지 않는다.
+ALTER TABLE catalog_dataset_schemas ADD COLUMN IF NOT EXISTS unit VARCHAR(50);
+ALTER TABLE catalog_dataset_schemas ADD COLUMN IF NOT EXISTS calculation TEXT;
+COMMENT ON COLUMN catalog_dataset_schemas.unit IS '단위 — 원, %, km, 명 등 (데이터 사전, Croissant sc:unitText). 수집이 덮어쓰지 않음';
+COMMENT ON COLUMN catalog_dataset_schemas.calculation IS '산정기준 — 값을 계산·집계하는 방식 (데이터 사전). 수집이 덮어쓰지 않음';
+
+-- AI 제안의 근거 (TODO-096) — AI-Ready 초안의 관련법령 · 허용 이용 유형을 고른 이유. 제안 창에 보여 준다.
+ALTER TABLE catalog_ai_generation_log ADD COLUMN IF NOT EXISTS reason TEXT;
+COMMENT ON COLUMN catalog_ai_generation_log.reason IS '제안 근거 — AI-Ready 초안의 관련법령 · 허용 이용 유형을 고른 이유 (없으면 NULL)';
+
+-- 수동 데이터셋 · 데이터 소스 매핑 (TODO-CAT-001, design/catalog-registration-design.md 4.2, 재실행 안전).
+-- 수동 데이터셋(ARGUS 카탈로그의 수동 등록 데이터 소스 type='manual' 소속)이 실제로 어느 데이터 소스의 어느 테이블인지.
+-- 매핑해도 데이터셋 소속 · URN 은 그대로이고, 수집은 매핑된 경로의 테이블을 건너뛴다.
+CREATE TABLE IF NOT EXISTS catalog_dataset_source_maps (
+    id SERIAL PRIMARY KEY,
+    dataset_id INTEGER NOT NULL UNIQUE REFERENCES catalog_datasets(id) ON DELETE CASCADE,
+    datasource_id INTEGER NOT NULL REFERENCES catalog_datasources(id) ON DELETE CASCADE,
+    remote_path VARCHAR(500) NOT NULL,
+    check_status VARCHAR(20),
+    check_detail TEXT,
+    checked_at TIMESTAMPTZ,
+    created_by VARCHAR(200),
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    CONSTRAINT uq_dataset_source_map_path UNIQUE (datasource_id, remote_path)
+);
+CREATE INDEX IF NOT EXISTS ix_catalog_dataset_source_maps_datasource_id ON catalog_dataset_source_maps (datasource_id);
+COMMENT ON TABLE catalog_dataset_source_maps IS '수동 데이터셋 → 실제 데이터 소스 · 원천 경로 매핑 (수집은 매핑된 경로를 건너뜀)';
+COMMENT ON COLUMN catalog_dataset_source_maps.id IS 'PK';
+COMMENT ON COLUMN catalog_dataset_source_maps.dataset_id IS '수동 데이터셋 catalog_datasets(id) 참조 (데이터셋당 하나)';
+COMMENT ON COLUMN catalog_dataset_source_maps.datasource_id IS '실제 데이터 소스 catalog_datasources(id) 참조';
+COMMENT ON COLUMN catalog_dataset_source_maps.remote_path IS '원천 경로 (수집 URN 의 path 와 같은 모양, 대소문자 보존) — 데이터 소스 안에서 유일(비교는 대소문자 무시)';
+COMMENT ON COLUMN catalog_dataset_source_maps.check_status IS '마지막 원천 확인 결과 (MATCH/DIFF/NOT_FOUND/UNREACHABLE/UNSUPPORTED, NULL=확인 안 함)';
+COMMENT ON COLUMN catalog_dataset_source_maps.check_detail IS '스키마 비교 상세 JSON (추가 · 누락 · 타입 다른 컬럼)';
+COMMENT ON COLUMN catalog_dataset_source_maps.checked_at IS '마지막 원천 확인 시각';
+COMMENT ON COLUMN catalog_dataset_source_maps.created_by IS '매핑한 사용자';
+COMMENT ON COLUMN catalog_dataset_source_maps.created_at IS '생성 시각';
+COMMENT ON COLUMN catalog_dataset_source_maps.updated_at IS '수정 시각';
+-- 수집 실행의 건너뜀 수 — 수동 데이터셋에 원천 매핑된 테이블은 수집하지 않는다(TODO-CAT-001)
+ALTER TABLE catalog_datasource_sync_runs ADD COLUMN IF NOT EXISTS skipped_count INTEGER NOT NULL DEFAULT 0;
+COMMENT ON COLUMN catalog_datasource_sync_runs.skipped_count IS '수동 데이터셋에 원천 매핑돼 건너뛴 테이블 수';

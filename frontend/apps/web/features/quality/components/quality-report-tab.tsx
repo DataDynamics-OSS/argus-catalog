@@ -48,6 +48,7 @@ import {
   rateBarPercent,
 } from "@/features/quality/format"
 import { qualityReportHref } from "@/features/quality/links"
+import { checkTypeLabel } from "@/features/quality/check-types"
 import { errorMessage, notifyError } from "@/lib/notify"
 import { usePermissions } from "@/features/permissions/use-permissions"
 
@@ -450,6 +451,7 @@ export function QualityReportTab() {
               <Tile label="진단한 데이터셋" value={`${jr.runs_succeeded}/${jr.runs_total}`}
                 sub={[
                   jr.runs_failed ? `실패 ${jr.runs_failed}` : "",
+                  jr.runs_cancelled ? `중지 ${jr.runs_cancelled}` : "",
                   jr.skipped_total ? `시작 못 함 ${jr.skipped_total}` : "",
                   `대상 ${jr.targets_total.toLocaleString()}`,
                 ].filter(Boolean).join(" · ")}
@@ -535,7 +537,7 @@ export function QualityReportTab() {
                         <td className="px-3 py-1.5 font-mono">{r.column_name ?? "-"}</td>
                         <td className="px-3 py-1.5">
                           <span className="font-medium">{r.rule_name ?? `규칙 #${r.rule_id}`}</span>
-                          {r.check_type && <span className="ml-1">{r.check_type}</span>}
+                          {r.check_type && <span className="ml-1" title={r.check_type}>{checkTypeLabel(r.check_type)}</span>}
                         </td>
                         <td className="px-3 py-1.5">{r.indicator_name ?? "-"}</td>
                         <td className="px-3 py-1.5">{r.definition_name ?? <span >직접 만든 규칙</span>}</td>

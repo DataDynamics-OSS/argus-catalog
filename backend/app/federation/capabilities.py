@@ -47,7 +47,7 @@ _ITEMS: list[tuple[str, str, str]] = [
     ("schema.partition", "Partition Key", "schema"),
     ("schema.distribution", "Distribution Key", "schema"),
     ("schema.pii", "PII 타입", "schema"),
-    ("schema.description", "컬럼 설명", "schema"),
+    ("schema.description", "컬럼 설명 · 단위 · 산정기준", "schema"),
     # 거버넌스/관계
     ("tags", "태그", "governance"),
     ("owners", "오너", "governance"),
@@ -57,6 +57,8 @@ _ITEMS: list[tuple[str, str, str]] = [
     # 데이터
     ("sample", "샘플 데이터", "data"),
     ("ddl", "DDL", "data"),
+    # 배포본(데이터를 받는 곳 — 포털·API·파일 주소, 형식·크기·체크섬. TODO-096). 주소가 내부 서버일 수 있어 항목을 따로 둔다
+    ("distributions", "배포본", "data"),
 ]
 
 # capability 키 → 스키마 컬럼 dict 의 실제 키(들)
@@ -69,7 +71,7 @@ _SCHEMA_COLUMN_KEYS: dict[str, tuple[str, ...]] = {
     "schema.partition": ("is_partition_key",),
     "schema.distribution": ("is_distribution_key",),
     "schema.pii": ("pii_type",),
-    "schema.description": ("description",),
+    "schema.description": ("description", "unit", "calculation"),  # 데이터 사전(단위·산정기준)은 설명과 함께
 }
 
 # 스키마 항목에서 항상 유지하는 식별 컬럼(논리명 포함 — 로컬 상세와 동일하게 표시)
@@ -136,7 +138,7 @@ def filter_metadata(metadata: dict, exposed: list[str] | set[str]) -> dict:
     for cap in (
         "description", "qualified_name", "table_type", "storage_format",
         "status", "origin", "is_synced", "extended", "tags", "owners",
-        "properties", "ddl", "glossary",
+        "properties", "ddl", "glossary", "distributions",
     ):
         if cap in allow and cap in metadata:
             out[cap] = metadata[cap]

@@ -27,8 +27,9 @@ export const ALERT_TYPE_LABEL: Record<string, string> = {
   SYNC_FAILED: "수집 실패",
   SYNC_STALE: "수집 지연",
   AI_READY_UNMET: "AI-Ready 최소 요건 미충족",
-  REPORT_RECEIVED: "오류 신고 접수",
+  REPORT_RECEIVED: "오류 신고·개선 요청 접수",
   REPORT_DUE: "신고 처리 기한",
+  REPORT_CLOSED: "신고 처리 결과",
 }
 
 export const SCOPE_LABEL: Record<string, string> = {
@@ -52,6 +53,7 @@ export const TRIGGER_LABEL: Record<string, string> = {
   AI_READY_UNMET: "AI-Ready 최소 요건 미충족",
   REPORT_RECEIVED: "오류 신고·개선 요청 접수",
   REPORT_DUE: "신고 처리 기한 임박·넘김",
+  REPORT_CLOSED: "신고 처리 결과(신고자에게)",
 }
 
 /** AI-Ready 최소 요건 조건 (trigger_config.conditions) */
@@ -77,8 +79,8 @@ export const CHANNEL_LABEL: Record<string, string> = {
 export const MCP_TRIGGERS = new Set(["MCP_POLICY_DRIFT", "MCP_SECURITY_WARNING"])
 /** 데이터 소스 수집 트리거 — 범위는 전체·데이터 소스만. */
 export const SYNC_TRIGGERS = new Set(["SYNC_FAILED", "SYNC_STALE"])
-/** AI-Ready 트리거 — 데이터셋 범위. 수신자에 데이터셋 생성자가 더해진다. */
-export const AI_READY_TRIGGERS = new Set(["AI_READY_UNMET", "REPORT_RECEIVED", "REPORT_DUE"])
+/** AI-Ready 트리거 — 데이터셋 범위. 수신자에 데이터셋 생성자가 더해진다(처리 결과는 소유자 대신 신고한 사람). */
+export const AI_READY_TRIGGERS = new Set(["AI_READY_UNMET", "REPORT_RECEIVED", "REPORT_DUE", "REPORT_CLOSED"])
 
 export function labelOf(map: Record<string, string>, key: string | null | undefined): string {
   if (!key) return ""

@@ -15,6 +15,7 @@ import { AllCommunityModule, ModuleRegistry, type ColDef } from "ag-grid-communi
 import { Plus, Trash2 } from "lucide-react"
 import { Button } from "@workspace/ui/components/button"
 import { applyKeyFlags } from "../schema-key-flags"
+import { normalizeSchemaRow } from "../schema-edit-fields"
 
 ModuleRegistry.registerModules([AllCommunityModule])
 
@@ -34,7 +35,12 @@ export type EditableField = {
   is_unique: string
   is_indexed: string
   is_partition_key: string
+  /** 원천 인덱스로 수집돼 PK · 고유가 아니어도 인덱스인 컬럼(저장하지 않음 — DEF-DSET-002) */
+  index_from_source?: boolean
   ordinal: number
+  /** 데이터 사전 — 단위(원 · % · 명 등) · 산정기준(계산 · 집계 방식) */
+  unit: string
+  calculation: string
 }
 
 // ---------------------------------------------------------------------------
@@ -173,6 +179,21 @@ export function SchemaEditGrid({ fields, onChange, dataTypeOptions = [] }: Schem
       editable: true,
     },
     {
+      headerName: "단위",
+      field: "unit",
+      width: 90,
+      editable: true,
+      headerTooltip: "측정값의 단위 — 원, %, 명, km 등. 단위가 없는 숫자는 '-'",
+    },
+    {
+      headerName: "산정기준",
+      field: "calculation",
+      minWidth: 160,
+      flex: 1,
+      editable: true,
+      headerTooltip: "값을 계산 · 집계하는 방식 — 예: 판매가 × 수량, 월말 기준 합계",
+    },
+    {
       headerName: "",
       field: "key",
       width: 50,
@@ -188,7 +209,8 @@ export function SchemaEditGrid({ fields, onChange, dataTypeOptions = [] }: Schem
     if (!api) return
     const current: EditableField[] = []
     api.forEachNode((node) => {
-      if (node.data) current.push(node.data)
+      // 비운 칸은 그리드가 null 로 넣는다 — 빈 문자열로 맞춰 둔다(DEF-DSET-001)
+      if (node.data) current.push(normalizeSchemaRow(node.data as EditableField))
     })
     // 단일 PK 면 고유, PK·고유면 인덱스 (복합 PK 컬럼은 고유로 채우지 않음)
     onChange(applyKeyFlags(current))
@@ -210,6 +232,8 @@ export function SchemaEditGrid({ fields, onChange, dataTypeOptions = [] }: Schem
       is_indexed: "false",
       is_partition_key: "false",
       ordinal: fieldsRef.current.length,
+      unit: "",
+      calculation: "",
     }])
   }, [onChange])
 

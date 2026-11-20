@@ -104,6 +104,16 @@ async def _fetch_glossary(session: AsyncSession, dataset_id: int) -> list[str]:
     return [r[0] for r in rows]
 
 
+async def _fetch_distributions(session: AsyncSession, dataset_id: int) -> list[dict]:
+    """데이터셋 배포본 목록(순서 ``ordinal`` 대로) — 내부 id·시각은 빼고 배포본 항목만."""
+    from app.catalog.ai_ready_export import DIST_FIELDS, list_distributions
+
+    return [
+        {k: getattr(d, k) for k in DIST_FIELDS}
+        for d in await list_distributions(session, dataset_id)
+    ]
+
+
 # 확장 메타데이터로 노출하는 Dataset 컬럼(로컬 상세가 보여주는 전체 항목).
 _EXTENDED_FIELDS = (
     "summary", "display_name", "note",
@@ -127,6 +137,7 @@ _EXTENDED_FIELDS = (
     "temporal_start", "temporal_end", "spatial_coverage", "data_version", "version_notes",
     "license", "license_url", "rights", "allowed_uses", "contains_synthetic", "contains_machine_annotation",
     "data_biases", "known_limitations", "missing_data_info", "missing_value_notation", "privacy_measures",
+    "social_impact", "risk_mitigation",
 )
 
 
@@ -173,7 +184,7 @@ async def augment_and_filter_detail(
 ) -> dict:
     """export 상세 메타데이터를 확장 항목으로 보강하고 노출 키로 필터링한다.
 
-    ddl/glossary/extended/스키마 논리명은 기본 메타데이터에 없으므로, 노출 대상일 때만
+    ddl/glossary/extended/distributions/스키마 논리명은 기본 메타데이터에 없으므로, 노출 대상일 때만
     DB 에서 조회해 덧붙인 뒤 필터링한다. 이로써 페더레이션 상세가 로컬 상세와
     동일한 수준의 메타데이터를 노출한다.
     """
@@ -186,6 +197,8 @@ async def augment_and_filter_detail(
             metadata["glossary"] = await _fetch_glossary(session, ds_id)
         if "extended" in allow:
             metadata["extended"] = await _fetch_extended(session, ds_id)
+        if "distributions" in allow:
+            metadata["distributions"] = await _fetch_distributions(session, ds_id)
         # 스키마 논리명은 schema 가 노출될 때만 의미 있음(식별 컬럼이라 필터에서 유지됨)
         if "schema" in allow:
             await _inject_schema_display_names(session, ds_id, metadata)

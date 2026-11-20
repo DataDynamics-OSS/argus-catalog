@@ -1,5 +1,6 @@
 "use client"
 
+import { datasourceTypeLabel } from "@/features/datasources/datasource-configs"
 import { useCallback, useEffect, useState } from "react"
 import {
   Activity, BookOpen, Database, Server, Tags, Users, RefreshCw,
@@ -121,7 +122,9 @@ export default function DashboardPage() {
   const [stats, setStats] = useState<CatalogStats | null>(null)
   // 수집 실패 카드 — 통계와 따로 불러온다(실패해도 대시보드는 그대로)
   const [syncSummary, setSyncSummary] = useState<SyncRunSummary | null>(null)
-  const { canUseFeature } = usePermissions()
+  const { canUseFeature, isMenuAllowed } = usePermissions()
+  // 데이터셋 메뉴를 막은 역할에게는 데이터셋 화면으로 가는 링크 대신 글자만 보인다(DEF-158)
+  const datasetsOpen = isMenuAllowed("datasets")
   useEffect(() => {
     fetchSyncRunSummary().then(setSyncSummary).catch(() => setSyncSummary(null))
   }, [])
@@ -180,7 +183,7 @@ export default function DashboardPage() {
   const typeRaw = stats.datasets_by_datasource_type.filter((d) => d.count > 0)
   const typeItems: DistributionItem[] = [
     ...typeRaw.slice(0, typeRaw.length <= 6 ? 6 : 5).map((d, i) => ({
-      key: d.type, label: d.type, count: d.count, color: seriesColor(i),
+      key: d.type, label: datasourceTypeLabel(d.type), count: d.count, color: seriesColor(i),
     })),
     ...(typeRaw.length > 6
       ? [{ key: "__other__", label: "기타", count: typeRaw.slice(5).reduce((s, d) => s + d.count, 0), color: OTHER }]
@@ -191,20 +194,20 @@ export default function DashboardPage() {
     .sort((a, b) => originRank(a.origin) - originRank(b.origin))
     .map((d) => ({
       key: d.origin, label: originLabel(d.origin), count: d.count,
-      color: originMeta(d.origin).color, href: datasetListHref({ origin: [d.origin] }),
+      color: originMeta(d.origin).color, href: datasetsOpen ? datasetListHref({ origin: [d.origin] }) : undefined,
     }))
 
   const datasourceItems: TopBarItem[] = stats.datasets_by_datasource.map((d) => ({
     name: d.datasource, value: d.count, display: `${d.count.toLocaleString()}개`,
-    href: d.key ? datasourceDatasetsHref(d.key) : undefined,
+    href: d.key && datasetsOpen ? datasourceDatasetsHref(d.key) : undefined,
   }))
   const schemaItems: TopBarItem[] = stats.schema_fields_by_datasource.map((d) => ({
     name: d.datasource, value: d.count, display: `${d.count.toLocaleString()}개`,
-    href: d.key ? datasourceDatasetsHref(d.key) : undefined,
+    href: d.key && datasetsOpen ? datasourceDatasetsHref(d.key) : undefined,
   }))
   const tagItems: TopBarItem[] = stats.top_tagged_datasets.map((d) => ({
     name: d.name, value: d.count, display: `태그 ${d.count}개`,
-    href: d.id != null ? datasetHref(d.id) : undefined,
+    href: d.id != null && datasetsOpen ? datasetHref(d.id) : undefined,
   }))
 
   return (
@@ -307,7 +310,7 @@ export default function DashboardPage() {
                     <tr>
                       <th className="px-3 py-2 text-left font-medium">이름</th>
                       <th className="px-3 py-2 text-center font-medium w-36">데이터 소스</th>
-                      <th className="px-3 py-2 text-center font-medium w-20">환경</th>
+                      <th className="px-3 py-2 text-center font-medium w-28">환경</th>
                       <th className="px-3 py-2 text-center font-medium w-16">태그</th>
                       <th className="px-3 py-2 text-center font-medium w-16">소유자</th>
                       <th className="px-3 py-2 text-center font-medium w-16">필드</th>
@@ -318,18 +321,19 @@ export default function DashboardPage() {
                     {stats.recent_datasets.map((ds) => (
                       <tr key={ds.id} className="hover:bg-muted/30">
                         <td className="px-3 py-2">
-                          <Link
-                            href={`/dashboard/datasets/${ds.id}`}
-                            className="font-medium hover:underline"
-                          >
-                            {ds.name}
-                          </Link>
+                          {datasetsOpen ? (
+                            <Link href={datasetHref(ds.id)} className="font-medium hover:underline">
+                              {ds.name}
+                            </Link>
+                          ) : (
+                            <span className="font-medium">{ds.name}</span>
+                          )}
                           {ds.summary && (
                             <p className="text-xs truncate max-w-[400px]">{ds.summary}</p>
                           )}
                         </td>
                         <td className="px-3 py-2 text-center">{ds.datasource_name}</td>
-                        <td className="px-3 py-2 text-center">
+                        <td className="px-3 py-2 text-center whitespace-nowrap">
                           <OriginText origin={ds.origin} />
                         </td>
                         <td className="px-3 py-2 text-center">{ds.tag_count}</td>
@@ -363,9 +367,12 @@ function SyncFailureCard({ summary, clickable }: { summary: SyncRunSummary | nul
   const failed = summary?.failed_24h ?? null
   const body = (
     <Card className={clickable ? `h-full ${interactiveCardClass}` : "h-full"}>
-      <CardHeader className="flex flex-row items-center justify-between pb-2">
-        <CardTitle className="text-sm font-medium">수집 실패 (24시간)</CardTitle>
-        <Activity className={`h-4 w-4 ${failed ? "text-destructive" : "text-muted-foreground"}`} />
+      <CardHeader className="flex flex-row items-center justify-between gap-1.5 pb-2">
+        {/* 카드 7개가 한 줄일 때(1440 폭) 제목이 두 줄로 꺾여 숫자가 밀리지 않게 — 기간은 작은 글씨로 붙이고 한 줄 고정(DEF-180) */}
+        <CardTitle className="min-w-0 truncate text-sm font-medium">
+          수집 실패 <span className="text-xs font-normal text-muted-foreground">24시간</span>
+        </CardTitle>
+        <Activity className={`h-4 w-4 shrink-0 ${failed ? "text-destructive" : "text-muted-foreground"}`} />
       </CardHeader>
       <CardContent>
         <div className={`text-2xl font-bold ${failed ? "text-destructive" : ""}`}>{failed ?? "-"}</div>

@@ -37,6 +37,7 @@ _EXT_STR_FIELDS = (
     "spatial_coverage", "data_version", "version_notes", "license", "license_url", "rights",
     "allowed_uses", "contains_synthetic", "contains_machine_annotation",
     "data_biases", "known_limitations", "missing_data_info", "missing_value_notation", "privacy_measures",
+    "social_impact", "risk_mitigation",
 )
 _EXT_DATE_FIELDS = ("temporal_start", "temporal_end")
 
@@ -181,6 +182,49 @@ async def _copy_sample_to_local(
         return False
 
 
+# 배포본 문자열 칸의 로컬 길이 제한(catalog_dataset_distribution). 주소는 자르면 틀린 주소가 되므로 넘으면 건너뛴다.
+_DIST_TEXT_LIMITS = {"title": 200, "format": 30, "media_type": 100, "checksum_algorithm": 20, "checksum": 200}
+_DIST_URL_LIMIT = 1000
+
+
+def _clean_distribution(d: dict, fields: tuple[str, ...]) -> dict:
+    """peer 배포본 dict 를 로컬 입력 형태로 — 알려진 칸만, 타입이 틀린 값은 비우고 길이를 맞춘다."""
+    out: dict = {}
+    for k in fields:
+        v = d.get(k)
+        if k == "byte_size":
+            out[k] = v if isinstance(v, int) and not isinstance(v, bool) else None
+            continue
+        v = v if isinstance(v, str) else None
+        if v is not None and k in ("access_url", "download_url") and len(v) > _DIST_URL_LIMIT:
+            raise ValueError(f"{k} 가 {_DIST_URL_LIMIT}자를 넘습니다.")
+        out[k] = _clip(v, _DIST_TEXT_LIMITS[k]) if k in _DIST_TEXT_LIMITS else v
+    return out
+
+
+async def _copy_distributions(session: AsyncSession, dataset_id: int, items) -> int:
+    """peer 배포본을 로컬 데이터셋 배포본으로 복사한다(받은 순서대로). 복사한 수를 반환.
+
+    peer 값은 신뢰하지 않으므로 로컬 배포본 입력과 같은 검사(``normalize_distribution`` — 접속 URL 필수,
+    http(s) 주소, 체크섬 길이)를 거치고, 틀린 항목은 건너뛴다. 배포본을 보내지 않는 peer(구버전 또는
+    노출 정책에서 뺀 경우)는 ``items`` 가 없어 아무것도 하지 않는다.
+    """
+    from app.catalog.ai_ready_export import DIST_FIELDS, create_distribution
+
+    if not isinstance(items, list):
+        return 0
+    copied = 0
+    for d in items:
+        if not isinstance(d, dict):
+            continue
+        try:
+            await create_distribution(session, dataset_id, _clean_distribution(d, DIST_FIELDS))
+            copied += 1
+        except ValueError as e:
+            logger.warning("import 배포본 건너뜀(형식 오류): dataset_id=%d error=%s", dataset_id, e)
+    return copied
+
+
 class AlreadyImportedError(Exception):
     """같은 federated URN 을 이미 로컬로 가져옴(409)."""
 
@@ -205,7 +249,7 @@ async def import_federated_dataset(
     """페더레이션(미러) 데이터셋을 로컬 카탈로그로 승격(import)한다.
 
     peer 드릴다운으로 전체 메타데이터를 받아 전용 데이터소스에 1급 데이터셋으로 생성하고,
-    스키마·태그·소유자·용어집·DDL·확장 메타·샘플을 복사한 뒤 로컬 임베딩을 생성한다.
+    스키마·태그·소유자·용어집·DDL·확장 메타·배포본·샘플을 복사한 뒤 로컬 임베딩을 생성한다.
     이미 가져온 데이터셋이면 AlreadyImportedError(라우터가 409 로 변환), 해석 불가면 None.
     """
     from app.catalog import service as catalog_service
@@ -275,6 +319,9 @@ async def import_federated_dataset(
             is_partition_key=s.get("is_partition_key", "false"),
             is_distribution_key=s.get("is_distribution_key", "false"),
             ordinal=s.get("ordinal", idx),
+            # 데이터 사전(단위·산정기준) — 이 필드가 없는 이전 peer 면 비어 있음
+            unit=_clip(s.get("unit"), 50),
+            calculation=_clip(s.get("calculation"), 2000),
         )
         for idx, s in enumerate(meta.get("schema") or [])
         if s.get("field_path")
@@ -339,10 +386,12 @@ async def import_federated_dataset(
     )).scalars().first()
     if ext:
         _apply_extended(dataset, ext)
-        await session.commit()
+    # 배포본(peer 가 노출할 때만 옴) — 받은 순서가 peer 의 ordinal 순서다.
+    dist_count = await _copy_distributions(session, dataset.id, meta.get("distributions"))
+    await session.commit()
     logger.debug(
-        "import 메타 구성: urn=%s fields=%d tags=%d/%d glossary=%d",
-        federated_urn, len(schema_fields), len(tag_ids), len(peer_tags), len(peer_glossary),
+        "import 메타 구성: urn=%s fields=%d tags=%d/%d glossary=%d distributions=%d",
+        federated_urn, len(schema_fields), len(tag_ids), len(peer_tags), len(peer_glossary), dist_count,
     )
 
     # 용어집: '매칭만'(이미 있는 로컬 용어에만 연결, 새로 만들지 않음). 원본은 위 imported_glossary 속성에 보존.

@@ -110,6 +110,9 @@ export function QualityJobDialog({ open, job, onOpenChange, onSaved }: Props) {
   const [intervalHours, setIntervalHours] = useState("6")
   const [enabled, setEnabled] = useState(true)
   const [includeProfile, setIncludeProfile] = useState(false)
+  // 진단 범위(DEF-147) — ALL: 데이터셋의 활성 규칙 전부(지표 없이 직접 만든 규칙 포함, definition_ids 비움),
+  // MAPPED: 매핑한 품질 지표만. 예전 방식에서 옮겨 온 작업은 ALL 로 열린다.
+  const [scope, setScope] = useState<"ALL" | "MAPPED">("MAPPED")
   const [saving, setSaving] = useState(false)
   // 조회 실패는 "없음" 과 구분한다
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -139,6 +142,7 @@ export function QualityJobDialog({ open, job, onOpenChange, onSaved }: Props) {
     setIntervalHours(String(job?.schedule_interval_hours ?? 6))
     setEnabled(job?.enabled ?? true)
     setIncludeProfile(job?.include_profile ?? false)
+    setScope(job && job.definition_ids.length === 0 ? "ALL" : "MAPPED")
     setSearch("")
     setSourceId(ANY_SOURCE)
     setHits([])
@@ -240,7 +244,20 @@ export function QualityJobDialog({ open, job, onOpenChange, onSaved }: Props) {
   // 주기 입력은 저장 전에 검사한다 — 서버가 거절하기 전에 매핑(할당·해제)이 먼저 반영되지 않게
   const scheduleError = scheduleProblem({ type: scheduleType, time, monthDay, intervalHours })
   const scheduleDenied = !canSchedule && scheduleType !== "NONE"
-  const canSave = name.trim().length > 0 && dataset != null && loaded != null && mapped > 0 && !scheduleError
+  // 매핑한 지표만 진단하면 매핑이 하나 이상, 전부 진단하면 규칙(매핑 또는 직접 만든 규칙)이 하나 이상 있어야 한다
+  const hasTarget = scope === "MAPPED" ? mapped > 0 : mapped + direct > 0
+  // 원래 전부 진단하던 작업을 '매핑한 지표만' 으로 줄이는지 — 저장 전에 알린다
+  const narrowing = job != null && job.definition_ids.length === 0 && scope === "MAPPED"
+  // 매핑한 지표만 진단하는 작업의 지표 목록은 저장할 때 정해진다(DEF-148) — 그 뒤 다른 화면에서 이 데이터셋에 할당한
+  // 지표는 매핑에 보여도 작업은 진단하지 않는다. 작업 목록과 지금 매핑의 차이를 따로 보여 저장이 명시적인 선택이 되게 한다
+  const jobDefinitionIds = useMemo(
+    () => new Set(job && job.definition_ids.length > 0 ? job.definition_ids : []), [job])
+  const savedMapped = job != null && job.definition_ids.length > 0 && scope === "MAPPED"
+  const mappedIds = mappedDefinitionIds(mapping)
+  const joining = savedMapped ? mappedIds.filter((id) => !jobDefinitionIds.has(id)) : []
+  const leaving = savedMapped ? [...jobDefinitionIds].filter((id) => !mappedIds.includes(id)) : []
+  const nameOf = (id: number) => byId.get(id)?.name ?? `삭제된 지표 #${id}`
+  const canSave = name.trim().length > 0 && dataset != null && loaded != null && hasTarget && !scheduleError
     && !scheduleDenied && !saving
 
   const save = async () => {
@@ -256,8 +273,9 @@ export function QualityJobDialog({ open, job, onOpenChange, onSaved }: Props) {
         name: name.trim(),
         description: description.trim() || null,
         targets: [{ type: "dataset", dataset_id: dataset.id }],
-        indicators: [],
-        definition_ids: mappedDefinitionIds(mapping),
+        // 전부 진단하는 작업은 진단 기준(indicators)도 그대로 둔다 — 저장만으로 범위가 바뀌지 않게
+        indicators: scope === "ALL" ? (job?.indicators ?? []) : [],
+        definition_ids: scope === "ALL" ? [] : mappedDefinitionIds(mapping),
         schedule_type: scheduleType,
         schedule_time: timed ? time : null,
         schedule_day: scheduleType === "WEEKLY" ? Number(weekday) : scheduleType === "MONTHLY" ? Number(monthDay) : null,
@@ -418,10 +436,17 @@ export function QualityJobDialog({ open, job, onOpenChange, onSaved }: Props) {
                               <div className="flex flex-wrap items-center gap-1.5">
                                 {chosen.map((id) => {
                                   const d = byId.get(id)
+                                  // 이 작업이 아직 진단하지 않는 지표 — 저장하면 작업에 포함된다(DEF-148)
+                                  const pending = savedMapped && !jobDefinitionIds.has(id)
                                   return (
-                                    <span key={id} className="flex items-center gap-1 rounded border bg-muted/40 px-1.5 py-0.5"
-                                      title={d ? criteriaText(d) : undefined}>
+                                    <span key={id}
+                                      className={`flex items-center gap-1 rounded border px-1.5 py-0.5 ${pending
+                                        ? "border-dashed border-amber-500/60 bg-warning/10" : "bg-muted/40"}`}
+                                      title={[d ? criteriaText(d) : null,
+                                        pending ? "이 작업에 아직 포함되지 않은 지표 — 저장하면 이 작업에 포함됩니다" : null]
+                                        .filter(Boolean).join("\n") || undefined}>
                                       {d?.name ?? `삭제된 지표 #${id}`}
+                                      {pending && <span className="text-[11px] text-amber-700 dark:text-amber-400">미포함</span>}
                                       <Tip label={`${c.name} 에서 ${d?.name ?? id} 빼기`}><button type="button" aria-label={`${c.name} 에서 ${d?.name ?? id} 빼기`}
                                         className="text-muted-foreground hover:text-foreground"
                                         onClick={() => setMapping((m) => toggleMapping(m, c.name, id, false))}>
@@ -461,14 +486,55 @@ export function QualityJobDialog({ open, job, onOpenChange, onSaved }: Props) {
               <p className="text-sm">
                 매핑은 이 데이터셋의 지표 할당과 같습니다 — 품질 지표 탭이나 데이터셋 품질 탭에서 할당한 것이 여기에 보이고,
                 여기서 바꾸면 그쪽에도 반영됩니다.
-                {mapped === 0 && loaded != null && " 컬럼에 품질 지표를 하나 이상 매핑해야 저장할 수 있습니다."}
+                {!hasTarget && loaded != null && (scope === "MAPPED"
+                  ? " 컬럼에 품질 지표를 하나 이상 매핑해야 저장할 수 있습니다."
+                  : " 이 데이터셋에 진단할 규칙이 없습니다 — 컬럼에 품질 지표를 매핑하세요.")}
                 {changes.added > 0 && ` 저장하면 ${changes.added}개를 새로 할당합니다.`}
                 {changes.removed > 0 && (
                   <span className="text-destructive">
                     {" "}뺀 {changes.removed}개는 저장할 때 할당이 해제되고, 그 규칙의 지난 진단 결과도 함께 지워집니다.
                   </span>
                 )}
-                {direct > 0 && ` 지표 없이 직접 만든 규칙 ${direct}개는 이 작업이 진단하지 않습니다(데이터셋 품질 탭의 정밀 진단으로 진단).`}
+                {joining.length > 0 && (
+                  <span className="text-amber-700 dark:text-amber-400">
+                    {" "}이 데이터셋에 할당돼 있지만 이 작업에는 없는 지표 {joining.length}개(
+                    {joining.map(nameOf).join(", ")}, &quot;미포함&quot; 표시)는 지금 작업이 진단하지 않습니다 — 저장하면 이 작업에
+                    포함됩니다. 넣지 않으려면 빼고 저장하세요(할당도 해제됩니다).
+                  </span>
+                )}
+                {leaving.length > 0 && (
+                  <span className="text-amber-700 dark:text-amber-400">
+                    {" "}이 작업이 진단하던 지표 {leaving.length}개({leaving.map(nameOf).join(", ")})는 지금 매핑에 없어 저장하면
+                    작업에서 빠집니다.
+                  </span>
+                )}
+                {direct > 0 && (scope === "ALL"
+                  ? ` 지표 없이 직접 만든 규칙 ${direct}개도 이 작업이 함께 진단합니다.`
+                  : ` 지표 없이 직접 만든 규칙 ${direct}개는 이 작업이 진단하지 않습니다(데이터셋 품질 탭의 정밀 진단으로 진단).`)}
+              </p>
+            </div>
+          )}
+
+          {dataset && (
+            <div className="grid gap-2">
+              <Label>진단 범위</Label>
+              <Select value={scope} onValueChange={(v) => v && setScope(v as "ALL" | "MAPPED")}>
+                <SelectTrigger className="h-8 w-72"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ALL">데이터셋의 활성 규칙 전부</SelectItem>
+                  <SelectItem value="MAPPED">매핑한 품질 지표만</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-sm">
+                {scope === "ALL"
+                  ? "주기마다 이 데이터셋의 활성 규칙을 모두 진단합니다 — 나중에 더한 규칙과 지표 없이 직접 만든 규칙도 포함합니다."
+                  : "주기마다 위에서 매핑한 품질 지표의 규칙만 진단합니다."}
+                {narrowing && (
+                  <span className="text-destructive">
+                    {" "}지금은 활성 규칙을 모두 진단하는 작업입니다. 저장하면 매핑한 지표 {mappedDefinitionIds(mapping).length}개의 규칙만 진단하도록 범위가 줄어듭니다
+                    {direct > 0 && `(직접 만든 규칙 ${direct}개 제외)`}.
+                  </span>
+                )}
               </p>
             </div>
           )}

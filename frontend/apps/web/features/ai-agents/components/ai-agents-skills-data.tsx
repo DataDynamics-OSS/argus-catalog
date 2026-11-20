@@ -11,6 +11,7 @@ import { Badge } from "@workspace/ui/components/badge"
 import { StatusBadge, type StatusTone } from "@workspace/ui/components/status-badge"
 import { Button } from "@workspace/ui/components/button"
 import { DetailSection } from "@/components/detail-section"
+import { usePermissions } from "@/features/permissions/use-permissions"
 import {
   Dialog,
   DialogContent,
@@ -465,8 +466,12 @@ export function AgentUsagePanel({
   const [rows, setRows] = useState<AgentResourceUsage[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const key = JSON.stringify(target)
+  // AI Agent 메뉴가 막힌 역할은 /ai-agents/usage 가 403 이다 — 부르지 않고 패널을 숨긴다 (DEF-160)
+  const { loaded: permsLoaded, isMenuAllowed } = usePermissions()
+  const allowed = permsLoaded && isMenuAllowed("ai-agents")
 
   useEffect(() => {
+    if (!allowed) return
     let active = true
     setRows(null)
     setError(null)
@@ -476,7 +481,9 @@ export function AgentUsagePanel({
     return () => {
       active = false
     }
-  }, [key])
+  }, [key, allowed])
+
+  if (!allowed) return null
 
   return (
     <DetailSection

@@ -21,6 +21,13 @@ const nextConfig = {
   allowedDevOrigins: process.env.ALLOWED_DEV_ORIGINS
     ? process.env.ALLOWED_DEV_ORIGINS.split(",")
     : ["localhost", "10.0.1.*", "192.168.0.*"],
+  // 도움말 매뉴얼(public/manual, Antora 빌드)의 루트 — public/ 은 디렉터리 주소에 index.html 을 붙여 주지 않아
+  // /manual · /manual/ 이 404 였다(DEF-DOC-001). 시작 페이지로 보낸다. 매뉴얼 안 링크는 머리글 partial 에서 고쳤다.
+  async redirects() {
+    return [
+      { source: "/manual", destination: "/manual/argus-catalog/index.html", permanent: false },
+    ]
+  },
   async headers() {
     return [
       {

@@ -19,7 +19,7 @@ include::../modules/ROOT/pages/getting-started.adoc[leveloffset=+1]
 
 = 사용자 가이드 — 데이터 카탈로그
 
-include::../modules/ROOT/pages/catalog/dashboard.adoc[leveloffset=+1]
+include::../modules/ROOT/pages/catalog/platforms.adoc[leveloffset=+1]
 
 include::../modules/ROOT/pages/catalog/datasets.adoc[leveloffset=+1]
 
@@ -27,14 +27,63 @@ include::../modules/ROOT/pages/catalog/schema.adoc[leveloffset=+1]
 
 include::../modules/ROOT/pages/catalog/lineage.adoc[leveloffset=+1]
 
-include::../modules/ROOT/pages/catalog/quality.adoc[leveloffset=+1]
-
-
-include::../modules/ROOT/pages/catalog/platforms.adoc[leveloffset=+1]
-
 include::../modules/ROOT/pages/catalog/taxonomies.adoc[leveloffset=+1]
 
+include::../modules/ROOT/pages/ops/search.adoc[leveloffset=+1]
+
+include::../modules/ROOT/pages/catalog/dashboard.adoc[leveloffset=+1]
+
+= 사용자 가이드 — 데이터 품질
+
+include::../modules/ROOT/pages/catalog/quality.adoc[leveloffset=+1]
+
+= 사용자 가이드 — AI-Ready 공공데이터
+
+include::../modules/ROOT/pages/governance/ai-ready.adoc[leveloffset=+1]
+
+include::../modules/ROOT/pages/governance/data-reports.adoc[leveloffset=+1]
+
+= 사용자 가이드 — 거버넌스
+
+include::../modules/ROOT/pages/governance/standards.adoc[leveloffset=+1]
+
+include::../modules/ROOT/pages/governance/glossary.adoc[leveloffset=+1]
+
+include::../modules/ROOT/pages/governance/tags.adoc[leveloffset=+1]
+
 include::../modules/ROOT/pages/governance/change-management.adoc[leveloffset=+1]
+
+include::../modules/ROOT/pages/governance/alerts.adoc[leveloffset=+1]
+
+= 사용자 가이드 — API · AI 자산
+
+include::../modules/ROOT/pages/governance/api-catalog.adoc[leveloffset=+1]
+
+include::../modules/ROOT/pages/governance/ai-agent-catalog.adoc[leveloffset=+1]
+
+include::../modules/ROOT/pages/governance/mcp-server-catalog.adoc[leveloffset=+1]
+
+include::../modules/ROOT/pages/governance/mcp-server-catalog-advanced.adoc[leveloffset=+1]
+
+= 사용자 가이드 — ML 모델
+
+include::../modules/ROOT/pages/models/registry.adoc[leveloffset=+1]
+
+include::../modules/ROOT/pages/models/stage-metrics.adoc[leveloffset=+1]
+
+include::../modules/ROOT/pages/models/oci-hub.adoc[leveloffset=+1]
+
+include::../modules/ROOT/pages/models/import.adoc[leveloffset=+1]
+
+= 사용자 가이드 — AI
+
+include::../modules/ROOT/pages/ai/metadata-generation.adoc[leveloffset=+1]
+
+include::../modules/ROOT/pages/ai/metadata-generation-advanced.adoc[leveloffset=+1]
+
+include::../modules/ROOT/pages/ai/assistant.adoc[leveloffset=+1]
+
+= 사용자 가이드 — 페더레이션
 
 include::../modules/ROOT/pages/federation/index.adoc[leveloffset=+1]
 
@@ -48,53 +97,15 @@ include::../modules/ROOT/pages/federation/import.adoc[leveloffset=+1]
 
 include::../modules/ROOT/pages/federation/governance.adoc[leveloffset=+1]
 
-= 사용자 가이드 — AI 카탈로그
-
-include::../modules/ROOT/pages/governance/ai-agent-catalog.adoc[leveloffset=+1]
-
-include::../modules/ROOT/pages/governance/mcp-server-catalog.adoc[leveloffset=+1]
-
-include::../modules/ROOT/pages/governance/mcp-server-catalog-advanced.adoc[leveloffset=+1]
-
-include::../modules/ROOT/pages/models/registry.adoc[leveloffset=+1]
-
-include::../modules/ROOT/pages/models/stage-metrics.adoc[leveloffset=+1]
-
-include::../modules/ROOT/pages/models/oci-hub.adoc[leveloffset=+1]
-
-include::../modules/ROOT/pages/models/import.adoc[leveloffset=+1]
-
-= 사용자 가이드 — API 카탈로그
-
-include::../modules/ROOT/pages/governance/api-catalog.adoc[leveloffset=+1]
-
-= 사용자 가이드 — 거버넌스
-
-include::../modules/ROOT/pages/governance/standards.adoc[leveloffset=+1]
-
-include::../modules/ROOT/pages/governance/glossary.adoc[leveloffset=+1]
-
-include::../modules/ROOT/pages/governance/tags.adoc[leveloffset=+1]
-
-include::../modules/ROOT/pages/governance/alerts.adoc[leveloffset=+1]
-
-= 사용자 가이드 — 검색과 AI 도우미
-
-include::../modules/ROOT/pages/ops/search.adoc[leveloffset=+1]
-
-include::../modules/ROOT/pages/ai/metadata-generation.adoc[leveloffset=+1]
-
-include::../modules/ROOT/pages/ai/metadata-generation-advanced.adoc[leveloffset=+1]
-
-include::../modules/ROOT/pages/ai/assistant.adoc[leveloffset=+1]
-
-= 관리자 가이드 — 관리 메뉴
+= 관리자 가이드 — 운영 · 보안
 
 include::../modules/ROOT/pages/ops/users.adoc[leveloffset=+1]
 
-include::../modules/ROOT/pages/ops/settings.adoc[leveloffset=+1]
-
 include::../modules/ROOT/pages/ops/permissions.adoc[leveloffset=+1]
+
+include::../modules/ROOT/pages/ops/audit.adoc[leveloffset=+1]
+
+include::../modules/ROOT/pages/ops/settings.adoc[leveloffset=+1]
 
 = 관리자 가이드 — 설치 · 배포
 

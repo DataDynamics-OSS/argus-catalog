@@ -38,6 +38,9 @@ export function NotifyToaster() {
       theme={resolvedTheme === "dark" ? "dark" : "light"}
       position="bottom-right"
       closeButton
+      // 여러 개가 동시에 뜨면 겹쳐 쌓지 않고(sonner 기본) 항상 펼쳐 세로로 나란히 보인다.
+      expand
+      gap={8}
       duration={DEFAULT_DURATION_MS}
       visibleToasts={4}
       style={TOKENS}

@@ -48,7 +48,14 @@ from app.apis.schemas import (
     SpecPreviewResponse,
     SpecUpload,
 )
-from app.core.auth import AdminUser, CurrentUser, OptionalUser, TokenUser, assert_owner_or_admin
+from app.core.auth import (
+    AdminUser,
+    CurrentUser,
+    OptionalUser,
+    PermissionDenied,
+    TokenUser,
+    assert_owner_or_admin,
+)
 from app.core.database import get_session
 from app.core.outbound import OutboundBlockedError
 from app.permissions.router import (
@@ -155,7 +162,7 @@ async def invoke(_guard: CurrentUser, req: InvokeRequest, user: OptionalUser, se
     # 저장 자격증명 사용은 자격증명 기능 권한(apis.credentials)이 있어야 한다(목록 조회와 동일 기준)
     if req.credential_id and not await check_feature(session, _guard, "apis.credentials"):
         logger.warning("POST /apis/invoke 거부(apis.credentials 권한 없음): user=%s api=%s", _guard.username, req.api_name)
-        raise HTTPException(status_code=403, detail="기능 권한이 없습니다: apis.credentials")
+        raise PermissionDenied("기능 권한이 없습니다: apis.credentials", user=_guard, kind="FEATURE", key="apis.credentials")
     try:
         return await service.invoke(session, req, called_by=_user_key(user))
     except OutboundBlockedError as e:

@@ -143,6 +143,13 @@ export function DatasetCategoryField({
           <span className="text-xs text-muted-foreground">없음</span>
         )}
       </div>
+      {!canEdit && (
+        // 소유자라도 분류 매핑 권한이 없으면 붙일 수 없다(기본 거부, 소유자에게 자동으로 주지 않음) — 누구에게 부탁할지 알린다(TODO-149)
+        <p className="text-xs text-muted-foreground">
+          분류를 붙이거나 떼려면 분류 매핑 권한(taxonomies.map)이 필요합니다. 이 권한이 있는 사용자나 관리자에게
+          요청하세요. 주제분류는 AI-Ready 필수 메타데이터입니다.
+        </p>
+      )}
       {canEdit && (
         <Popover open={open} onOpenChange={setOpen}>
           <PopoverTrigger asChild>

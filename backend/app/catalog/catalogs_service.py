@@ -15,6 +15,13 @@
 엔진(Impala·Trino)은 카탈로그를 자동으로 만들지 않고 기존 카탈로그에 QUERY 로 연결한다. 엔진을
 통해서만 닿는 카탈로그는 엔진을 SYNC 로 연결해 엔진 경유로 수집한다. SYNC 연결이 없는 엔진은
 데이터셋을 만들 수 없다(``ensure_can_own_datasets`` → 409).
+
+TODO-CAT-001 (design/catalog-registration-design.md): 화면에서 등록한 카탈로그(``source_type=ARGUS``)는
+원천이 없다. 여기에 사람이 직접 데이터셋을 등록하면 카탈로그마다 내부 "수동 등록 데이터 소스"
+(``type=manual``)를 하나 만들어 SYNC 로 연결하고 데이터셋을 거기에 둔다(``ensure_manual_datasource``).
+데이터셋은 계속 데이터 소스에 속하므로 기존 조인 · URN 규칙이 그대로 동작한다. 수동 데이터 소스는
+사용자가 직접 다루지 않는다 — 카탈로그 이름 · 삭제를 따라가고, 다른 카탈로그에 연결할 수 없다.
+ARGUS 카탈로그에는 실제 데이터 소스를 SYNC 로 연결할 수 없다(수동 · 수집 카탈로그를 섞지 않음).
 """
 
 from __future__ import annotations
@@ -26,8 +33,12 @@ import time
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.catalog.datasource_metadata import QUERY_CAPABLE_TYPES, datasource_role
-from app.catalog.models import Catalog, CatalogConnection, Dataset, Datasource
+from app.catalog.datasource_metadata import (
+    MANUAL_DATASOURCE_TYPE,
+    QUERY_CAPABLE_TYPES,
+    datasource_role,
+)
+from app.catalog.models import Catalog, CatalogConnection, Dataset, Datasource, Organization, System
 from app.catalog.schemas import (
     CatalogConnectionCreate,
     CatalogConnectionResponse,
@@ -50,6 +61,36 @@ class CatalogNotFoundError(LookupError):
 
 class CatalogConflictError(Exception):
     """현재 상태와 맞지 않는 요청 → 라우터가 409 로 응답."""
+
+
+class ManualMappedError(CatalogConflictError):
+    """수집이 수동 데이터셋에 매핑된 테이블을 만들려 함 → 409 ``code=MANUAL_MAPPED``(metadata-sync 는 건너뜀으로 센다)."""
+
+    code = "MANUAL_MAPPED"
+
+
+async def resolve_dataset_datasource(
+    session: AsyncSession, catalog_id: int, origin: str | None = None,
+) -> Datasource:
+    """카탈로그에 데이터셋을 등록할 때 담을 데이터 소스(TODO-CAT-001, 커밋 안 함).
+
+    - 직접 등록한(ARGUS) 카탈로그 → 수동 등록 데이터 소스(없으면 생성)
+    - 그 밖 → 카탈로그의 SYNC 데이터 소스. 없으면(엔진으로만 닿는 카탈로그) 409
+    """
+    catalog = await _get_catalog_or_404(session, catalog_id)
+    if catalog.source_type == "ARGUS":
+        return await ensure_manual_datasource(session, catalog, origin)
+    ds = (await session.execute(
+        select(Datasource)
+        .join(CatalogConnection, CatalogConnection.datasource_id == Datasource.id)
+        .where(CatalogConnection.catalog_id == catalog_id, CatalogConnection.role == ROLE_SYNC)
+        .order_by(CatalogConnection.id)
+        .limit(1)
+    )).scalars().first()
+    if ds is None:
+        raise CatalogConflictError(
+            f"카탈로그({catalog.name})에 수집(SYNC) 데이터 소스가 없어 데이터셋을 등록할 수 없습니다.")
+    return ds
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +132,77 @@ async def ensure_datasource_catalog(session: AsyncSession, datasource: Datasourc
 def creates_own_catalog(datasource_type: str | None) -> bool:
     """데이터 소스 생성 시 자동 카탈로그를 만드는 유형인지 — 엔진은 만들지 않는다."""
     return datasource_role(datasource_type) != "ENGINE"
+
+
+def is_manual_datasource(datasource: Datasource | None) -> bool:
+    """수동 등록 데이터 소스(ARGUS 카탈로그의 내부 데이터 소스)인지."""
+    return datasource is not None and (datasource.type or "").lower() == MANUAL_DATASOURCE_TYPE
+
+
+def _manual_datasource_key(catalog: Catalog) -> str:
+    # 카탈로그 기준 URN(TODO-004)으로 바꿔도 URN 이 그대로이도록, 맞으면 catalog_key 를 그대로 쓴다.
+    if len(catalog.catalog_key) <= 36:
+        return catalog.catalog_key
+    from app.catalog.service import _generate_datasource_id
+    return _generate_datasource_id(MANUAL_DATASOURCE_TYPE)
+
+
+async def manual_datasource_of(session: AsyncSession, catalog_id: int) -> Datasource | None:
+    """카탈로그의 수동 등록 데이터 소스(SYNC 연결). 없으면 None."""
+    return (await session.execute(
+        select(Datasource)
+        .join(CatalogConnection, CatalogConnection.datasource_id == Datasource.id)
+        .where(CatalogConnection.catalog_id == catalog_id,
+               CatalogConnection.role == ROLE_SYNC,
+               Datasource.type == MANUAL_DATASOURCE_TYPE)
+        .limit(1)
+    )).scalars().first()
+
+
+async def ensure_manual_datasource(
+    session: AsyncSession, catalog: Catalog, origin: str | None = None,
+) -> Datasource:
+    """ARGUS 카탈로그의 수동 등록 데이터 소스를 돌려준다. 없으면 만들어 SYNC 로 연결한다(멱등, 커밋 안 함).
+
+    ARGUS 가 아닌 카탈로그나, 이미 실제 데이터 소스가 SYNC 인 카탈로그에는 만들지 않는다(409).
+    """
+    existing = await manual_datasource_of(session, catalog.id)
+    if existing is not None:
+        return existing
+    if catalog.source_type != "ARGUS":
+        raise CatalogConflictError(
+            "직접 등록한(Argus) 카탈로그에만 데이터 소스 없이 데이터셋을 등록할 수 있습니다.")
+    if await session.scalar(select(CatalogConnection.id).where(
+            CatalogConnection.catalog_id == catalog.id, CatalogConnection.role == ROLE_SYNC)) is not None:
+        raise CatalogConflictError("이 카탈로그는 이미 다른 데이터 소스가 수집(SYNC)하고 있습니다.")
+    key = _manual_datasource_key(catalog)
+    if await session.scalar(select(Datasource.id).where(Datasource.datasource_id == key)) is not None:
+        from app.catalog.service import _generate_datasource_id
+        key = _generate_datasource_id(MANUAL_DATASOURCE_TYPE)
+    datasource = Datasource(
+        datasource_id=key,
+        name=catalog.name[:200],
+        type=MANUAL_DATASOURCE_TYPE,
+        origin=origin or "PROD",
+    )
+    session.add(datasource)
+    await session.flush()
+    # 스키마 편집기의 타입 목록(일반 타입) — 유형 메타데이터 시드
+    from app.catalog.service import _seed_metadata_for
+    await _seed_metadata_for(session, datasource)
+    session.add(CatalogConnection(catalog_id=catalog.id, datasource_id=datasource.id, role=ROLE_SYNC))
+    await session.flush()
+    logger.info("수동 등록 데이터 소스 생성: %s (catalog id=%d, datasource id=%d)",
+                key, catalog.id, datasource.id)
+    return datasource
+
+
+async def ensure_not_manual(session: AsyncSession, datasource_id: int, action: str) -> None:
+    """수동 등록 데이터 소스에 원천 접속 · 직접 관리 조작을 하려 하면 409."""
+    ds = await session.get(Datasource, datasource_id)
+    if is_manual_datasource(ds):
+        raise CatalogConflictError(
+            f"수동 등록 데이터 소스는 원천 접속이 없어 {action}을(를) 할 수 없습니다. 카탈로그에서 관리하세요.")
 
 
 async def ensure_can_own_datasets(session: AsyncSession, datasource: Datasource) -> None:
@@ -170,7 +282,29 @@ def _new_catalog_key(kind: str | None) -> str:
     return f"{prefix}-{int(time.time() * 1000):x}{secrets.token_hex(3)}"
 
 
+async def _set_manual_system(session: AsyncSession, catalog: Catalog, system_id: int | None) -> None:
+    """직접 등록(ARGUS) 카탈로그의 소속 시스템 — 수동 등록 데이터 소스의 system_id 로 둔다(커밋 안 함, DEF-CAT-001).
+
+    수동 데이터셋의 소관기관(AI-Ready C05)은 데이터 소스 → 시스템 → 조직으로 읽으므로, 데이터 소스 화면에 나오지 않는
+    수동 등록 데이터 소스에는 이 경로로만 시스템을 배정한다. 다른 카탈로그는 데이터 소스 화면에서 배정하므로 409.
+    """
+    if catalog.source_type != "ARGUS":
+        raise CatalogConflictError("데이터 소스에서 수집하는 카탈로그의 시스템은 데이터 소스 화면에서 지정합니다.")
+    if system_id is not None and await session.get(System, system_id) is None:
+        raise CatalogNotFoundError(f"시스템을 찾을 수 없습니다: {system_id}")
+    manual = await manual_datasource_of(session, catalog.id)
+    if manual is None:
+        if system_id is None:
+            return
+        manual = await ensure_manual_datasource(session, catalog)
+    manual.system_id = system_id
+
+
 async def create_catalog(session: AsyncSession, req: CatalogCreate) -> CatalogResponse:
+    if req.system_id is not None and req.source_type != "ARGUS":
+        raise CatalogConflictError("데이터 소스에서 수집하는 카탈로그의 시스템은 데이터 소스 화면에서 지정합니다.")
+    if req.system_id is not None and await session.get(System, req.system_id) is None:
+        raise CatalogNotFoundError(f"시스템을 찾을 수 없습니다: {req.system_id}")
     catalog = Catalog(
         catalog_key=_new_catalog_key(req.kind),
         name=req.name.strip(),
@@ -183,6 +317,9 @@ async def create_catalog(session: AsyncSession, req: CatalogCreate) -> CatalogRe
         status="active",
     )
     session.add(catalog)
+    if req.system_id is not None:
+        await session.flush()
+        await _set_manual_system(session, catalog, req.system_id)
     await session.commit()
     await session.refresh(catalog)  # 서버 기본값(created_at/updated_at) — async 세션은 지연 로딩 불가
     logger.info("카탈로그 생성: %s (id=%d, kind=%s)", catalog.catalog_key, catalog.id, catalog.kind)
@@ -195,10 +332,15 @@ async def update_catalog(session: AsyncSession, catalog_id: int, req: CatalogUpd
         if catalog.auto_created:
             raise CatalogConflictError("데이터 소스와 함께 만들어진 카탈로그의 이름은 데이터 소스 이름을 따릅니다.")
         catalog.name = req.name.strip()
+        manual = await manual_datasource_of(session, catalog.id)
+        if manual is not None:
+            manual.name = catalog.name[:200]
     for field in ("summary", "description", "owner"):
         value = getattr(req, field)
         if value is not None:
             setattr(catalog, field, value)
+    if "system_id" in req.model_fields_set:
+        await _set_manual_system(session, catalog, req.system_id)
     await session.commit()
     await session.refresh(catalog)  # onupdate updated_at 은 커밋 후 만료된다
     return (await _responses(session, [catalog]))[0]
@@ -212,8 +354,12 @@ async def delete_catalog(session: AsyncSession, catalog_id: int) -> None:
         select(func.count()).select_from(Dataset).where(Dataset.catalog_id == catalog_id))
     if datasets:
         raise CatalogConflictError(f"카탈로그에 데이터셋이 {datasets}개 있어 삭제할 수 없습니다.")
+    manual = await manual_datasource_of(session, catalog_id)
     await session.execute(delete(CatalogConnection).where(CatalogConnection.catalog_id == catalog_id))
     await session.execute(delete(Catalog).where(Catalog.id == catalog_id))
+    if manual is not None:
+        # 데이터셋이 없으니 남은 것은 유형 메타데이터 시드뿐(FK CASCADE)
+        await session.delete(manual)
     await session.commit()
     logger.info("카탈로그 삭제: %s (id=%d)", catalog.catalog_key, catalog_id)
 
@@ -234,6 +380,11 @@ async def add_connection(
     datasource = await session.get(Datasource, req.datasource_id)
     if datasource is None:
         raise CatalogNotFoundError("데이터 소스를 찾을 수 없습니다.")
+    if is_manual_datasource(datasource):
+        raise CatalogConflictError("수동 등록 데이터 소스는 다른 카탈로그에 연결할 수 없습니다.")
+    if req.role == ROLE_SYNC and catalog.source_type == "ARGUS":
+        raise CatalogConflictError(
+            "직접 등록한(Argus) 카탈로그에는 수집(SYNC) 연결을 할 수 없습니다. 데이터셋마다 원천 매핑을 쓰세요.")
     dup = await session.scalar(select(CatalogConnection.id).where(
         CatalogConnection.catalog_id == catalog_id,
         CatalogConnection.datasource_id == datasource.id))
@@ -282,6 +433,9 @@ async def remove_connection(session: AsyncSession, catalog_id: int, datasource_i
         raise CatalogNotFoundError("연결을 찾을 수 없습니다.")
     if conn.role == ROLE_SYNC and catalog.auto_created:
         raise CatalogConflictError("데이터 소스와 함께 만들어진 카탈로그의 수집(SYNC) 연결은 끊을 수 없습니다.")
+    if conn.role == ROLE_SYNC and await manual_datasource_of(session, catalog_id) is not None \
+            and (await session.get(Datasource, datasource_id)).type == MANUAL_DATASOURCE_TYPE:
+        raise CatalogConflictError("수동 등록 데이터 소스의 연결은 끊을 수 없습니다. 카탈로그를 삭제하면 함께 정리됩니다.")
     engine_key = await session.scalar(select(Datasource.datasource_id).where(Datasource.id == datasource_id))
     await session.delete(conn)
     await session.commit()
@@ -423,6 +577,17 @@ async def _responses(session: AsyncSession, catalogs: list[Catalog]) -> list[Cat
         .where(CatalogConnection.catalog_id.in_(ids))
         .order_by(CatalogConnection.id)
     )).all()
+    # 소속 시스템 · 조직 — SYNC 데이터 소스(직접 등록 카탈로그는 수동 등록 데이터 소스)가 배정된 시스템
+    sync_system: dict[int, int] = {
+        conn.catalog_id: ds.system_id for conn, ds in rows if conn.role == ROLE_SYNC and ds.system_id is not None
+    }
+    systems: dict[int, tuple[str, str | None]] = {}
+    if sync_system:
+        systems = {sid: (sname, oname) for sid, sname, oname in (await session.execute(
+            select(System.id, System.name, Organization.name)
+            .outerjoin(Organization, Organization.id == System.org_id)
+            .where(System.id.in_(set(sync_system.values())))
+        )).all()}
     for conn, ds in rows:
         conns[conn.catalog_id].append(CatalogConnectionResponse(
             datasource_id=ds.id,
@@ -446,6 +611,9 @@ async def _responses(session: AsyncSession, catalogs: list[Catalog]) -> list[Cat
             status=c.status,
             dataset_count=counts.get(c.id, 0),
             connections=conns[c.id],
+            system_id=sync_system.get(c.id),
+            system_name=systems.get(sync_system.get(c.id, -1), (None, None))[0],
+            org_name=systems.get(sync_system.get(c.id, -1), (None, None))[1],
             created_at=c.created_at,
             updated_at=c.updated_at,
         )

@@ -32,6 +32,7 @@ import {
   type FederatedBrowseResponse,
   type FederationStatsInstance,
 } from "./api"
+import { instanceTreeCount } from "./browse-count"
 import { federatedDetailHref } from "./search-panel"
 import { errorMessage } from "@/lib/notify"
 import { OriginText } from "@/features/datasets/components/origin-text"
@@ -317,6 +318,12 @@ export function FederationBrowsePanel() {
             {mirrorInstances.map((inst) => {
               const open = expandedInst.has(inst.id)
               const st = data[inst.id]
+              // 필터 중에는 필터 결과 수(DEF-177) — 아래 데이터 소스 건수와 맞춘다.
+              const count = instanceTreeCount(
+                inst.mirror_datasets,
+                appliedQ,
+                st?.resp?.total_datasets
+              )
               return (
                 <div key={inst.id} className="border-b last:border-b-0">
                   {/* 인스턴스 노드 — 펼치기 전용 */}
@@ -332,9 +339,11 @@ export function FederationBrowsePanel() {
                     )}
                     <Globe className="h-4 w-4 shrink-0 text-blue-600" />
                     <span className="truncate font-medium">{inst.name}</span>
-                    <span className="ml-auto text-xs">
-                      {inst.mirror_datasets.toLocaleString()}
-                    </span>
+                    {count != null && (
+                      <span className="ml-auto text-xs">
+                        {count.toLocaleString()}
+                      </span>
+                    )}
                   </button>
 
                   {open && (

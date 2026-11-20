@@ -50,6 +50,7 @@ STR_FIELDS = (
     "legal_basis", "publisher", "landing_page", "contact_email", "data_language", "persistent_id",
     "spatial_coverage", "data_version", "version_notes", "license", "license_url", "rights",
     "data_biases", "known_limitations", "missing_data_info", "missing_value_notation", "privacy_measures",
+    "social_impact", "risk_mitigation",
 )
 DATE_FIELDS = ("temporal_start", "temporal_end")
 BOOL_FIELDS = ("contains_synthetic", "contains_machine_annotation")

@@ -1,5 +1,6 @@
 "use client"
 
+import { datasourceTypeLabel } from "@/features/datasources/datasource-configs"
 import { Tip } from "@/components/tip"
 import { useEffect, useRef, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
@@ -67,7 +68,7 @@ function selectDataset(d: DatasetSummary): SelectedDataset {
   const parts = core.split(".").filter(Boolean)
   const path = parts.slice(1)                       // datasource id 제외 → db[.schema].table
   const upperPath = (path.length ? path : [d.name]).map((p) => p.toUpperCase()).join(".")
-  const platform = `${d.datasource_name}${d.datasource_type ? ` (${d.datasource_type})` : ""}`
+  const platform = `${d.datasource_name}${d.datasource_type ? ` (${datasourceTypeLabel(d.datasource_type)})` : ""}`
   return { id: d.id, display: upperPath ? `${platform} - ${upperPath}` : platform }
 }
 
@@ -168,7 +169,7 @@ export default function NewChangeRequestPage() {
         const parts = core.split(".").filter(Boolean)
         const path = parts.slice(1)
         const upperPath = (path.length ? path : [d.name]).map((p) => p.toUpperCase()).join(".")
-        const platform = `${d.datasource.name}${d.datasource.type ? ` (${d.datasource.type})` : ""}`
+        const platform = `${d.datasource.name}${d.datasource.type ? ` (${datasourceTypeLabel(d.datasource.type)})` : ""}`
         setDataset({ id: d.id, display: upperPath ? `${platform} - ${upperPath}` : platform })
         setDatasetLocked(true)
       })

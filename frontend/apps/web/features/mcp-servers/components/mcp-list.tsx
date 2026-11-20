@@ -206,6 +206,8 @@ export function McpList() {
           </TabsList>
         </Tabs>
         <div className="flex items-center gap-2">
+          {/* 항목이 하나도 없으면 단추도 숨긴다 (DEF-161) */}
+          {(canRegister || user?.is_admin) && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button size="sm" variant="outline">
@@ -231,6 +233,7 @@ export function McpList() {
               )}
             </DropdownMenuContent>
           </DropdownMenu>
+          )}
           {canRegister && (
             <>
               <Button size="sm" variant="outline" onClick={() => setOpen("add-deployment")}>

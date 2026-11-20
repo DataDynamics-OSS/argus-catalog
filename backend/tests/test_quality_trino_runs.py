@@ -62,7 +62,7 @@ from quality_worker.runner import Runner  # noqa: E402
 
 _TABLES = (
     cm.Organization, cm.System, cm.Datasource, cm.Catalog, cm.CatalogConnection,
-    cm.DatasourceConfiguration, cm.Dataset, cm.DatasetSchema, cm.DatasetProperty,
+    cm.DatasourceConfiguration, cm.Dataset, cm.Owner, cm.DatasetSchema, cm.DatasetProperty,
     QualityDefinition, QualityRule, QualityResult, QualityScore, DataProfile, QualityJob, QualityJobRun, QualityRun, QualityWorker,
     Permission,
 )
@@ -377,6 +377,7 @@ def test_resolve_trino_dataset_uses_own_name(tmp_path) -> None:
             trino = cm.Datasource(datasource_id="trino-9", name="t9", type="trino")
             s.add(trino)
             await s.flush()
+            s.add(cm.DatasourceConfiguration(datasource_id=trino.id, config_json=json.dumps({"host": "t9.local"})))
             d = cm.Dataset(urn="u", name="m", datasource_id=trino.id, qualified_name="trino-9.lakehouse.mart.m")
             s.add(d)
             await s.commit()
@@ -959,9 +960,9 @@ def test_every_trino_check_type_belongs_to_one_indicator() -> None:
     assert covered == set(rule_sql.TRINO_CHECK_TYPES), "Trino 유형마다 지표가 있어야 한다"
     assert len({i.key for i in indicators.INDICATORS}) == len(indicators.INDICATORS)
     assert {i.area for i in indicators.INDICATORS} <= indicators.AREAS.keys()
-    # 관리지침의 진단 기준 16개(완결성 4 · 유효성 7 · 정합성 5) + 기준 밖의 문자열 형식·건수·더미 값·연속성
+    # 관리지침의 진단 기준 16개(완결성 4 · 유효성 7 · 정합성 5) + 기준 밖의 문자열 형식·건수·더미 값·연속성·다양성·여러 컬럼 키
     per_area = {a: sum(1 for i in indicators.INDICATORS if i.area == a) for a in indicators.AREAS}
-    assert per_area == {"COMPLETENESS": 4, "VALIDITY": 7, "CONSISTENCY": 5, "OTHER": 4}
+    assert per_area == {"COMPLETENESS": 4, "VALIDITY": 7, "CONSISTENCY": 5, "OTHER": 6}
     # AI-Ready 품질 지표(가이드라인 §2.3) — 건수만 빠지고 6개 지표가 모두 쓰인다
     assert [i.key for i in indicators.INDICATORS if i.ai_ready is None] == ["VOLUME"]
     assert {i.ai_ready[0] for i in indicators.INDICATORS if i.ai_ready} == set(indicators.AI_READY_AREAS)
@@ -1124,7 +1125,8 @@ def test_run_with_indicators_evaluates_only_those_rules(tmp_path, monkeypatch) -
     assert "IN (" not in fake.calls[0]["sql"], "고르지 않은 지표의 규칙은 쿼리에 넣지 않는다"
 
     done = _run(sm, lambda s: runs.get_run(s, second.id))
-    assert done.status == "SUCCEEDED" and done.rules_total == 3 and done.rules_evaluated == 2
+    # 분모는 이 실행이 진단하는 규칙만(DEF-149)
+    assert done.status == "SUCCEEDED" and done.rules_total == 2 and done.rules_evaluated == 2
     assert (done.checked_count, done.error_count) == (190, 5)
 
     async def by_run(s):

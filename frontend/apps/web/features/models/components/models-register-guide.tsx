@@ -24,7 +24,16 @@ export function ModelsRegisterGuide({ open, onOpenChange }: { open: boolean; onO
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-3xl">
+      {/* 여는 순간의 포커스는 창 자체에 둔다 — 첫 복사 단추로 가면 "코드 복사" 툴팁이 떠 본문을 가린다(DEF-176).
+          탭으로 단추에 가면 툴팁은 그대로 뜬다. */}
+      <DialogContent
+        tabIndex={-1}
+        className="max-h-[85vh] overflow-y-auto outline-none sm:max-w-3xl"
+        onOpenAutoFocus={(e) => {
+          e.preventDefault()
+          ;(e.currentTarget as HTMLElement).focus()
+        }}
+      >
         <DialogHeader>
           <DialogTitle>MLflow 모델 등록 방법</DialogTitle>
           <DialogDescription>

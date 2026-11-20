@@ -20,6 +20,8 @@ export const CHECK_TYPE_LABEL: Record<string, string> = {
   REFERENTIAL: "참조관계",
   DUMMY_VALUE: "더미 값",
   CONTINUITY: "데이터 연속성",
+  DIVERSITY: "값 분포 다양성",
+  COMPOSITE_UNIQUE: "여러 컬럼 키 고유값",
   ROW_COUNT: "행 수 하한",
   FRESHNESS: "최신성",
   CUSTOM_SQL: "커스텀 SQL",

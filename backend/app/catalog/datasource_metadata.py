@@ -12,6 +12,19 @@ ordinal(목록 순서)과 함께 시드한다. 값은 다음을 포함한다(is_
 """
 
 DATASOURCE_METADATA = {
+    # 수동 등록 데이터 소스(TODO-CAT-001) — ARGUS 카탈로그에 사람이 직접 등록한 데이터셋을 담는 내부 데이터 소스.
+    "manual": {
+        # 데이터 타입은 두지 않는다 — 스키마 편집기가 카탈로그 공통 타입(STRING · NUMBER · DATE …)을 쓰고,
+        # 수집도 같은 공통 타입으로 field_type 을 채우므로 원천 매핑 때 비교가 맞는다.
+        "data_types": [],
+        "table_types": [
+            ("TABLE", "Table", "Table-like dataset", "true"),
+            ("VIEW", "View", "Derived view", "false"),
+            ("FILE", "File", "File or spreadsheet managed outside a database", "false"),
+        ],
+        "storage_formats": [],
+        "features": [],
+    },
     "hive": {
         "data_types": [
             ("BOOLEAN", "boolean", "True/false values"),
@@ -704,12 +717,17 @@ DATASOURCE_ROLES: dict[str, str] = {
     "unity_catalog": "CATALOG",
     "impala": "ENGINE",
     "trino": "ENGINE",
+    # 수동 등록 데이터 소스(TODO-CAT-001) — ARGUS 카탈로그가 1:1 로 갖는 내부 데이터 소스. 원천 접속 · 수집이 없다.
+    "manual": "MANUAL",
 }
+
+# 수동 등록 데이터 소스 유형 키 — 사용자가 직접 만들 수 없고 카탈로그가 만든다.
+MANUAL_DATASOURCE_TYPE = "manual"
 
 # 카탈로그에 QUERY 로 연결할 수 있는 유형 — 엔진 + 외부 카탈로그를 붙여 조회하는 DB(StarRocks external catalog).
 QUERY_CAPABLE_TYPES: frozenset[str] = frozenset({"impala", "trino", "starrocks"})
 
 
 def datasource_role(datasource_type: str | None) -> str:
-    """데이터 소스 유형의 역할(CATALOG / DATABASE / ENGINE). 모르는 유형은 DATABASE."""
+    """데이터 소스 유형의 역할(CATALOG / DATABASE / ENGINE / MANUAL). 모르는 유형은 DATABASE."""
     return DATASOURCE_ROLES.get((datasource_type or "").lower(), "DATABASE")

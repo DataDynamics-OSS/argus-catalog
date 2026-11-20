@@ -1,5 +1,6 @@
 "use client"
 
+import { datasourceTypeLabel } from "@/features/datasources/datasource-configs"
 import { useRouter } from "next/navigation"
 import { useCallback, useEffect, useState } from "react"
 import { Bell, Brain } from "lucide-react"
@@ -166,9 +167,9 @@ export function DashboardHeader({ title, searchQuery }: DashboardHeaderProps) {
                         </p>
                         <p className="text-sm mt-0.5">
                           {alert.entity_ref && `${alert.entity_type === "mcp_deployment" ? "MCP 배포" : alert.entity_type === "datasource" ? "데이터 소스" : alert.entity_type} ${alert.entity_ref}`}
-                          {alert.source_datasource_type && `${alert.source_datasource_type}`}
+                          {alert.source_datasource_type && datasourceTypeLabel(alert.source_datasource_type)}
                           {alert.source_dataset_name && `.${alert.source_dataset_name}`}
-                          {alert.affected_dataset_name && ` → ${alert.affected_datasource_type}.${alert.affected_dataset_name}`}
+                          {alert.affected_dataset_name && ` → ${datasourceTypeLabel(alert.affected_datasource_type)}.${alert.affected_dataset_name}`}
                         </p>
                         <p className="text-sm mt-0.5">
                           {formatTimeAgo(alert.created_at)}

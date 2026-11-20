@@ -1,5 +1,6 @@
 "use client"
 
+import { datasourceTypeLabel } from "@/features/datasources/datasource-configs"
 import { useCallback, useEffect, useState } from "react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@workspace/ui/components/dialog"
 import { Button } from "@workspace/ui/components/button"
@@ -107,7 +108,7 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
   // SYNC_FAILED / SYNC_STALE 조건
   const [syncIncludePartial, setSyncIncludePartial] = useState(true)
   const [syncStaleHours, setSyncStaleHours] = useState("")  // 빈 값 = 예약 주기의 2배
-  // AI_READY_UNMET / REPORT_RECEIVED / REPORT_DUE 조건
+  // AI_READY_UNMET / REPORT_RECEIVED · REPORT_CLOSED / REPORT_DUE 조건
   const [aiConditions, setAiConditions] = useState<string[]>(Object.keys(AI_READY_CONDITION_LABEL))
   const [reportCategories, setReportCategories] = useState<string[]>(Object.keys(REPORT_CATEGORY_LABEL))
   const [dueDaysBefore, setDueDaysBefore] = useState("2")
@@ -233,11 +234,11 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
     }
     if (scopeType === "DATASET" && scopeId) {
       const ds = datasets.find(d => d.id === scopeId)
-      return ds ? `${ds.datasource_type}.${ds.name}` : editName ?? `데이터셋 ID: ${scopeId}`
+      return ds ? `${datasourceTypeLabel(ds.datasource_type)}.${ds.name}` : editName ?? `데이터셋 ID: ${scopeId}`
     }
     if (scopeType === "LINEAGE" && scopeId) {
       const l = lineages.find(l => l.id === scopeId)
-      return l ? `${l.source_datasource_type}.${l.source_dataset_name} → ${l.target_datasource_type}.${l.target_dataset_name}` : editName ?? `리니지 ID: ${scopeId}`
+      return l ? `${datasourceTypeLabel(l.source_datasource_type)}.${l.source_dataset_name} → ${datasourceTypeLabel(l.target_datasource_type)}.${l.target_dataset_name}` : editName ?? `리니지 ID: ${scopeId}`
     }
     if (scopeType === "DATASOURCE" && scopeId) {
       const p = datasources.find(p => p.id === scopeId)
@@ -264,7 +265,8 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
     : triggerType === "SYNC_STALE" && !staleAuto && !(Number.isInteger(staleHours) && staleHours >= 1 && staleHours <= 720)
       ? "기준 시간은 1~720 사이의 정수(시간)로 입력하거나 비워 두세요(예약 주기의 2배)."
     : triggerType === "AI_READY_UNMET" && aiConditions.length === 0 ? "최소 요건 조건을 하나 이상 선택하세요."
-    : triggerType === "REPORT_RECEIVED" && reportCategories.length === 0 ? "분류를 하나 이상 선택하세요."
+    : (triggerType === "REPORT_RECEIVED" || triggerType === "REPORT_CLOSED") && reportCategories.length === 0
+      ? "분류를 하나 이상 선택하세요."
     : triggerType === "REPORT_DUE" && !(Number.isInteger(dueDays) && dueDays >= 0 && dueDays <= 30)
       ? "임박 기준은 0~30 사이의 정수(일)로 입력하세요."
     : usesChangeTypes && changeTypes.length === 0 ? "변경 유형을 하나 이상 선택하세요."
@@ -305,7 +307,7 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
       if (!staleAuto) triggerConfig.stale_hours = staleHours
     } else if (triggerType === "AI_READY_UNMET") {
       triggerConfig.conditions = aiConditions
-    } else if (triggerType === "REPORT_RECEIVED") {
+    } else if (triggerType === "REPORT_RECEIVED" || triggerType === "REPORT_CLOSED") {
       triggerConfig.categories = reportCategories
     } else if (triggerType === "REPORT_DUE") {
       triggerConfig.days_before = dueDays
@@ -438,7 +440,7 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
                         {datasets.map(d => (
                           <CommandItem key={d.id} value={String(d.id)} onSelect={() => { setScopeId(d.id); setScopePopoverOpen(false) }}>
                             <Check className={`mr-2 h-3.5 w-3.5 ${scopeId === d.id ? "opacity-100" : "opacity-0"}`} />
-                            <Badge size="sm" variant="outline" className="mr-1.5">{d.datasource_type}</Badge>
+                            <Badge size="sm" variant="outline" className="mr-1.5">{datasourceTypeLabel(d.datasource_type)}</Badge>
                             <span className="truncate">{d.name}</span>
                           </CommandItem>
                         ))}
@@ -455,7 +457,7 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
                 <SelectContent>
                   {lineages.map(l => (
                     <SelectItem key={l.id} value={String(l.id)} className="text-sm">
-                      {l.source_datasource_type}.{l.source_dataset_name} → {l.target_datasource_type}.{l.target_dataset_name}
+                      {datasourceTypeLabel(l.source_datasource_type)}.{l.source_dataset_name} → {datasourceTypeLabel(l.target_datasource_type)}.{l.target_dataset_name}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -480,6 +482,7 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
                 <SelectItem value="AI_READY_UNMET">AI-Ready 공유 최소 요건 미충족</SelectItem>
                 <SelectItem value="REPORT_RECEIVED">오류 신고·개선 요청 접수</SelectItem>
                 <SelectItem value="REPORT_DUE">신고 처리 기한 임박·넘김</SelectItem>
+                <SelectItem value="REPORT_CLOSED">신고 처리 결과 (신고한 사람에게)</SelectItem>
               </SelectContent>
             </Select>
 
@@ -502,10 +505,12 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
               </div>
             )}
 
-            {triggerType === "REPORT_RECEIVED" && (
+            {(triggerType === "REPORT_RECEIVED" || triggerType === "REPORT_CLOSED") && (
               <div className="space-y-2 rounded-md border p-3">
                 <p className="text-xs">
-                  범위 안 데이터셋에 댓글로 오류 신고·개선 요청이 접수되면(다른 분류에서 바꾼 경우 포함) 바로 발행됩니다.
+                  {triggerType === "REPORT_RECEIVED"
+                    ? "범위 안 데이터셋에 댓글로 오류 신고·개선 요청이 접수되면(다른 분류에서 바꾼 경우 포함) 바로 발행됩니다."
+                    : "범위 안 데이터셋의 오류 신고·개선 요청을 해결하거나 소명하면 바로 발행되고, 신고한 사람이 수신자에 들어갑니다(데이터셋 소유자는 처리한 쪽이라 받지 않음). 처리 결과만 고친 것은 다시 알리지 않습니다."}
                 </p>
                 <div className="flex flex-wrap gap-4">
                   {Object.entries(REPORT_CATEGORY_LABEL).map(([k, label]) => (
@@ -706,7 +711,7 @@ export function RuleCreateDialog({ open, onOpenChange, onCreated, presetScope, e
                 checked={notifyOwners}
                 onCheckedChange={(v) => setNotifyOwners(!!v)}
               />
-              {isMcpTrigger ? "MCP 배포 소유자에게도 알림" : isSyncTrigger ? "소유자에게도 알림 (수집 알림은 해당 없음)" : AI_READY_TRIGGERS.has(triggerType) ? "데이터셋 소유자·생성자에게도 알림" : "데이터셋 소유자에게도 알림"}
+              {isMcpTrigger ? "MCP 배포 소유자에게도 알림" : isSyncTrigger ? "소유자에게도 알림 (수집 알림은 해당 없음)" : triggerType === "REPORT_CLOSED" ? "소유자에게도 알림 (처리 결과 알림은 해당 없음 — 신고한 사람에게 갑니다)" : AI_READY_TRIGGERS.has(triggerType) ? "데이터셋 소유자·생성자에게도 알림" : "데이터셋 소유자에게도 알림"}
             </label>
 
             <div className="space-y-1.5">

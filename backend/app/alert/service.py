@@ -408,10 +408,12 @@ async def evaluate_sync_alerts(
 
 
 async def _persist_and_dispatch(session: AsyncSession, alerts: list[LineageAlert],
-                                extra_owners: list[str] | None = None) -> None:
+                                extra_owners: list[str] | None = None, *,
+                                dataset_owners: bool = True, direct: list[str] | None = None) -> None:
     """알림 저장 후 전달. 전달 실패는 알림 자체를 막지 않는다.
 
     flush 로 알림 id 를 확보한 뒤 규칙을 일괄 조회해 전달한다(커밋은 호출자 책임).
+    ``dataset_owners``·``direct`` 는 ``_dispatch_notifications`` 와 같다.
     """
     for alert in alerts:
         session.add(alert)
@@ -423,7 +425,8 @@ async def _persist_and_dispatch(session: AsyncSession, alerts: list[LineageAlert
             select(AlertRule).where(AlertRule.id.in_(rule_ids))
         )).scalars().all()}
     for alert in alerts:
-        await _dispatch_notifications(session, alert, rules.get(alert.rule_id), extra_owners=extra_owners)
+        await _dispatch_notifications(session, alert, rules.get(alert.rule_id), extra_owners=extra_owners,
+                                      dataset_owners=dataset_owners, direct=direct)
     await session.flush()
 
 
@@ -646,11 +649,15 @@ def rule_channels(rule: AlertRule | None) -> list[str]:
 
 
 async def _dispatch_notifications(session: AsyncSession, alert: LineageAlert, rule: AlertRule | None,
-                                  extra_owners: list[str] | None = None) -> None:
+                                  extra_owners: list[str] | None = None, *,
+                                  dataset_owners: bool = True, direct: list[str] | None = None) -> None:
     """알림을 규칙 구독자와 데이터셋(또는 엔터티) 소유자에게 전달한다.
 
     - IN_APP : 수신자마다 ``AlertNotification`` 기록
     - WEBHOOK: 규칙의 URL 로 1회 POST, 결과(SENT/FAILED)를 ``AlertNotification`` 에 기록
+
+    ``dataset_owners=False`` 면 데이터셋 소유자 · ``extra_owners`` 를 더하지 않는다. ``direct`` 는 규칙의
+    소유자 알림 설정과 상관없이 늘 더하는 수신자(예: 신고 처리 결과의 신고자, TODO-096).
     """
     recipients: list[str] = []
 
@@ -663,7 +670,10 @@ async def _dispatch_notifications(session: AsyncSession, alert: LineageAlert, ru
         for sub in rule.subscribers.split(","):
             add(sub)
 
-    if not rule or rule.notify_owners == "true":
+    for name in direct or []:
+        add(name)
+
+    if dataset_owners and (not rule or rule.notify_owners == "true"):
         ds_ids = [i for i in (alert.source_dataset_id, alert.affected_dataset_id) if i]
         if ds_ids:
             for owner in (await session.execute(
@@ -981,16 +991,10 @@ _STATUS_LABEL = {"OPEN": "미확인", "ACKNOWLEDGED": "확인", "RESOLVED": "해
 
 
 async def managed_dataset_ids(session: AsyncSession, username: str, dataset_ids: set[int]) -> set[int]:
-    """주어진 데이터셋 중 사용자가 생성자이거나 소유자(Owner)로 등록된 것."""
-    if not dataset_ids or not username:
-        return set()
-    created = set((await session.execute(
-        select(Dataset.id).where(Dataset.id.in_(dataset_ids), Dataset.created_by == username)
-    )).scalars().all())
-    owned = set((await session.execute(
-        select(Owner.dataset_id).where(Owner.dataset_id.in_(dataset_ids), Owner.owner_name == username)
-    )).scalars().all())
-    return created | owned
+    """주어진 데이터셋 중 사용자가 생성자이거나 소유자(Owner)로 등록된 것 — 데이터셋 소유자 공통 기준(DEF-138)."""
+    from app.catalog.dataset_owner import managed_dataset_ids as _managed
+
+    return await _managed(session, username, dataset_ids)
 
 
 def _alert_dataset_ids(alert: LineageAlert) -> set[int]:

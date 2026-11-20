@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -24,6 +25,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.catalog import ai_ready
+from app.catalog.datasource_metadata import MANUAL_DATASOURCE_TYPE
 from app.catalog.models import (
     AiReadyJudgment,
     Dataset,
@@ -69,13 +71,16 @@ COMMON_ITEMS: tuple[Item, ...] = (
     Item("C04", "형식 및 구조", REQUIRED, "메타데이터를 표준 스키마(예: DCAT)또는 기관·국가 적용 프로파일에 따라 기계 이해 가능한 형태로 제공하고 있는가?", AUTO,
          "외부 API 의 DCAT·Croissant JSON-LD(AI-Ready 탭 '내보내기')"),
     Item("C05", "형식 및 구조", REQUIRED, "메타데이터 작성 기준에서 정의한 필수 항목을 누락 없이 제공하고 있는가?", AUTO,
-         "메타데이터 탭 — 설명·관련법령·제공기관·제공시스템·갱신주기·주제분류·키워드·연락처·언어·용량·형식·버전·라이선스, AI-Ready 탭 '배포본'"),
+         "메타데이터 탭 — 설명·관련법령·제공기관·제공시스템·갱신주기·키워드·연락처·언어·용량·형식·버전·라이선스, "
+         "AI-Ready 탭 '배포본'. 주제분류는 분류 매핑 권한(taxonomies.map) 사용자·관리자가 메타데이터 탭 '분류 체계' "
+         "또는 분류 체계 화면에서 매핑, 소관기관은 관리자(또는 datasources.manage)가 데이터 소스 화면에서 시스템에 조직을 지정"
+         "(직접 등록 카탈로그의 수동 데이터셋은 카탈로그 화면에서 카탈로그의 시스템을 지정)"),
     Item("C06", "형식 및 구조", RECOMMENDED, "데이터 검증 기준(예: 허용값, 필수값, 형식, 관계 제약 등)을 제공하고 있는가?", AUTO,
          "품질 탭의 활성 규칙"),
     Item("C07", "형식 및 구조", RECOMMENDED, "대용량 데이터는 압축 제공 또는 대용량 처리에 적합한 포맷(예: Parquet 등)으로 제공하여 이용자가 용이하게 다운로드·활용할 수 있는가?", AUTO,
          "용량이 기준(1GB) 이상이면 압축 또는 Parquet·ORC·Avro"),
     Item("C08", "의미 및 표준", REQUIRED, "변수(항목)별 정의·단위·산정기준·코드값 의미를 포함하는 데이터 사전(또는 이에 준하는 문서)을 제공하고 있는가?", AUTO,
-         "스키마 탭 컬럼 설명 채움률(80% 이상)"),
+         "스키마 탭 — 컬럼 설명 채움률 80% 이상, 측정값 컬럼(숫자형, 키 제외)의 단위 채움률 80% 이상. 산정기준은 근거에 표시"),
     Item("C09", "의미 및 표준", REQUIRED, "날짜·시간·코드 등 주요 값의 표기 형식은 표준 포맷에 따라 일관되게 적용되고 있는가?", AUTO,
          "품질 규칙 DATE_FORMAT·ACCEPTED_VALUES 의 최근 결과"),
     Item("C10", "의미 및 표준", REQUIRED, "동일한 개념은 동일한 라벨·용어로 일관되게 사용하고 있는가?", AUTO,
@@ -165,8 +170,21 @@ OPEN_FORMATS = {"CSV", "TSV", "JSON", "JSONL", "NDJSON", "XML", "PARQUET", "ORC"
 BULK_FORMATS = {"PARQUET", "ORC", "AVRO", "ICEBERG", "DELTA"}
 MEDIA_FORMATS = {"IMAGE", "VIDEO", "AUDIO", "PNG", "JPEG", "JPG", "TIFF", "MP4", "WEBM", "WAV", "FLAC"}
 LARGE_BYTES = 1024 ** 3                 # C07 '대용량' 기준 1GB
-DICTIONARY_FILL_PCT = 80.0              # C08 컬럼 설명 채움률 기준
+DICTIONARY_FILL_PCT = 80.0              # C08 컬럼 설명 · 측정값 단위 채움률 기준
 NUMERIC_HINTS = ("int", "decimal", "numeric", "number", "float", "double", "real", "long", "short", "money")
+# 숫자형이지만 측정값이 아닌 키 · 코드 · 순번 컬럼 이름(C08 단위 판정에서 뺌) — id, user_id, userId, seq_no, area_cd 등
+_KEY_NAME = re.compile(r"(?:^|[_\-])(?:id|no|seq|sn|cd|code|key)$", re.IGNORECASE)
+_KEY_NAME_CAMEL = re.compile(r"[a-z0-9](?:Id|No|Cd|Seq|Code|Key)$")
+
+
+def is_measure_column(path: str, field_type: str | None, is_pk) -> bool:
+    """C08 단위 판정 대상 — 숫자형이고 기본키가 아니며 이름이 키 · 코드 · 순번 꼴이 아닌 컬럼."""
+    if str(is_pk).lower() == "true":
+        return False
+    if not any(h in str(field_type or "").lower() for h in NUMERIC_HINTS):
+        return False
+    name = str(path or "").rsplit(".", 1)[-1]
+    return not (_KEY_NAME.search(name) or _KEY_NAME_CAMEL.search(name))
 
 # 갱신 주기(시간) — 최소 요건 '갱신 주기 N회 이내'. 실시간·수동·cron 은 판정하지 않는다.
 FREQUENCY_HOURS = {"HOURLY": 1, "DAILY": 24, "WEEKLY": 24 * 7, "MONTHLY": 24 * 31}
@@ -191,6 +209,17 @@ REQUIRED_METADATA: tuple[tuple[str, str], ...] = (
     ("license", "라이선스"),
 )
 
+# 데이터셋 소유자가 혼자 채울 수 없는 필수 항목 — 누가 어디서 채우는지(TODO-149). 주제분류 매핑은 기본 거부 권한이고
+# 소유자에게 자동으로 주지 않는다. 소관기관은 데이터셋이 아니라 데이터 소스의 시스템 → 조직에서 온다.
+REQUIRED_METADATA_WHO: dict[str, str] = {
+    "creator": "소관기관 — 관리자(또는 데이터 소스 관리 권한 사용자)가 데이터 소스 화면에서 데이터 소스의 시스템에 조직을 지정",
+    # 직접 등록 카탈로그의 수동 데이터셋 — 수동 등록 데이터 소스는 데이터 소스 화면에 없다 (DEF-CAT-001)
+    "creator_manual": "소관기관 — 카탈로그 관리 권한(catalogs.manage) 사용자 또는 관리자가 데이터 카탈로그 › 카탈로그에서 "
+                      "이 카탈로그의 시스템을 지정(시스템의 조직이 소관기관)",
+    "theme": "주제분류 — 분류 매핑 권한(taxonomies.map) 사용자 또는 관리자가 메타데이터 탭 '분류 체계' "
+             "또는 분류 체계 화면에서 매핑",
+}
+
 
 # ---------------------------------------------------------------------------
 # 판정 재료 — 데이터셋 묶음 단위로 모은다
@@ -203,12 +232,16 @@ class _Facts:
     ds: Dataset
     datasource_name: str | None = None
     org_name: str | None = None
+    manual: bool = False                                             # 직접 등록 카탈로그의 수동 데이터셋(TODO-CAT-001)
     columns: int = 0
     described: int = 0
     undescribed: set[str] = field(default_factory=set)              # 설명이 없는 컬럼 경로
     pk_columns: int = 0
     pii_columns: int = 0
     numeric_columns: int = 0
+    measure_columns: int = 0                                        # 측정값 컬럼(숫자형, 키 · 코드 제외) — C08 단위 대상
+    measure_units: int = 0                                          # 그중 단위가 있는 컬럼
+    calculated: int = 0                                             # 산정기준이 있는 컬럼
     owners: int = 0
     tags: int = 0
     categories: int = 0
@@ -241,20 +274,22 @@ async def _load_context(session: AsyncSession, datasets: list[Dataset], *, with_
         return facts
 
     # 데이터 소스 이름과 소관기관(데이터 소스 → 시스템 → 조직)
-    for ds_id, src_name, org_name in (await session.execute(
-        select(Dataset.id, Datasource.name, Organization.name)
+    for ds_id, src_name, src_type, org_name in (await session.execute(
+        select(Dataset.id, Datasource.name, Datasource.type, Organization.name)
         .join(Datasource, Datasource.id == Dataset.datasource_id)
         .outerjoin(System, System.id == Datasource.system_id)
         .outerjoin(Organization, Organization.id == System.org_id)
         .where(Dataset.id.in_(ids))
     )).all():
         facts[ds_id].datasource_name = src_name
+        facts[ds_id].manual = src_type == MANUAL_DATASOURCE_TYPE
         facts[ds_id].org_name = org_name
 
     # 스키마 — 컬럼 수, 설명 채움, 기본키, 개인정보, 숫자 컬럼
-    for ds_id, path, desc, pk, pii, ftype in (await session.execute(
+    for ds_id, path, desc, pk, pii, ftype, unit, calc in (await session.execute(
         select(DatasetSchema.dataset_id, DatasetSchema.field_path, DatasetSchema.description,
-               DatasetSchema.is_primary_key, DatasetSchema.pii_type, DatasetSchema.field_type)
+               DatasetSchema.is_primary_key, DatasetSchema.pii_type, DatasetSchema.field_type,
+               DatasetSchema.unit, DatasetSchema.calculation)
         .where(DatasetSchema.dataset_id.in_(ids))
     )).all():
         f = facts[ds_id]
@@ -269,12 +304,31 @@ async def _load_context(session: AsyncSession, datasets: list[Dataset], *, with_
             f.pii_columns += 1
         if any(h in str(ftype or "").lower() for h in NUMERIC_HINTS):
             f.numeric_columns += 1
+        if is_measure_column(path, ftype, pk):
+            f.measure_columns += 1
+            if unit and str(unit).strip():
+                f.measure_units += 1
+        if calc and str(calc).strip():
+            f.calculated += 1
 
-    for model, attr in ((Owner, "owners"), (DatasetTag, "tags"), (DatasetCategory, "categories")):
+    for model, attr in ((DatasetTag, "tags"), (DatasetCategory, "categories")):
         for ds_id, n in (await session.execute(
             select(model.dataset_id, func.count()).where(model.dataset_id.in_(ids)).group_by(model.dataset_id)
         )).all():
             setattr(facts[ds_id], attr, n)
+
+    # 소유자 — 소유자 목록에 생성자도 더한다(목록에 이미 있으면 한 번만). 알림 · 신고 처리와 같은 기준(DEF-138)
+    from app.catalog.dataset_owner import owner_matches
+
+    listed: dict[int, list[str]] = {i: [] for i in ids}
+    for ds_id, name in (await session.execute(
+        select(Owner.dataset_id, Owner.owner_name).where(Owner.dataset_id.in_(ids))
+    )).all():
+        listed[ds_id].append(name)
+    for ds_id, f in facts.items():
+        creator = f.ds.created_by
+        f.owners = len(listed[ds_id]) + (1 if creator and not any(owner_matches(n, creator)
+                                                                    for n in listed[ds_id]) else 0)
 
     # 활성 품질 규칙 유형별 수
     for ds_id, ctype, n in (await session.execute(
@@ -414,6 +468,12 @@ def _effective(ds: Dataset, defaults: dict, name: str):
     return v if _filled(v) else defaults.get(name)
 
 
+def _i_ga(word: str) -> str:
+    """주격 조사 — 마지막 글자에 받침이 있으면 '이', 없으면 '가'."""
+    last = word[-1:] if word else ""
+    return "이" if "가" <= last <= "힣" and (ord(last) - 0xAC00) % 28 else "가"
+
+
 def _fmt(ds: Dataset) -> str:
     return str(ds.data_format or "").strip().upper()
 
@@ -433,6 +493,11 @@ def _is_media(f: _Facts) -> bool:
 
 def missing_required_metadata(f: _Facts, defaults: dict) -> list[str]:
     """C05 — 비어 있는 필수 메타데이터 이름."""
+    return [label for key, label in REQUIRED_METADATA if key in _missing_required_keys(f, defaults)]
+
+
+def _missing_required_keys(f: _Facts, defaults: dict) -> set[str]:
+    """C05 — 비어 있는 필수 메타데이터 키."""
     ds = f.ds
     present = {
         "description": _filled(ds.description) or _filled(ds.summary),
@@ -451,7 +516,7 @@ def missing_required_metadata(f: _Facts, defaults: dict) -> list[str]:
         "data_version": _filled(ds.data_version),
         "license": _filled(_effective(ds, defaults, "license")),
     }
-    return [label for key, label in REQUIRED_METADATA if not present[key]]
+    return {key for key, ok in present.items() if not ok}
 
 
 def _auto(item: Item, f: _Facts, defaults: dict) -> tuple[str | None, str]:
@@ -487,7 +552,11 @@ def _auto(item: Item, f: _Facts, defaults: dict) -> tuple[str | None, str]:
         missing = missing_required_metadata(f, defaults)
         if not missing:
             return PASS, f"필수 메타데이터 {len(REQUIRED_METADATA)}개가 모두 있습니다."
-        return FAIL, "비어 있는 필수 항목: " + ", ".join(missing) + "."
+        keys = _missing_required_keys(f, defaults)
+        who = [REQUIRED_METADATA_WHO["creator_manual" if key == "creator" and f.manual else key]
+               for key in ("creator", "theme") if key in keys]
+        tail = (" 소유자가 채울 수 없는 항목: " + "; ".join(who) + ".") if who else ""
+        return FAIL, "비어 있는 필수 항목: " + ", ".join(missing) + "." + tail
     if k == "C06":
         n = sum(f.rule_types.values())
         return (PASS, f"활성 품질 규칙 {n}개가 검증 기준입니다.") if n \
@@ -504,9 +573,23 @@ def _auto(item: Item, f: _Facts, defaults: dict) -> tuple[str | None, str]:
     if k == "C08":
         if not f.columns:
             return FAIL, "스키마(컬럼)가 없어 데이터 사전을 만들 수 없습니다."
+        # 정의(설명) 80% 이상 + 측정값 컬럼(숫자형, 키 · 코드 · 순번 제외)의 단위 80% 이상. 산정기준은 계산한 값에만 있으므로
+        # 요구하지 않고 근거에 수만 보인다. 단위가 없는 숫자(개수 아닌 지수 등)는 단위 칸에 '-' 를 적으면 단위 있음으로 센다.
         pct = f.described / f.columns * 100
-        text = f"컬럼 설명 {f.described}/{f.columns}개({pct:.0f}%)."
-        return (PASS, text) if pct >= DICTIONARY_FILL_PCT else (FAIL, text + f" 기준 {DICTIONARY_FILL_PCT:.0f}% 미만.")
+        parts = [f"컬럼 설명 {f.described}/{f.columns}개({pct:.0f}%)"]
+        lacks = []
+        if pct < DICTIONARY_FILL_PCT:
+            lacks.append(f"설명 {DICTIONARY_FILL_PCT:.0f}% 미만")
+        if f.measure_columns:
+            upct = f.measure_units / f.measure_columns * 100
+            parts.append(f"측정값 컬럼 단위 {f.measure_units}/{f.measure_columns}개({upct:.0f}%)")
+            if upct < DICTIONARY_FILL_PCT:
+                lacks.append(f"단위 {DICTIONARY_FILL_PCT:.0f}% 미만")
+        else:
+            parts.append("측정값(숫자) 컬럼 없음")
+        parts.append(f"산정기준 {f.calculated}개")
+        text = ", ".join(parts) + "."
+        return (PASS, text) if not lacks else (FAIL, text + " 기준 미달: " + ", ".join(lacks) + ".")
     if k == "C09":
         ok, total = f.format_results
         if not total:
@@ -564,7 +647,8 @@ def _auto(item: Item, f: _Facts, defaults: dict) -> tuple[str | None, str]:
         lacks = [x for x, ok in (("설명", _filled(ds.description) or _filled(ds.summary)),
                                  ("알려진 편향 또는 한계", _filled(ds.data_biases) or _filled(ds.known_limitations))) if not ok]
         if lacks:
-            return FAIL, "데이터 카드는 자동으로 만들지만 " + ", ".join(lacks) + "이(가) 비어 있어 용도·리스크 요약이 빠집니다."
+            subject = ", ".join(lacks)
+            return FAIL, f"데이터 카드는 자동으로 만들지만 {subject}{_i_ga(subject)} 비어 있어 용도·리스크 요약이 빠집니다."
         return PASS, f"데이터 카드를 자동으로 만듭니다(/api/v1/external/datasets/{ds.id}/data-card)."
     if k == "C22":
         if pii is False:
@@ -600,10 +684,10 @@ def _auto(item: Item, f: _Facts, defaults: dict) -> tuple[str | None, str]:
         lacks = [x for x, ok in (("소유자", f.owners > 0), ("문의 연락처", _filled(contact))) if not ok]
         if lacks:
             return FAIL, "없는 것: " + ", ".join(lacks) + "."
-        return PASS, f"소유자 {f.owners}명, 문의 연락처 {contact}."
+        return PASS, f"소유자 {f.owners}명(생성자 포함), 문의 연락처 {contact}."
     if k == "C31":
         r = f.reports or {}
-        tally = (f"접수 {r.get('total', 0)}건 — 처리 중 {r.get('open', 0)}, 끝남 {r.get('closed', 0)}"
+        tally = (f"접수 {r.get('total', 0)}건 — 미처리(접수·처리 중) {r.get('open', 0)}, 끝남(해결·소명) {r.get('closed', 0)}"
                  if r.get("total") else "아직 접수된 신고 없음")
         if r.get("overdue"):
             return FAIL, f"처리 기한을 넘긴 오류 신고·개선 요청이 {r['overdue']}건 있습니다({tally})."
@@ -617,7 +701,8 @@ def _auto(item: Item, f: _Facts, defaults: dict) -> tuple[str | None, str]:
     if k == "T1":
         if _is_media(f) or not f.numeric_columns:
             return NA, "숫자 컬럼이 없거나 비정형 데이터입니다."
-        return None, f"숫자 컬럼 {f.numeric_columns}개 — 산출 규칙(산식·집계 단위·기준시점)을 근거로 판정하세요."
+        calc = f", 산정기준을 적은 컬럼 {f.calculated}개" if f.calculated else ""
+        return None, f"숫자 컬럼 {f.numeric_columns}개{calc} — 산출 규칙(산식·집계 단위·기준시점)을 근거로 판정하세요."
     if k in ("T2", "T3"):
         return (None, "이미지·영상(비정형) 데이터입니다.") if _is_media(f) else (NA, "이미지·영상 데이터가 아닙니다.")
     if k == "T4":
@@ -670,7 +755,9 @@ def _min_requirements(f: _Facts, items_by_key: dict[str, dict], thresholds: dict
         checks.append({"key": "freshness", "label": label, "met": None,
                        "detail": "갱신주기가 시간·일·주·월이 아니어서(실시간·수동·cron·미지정) 판정하지 않습니다."})
     elif ds.last_ingested_at is None:
-        checks.append({"key": "freshness", "label": label, "met": False, "detail": "최종 적재 시각이 없습니다."})
+        checks.append({"key": "freshness", "label": label, "met": False,
+                       "detail": "최종 적재 시각이 없습니다. 메타데이터 탭 › 생명주기 · 운영의 '최종 적재 시각'에 "
+                                 "마지막으로 적재한 시각을 적으세요."})
     else:
         last = ds.last_ingested_at if ds.last_ingested_at.tzinfo else ds.last_ingested_at.replace(tzinfo=timezone.utc)
         elapsed = (now - last).total_seconds() / 3600

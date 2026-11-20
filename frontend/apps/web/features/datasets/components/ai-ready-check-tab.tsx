@@ -4,14 +4,15 @@
  * 데이터셋 상세 › AI-Ready 탭 — 「공공데이터의 인공지능 친화적 관리 가이드라인」 부록 4 체크리스트 점검 (TODO-096 2단계).
  *
  * - 자동 판정은 서버가 조회할 때 계산한다(메타데이터·스키마·품질·표준·리니지). 계산할 수 없는 항목은 '판정 필요'.
- * - 수동 판정(적정·미흡·해당없음 + 근거)은 자동 판정보다 우선한다. 데이터셋 소유자(생성자)·관리자만 바꿀 수 있다.
+ * - 수동 판정(적정·미흡·해당없음 + 근거)은 자동 판정보다 우선한다. 데이터셋 소유자(생성자 · 소유자 목록)·관리자만 바꿀 수 있다.
  * - 필수·권장 충족률을 따로 보여 주고, 공유 최소 요건 4개는 배지로 따로 판정한다.
  * - 아래에 배포본 관리와 DCAT·Croissant·데이터 카드 내보내기(3단계, ai-ready-export-section)를 둔다.
  */
 
 import { DisabledReason, Tip } from "@/components/tip"
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react"
-import { CheckCircle2, CircleHelp, Loader2, MinusCircle, Pencil, RotateCcw, Sparkles, XCircle } from "lucide-react"
+import Link from "next/link"
+import { ArrowRight, CheckCircle2, CircleHelp, Loader2, MinusCircle, Pencil, RotateCcw, Sparkles, XCircle } from "lucide-react"
 
 import { StatusBadge, type StatusTone } from "@workspace/ui/components/status-badge"
 import { Button } from "@workspace/ui/components/button"
@@ -27,6 +28,7 @@ import {
 import { Textarea } from "@workspace/ui/components/textarea"
 import { cn } from "@workspace/ui/lib/utils"
 
+import { scrollToAndFlash } from "@/lib/focus-flash"
 import { errorMessage, notifyError, notifySuccess } from "@/lib/notify"
 
 import {
@@ -35,6 +37,8 @@ import {
 } from "../api"
 import { SegmentedToggle } from "@/components/model-hub/segmented-toggle"
 import { DistributionsCard, ExportCard } from "./ai-ready-export-section"
+import { AI_READY_TARGETS } from "../ai-ready-targets"
+import { datasetHref } from "../links"
 
 export const STATUS_LABEL: Record<AiReadyStatus | "UNKNOWN", string> = {
   PASS: "적정", FAIL: "미흡", NA: "해당없음", UNKNOWN: "판정 필요",
@@ -122,6 +126,25 @@ const MODE_LABEL: Record<AiReadyItem["mode"], string> = {
   EXTERNAL: "제공 플랫폼 몫 — 담당자 판정",
 }
 
+/** 미흡 · 판정 필요 항목의 고칠 곳 링크(TODO-151) — 다른 탭은 주소로, 같은 탭의 배포본 · 내보내기 카드는 스크롤로. */
+function FixLink({ datasetId, itemKey }: { datasetId: number; itemKey: string }) {
+  const target = AI_READY_TARGETS[itemKey]
+  if (!target) return null
+  const cls = "mt-1 inline-flex items-center gap-1 text-xs text-primary hover:underline"
+  if (target.kind === "card") {
+    return (
+      <button type="button" className={cls} onClick={() => scrollToAndFlash("ai-ready-card", target.card)}>
+        {target.label}에서 고치기 <ArrowRight className="h-3 w-3" />
+      </button>
+    )
+  }
+  return (
+    <Link href={datasetHref(datasetId, target.tab, { field: target.field })} className={cls}>
+      {target.label}에서 고치기 <ArrowRight className="h-3 w-3" />
+    </Link>
+  )
+}
+
 function formatTime(v: string | null): string {
   if (!v) return ""
   const d = new Date(v)
@@ -134,7 +157,7 @@ export function AiReadyCheckTab({
   datasetId: number; datasetName: string; canManage: boolean
   /** 체크리스트 수동 판정 — 데이터셋 수정 권한에 AI-Ready 수동 판정(aiready.judge, TODO-124)까지 있을 때만 */
   canJudge?: boolean
-  /** AI 초안(편향 · 한계 · 관련법령, 빈 항목만) 단추 — 데이터셋을 고칠 수 있고 AI 생성 권한이 있을 때만 */
+  /** AI 초안(편향 · 한계 · 관련법령 · 개인정보 보호조치 · 허용 이용 유형, 빈 항목만) 단추 — 데이터셋을 고칠 수 있고 AI 생성 권한이 있을 때만 */
   aiDraft?: { enabled: boolean; busy: boolean; run: () => void }
 }) {
   const [data, setData] = useState<AiReadyCheck | null>(null)
@@ -191,7 +214,7 @@ export function AiReadyCheckTab({
         </p>
         {aiDraft && (
           <DisabledReason reason={!aiDraft.enabled && "LLM 이 꺼져 있습니다 — 설정 › LLM 에서 켜세요"}>
-            <Tip label={aiDraft.enabled && "비어 있는 편향 · 한계 · 관련법령을 AI 가 메타데이터와 프로파일 통계로 초안을 씁니다 — 머리글의 AI 제안에서 읽고 적용합니다"}>
+            <Tip label={aiDraft.enabled && "비어 있는 편향 · 한계 · 관련법령 · 개인정보 보호조치 · 허용 이용 유형을 AI 가 메타데이터와 프로파일 통계로 초안을 씁니다 — 머리글의 AI 제안에서 읽고 적용합니다"}>
               <Button size="sm" variant="outline" onClick={aiDraft.run} disabled={aiDraft.busy || !aiDraft.enabled}>
                 {aiDraft.busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Sparkles className="mr-1 h-4 w-4" />}
                 AI 초안
@@ -279,6 +302,9 @@ export function AiReadyCheckTab({
                       <TableCell className="whitespace-normal">
                         <div className="text-sm">{item.text}</div>
                         <div className="mt-0.5 text-xs">{MODE_LABEL[item.mode]}{item.hint ? ` · ${item.hint}` : ""}</div>
+                        {item.status !== "PASS" && item.status !== "NA" && (
+                          <FixLink datasetId={datasetId} itemKey={item.key} />
+                        )}
                       </TableCell>
                       <TableCell>
                         <AiReadyStatusBadge status={item.status} />
@@ -320,8 +346,12 @@ export function AiReadyCheckTab({
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[3fr_2fr]">
-        <DistributionsCard datasetId={datasetId} canManage={canManage} onChanged={load} />
-        <ExportCard datasetId={datasetId} datasetName={datasetName} />
+        <div data-ai-ready-card="distributions" className="rounded-xl">
+          <DistributionsCard datasetId={datasetId} canManage={canManage} onChanged={load} />
+        </div>
+        <div data-ai-ready-card="export" className="rounded-xl">
+          <ExportCard datasetId={datasetId} datasetName={datasetName} />
+        </div>
       </div>
 
       <JudgmentDialog

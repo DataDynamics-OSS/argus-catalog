@@ -11,8 +11,9 @@ import logging
 import re
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import case, func, select, update
+from sqlalchemy import and_, case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.comments.models import Comment
 from app.comments.schemas import (
@@ -35,6 +36,9 @@ REPORT_ENTITY_TYPES = frozenset({"dataset"})
 REPORT_CATEGORIES = frozenset({"bug", "suggestion"})
 REPORT_STATUSES = ("OPEN", "IN_PROGRESS", "RESOLVED", "REJECTED")
 OPEN_STATUSES = ("OPEN", "IN_PROGRESS")
+CLOSED_STATUSES = ("RESOLVED", "REJECTED")  # 처리 끝남(해결 · 소명) — 분류를 바꿀 수 없다(DEF-141)
+# 담당자가 손댄 신고(처리 중 · 해결 · 소명) — 분류를 바꾸면 처리 기록이 지워지므로 막는다(DEF-141 · DEF-165)
+CATEGORY_LOCKED_STATUSES = ("IN_PROGRESS", *CLOSED_STATUSES)
 SETTING_DUE_DAYS = "ai_ready_report_due_days"
 DEFAULT_DUE_DAYS = 10  # 가이드라인 §3 "신고 후 10일 안에 수정 또는 소명"(기준 예시)
 
@@ -92,6 +96,29 @@ async def _notify_received(session: AsyncSession, comment: Comment) -> None:
         logger.warning("신고 접수 알림 실패: comment_id=%s: %s", comment.id, e)
 
 
+async def _resolve_alerts(session: AsyncSession, comment: Comment) -> None:
+    """신고의 접수 · 기한 알림을 바로 해결로(DEF-140) — 실패해도 신고 처리 · 댓글 저장은 막지 않는다."""
+    from app.catalog.ai_ready_alerts import resolve_report_alerts
+
+    try:
+        async with session.begin_nested():
+            await resolve_report_alerts(session, comment)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("신고 알림 자동 해결 실패: comment_id=%s: %s", comment.id, e)
+
+
+async def _notify_closed(session: AsyncSession, comment: Comment, status: str, resolution: str | None,
+                         actor: str) -> None:
+    """신고한 사람에게 처리 결과 알림(``REPORT_CLOSED`` 규칙) — 실패해도 신고 처리는 막지 않는다."""
+    from app.catalog.ai_ready_alerts import notify_report_closed
+
+    try:
+        async with session.begin_nested():
+            await notify_report_closed(session, comment, status, resolution, actor)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("신고 처리 결과 알림 실패: comment_id=%s: %s", comment.id, e)
+
+
 def _to_response(comment: Comment) -> CommentResponse:
     """ORM Comment 를 응답 스키마로 변환(답글은 제외 — 이후에 추가)."""
     return CommentResponse(
@@ -146,18 +173,45 @@ def _build_reply_tree(
     return root_comments
 
 
+async def page_of_comment(
+    session: AsyncSession, entity_type: str, entity_id: str, comment_id: int, page_size: int,
+) -> int | None:
+    """이 댓글(답글이면 그 최상위 댓글)이 있는 쪽 번호 — 목록과 같은 정렬(작성 최근 순, 같으면 id 큰 순). 이 엔티티의 댓글이 아니면 None."""
+    c = await session.get(Comment, comment_id)
+    if c is None or c.entity_type != entity_type or c.entity_id != entity_id:
+        return None
+    root = await session.get(Comment, c.root_id) if c.parent_id is not None and c.root_id else c
+    if root is None or root.created_at is None:
+        return None
+    r = aliased(Comment)
+    root_at = select(r.created_at).where(r.id == root.id).correlate(None).scalar_subquery()
+    newer = (await session.execute(
+        select(func.count()).where(
+            Comment.entity_type == entity_type, Comment.entity_id == entity_id, Comment.parent_id.is_(None),
+            ((Comment.is_deleted == False) | (Comment.reply_count > 0)),  # noqa: E712
+            # 시각은 DB 의 값끼리 비교(파라미터로 넘기면 SQLite 는 문자열 형식이 달라 어긋난다)
+            or_(Comment.created_at > root_at, and_(Comment.created_at == root_at, Comment.id > root.id)),
+        )
+    )).scalar() or 0
+    return newer // page_size + 1
+
+
 async def list_comments(
     session: AsyncSession,
     entity_type: str,
     entity_id: str,
     page: int = 1,
     page_size: int = 10,
+    focus: int | None = None,
 ) -> PaginatedComments:
     """최상위 댓글만 페이지네이션하여 댓글 목록을 조회한다.
 
     답글은 일괄 조회되어 응답에 중첩된다.
     페이지 크기는 최상위 댓글에만 적용되며 답글은 포함되지 않는다.
+    ``focus`` 를 주면 그 댓글이 있는 쪽을 돌려준다(``page`` 무시, 못 찾으면 ``page`` 그대로) — 신고 · 알림 링크용.
     """
+    if focus is not None:
+        page = await page_of_comment(session, entity_type, entity_id, focus, page_size) or page
     # 최상위 댓글 카운트(노출 대상: 삭제되지 않았거나, 삭제됐어도 답글이 있는 경우)
     count_q = (
         select(func.count())
@@ -182,7 +236,7 @@ async def list_comments(
             Comment.parent_id.is_(None),
             ((Comment.is_deleted == False) | (Comment.reply_count > 0)),
         )
-        .order_by(Comment.created_at.desc())
+        .order_by(Comment.created_at.desc(), Comment.id.desc())  # 같은 시각이면 id — 쪽 계산(page_of_comment)과 같게
         .offset(offset)
         .limit(page_size)
     )
@@ -313,11 +367,20 @@ async def update_comment(
     comment_id: int,
     req: CommentUpdate,
 ) -> CommentResponse | None:
-    """댓글의 본문 또는 분류를 수정한다. 댓글이 없거나 삭제됐으면 None."""
+    """댓글의 본문 또는 분류를 수정한다. 댓글이 없거나 삭제됐으면 None.
+
+    담당자가 처리 중 · 해결 · 소명으로 둔 신고는 분류를 바꿀 수 없다(ValueError) — 바꾸면 담당자의 처리 기록이
+    지워지기 때문이다(DEF-141 · DEF-165). 접수 상태의 신고를 신고가 아닌 분류로 바꾸면 그 신고의 알림을 해결로 바꾼다.
+    """
     comment = await session.get(Comment, comment_id)
     if not comment or comment.is_deleted:
         logger.debug("수정 대상 댓글 없음 또는 삭제됨: id=%d", comment_id)
         return None
+    if req.category is not None and req.category != comment.category and comment.status in CATEGORY_LOCKED_STATUSES:
+        logger.warning("처리 중이거나 처리된 신고의 분류 변경 거부: id=%d status=%s", comment_id, comment.status)
+        if comment.status == "IN_PROGRESS":
+            raise ValueError("담당자가 처리 중인 신고는 분류를 바꿀 수 없습니다. 새 댓글로 남겨 주세요.")
+        raise ValueError("담당자가 해결·소명한 신고는 분류를 바꿀 수 없습니다. 새 댓글로 남겨 주세요.")
 
     comment.content = req.content
     # 평문이 없으면 새 본문에서 만든다 — 예전 평문이 남아 바뀐 본문과 어긋나지 않게(DEF-133)
@@ -328,6 +391,8 @@ async def update_comment(
         await _sync_report_state(session, comment)
         if was is None and comment.status is not None:
             await _notify_received(session, comment)
+        elif was is not None and comment.status is None:
+            await _resolve_alerts(session, comment)
 
     await session.commit()
     await session.refresh(comment)
@@ -355,6 +420,8 @@ async def delete_comment(
         return False
 
     comment.is_deleted = True
+    if comment.status is not None:
+        await _resolve_alerts(session, comment)  # 지운 신고의 접수 · 기한 알림도 바로 해결(DEF-140)
 
     # 보이는 답글이 남아 있으면 "삭제된 댓글" 로 계속 보이므로 조상 카운트는 그대로 둔다.
     node = comment
@@ -421,14 +488,20 @@ async def set_report_status(
     text = (resolution or "").strip() or None
     if status == "REJECTED" and not text:
         raise ValueError("소명(반려)은 사유를 적어야 합니다.")
+    before = comment.status
     # updated_at 은 본문 수정 시각("수정됨" 표시) — 상태 변경으로 바뀌지 않게 둔다(onupdate 를 피해 UPDATE 로)
     await session.execute(
         update(Comment).where(Comment.id == comment.id).values(
             status=status, resolution=text, handled_by=actor,
-            resolved_at=_now() if status in ("RESOLVED", "REJECTED") else None,
+            resolved_at=_now() if status in CLOSED_STATUSES else None,
             updated_at=Comment.updated_at,
         )
     )
+    if status in CLOSED_STATUSES:
+        # 접수 · 기한 알림을 매시간 점검까지 기다리지 않고 바로 해결(DEF-140)
+        await _resolve_alerts(session, comment)
+        if status != before:  # 처리가 새로 끝났거나 해결 ↔ 소명 — 처리 결과만 고친 것은 다시 알리지 않음
+            await _notify_closed(session, comment, status, text, actor)
     await session.commit()
     await session.refresh(comment)
     logger.info("신고 처리 상태 변경: id=%d status=%s by=%s", comment.id, status, actor)
@@ -446,15 +519,20 @@ def _report_filter(entity_type: str, entity_ids: list[str] | None):
 async def list_reports(
     session: AsyncSession, *, entity_type: str = "dataset", entity_ids: list[str] | None = None,
     state: str = "open", category: str | None = None, page: int = 1, page_size: int = 20,
+    reporter: str | None = None,
 ) -> tuple[list[ReportItem], int, dict[str, int]]:
     """신고 목록 — state: open(접수·처리 중) · overdue(기한 넘김) · closed(해결·소명) · all.
 
-    정렬은 처리 중인 것은 기한 이른 순, 끝난 것은 처리 최근 순. counts 는 범위(entity_ids) 안의 상태별 수.
+    정렬은 처리 중인 것은 기한 이른 순, 끝난 것은 처리 최근 순. counts 는 범위(entity_ids · reporter) 안의 상태별 수.
+    ``reporter`` 는 작성자 아이디 — 작성자 이름이 ``username`` 이거나 ``표시명(username)`` 인 신고.
     """
     now = _now()
     base = _report_filter(entity_type, entity_ids)
     if category in REPORT_CATEGORIES:
         base.append(Comment.category == category)
+    if reporter:
+        base.append(or_(Comment.author_name == reporter,
+                        Comment.author_name.endswith(f"({reporter})", autoescape=True)))
 
     counts = {"open": 0, "overdue": 0, "closed": 0, "all": 0}
     for st, n in (await session.execute(

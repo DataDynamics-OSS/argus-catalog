@@ -157,7 +157,8 @@ export function ApiCard({ api: a, onOpen }: { api: ApiSummary; onOpen: () => voi
   const title = named || a.name
   const crumb = [a.department, a.category].filter(Boolean).join(" › ")
   const meta = [formatLabel(a), a.version && `v${a.version.replace(/^v/i, "")}`].filter((v) => v && v !== "-").join(" · ")
-  const baseUrl = a.base_url_overridden || a.base_url
+  // base_url_overridden 은 주소가 아니라 "직접 입력했는지" 표시("true" / "false")다(DEF-186).
+  const baseUrl = a.base_url
   const updated = fmtDate(a.updated_at)
   const Icon = PROTOCOL_ICON[(a.protocol ?? "").toLowerCase()] ?? Webhook
   return (

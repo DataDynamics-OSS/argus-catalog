@@ -15,7 +15,8 @@ indicator · ``category``).
 - 지표를 지우면 할당된 규칙은 직접 정한 규칙으로 남는다(FK ``SET NULL``).
 - 미리 정의할 수 있는 것은 컬럼 하나와 기준값으로 정해지는 유형이다(``indicators.DEFINABLE_TYPES``). 컬럼 간 비교·
   논리관계·계산식·참조관계는 테이블마다 내용이 달라 데이터셋의 품질 탭에서 직접 만든다.
-- ``preview_sql``: 지표·규칙이 실행할 Trino 쿼리를 진단과 같은 코드(``rule_sql.compile_rule``)로 만들어 보여 준다.
+- ``preview_sql``: 지표·규칙이 실행할 진단 쿼리를 진단과 같은 코드(``rule_sql.compile_rule``)로 만들어 보여 준다 — 데이터셋이
+  원천 직접 경로면 원천 DB 방언(``rule_direct``)으로.
 """
 
 from __future__ import annotations
@@ -28,15 +29,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.catalog.models import Dataset, DatasetSchema, Datasource
 from app.core.sql import LIKE_ESCAPE, like_contains
 from app.quality import indicators as quality_indicators
-from app.quality import rule_sql, runs, service
-from app.quality.models import QualityDefinition, QualityRule
+from app.quality import rule_direct, rule_sql, runs, service
+from app.quality.models import QualityDefinition, QualityJob, QualityRule
 from app.quality.rule_sql import Compiled, Outcome, RuleSpec, TableRef
 from app.quality.schemas import (
     QualityAssignment,
     QualityAssignRequest,
     QualityAssignResult,
     QualityAssignSkipped,
+    QualityCodeGroupOption,
     QualityColumnCandidate,
+    QualityDefinitionJobRef,
     QualityDefinitionResponse,
     QualityDefinitionWrite,
     QualitySqlPreview,
@@ -79,6 +82,8 @@ DEFAULTS: tuple[tuple[str, str, str, str | None, str], ...] = (
      "날짜 컬럼의 처음부터 마지막 날까지 빠진 날이 없어야 합니다 — 문자열 날짜면 형식을 덧붙입니다(DAY YYYYMMDD) (AI-Ready 적시성)"),
     ("월 단위 연속", "CONTINUITY", "CONTINUITY", "MONTH",
      "처음부터 마지막 달까지 빠진 달이 없어야 합니다 (AI-Ready 적시성)"),
+    ("한 값 쏠림 90% 이하", "DIVERSITY", "DIVERSITY", None,
+     "범주 · 라벨 컬럼에서 가장 많은 값이 전체(NULL 제외)의 90% 를 넘지 않아야 합니다 (AI-Ready 데이터 · 라벨 다양성)"),
 )
 
 
@@ -115,11 +120,32 @@ async def _responses(session: AsyncSession, definitions: list[QualityDefinition]
             select(QualityRule.definition_id, func.count(QualityRule.id), func.count(func.distinct(QualityRule.dataset_id)))
             .where(QualityRule.definition_id.in_(ids)).group_by(QualityRule.definition_id))
         counts = {r[0]: (r[1], r[2]) for r in rows.all()}
+    users = await _jobs_using(session, set(ids))
     out = []
     for d in definitions:
         item = QualityDefinitionResponse.model_validate(d)
         item.rules, item.datasets = counts.get(d.id, (0, 0))
+        item.jobs = users.get(d.id, [])
         out.append(item)
+    return out
+
+
+async def _jobs_using(session: AsyncSession, ids: set[int]) -> dict[int, list[QualityDefinitionJobRef]]:
+    """지표 ID → 그 지표를 진단 범위(definition_ids)로 고른 작업들(이름 순) (DEF-148).
+
+    작업의 지표 목록은 저장할 때 정해진다 — 지표를 지우면 그 작업은 이 지표의 규칙을 진단하지 않으므로 삭제 확인 창이 알린다.
+    """
+    if not ids:
+        return {}
+    rows = await session.execute(
+        select(QualityJob.id, QualityJob.name, QualityJob.definition_ids)
+        .where(QualityJob.definition_ids.is_not(None)).order_by(QualityJob.name, QualityJob.id))
+    out: dict[int, list[QualityDefinitionJobRef]] = {}
+    for job_id, name, value in rows.all():
+        chosen = runs.load_definition_ids(value)
+        for i in chosen:
+            if i in ids:
+                out.setdefault(i, []).append(QualityDefinitionJobRef(id=job_id, name=name, only=len(set(chosen)) == 1))
     return out
 
 
@@ -397,6 +423,35 @@ async def list_candidates(
 
 
 # ---------------------------------------------------------------------------
+# 표준 코드 그룹 — 허용 값 규칙이 가리킬 수 있는 것 (TODO-096)
+# ---------------------------------------------------------------------------
+
+_CODE_SAMPLE = 5
+
+
+async def list_code_groups(session: AsyncSession) -> list[QualityCodeGroupOption]:
+    """모든 표준 사전의 코드 그룹 — 사전 · 그룹 이름 순. 사용 중인 코드 값 수와 앞의 값 몇 개를 함께 준다."""
+    from app.standard.models import CodeGroup, CodeValue, StandardDictionary
+
+    groups = (await session.execute(
+        select(CodeGroup, StandardDictionary.dict_name)
+        .outerjoin(StandardDictionary, StandardDictionary.id == CodeGroup.dictionary_id)
+        .order_by(StandardDictionary.dict_name, CodeGroup.group_name)
+    )).all()
+    values: dict[int, list[str]] = {}
+    for group_id, value in (await session.execute(
+        select(CodeValue.code_group_id, CodeValue.code_value).where(CodeValue.is_active != "false")
+        .order_by(CodeValue.code_group_id, CodeValue.sort_order, CodeValue.code_value)
+    )).all():
+        values.setdefault(group_id, []).append(value)
+    return [
+        QualityCodeGroupOption(id=g.id, name=g.group_name, dictionary_name=dict_name,
+                               value_count=len(values.get(g.id, [])), sample_values=values.get(g.id, [])[:_CODE_SAMPLE])
+        for g, dict_name in groups
+    ]
+
+
+# ---------------------------------------------------------------------------
 # 진단 쿼리 미리보기
 # ---------------------------------------------------------------------------
 
@@ -430,30 +485,113 @@ def _judgement(check_type: str, expected: str | None, threshold: float) -> tuple
                 ("진단 건수 (NULL 제외)", "오류 건수 — 더미 값"))
     if check_type == "CONTINUITY":
         return ("가장 이른 기간부터 가장 늦은 기간까지의 기간 수가 진단 건수, 값이 하나도 없는 기간 수가 오류 건수입니다. "
-                f"있는 기간의 비율이 임계값 {threshold:g}% 이상이면 통과합니다(100 이면 빠진 기간이 없어야 합니다).",
+                f"있는 기간의 비율이 임계값 {threshold:g}% 이상이면 통과합니다(100 이면 빠진 기간이 없어야 합니다). "
+                "주(WEEK)는 월요일에 시작하는 ISO 주입니다.",
                 ("값이 있는 기간 수", "가장 이른 기간", "가장 늦은 기간"))
+    if check_type == "DIVERSITY":
+        try:
+            limit = f"{rule_sql.diversity_limit(expected):g}"
+        except rule_sql.ExpressionError:
+            limit = str(expected)
+        return (f"값마다 행 수를 세어, 가장 많은 값의 행 수 ÷ 진단 건수(NULL 제외)가 {limit}% 이하이면 통과합니다. "
+                "상한을 넘친 최빈값 행 수가 오류 건수입니다. 결과 순서: 진단 건수, 최빈값 건수, 가장 적은 값의 건수, 고유값 수.", ())
+    if check_type == "COMPOSITE_UNIQUE":
+        return (f"키 컬럼 묶음이 겹치지 않는 행의 비율이 임계값 {threshold:g}% 이상이면 통과합니다(100 이면 겹치는 키가 없어야 "
+                "합니다). 겹치는 키를 가진 행은 모두 오류 건수로 셉니다. 키 컬럼 가운데 하나라도 NULL 인 행은 진단하지 않습니다. "
+                "결과 순서: 진단 건수, 키가 겹치는 행 수.", ())
     return ("오류 건수가 0 이면 통과합니다. NULL 은 진단하지 않습니다.", ("진단 건수 (NULL 제외)", "오류 건수"))
 
 
-def _format_scan(table: TableRef, compiled: Compiled, meanings: tuple[str, ...]) -> str:
-    """스캔 쿼리를 읽기 좋게 — 식마다 한 줄, 뒤에 그 식이 뜻하는 것. 내용은 ``rule_sql.scan_sql`` 과 같다."""
+def _format_scan(table: TableRef | str, compiled: Compiled, meanings: tuple[str, ...]) -> str:
+    """스캔 쿼리를 읽기 좋게 — 식마다 한 줄, 뒤에 그 식이 뜻하는 것. 내용은 ``rule_sql.scan_sql`` 과 같다.
+
+    ``table`` 이 문자열이면 그대로 FROM 에 쓴다 — 원천 직접 경로의 원천 집계(``rule_direct.aggregate_sql``)."""
     exprs = [("count(*)", "전체 행 수")]
     exprs += [(e, meanings[n] if n < len(meanings) else "") for n, e in enumerate(compiled.exprs)]
     lines = []
     for n, (expr, meaning) in enumerate(exprs):
         comma = "," if n < len(exprs) - 1 else ""
         lines.append(f"  {expr}{comma}" + (f"  -- {meaning}" if meaning else ""))
-    return "SELECT\n" + "\n".join(lines) + f"\nFROM {table.sql}"
+    return "SELECT\n" + "\n".join(lines) + f"\nFROM {table if isinstance(table, str) else table.sql}"
+
+
+# 원천 유형 → 화면에 보일 이름
+_SOURCE_NAMES = {"postgresql": "PostgreSQL", "mysql": "MySQL", "mariadb": "MariaDB", "oracle": "Oracle",
+                 "mssql": "SQL Server"}
+
+
+async def _preview_direct(
+    session: AsyncSession, req: QualitySqlPreviewRequest, dataset: Dataset, target: runs.EngineTarget,
+    types: dict[str, str] | None, column: str,
+) -> QualitySqlPreview:
+    """원천 직접 경로(Trino 연결 없음)의 진단 쿼리 — 원천 DB 방언으로, 진단과 같은 계획 코드(``execution.compile_snapshot``)로
+    만든다(DEF-152). 원천이 집계로 세는 규칙은 집계 쿼리, 행을 읽어 품질 워커가 판정하는 규칙은 읽기 쿼리를 보여 준다."""
+    from app.quality import execution
+
+    check = req.check_type
+    source_type = target.source_type or ""
+    source_name = _SOURCE_NAMES.get(source_type, source_type)
+    preview = QualitySqlPreview(table=target.table.display, actual_table=True, engine=runs.DIRECT_ENGINE,
+                                source_type=source_type)
+    if check not in rule_direct.DIRECT_CHECK_TYPES:
+        preview.note = ("이 데이터셋은 카탈로그에 Trino 연결이 없어 품질 워커가 원천 DB 를 직접 읽어 진단합니다. "
+                        "이 유형은 Trino 에서만 평가할 수 있어(Trino 에 등록한 함수) 이 데이터셋의 진단에서는 건너뜁니다.")
+        return preview
+    reference = None
+    if check == "REFERENTIAL":
+        resolved = await execution._resolve_reference(
+            session, req.expected_value, target.datasource_id, runs.DIRECT_ENGINE, source_type,
+            execution._source_database(source_type, dataset.qualified_name))
+        reference = resolved if isinstance(resolved, str) else {
+            "table": execution._table_json(resolved[0]), "column": resolved[1]}
+    plan = execution.compile_snapshot({
+        "engine": runs.DIRECT_ENGINE, "table": execution._table_json(target.table), "types": types or {},
+        "source_type": source_type,
+        "rules": [{"id": 0, "check_type": check, "column_name": column or None, "expected_value": req.expected_value,
+                   "threshold": req.threshold, "reference": reference}],
+    })
+    judgement, meanings = _judgement(check, req.expected_value, req.threshold)
+    preview.judgement = judgement
+    table = (target.table.schema, target.table.table)
+    notes = []
+    if 0 in plan.outcomes:
+        notes.append(f"쿼리를 만들 수 없습니다 — {plan.outcomes[0].detail}")
+        preview.judgement = ""
+    elif plan.aggregate:
+        preview.sql = _format_scan(rule_direct.source_table(source_type, *table), plan.aggregate[0], meanings)
+        preview.mode = "AGGREGATE"
+    elif plan.separate:
+        preview.sql = rule_sql.format_own(plan.separate[0].own_sql or "")
+        preview.mode = "SEPARATE"
+    elif plan.scan:
+        columns = rule_direct.columns_of([plan.probes[0]])
+        preview.sql = rule_direct.select_sql(source_type, *table, columns)
+        preview.mode = "READ"
+        notes.append(f"이 규칙은 {source_name} 에서 집계로 세지 않고(DB 마다 함수 · 문자열 비교가 달라서) 품질 워커가 위 쿼리로 "
+                     "행을 읽어 판정합니다. 행이 많으면 워커의 행 수 상한(direct_max_rows)까지만 읽습니다.")
+    else:
+        notes.append("이 유형은 진단 쿼리를 미리 보여 주지 않습니다 — 정밀 진단에서 평가합니다.")
+    if check == "DATE_FORMAT" and plan.aggregate and plan.aggregate[0].exprs[-1:] == ("0",):
+        notes.append("날짜·시각 타입 컬럼이라 값의 유효성은 DBMS 가 보장합니다 — 진단 건수만 셉니다.")
+    preview.note = " ".join(notes) or None
+    return preview
 
 
 async def preview_sql(session: AsyncSession, req: QualitySqlPreviewRequest) -> QualitySqlPreview:
-    """이 유형·기준값이 실행할 Trino 쿼리. 데이터셋을 주면 그 테이블 이름과 컬럼 타입으로, 없으면 예시 이름으로 만든다.
+    """이 유형·기준값이 실행할 진단 쿼리. 데이터셋을 주면 그 테이블 이름과 컬럼 타입으로, 없으면 예시 이름으로 만든다.
 
     진단과 같은 ``rule_sql.compile_rule`` 을 쓴다. 실제 진단은 같은 테이블의 규칙들을 한 쿼리(스캔)로 묶어 실행한다.
+    데이터셋이 원천 직접 경로(Trino 연결 없음)면 원천 DB 방언의 쿼리를 보여 준다(``_preview_direct``).
     """
     check = req.check_type
     if check not in rule_sql.TRINO_CHECK_TYPES:
         return QualitySqlPreview(note="진단 쿼리를 미리 보여 주지 않는 유형입니다 — 정밀 진단에서 평가합니다.")
+    if rule_sql.code_group_ref(req.expected_value) is not None:
+        # 표준 코드 그룹 연결 — 진단처럼 지금의 코드 값으로 풀어 보여 준다
+        from app.quality import execution
+
+        req = req.model_copy(update={
+            "expected_value": await execution.resolve_code_group(session, check, req.expected_value)})
     table, types, actual, notes = _SAMPLE_TABLE, None, False, []
     column = (req.column_name or "").strip()
     reference = None
@@ -462,17 +600,20 @@ async def preview_sql(session: AsyncSession, req: QualitySqlPreviewRequest) -> Q
         dataset = await session.get(Dataset, req.dataset_id)
         if dataset is None:
             raise DefinitionNotFoundError(f"데이터셋을 찾을 수 없습니다: {req.dataset_id}")
+        fields = (await session.execute(
+            select(DatasetSchema).where(DatasetSchema.dataset_id == dataset.id))).scalars().all()
+        types = {f.field_path: (f.native_type or f.field_type or "") for f in fields} or None
         try:
-            target = await runs.resolve_engine_target(session, dataset, direct=False)
+            # 진단과 같은 경로 해석 — Trino 연결이 없고 원천을 직접 읽을 수 있으면 원천 직접 경로(DEF-152)
+            target = await runs.resolve_engine_target(session, dataset, connection=False)
+            if target.engine == runs.DIRECT_ENGINE:
+                return await _preview_direct(session, req, dataset, target, types, column)
             table, actual, engine_datasource_id = target.table, True, target.datasource_id
         except runs.EngineUnavailableError as e:
             parts = [p for p in (dataset.qualified_name or "").split(".") if p]
             if len(parts) >= 2:
                 table = TableRef(_SAMPLE_TABLE.catalog, parts[-2], parts[-1])
             notes.append(f"Trino 의 테이블 이름을 알 수 없어 카탈로그 이름은 예시입니다 — {e}")
-        fields = (await session.execute(
-            select(DatasetSchema).where(DatasetSchema.dataset_id == dataset.id))).scalars().all()
-        types = {f.field_path: (f.native_type or f.field_type or "") for f in fields} or None
     else:
         notes.append("테이블·컬럼 이름은 예시입니다. 할당된 컬럼을 고르면 실제 이름으로 보여 줍니다.")
     if not column and check not in rule_sql.TABLE_LEVEL_TYPES and req.dataset_id is None:
@@ -492,7 +633,8 @@ async def preview_sql(session: AsyncSession, req: QualitySqlPreviewRequest) -> Q
                     threshold=req.threshold)
     compiled = rule_sql.compile_rule(spec, table, types, reference)
     judgement, meanings = _judgement(check, req.expected_value, req.threshold)
-    preview = QualitySqlPreview(judgement=judgement, table=table.display, actual_table=actual)
+    preview = QualitySqlPreview(judgement=judgement, table=table.display, actual_table=actual,
+                                engine=runs.TRINO_ENGINE)
     if isinstance(compiled, Outcome):
         notes.insert(0, f"쿼리를 만들 수 없습니다 — {compiled.detail}")
         preview.judgement = ""

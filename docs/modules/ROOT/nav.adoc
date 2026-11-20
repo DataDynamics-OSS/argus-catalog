@@ -3,52 +3,68 @@
 
 .사용자 가이드
 * 데이터 카탈로그
-** xref:catalog/dashboard.adoc[대시보드]
-** xref:catalog/datasets.adoc[데이터셋]
-*** xref:catalog/schema.adoc[스키마]
-*** xref:catalog/lineage.adoc[리니지 & ERD]
-*** xref:catalog/quality.adoc[데이터 품질]
+** xref:catalog/catalogs.adoc[카탈로그]
 ** xref:catalog/platforms.adoc[데이터 소스]
+** xref:catalog/datasets.adoc[데이터셋]
+*** xref:catalog/schema.adoc[스키마 · 적재 코드]
+*** xref:catalog/lineage.adoc[리니지 & ERD]
 ** xref:catalog/taxonomies.adoc[분류 체계]
-** xref:governance/change-management.adoc[변경 관리 · 내 결재함]
-** xref:federation/index.adoc[페더레이션]
-*** xref:federation/instances.adoc[인스턴스 관리]
-*** xref:federation/harvest.adoc[가져오기(HARVEST)]
-*** xref:federation/browse-search.adoc[탐색·통합 검색·리니지]
-*** xref:federation/import.adoc[로컬 승격(import)]
-*** xref:federation/governance.adoc[노출 거버넌스·운영]
+** xref:ops/search.adoc[통합 검색]
+** xref:catalog/dashboard.adoc[대시보드]
 
-* AI 카탈로그
-** xref:governance/ai-agent-catalog.adoc[AI Agent]
-** xref:governance/mcp-server-catalog.adoc[MCP Server]
-*** xref:governance/mcp-server-catalog-advanced.adoc[감사와 정책 집행]
-** xref:models/registry.adoc[MLflow 모델]
-*** xref:models/stage-metrics.adoc[Stage · 성능 · 리니지]
-** xref:models/oci-hub.adoc[OCI 모델 허브]
-** xref:models/import.adoc[모델 반입(CLI·에어갭)]
+* 데이터 품질
+** xref:catalog/quality.adoc[데이터 품질]
+*** xref:catalog/quality.adoc#_프로파일링[프로파일링]
+*** xref:catalog/quality.adoc#_품질_규칙[품질 규칙]
+*** xref:catalog/quality.adoc#help-quality-trino[정밀 진단]
+*** xref:catalog/quality.adoc#help-quality-definitions[품질 지표]
+*** xref:catalog/quality.adoc#help-quality-jobs[품질 진단 작업]
+*** xref:catalog/quality.adoc#help-quality-report[리포트 · 점수]
 
-* API 카탈로그
-** xref:governance/api-catalog.adoc[API · 즐겨찾기]
+* AI-Ready 공공데이터
+** xref:catalog/datasets.adoc#help-dataset-ai-ready[AI 활용 메타데이터]
+** xref:governance/ai-ready.adoc[AI-Ready 점검]
+** xref:catalog/datasets.adoc#help-dataset-distributions[배포 · 내보내기]
+** xref:governance/data-reports.adoc[이용자 피드백(오류 신고 처리)]
 
 * 거버넌스
 ** xref:governance/standards.adoc[데이터 표준]
 ** xref:governance/glossary.adoc[용어집]
 ** xref:governance/tags.adoc[태그]
+** xref:governance/change-management.adoc[변경 관리 · 내 결재함]
 ** xref:governance/alerts.adoc[알림]
-** xref:governance/ai-ready.adoc[AI-Ready 점검]
-** xref:governance/data-reports.adoc[오류 신고 처리]
 
-* 검색과 AI 도우미
-** xref:ops/search.adoc[통합 검색]
+* API · AI 자산
+** xref:governance/api-catalog.adoc[API 카탈로그 · 즐겨찾기]
+** xref:governance/ai-agent-catalog.adoc[AI Agent]
+** xref:governance/mcp-server-catalog.adoc[MCP Server]
+*** xref:governance/mcp-server-catalog-advanced.adoc[감사와 정책 집행]
+
+* ML 모델
+** xref:models/registry.adoc[MLflow 모델]
+*** xref:models/stage-metrics.adoc[Stage · 성능 · 리니지]
+** xref:models/oci-hub.adoc[OCI 모델 허브]
+** xref:models/import.adoc[파일 · SDK(CLI · 에어갭 반입)]
+
+* AI
 ** xref:ai/metadata-generation.adoc[메타데이터 자동 생성]
 *** xref:ai/metadata-generation-advanced.adoc[고급 — API·프롬프트]
 ** xref:ai/assistant.adoc[AI 어시스턴트]
 
+* 페더레이션
+** xref:federation/index.adoc[페더레이션 개요]
+** xref:federation/instances.adoc[인스턴스 관리]
+** xref:federation/harvest.adoc[가져오기(HARVEST)]
+** xref:federation/browse-search.adoc[탐색·통합 검색·리니지]
+** xref:federation/import.adoc[로컬 승격(import)]
+** xref:federation/governance.adoc[노출 거버넌스·운영]
+
 .관리자 가이드
-* 관리 메뉴
+* 운영 · 보안
 ** xref:ops/users.adoc[사용자 관리]
-** xref:ops/settings.adoc[설정]
 ** xref:ops/permissions.adoc[권한 관리]
+** xref:ops/audit.adoc[감사 로그]
+** xref:ops/settings.adoc[설정 · 감사]
 
 * 설치 · 배포
 ** xref:install/requirements.adoc[시스템 요구사항]

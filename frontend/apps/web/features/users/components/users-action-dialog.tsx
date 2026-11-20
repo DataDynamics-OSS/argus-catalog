@@ -50,7 +50,7 @@ import { PasswordInput } from "@/components/password-input"
 import { SelectDropdown } from "@/components/select-dropdown"
 import { useAuth } from "@/features/auth"
 import { changeMyPassword, changeUserRole, checkUserExists, createUser, modifyUser } from "../api"
-import { useRoleOptions } from "../use-role-options"
+import { useCanAssignRole, useRoleOptions } from "../use-role-options"
 import { type User } from "../data/schema"
 import { useUsersOptional } from "./users-provider"
 
@@ -178,12 +178,14 @@ export function UsersActionDialog({
   const { authType, applyTokens, user } = useAuth()
   const synced = isEdit && authType === "keycloak"
   // 역할 변경은 관리자만(서버도 관리자 전용). 사용자 관리를 위임받은 사람은 수정 화면에서 역할을 바꾸지 못하고,
-  // 추가할 때도 관리자 역할은 고를 수 없다(서버 403, TODO-123).
+  // 추가할 때도 자기가 줄 수 없는 역할은 고를 수 없다(서버 403, TODO-123 · DEF-163).
   const isAdmin = !!user?.is_admin
   const showRole = !hideRole && (isAdmin || !isEdit)
   // 기본 역할 + 사용자 정의 역할(TODO-124)
   const roleOptions = useRoleOptions()
-  const roleItems = roleOptions.filter(({ value }) => isAdmin || value !== "argus-admin")
+  // 위임받은 사람은 기본 사용자 역할과 자기 역할만(서버 403, DEF-163)
+  const canAssignRole = useCanAssignRole(isAdmin, user?.username)
+  const roleItems = roleOptions.filter(({ value }) => canAssignRole(value))
   const usersCtx = useUsersOptional()
   const refreshUsers = usersCtx?.refreshUsers
 
@@ -289,6 +291,8 @@ export function UsersActionDialog({
    * After a successful save, refreshes the user list and closes the dialog.
    */
   const onSubmit = async (values: UserForm) => {
+    // 계정 설정에서 비밀번호를 먼저 바꾼 뒤 프로필을 저장한다 — 뒤 단계가 실패해도 비밀번호는 이미 바뀌었음을 알린다(DEF-AUTH-001)
+    let passwordChanged = false
     try {
       if (isEdit && currentRow) {
         // 계정 설정(본인)에서 새 비밀번호를 입력한 경우 — 현재 비밀번호 검증을
@@ -306,6 +310,7 @@ export function UsersActionDialog({
           }
           // 비밀번호가 바뀌면 이전 토큰은 서버에서 401 — 새 토큰으로 세션을 바꾼 뒤 프로필을 저장한다
           await applyTokens(tokens)
+          passwordChanged = true
         }
         if (synced) {
           await modifyUser(currentRow.id, { phone_number: values.phoneNumber })
@@ -375,6 +380,13 @@ export function UsersActionDialog({
       form.reset()
       onOpenChange(false)
     } catch (err) {
+      if (passwordChanged) {
+        form.resetField("currentPassword")
+        form.resetField("password")
+        form.resetField("confirmPassword")
+        notifyError(err, "비밀번호는 변경했지만 프로필을 저장하지 못했습니다.")
+        return
+      }
       notifyError(err, "사용자를 저장하지 못했습니다.")
     }
   }

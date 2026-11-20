@@ -28,7 +28,7 @@
 [source,bash]
 ----
 curl http://<server>:4600/health
-# {"status":"ok","service":"argus-catalog-server","uptime":12345,"version":"0.8.0"}
+# {"status":"ok","service":"argus-catalog-server","uptime":12345,"version":"0.9.0"}
 ----
 
 UI 쪽 헬스는 Next.js 의 응답 코드로 판단합니다. 로드 밸런서에서는 `/` 또는 `/login` 이 200 을 돌려주는지 확인하면 됩니다.

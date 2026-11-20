@@ -10,7 +10,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import AdminUser, OptionalUser
+from app.core.auth import AdminUser, OptionalUser, PermissionDenied
 from app.core.database import get_session
 from app.embedding import service as embedding_service
 from app.embedding.registry import get_provider
@@ -58,7 +58,7 @@ async def _require_dataset_menu(session: AsyncSession, current) -> None:
     통합 검색(/unified)은 같은 경우 빈 목록을 돌려준다 — 여기는 결과가 전부 데이터셋이라 막는다."""
     if not await check_menu(session, current, DATASET_MENU_KEY):
         logger.warning("데이터셋 검색 거부(메뉴 권한 없음): user=%s", getattr(current, "username", None))
-        raise HTTPException(status_code=403, detail=f"메뉴 접근 권한이 없습니다: {DATASET_MENU_KEY}")
+        raise PermissionDenied(f"메뉴 접근 권한이 없습니다: {DATASET_MENU_KEY}", user=current, kind="MENU", key=DATASET_MENU_KEY)
 
 
 @router.get("/semantic", response_model=SemanticSearchResponse)

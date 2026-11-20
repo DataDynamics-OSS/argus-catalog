@@ -1,6 +1,7 @@
 "use client"
 
 import { Tip } from "@/components/tip"
+import { SourceMapBadge } from "@/features/catalogs/components/source-map-badge"
 import { type ColumnDef } from "@tanstack/react-table"
 import { Database, MoreHorizontal, Trash2 } from "lucide-react"
 import Link from "next/link"
@@ -104,9 +105,13 @@ export const datasetsColumns: ColumnDef<DatasetSummary>[] = [
     accessorKey: "datasource_name",
     header: "데이터 소스",
     cell: ({ row }) => (
-      <div className="flex items-center justify-center gap-1.5">
-        <Database className="h-3.5 w-3.5 text-muted-foreground" />
-        <span className="text-sm">{row.original.datasource_name}</span>
+      <div className="flex flex-col items-center gap-0.5">
+        <div className="flex items-center justify-center gap-1.5">
+          <Database className="h-3.5 w-3.5 text-muted-foreground" />
+          <span className="text-sm">{row.original.datasource_name}</span>
+        </div>
+        {/* 수동 데이터셋(직접 등록한 카탈로그, TODO-CAT-001)은 원천 매핑 상태를 같이 — 데이터 소스 이름은 카탈로그 이름 */}
+        <SourceMapBadge status={row.original.source_map_status} />
       </div>
     ),
     meta: { className: "w-[150px] text-center" },

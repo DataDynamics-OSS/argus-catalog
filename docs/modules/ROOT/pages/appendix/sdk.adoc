@@ -76,7 +76,7 @@ $ python3 -m venv venv && . venv/bin/activate
 $ pip install argus-catalog-sdk        # 사내 배포 패키지가 없으면 저장소의 sdk/ 디렉터리: pip install ./sdk
 $ pip show argus-catalog-sdk | grep -E "^(Name|Version|Requires):"
 Name: argus-catalog-sdk
-Version: 0.8.0
+Version: 0.9.0
 Requires: httpx, PyYAML, rich
 $ argus-model --help
 usage: argus-model [-h]

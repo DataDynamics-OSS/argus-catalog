@@ -1,7 +1,7 @@
 "use client"
 
 import { Tip } from "@/components/tip"
-import { useState } from "react"
+import { useState, type DragEvent } from "react"
 import {
   flexRender,
   getCoreRowModel,
@@ -38,6 +38,10 @@ type DatasetsGridProps = {
   selectedIds?: Set<number>
   onToggleSelect?: (id: number) => void
   onToggleSelectAll?: (checked: boolean) => void
+  /** 지정하면 행을 끌 수 있다(예: 분류 체계 — 왼쪽 분류로 끌어 매핑). 끄는 동안 dimmedIds 의 행은 흐리게 */
+  onRowDragStart?: (e: DragEvent<HTMLTableRowElement>, row: DatasetSummary) => void
+  onRowDragEnd?: () => void
+  dimmedIds?: Set<number>
 }
 
 /**
@@ -53,6 +57,9 @@ export function DatasetsGrid({
   selectedIds,
   onToggleSelect,
   onToggleSelectAll,
+  onRowDragStart,
+  onRowDragEnd,
+  dimmedIds,
 }: DatasetsGridProps) {
   const [viewMode, setViewMode] = useState<"table" | "card">("table")
 
@@ -171,12 +178,24 @@ export function DatasetsGrid({
         <TableBody>
           {table.getRowModel().rows.length ? (
             table.getRowModel().rows.map((row) => (
-              <TableRow key={row.id} className="group/row">
+              <TableRow
+                key={row.id}
+                className={cn(
+                  "group/row",
+                  onRowDragStart && "cursor-grab active:cursor-grabbing",
+                  dimmedIds?.has(row.original.id) && "opacity-40",
+                )}
+                data-state={selectedIds?.has(row.original.id) ? "selected" : undefined}
+                draggable={onRowDragStart ? true : undefined}
+                onDragStart={onRowDragStart ? (e) => onRowDragStart(e, row.original) : undefined}
+                onDragEnd={onRowDragEnd}
+              >
                 {row.getVisibleCells().map((cell) => (
                   <TableCell
                     key={cell.id}
                     className={cn(
-                      "bg-background group-hover/row:bg-muted",
+                      selectedIds?.has(row.original.id) ? "bg-muted/60" : "bg-background",
+                      "group-hover/row:bg-muted",
                       (cell.column.columnDef.meta as { className?: string })?.className,
                     )}
                   >

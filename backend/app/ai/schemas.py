@@ -11,8 +11,10 @@ from pydantic import BaseModel, Field
 # ---------------------------------------------------------------------------
 
 class AiReadyDraftRequest(BaseModel):
-    """AI-Ready 초안 요청 — 항목을 비우면 편향 · 한계 · 관련법령 셋 다. ``force`` 면 값이 있는 항목도 다시 쓴다."""
-    fields: list[str] | None = Field(None, description="data_biases, known_limitations, legal_basis")
+    """AI-Ready 초안 요청 — 항목을 비우면 편향 · 한계 · 관련법령 · 개인정보 보호조치 · 허용 이용 유형 모두.
+    ``force`` 면 값이 있는 항목도 다시 쓴다."""
+    fields: list[str] | None = Field(
+        None, description="data_biases, known_limitations, legal_basis, privacy_measures, allowed_uses")
     force: bool = False
     language: str | None = None
 
@@ -22,6 +24,7 @@ class AiReadyDraft(BaseModel):
     label: str
     text: str
     log_id: int
+    reason: str | None = None  # 고른 근거 — 관련법령 · 허용 이용 유형
 
 
 class AiReadySkipped(BaseModel):
@@ -49,8 +52,8 @@ class GenerateRequest(BaseModel):
 class BulkGenerateRequest(BaseModel):
     """일괄 생성 요청 바디 — generation_types 는 description / columns / tags / pii / ai_ready 중 선택.
 
-    ``ai_ready`` 는 편향 · 한계 · 관련법령 초안(TODO-096 6단계) — ``apply`` 와 관계없이 제안으로만 남고, ``empty_only`` 면
-    세 항목 중 하나라도 빈 데이터셋이 대상이다(다른 유형과 함께 고르면 설명이 빈 데이터셋)."""
+    ``ai_ready`` 는 편향 · 한계 · 관련법령 · 개인정보 보호조치 · 허용 이용 유형 초안(TODO-096) — ``apply`` 와 관계없이 제안으로만
+    남고, ``empty_only`` 면 그 항목 중 하나라도 빈 데이터셋이 대상이다(다른 유형과 함께 고르면 설명이 빈 데이터셋)."""
     generation_types: list[str] = Field(
         default=["description"],
         description="Types to generate: description, columns, tags, pii, ai_ready",
@@ -160,6 +163,7 @@ class SuggestionItem(BaseModel):
     # 설명·요약·컬럼 설명은 평문, 태그는 현재 태그 이름 JSON 배열, PII 는
     # 제안에 나온 컬럼별 현재 pii_type JSON 배열([{"name", "pii_type"}]). 없으면 None.
     current_text: str | None = None
+    reason: str | None = None  # 제안 근거 — AI-Ready 초안의 관련법령 · 허용 이용 유형을 고른 이유
 
 
 class ApplyRejectResponse(BaseModel):

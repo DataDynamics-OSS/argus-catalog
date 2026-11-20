@@ -20,6 +20,8 @@ import json
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from app.core.auth import TokenUser
+from app.permissions.models import Permission
 from app.quality import execution, rule_sql, runs
 from app.quality.models import QualityResult
 from app.quality.rule_sql import RuleSpec, TableRef
@@ -125,6 +127,20 @@ def test_trino_run_fetches_samples_for_failed_rules(tmp_path, monkeypatch) -> No
     shown = {r["rule_id"]: r for r in client.get(f"/api/v1/quality/datasets/{ds_id}/results").json()}
     assert shown[r_nn]["failed_samples"][0]["cust_id"] == "7"
     assert _run(sm, lambda s: runs.get_run(s, run.id)).status == "SUCCEEDED"
+
+    # DEF-153 — 샘플 보기 권한(datasets.sample-view)이 없는 사람은 값 없이 안내 표시만
+    async def _restrict(sess):
+        sess.add(Permission(kind="FEATURE", perm_key="datasets.sample-view", role_id="argus-superuser"))
+        await sess.commit()
+    _run(sm, _restrict)
+    bob = TokenUser(sub="9", username="bob", roles=["argus-user"])
+    hidden = {r["rule_id"]: r for r in TestClient(_app(sm, bob)).get(f"/api/v1/quality/datasets/{ds_id}/results").json()}
+    assert hidden[r_nn]["failed_samples"] is None and hidden[r_nn]["samples_hidden"] is True
+    assert hidden[r_nn]["error_count"] == shown[r_nn]["error_count"], "건수는 그대로"
+    assert hidden[r_ok]["samples_hidden"] is False
+    sam = TokenUser(sub="8", username="sam", roles=["argus-superuser"])
+    allowed = {r["rule_id"]: r for r in TestClient(_app(sm, sam)).get(f"/api/v1/quality/datasets/{ds_id}/results").json()}
+    assert allowed[r_nn]["failed_samples"][0]["cust_id"] == "7"
 
 
 def test_sample_query_failure_keeps_run_result(tmp_path, monkeypatch) -> None:

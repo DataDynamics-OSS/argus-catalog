@@ -49,6 +49,8 @@ class ProfileResponse(BaseModel):
     row_count: int
     columns: list[ColumnProfile] = Field(default_factory=list)
     profiled_at: datetime
+    # 샘플 보기 권한(datasets.sample-view)이 없어 컬럼의 실제 값(최솟값 · 최댓값 · 최빈값)을 뺐으면 True(DEF-164)
+    values_hidden: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -67,6 +69,8 @@ SUPPORTED_CHECK_TYPES = (
     "FUNCTION",
     # AI-Ready 품질 지표(TODO-096 5단계) — 더미 값 빈도(통계적 타당성), 데이터 연속성(적시성). 정밀 진단 전용
     "DUMMY_VALUE", "CONTINUITY",
+    # AI-Ready 품질 지표(TODO-096) — 데이터 · 라벨 다양성(최빈값 비율 상한), 여러 컬럼 키 유일성(테이블 수준). 정밀 진단 전용
+    "DIVERSITY", "COMPOSITE_UNIQUE",
 )
 # 심각도 — 알림 평가(alert.service._SEVERITY_RANK)·품질 탭 선택지와 동일
 SUPPORTED_SEVERITIES = ("BREAKING", "WARNING", "INFO")
@@ -92,7 +96,9 @@ class QualityRuleCreate(BaseModel):
     rule_name: str = Field(..., min_length=1, max_length=255)
     check_type: str        # SUPPORTED_CHECK_TYPES 중 하나
     column_name: str | None = None
-    expected_value: str | None = None   # 유형별 해석 문자열(숫자·정규식·SQL, 허용 값 · 더미 값은 JSON 배열 — 예전 쉼표 구분도 읽음, CUSTOM_PYTHON 은 JSON)
+    # 유형별 해석 문자열(숫자·정규식·SQL, 허용 값 · 더미 값 · 여러 컬럼 키의 컬럼은 JSON 배열 — 예전 쉼표 구분도 읽음,
+    # CUSTOM_PYTHON 은 JSON). 허용 값은 표준 코드 그룹 연결 {"code_group_id": N} 도 받는다
+    expected_value: str | None = None
     # 통과 임계값 % (0~100) — NOT_NULL·UNIQUE 만 사용. 0 도 유효한 값(0% 이상 = 항상 통과)
     threshold: float = Field(100.0, ge=0, le=100)
     severity: str = "WARNING"
@@ -108,6 +114,8 @@ class QualityRuleCreate(BaseModel):
         rule_sql.check_expression(self.check_type, self.expected_value)  # 논리관계·계산식은 모양을 미리 본다
         if self.check_type == "FRESHNESS" and not (self.column_name or "").strip():
             raise ValueError("최신성 검사는 적재 · 수정 시각 컬럼을 지정해야 합니다")
+        if self.check_type == "COMPOSITE_UNIQUE":
+            self.column_name = None  # 테이블 수준 — 키 컬럼은 기대값의 목록
         return self
 
 
@@ -218,10 +226,19 @@ class QualityDefinitionWrite(BaseModel):
                 float(expected)
             except ValueError:
                 raise ValueError(f"기준값은 숫자여야 합니다: {expected}") from None
-        if self.check_type == "ACCEPTED_VALUES" and not rule_sql.accepted_values(expected):
+        if self.check_type == "ACCEPTED_VALUES" and rule_sql.code_group_ref(expected) is None \
+                and not rule_sql.accepted_values(expected):
             raise ValueError("허용 값을 하나 이상 적어야 합니다")
         rule_sql.check_expression(self.check_type, self.expected_value)
         return self
+
+
+class QualityDefinitionJobRef(BaseModel):
+    """이 지표를 진단 범위로 고른 품질 진단 작업 (DEF-148) — 지표를 지우면 그 작업은 이 지표의 규칙을 진단하지 않는다."""
+    id: int
+    name: str
+    # 이 지표 말고 진단 범위로 고른 지표가 없다 — 지우면 남은 지표가 없어 진단할 규칙이 없다
+    only: bool = False
 
 
 class QualityDefinitionResponse(BaseModel):
@@ -239,6 +256,8 @@ class QualityDefinitionResponse(BaseModel):
     description: str | None = None
     rules: int = 0        # 할당된 컬럼(규칙) 수
     datasets: int = 0     # 그 컬럼들이 있는 데이터셋 수
+    # 이 지표를 진단 범위(definition_ids)로 고른 작업 — 삭제 확인 창이 영향을 알린다(DEF-148)
+    jobs: list[QualityDefinitionJobRef] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -314,11 +333,25 @@ class QualitySqlPreviewRequest(BaseModel):
 
 
 class QualitySqlPreview(BaseModel):
-    sql: str | None = None        # 실행할 Trino 쿼리. 만들 수 없으면 None(사유는 note)
+    sql: str | None = None        # 실행할 진단 쿼리(Trino 또는 원천 방언). 만들 수 없으면 None(사유는 note)
     judgement: str = ""           # 쿼리 결과로 통과를 어떻게 판정하는지
     note: str | None = None       # 쿼리를 만들지 못한 사유, 예시 이름을 쓴 사유
     table: str = ""               # 쿼리에 쓴 테이블
-    actual_table: bool = False    # 실제 Trino 테이블 이름인가(아니면 예시 이름)
+    actual_table: bool = False    # 실제 테이블 이름인가(아니면 예시 이름)
+    # 진단 경로 — TRINO(Trino 쿼리) / DIRECT(원천 DB 를 직접 읽음, sql 은 원천 방언) (DEF-152)
+    engine: str = "TRINO"
+    source_type: str | None = None  # DIRECT 일 때 원천 유형(postgresql · mysql · …)
+    # DIRECT 일 때 쿼리의 쓰임 — AGGREGATE(원천이 집계) / READ(행을 읽어 워커가 판정) / SEPARATE(따로 내는 조인 · 묶음 집계)
+    mode: str | None = None
+
+
+class QualityCodeGroupOption(BaseModel):
+    """허용 값 규칙이 가리킬 수 있는 표준 코드 그룹 (TODO-096) — 규칙 대화상자의 선택지."""
+    id: int
+    name: str
+    dictionary_name: str | None = None
+    value_count: int = 0                                   # 사용 중인 코드 값 수
+    sample_values: list[str] = Field(default_factory=list)  # 앞의 코드 값 몇 개(정렬 순서)
 
 
 # ---------------------------------------------------------------------------
@@ -344,6 +377,8 @@ class QualityResultResponse(BaseModel):
     detail: str | None = None
     severity: str | None = None
     failed_samples: list[dict] | None = None
+    # 샘플 보기 권한(datasets.sample-view)이 없어 위반 샘플 값을 뺐으면 True — 화면은 값 대신 안내를 보인다(DEF-153)
+    samples_hidden: bool = False
     # 진단 건수와 오류 건수 — 건수를 세지 않는 평가는 None
     checked_count: int | None = None
     error_count: int | None = None
@@ -378,9 +413,12 @@ class QualityScoreResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 class RunCheckResponse(BaseModel):
-    """진단 결과 저장(``service.import_results``)의 점수와 규칙별 결과. total_rules 는 미평가를 뺀 평가 수."""
+    """진단 결과 저장(``service.import_results``)의 점수와 규칙별 결과. total_rules 는 미평가를 뺀 평가 수.
+
+    평가된 규칙이 하나도 없으면 score 는 None(점수 없음, DEF-195).
+    """
     dataset_id: int
-    score: float
+    score: float | None
     total_rules: int
     passed: int
     failed: int
@@ -694,14 +732,15 @@ class QualityJobRunResponse(BaseModel):
     targets_total: int = 0      # 대상 데이터셋 수
     runs_total: int = 0         # 대기열에 넣은 데이터셋 실행 수
     runs_succeeded: int = 0
-    runs_failed: int = 0
+    runs_failed: int = 0        # 실패·일부 실패(중지는 runs_cancelled)
+    runs_cancelled: int = 0     # 중지된 데이터셋 실행 수(DEF-156)
     runs_active: int = 0        # 아직 끝나지 않은 데이터셋 실행 수
     # 아래는 이 작업 실행이 넣은 데이터셋 실행에서 모은 값 — 작업 이력 목록이 실행 현황과 같은 열을 보여 준다
     run_id: int | None = None           # 데이터셋 실행이 하나뿐이면 그 실행(상세를 바로 연다)
     dataset_id: int | None = None       # 〃 그 데이터셋
     dataset_name: str | None = None
     engine_table: str | None = None
-    rules_total: int = 0                # Σ 활성 규칙 수
+    rules_total: int = 0                # Σ 진단 대상 규칙 수(실행마다 고른 범위 안의 활성 규칙)
     rules_evaluated: int = 0            # Σ 평가한 규칙 수
     progress_done: int = 0              # Σ 끝난 쿼리 수
     progress_total: int | None = None   # Σ 전체 쿼리 수 (아직 계획이 없으면 None)
@@ -748,6 +787,8 @@ class QualityJobResponse(BaseModel):
     # 고른 품질 지표(미리 정의한 지표) ID 와 이름 — 비어 있으면 가리지 않는다. 지운 지표는 "삭제된 지표 #ID"
     definition_ids: list[int] = Field(default_factory=list)
     definitions: list[str] = Field(default_factory=list)
+    # definition_ids 가운데 지워진 지표 — 이 작업은 그 지표의 규칙을 더는 진단하지 않는다(DEF-148)
+    deleted_definition_ids: list[int] = Field(default_factory=list)
     schedule_type: str
     schedule_time: str | None = None
     schedule_day: int | None = None
@@ -921,7 +962,8 @@ class QualityJobTrendPoint(BaseModel):
     status: str
     runs_total: int = 0
     runs_succeeded: int = 0
-    runs_failed: int = 0
+    runs_failed: int = 0        # 실패·일부 실패(중지는 runs_cancelled)
+    runs_cancelled: int = 0
     checked_count: int | None = None
     error_count: int | None = None
     error_rate: float | None = None

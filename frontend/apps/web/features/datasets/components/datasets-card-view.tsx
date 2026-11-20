@@ -12,6 +12,7 @@ import { datasetStatus } from "../status"
 import { OriginText } from "./origin-text"
 import { SyncedBadge } from "./synced-badge"
 import { ageLabel } from "../card-format"
+import { datasetExcerpt } from "@/features/search/excerpt"
 import { EntityCard, EntityCardGrid, EntityCardText } from "@/components/entity-card"
 import { LinkMenuItems } from "@/components/link-menu-items"
 
@@ -107,7 +108,7 @@ function DatasetCard({
       </div>
 
       {/* 요약(없으면 설명) — 두 줄 */}
-      <EntityCardText text={row.summary || row.description} />
+      <EntityCardText text={datasetExcerpt(row)} />
 
       {row.column_preview && <ColumnChips names={row.column_preview} total={row.schema_field_count} />}
     </EntityCard>

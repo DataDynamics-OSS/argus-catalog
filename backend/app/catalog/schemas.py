@@ -63,6 +63,14 @@ class DatasourceCreate(BaseModel):
             raise ValueError("이름을 입력하세요.")
         return v
 
+    @field_validator("type")
+    @classmethod
+    def _not_manual(cls, v: str) -> str:
+        # 수동 등록 데이터 소스는 카탈로그가 만든다(TODO-CAT-001) — 사용자가 직접 만들 수 없다.
+        if v == "manual":
+            raise ValueError("manual 유형은 카탈로그에 데이터셋을 등록할 때 자동으로 만들어집니다.")
+        return v
+
 
 class DatasourceResponse(BaseModel):
     """데이터 소스 응답."""
@@ -315,6 +323,8 @@ class CatalogCreate(BaseModel):
     summary: str | None = Field(default=None, max_length=200)
     description: str | None = None
     owner: str | None = Field(default=None, max_length=200)
+    # 직접 등록(ARGUS) 카탈로그의 소속 시스템 — 수동 데이터셋의 소관기관(시스템의 조직, DEF-CAT-001)
+    system_id: int | None = None
 
 
 class CatalogUpdate(BaseModel):
@@ -323,6 +333,8 @@ class CatalogUpdate(BaseModel):
     summary: str | None = Field(default=None, max_length=200)
     description: str | None = None
     owner: str | None = Field(default=None, max_length=200)
+    # 직접 등록(ARGUS) 카탈로그의 소속 시스템. 보낸 경우에만 바꾼다 — null 이면 해제 (DEF-CAT-001)
+    system_id: int | None = None
 
 
 class CatalogConnectionCreate(BaseModel):
@@ -537,6 +549,7 @@ class SyncRunResponse(BaseModel):
     updated_count: int = 0
     removed_count: int = 0
     failed_count: int = 0
+    skipped_count: int = 0  # 수동 매핑으로 건너뛴 테이블 수
     items_total: int = 0
     error_message: str | None = None
     requested_by: str | None = None
@@ -564,7 +577,7 @@ class SyncRunReport(BaseModel):
     progress_total: int | None = Field(default=None, ge=0)
     created: int = Field(default=0, ge=0)
     updated: int = Field(default=0, ge=0)
-    skipped: int = Field(default=0, ge=0)
+    skipped: int = Field(default=0, ge=0)  # 수동 데이터셋에 원천 매핑돼 건너뛴 테이블 수(TODO-CAT-001)
     failed: int = Field(default=0, ge=0)
     removed: int = Field(default=0, ge=0)
     error_message: str | None = None
@@ -605,8 +618,90 @@ class CatalogResponse(BaseModel):
     status: str = "active"
     dataset_count: int = 0
     connections: list[CatalogConnectionResponse] = Field(default_factory=list)
+    # 소속 시스템 · 조직 — 수집(SYNC) 데이터 소스가 배정된 시스템. 직접 등록 카탈로그는 수동 등록 데이터 소스의 것 (DEF-CAT-001)
+    system_id: int | None = None
+    system_name: str | None = None
+    org_name: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+
+
+# ---------------------------------------------------------------------------
+# 수동 데이터셋 원천 매핑 (TODO-CAT-001, design/catalog-registration-design.md 5장)
+# ---------------------------------------------------------------------------
+
+SourceCheckStatus = Literal["MATCH", "DIFF", "NOT_FOUND", "UNREACHABLE", "UNSUPPORTED"]
+
+
+class DatasetSourceMapRequest(BaseModel):
+    """매핑 확인 · 저장 요청 — 실제 데이터 소스와 원천 경로(db.table)."""
+    datasource_id: int
+    remote_path: str = Field(..., min_length=1, max_length=500)
+    # 원천 확인(존재 · 스키마 비교)을 건너뛴다 — 접속할 수 없는 걸 알 때
+    skip_check: bool = False
+
+    @field_validator("remote_path")
+    @classmethod
+    def _strip_path(cls, v: str) -> str:
+        v = v.strip().strip(".")
+        if not v:
+            raise ValueError("원천 경로를 입력하세요.")
+        return v
+
+
+class SchemaColumnDiff(BaseModel):
+    """스키마 비교 한 줄."""
+    name: str
+    change: Literal["ONLY_SOURCE", "ONLY_MANUAL", "TYPE_DIFF"]
+    manual_type: str | None = None
+    source_type: str | None = None
+
+
+class SourceCheckResult(BaseModel):
+    """원천 확인 결과(② 존재 · ③ 스키마 비교) — 매핑을 막지 않는다."""
+    status: SourceCheckStatus
+    message: str | None = None
+    source_column_count: int | None = None
+    diffs: list[SchemaColumnDiff] = Field(default_factory=list)
+
+
+class SourceMapConflict(BaseModel):
+    """① 중복 — 이 경로를 이미 쓰는 데이터셋."""
+    kind: Literal["SYNCED_DATASET", "MANUAL_MAPPING"]
+    dataset_id: int
+    dataset_name: str
+    urn: str
+
+
+class SourceMapPreview(BaseModel):
+    """매핑 미리보기(저장 없음). conflict 가 있으면 저장할 수 없다."""
+    datasource_id: int
+    datasource_name: str
+    remote_path: str
+    conflict: SourceMapConflict | None = None
+    check: SourceCheckResult | None = None
+
+
+class DatasetSourceMapResponse(BaseModel):
+    """저장된 매핑."""
+    dataset_id: int
+    datasource_id: int
+    datasource_key: str
+    datasource_name: str
+    datasource_type: str
+    remote_path: str
+    check_status: str | None = None
+    check_detail: SourceCheckResult | None = None
+    checked_at: datetime | None = None
+    created_by: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class DatasourceSourceMapEntry(BaseModel):
+    """데이터 소스에 매핑된 경로(metadata-sync 건너뛰기용)."""
+    remote_path: str
+    dataset_id: int
 
 
 # 자기참조(children) forward ref 해소
@@ -642,6 +737,10 @@ class SchemaFieldCreate(BaseModel):
     is_partition_key: str = "false"
     is_distribution_key: str = "false"
     ordinal: int = 0
+    # 데이터 사전 — 단위·산정기준(체크리스트 C08). 담당자 큐레이션 값이라 요청에 키가 있을 때만 바꾼다
+    # (수집 어댑터는 보내지 않음 → 재수집해도 보존, ``service.apply_schema_fields``). null·빈 값을 보내면 지운다.
+    unit: str | None = Field(default=None, max_length=50)
+    calculation: str | None = Field(default=None, max_length=2000)
 
 
 class SchemaFieldResponse(BaseModel):
@@ -658,6 +757,8 @@ class SchemaFieldResponse(BaseModel):
     is_partition_key: str = "false"
     is_distribution_key: str = "false"
     ordinal: int
+    unit: str | None = None
+    calculation: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -824,7 +925,10 @@ class DatasetCreate(BaseModel):
     """데이터셋 생성 요청 — 스키마 필드·태그·소유자·속성을 함께 받을 수 있다."""
     name: str = Field(..., min_length=1, max_length=255)
     display_name: str | None = Field(default=None, max_length=255)
-    datasource_id: int
+    # 소속 — datasource_id · catalog_id 중 정확히 하나(TODO-CAT-001). catalog_id 는 그 카탈로그의 SYNC 데이터 소스에
+    # 만들고, 직접 등록한(ARGUS) 카탈로그면 수동 등록 데이터 소스(없으면 생성)에 만든다.
+    datasource_id: int | None = None
+    catalog_id: int | None = None
     summary: str | None = Field(default=None, max_length=200)
     description: RichHtml | None = None  # 상세 설명 — 리치 텍스트, 저장 전 정화(TODO-027)
     # 생략하면 데이터 소스의 환경(origin)을 따른다(UI 와 동일) — 이전에는 항상 PROD 였다.
@@ -845,6 +949,12 @@ class DatasetCreate(BaseModel):
     properties: list[DatasetPropertyCreate] = Field(default_factory=list)
     # 수집으로 들어온 데이터셋 표시(metadata-sync 가 true 로 보냄) — 수집 범위 밖 판정·탐색 건수가 이 표시를 본다.
     is_synced: bool | None = None
+
+    @model_validator(mode="after")
+    def _one_owner(self) -> "DatasetCreate":
+        if (self.datasource_id is None) == (self.catalog_id is None):
+            raise ValueError("datasource_id 와 catalog_id 중 하나만 지정하세요.")
+        return self
 
 
 class DatasetUpdate(BaseModel):
@@ -913,11 +1023,13 @@ class DatasetUpdate(BaseModel):
     missing_data_info: str | None = Field(default=None, max_length=4000)
     missing_value_notation: str | None = Field(default=None, max_length=100)
     privacy_measures: str | None = Field(default=None, max_length=4000)
+    social_impact: str | None = Field(default=None, max_length=4000)
+    risk_mitigation: str | None = Field(default=None, max_length=4000)
 
     @field_validator(
         "legal_basis", "publisher", "persistent_id", "spatial_coverage", "data_version", "version_notes",
         "rights", "data_biases", "known_limitations", "missing_data_info", "missing_value_notation",
-        "privacy_measures",
+        "privacy_measures", "social_impact", "risk_mitigation",
     )
     @classmethod
     def _ai_ready_text(cls, v: str | None) -> str | None:
@@ -983,6 +1095,11 @@ class DatasetResponse(BaseModel):
     name: str
     display_name: str | None = None
     datasource: DatasourceResponse
+    # 소속 카탈로그(TODO-CAT-001). is_manual = 직접 등록한 카탈로그의 수동 데이터셋(수집 대상 아님)
+    catalog_id: int | None = None
+    catalog_name: str | None = None
+    is_manual: bool = False
+    source_map: DatasetSourceMapResponse | None = None
     summary: str | None = None
     description: str | None = None
     origin: str
@@ -1048,6 +1165,8 @@ class DatasetResponse(BaseModel):
     missing_data_info: str | None = None
     missing_value_notation: str | None = None
     privacy_measures: str | None = None
+    social_impact: str | None = None
+    risk_mitigation: str | None = None
     datasource_properties: dict | None = None
     schema_fields: list[SchemaFieldResponse] = Field(default_factory=list)
     tags: list[TagResponse] = Field(default_factory=list)
@@ -1066,6 +1185,10 @@ class DatasetSummary(BaseModel):
     display_name: str | None = None
     datasource_name: str
     datasource_type: str
+    catalog_id: int | None = None
+    catalog_name: str | None = None
+    # 수동 데이터셋의 원천 매핑 상태 — None(수동 아님), "UNMAPPED", 또는 매핑의 check_status(MATCH/DIFF/…/"UNCHECKED")
+    source_map_status: str | None = None
     summary: str | None = None
     description: str | None = None
     origin: str

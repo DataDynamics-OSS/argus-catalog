@@ -3,8 +3,8 @@
 // 데이터셋 상세의 "AI 제안" 버튼 + 검토 다이얼로그.
 // 미리보기로 생성만 하고 적용하지 않은 결과, AI 서비스 enrich 가 반입한 결과(승인 대기)를
 // 한 목록으로 보여 주고 개별 승인·거절, 선택 일괄 승인을 한다. 승인 대기 제안이 없으면 아무것도
-// 그리지 않는다. 승인·거절 권한은 서버 `_require_suggestion_editor`(데이터셋 생성자 또는 관리자)와
-// 같아서, 호출하는 쪽이 canManageDataset 일 때만 이 컴포넌트를 렌더링한다.
+// 그리지 않는다. 승인·거절 권한은 서버 `_require_suggestion_editor`(데이터셋 소유자 — 생성자 · 소유자 목록 — 또는 관리자)와
+// 같아서, 호출하는 쪽이 isDatasetOwner 일 때만 이 컴포넌트를 렌더링한다.
 
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { Check, Loader2, Sparkles, X } from "lucide-react"
@@ -120,10 +120,13 @@ export function AiSuggestionsButton({
   }
 
   // 같은 대상에 제안이 여러 건이면 승인 순서대로 덮어쓰인다 — 목록에서 알 수 있게 표시
+  // 대상은 유형 + 엔티티 + 필드 — AI-Ready 초안은 필드(편향·한계·관련법령 등)가 달라 서로 덮어쓰지 않는다(DEF-145)
+  const duplicateKey = (s: SuggestionItem) =>
+    `${s.generation_type}:${s.entity_type === "column" ? s.entity_id : "ds"}:${s.field_name ?? ""}`
   const duplicateKeys = useMemo(() => {
     const seen = new Map<string, number>()
     for (const s of items) {
-      const key = `${s.generation_type}:${s.entity_type === "column" ? s.entity_id : "ds"}`
+      const key = duplicateKey(s)
       seen.set(key, (seen.get(key) ?? 0) + 1)
     }
     return seen
@@ -170,7 +173,7 @@ export function AiSuggestionsButton({
             </TableHeader>
             <TableBody>
               {items.map((s) => {
-                const dupKey = `${s.generation_type}:${s.entity_type === "column" ? s.entity_id : "ds"}`
+                const dupKey = duplicateKey(s)
                 return (
                   <TableRow key={s.id} data-testid={`ai-suggestion-${s.id}`}>
                     <TableCell className="align-top">
@@ -189,6 +192,12 @@ export function AiSuggestionsButton({
                     </TableCell>
                     <TableCell className="align-top text-sm whitespace-pre-wrap break-words">
                       <div className="max-h-40 overflow-y-auto">{formatSuggestedValue(s)}</div>
+                      {/* 관련법령 · 허용 이용 유형을 고른 근거(AI-Ready 초안) */}
+                      {s.reason && (
+                        <div className="mt-1 text-xs" data-testid={`ai-suggestion-reason-${s.id}`}>
+                          근거: {s.reason}
+                        </div>
+                      )}
                     </TableCell>
                     <TableCell className="align-top text-sm whitespace-pre-wrap break-words">
                       <div className="max-h-40 overflow-y-auto">{formatCurrentValue(s)}</div>

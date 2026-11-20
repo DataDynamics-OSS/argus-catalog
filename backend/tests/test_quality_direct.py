@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import delete as sql_delete
 from sqlalchemy import select
 
 import app.catalog.models as cm
@@ -435,10 +436,17 @@ def test_source_read_failure_fails_run_without_results(tmp_path, monkeypatch) ->
 
 
 def test_direct_run_without_source_config_fails_at_claim(tmp_path, monkeypatch) -> None:
+    """접속 설정이 대기열에 넣은 뒤에 사라지면 워커가 잡을 때 실패로 남긴다(넣기 전에 없으면 create_run 이 거절 — DEF-154)."""
     sm = _make_sessionmaker(str(tmp_path / "q.db"))
-    ds_id, _ = asyncio.run(_seed(sm, [{"check_type": "NOT_NULL", "column": "use_yn"}], connect=False))
+    ds_id, _ = asyncio.run(_seed(sm, [{"check_type": "NOT_NULL", "column": "use_yn"}], connect=False,
+                                 source_config=SOURCE))
     monkeypatch.setattr(direct, "scan", _FakeSource([]))
     run = _run(sm, lambda s: runs.create_run(s, ds_id, "alice"))
+
+    async def _drop_config(s):
+        await s.execute(sql_delete(cm.DatasourceConfiguration))
+        await s.commit()
+    _run(sm, _drop_config)
     assert asyncio.run(_work(sm)) is False
     failed = _run(sm, lambda s: runs.get_run(s, run.id))
     assert failed.status == "FAILED" and "원천 데이터 소스 'sales-pg' 에 접속 설정이 없습니다" in failed.error_message
@@ -740,3 +748,15 @@ def test_continuity_is_counted_at_oracle_and_sqlserver_sources() -> None:
     assert "SUBSTRING(LTRIM(RTRIM([ymd])), 1, 6)" in exprs("mssql", "ymd", "MONTH YYYYMMDD")[0]
     # 정렬 규칙이 갈리는 집계는 행을 읽는다
     assert rule_direct.aggregate(RuleSpec(1, "ACCEPTED_VALUES", "ymd", "a,b"), types, "mssql", ("s", "t"), 5) is None
+
+
+def test_mysql_unique_sample_wraps_duplicate_keys_in_derived_table() -> None:
+    """MySQL 8 은 ``바이트 키 IN (SELECT 바이트 키 … GROUP BY 바이트 키 HAVING …)`` 을 ONLY_FULL_GROUP_BY 오류(1055)로 거부한다
+    (실제 MySQL 8.0 에서 확인) — 중복 키를 파생 테이블로 한 번 감싼다."""
+    agg = rule_direct.aggregate(RuleSpec(1, "UNIQUE", "name", None), {"name": "varchar(20)"}, "mysql", ("s", "t"), 5)
+    key = "CAST(CONVERT(`name` USING utf8mb4) AS BINARY)"
+    assert agg.sample_sql == (
+        f"SELECT * FROM `s`.`t` WHERE {key} IN (SELECT k FROM (SELECT {key} AS k FROM `s`.`t` WHERE `name` IS NOT NULL "
+        f"GROUP BY {key} HAVING count(*) > 1) d) ORDER BY {key} LIMIT 5")
+    pg = rule_direct.aggregate(RuleSpec(1, "UNIQUE", "n", None), {"n": "integer"}, "postgresql", ("s", "t"), 5)
+    assert '"n" IN (SELECT k FROM (SELECT "n" AS k FROM "s"."t" WHERE "n" IS NOT NULL GROUP BY "n" HAVING' in pg.sample_sql

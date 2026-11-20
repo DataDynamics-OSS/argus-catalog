@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest"
 
 import {
-  DATE_FORMAT_CHOICES, domainOptions, domainToSave, isBinaryColumnType, listedDateFormat, ruleListMeta,
+  codeGroupExpected, codeGroupRef, DATE_FORMAT_CHOICES, domainOptions, domainToSave, isBinaryColumnType,
+  listedDateFormat, ruleListMeta,
 } from "./quality-rules"
 
 describe("ruleListMeta", () => {
@@ -12,11 +13,23 @@ describe("ruleListMeta", () => {
     expect(ruleListMeta({ check_type: "MAX_VALUE", threshold: 100, is_active: "true" }).inactive).toBe(false)
   })
 
-  it("임계값은 NOT_NULL·UNIQUE 에서만 표시", () => {
+  it("임계값은 임계값을 쓰는 유형에서만 표시", () => {
     expect(ruleListMeta({ check_type: "NOT_NULL", threshold: 98.5, is_active: "true" }).threshold).toBe(98.5)
     expect(ruleListMeta({ check_type: "UNIQUE", threshold: 0, is_active: "true" }).threshold).toBe(0)
+    expect(ruleListMeta({ check_type: "COMPOSITE_UNIQUE", threshold: 99, is_active: "true" }).threshold).toBe(99)
+    expect(ruleListMeta({ check_type: "DIVERSITY", threshold: 100, is_active: "true" }).threshold).toBeNull()
     expect(ruleListMeta({ check_type: "ROW_COUNT", threshold: 100, is_active: "true" }).threshold).toBeNull()
     expect(ruleListMeta({ check_type: "CUSTOM_SQL", threshold: 100, is_active: "true" }).threshold).toBeNull()
+  })
+})
+
+describe("표준 코드 그룹 연결", () => {
+  it("기대값 {\"code_group_id\": N} 만 연결로 본다 — 값 목록은 null", () => {
+    expect(codeGroupRef(codeGroupExpected(12))).toBe(12)
+    expect(codeGroupRef('{"code_group_id": 3}')).toBe(3)
+    for (const other of [null, "", '["Y","N"]', "Y,N", '{"code_group_id": "3"}', '{"code_group_id": 1.5}', "{oops"]) {
+      expect(codeGroupRef(other)).toBeNull()
+    }
   })
 })
 

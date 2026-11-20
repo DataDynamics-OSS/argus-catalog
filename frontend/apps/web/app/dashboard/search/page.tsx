@@ -1,5 +1,6 @@
 "use client"
 
+import { datasourceTypeLabel } from "@/features/datasources/datasource-configs"
 import { useCallback, useEffect, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { BookOpen, Bot, Database, Loader2, Plug, Search, Webhook } from "lucide-react"
@@ -96,7 +97,7 @@ function EntitySection({
                       <Badge variant="outline">{protocolLabel(item.extra.protocol)}</Badge>
                     )}
                     {item.extra.platform && (
-                      <Badge variant="outline">{item.extra.platform}</Badge>
+                      <Badge variant="outline">{datasourceTypeLabel(item.extra.platform)}</Badge>
                     )}
                     {item.extra.status && (
                       <StatusBadge {...entityStatus(item.entity_type, item.extra.status)} />

@@ -1,5 +1,6 @@
 "use client"
 
+import { datasourceTypeLabel } from "@/features/datasources/datasource-configs"
 import { Tip } from "@/components/tip"
 import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
@@ -272,7 +273,7 @@ export function LineageTab({
                     <Link href={`/dashboard/datasets/${l.dataset_id}`} className="font-medium text-primary hover:underline">
                       {l.dataset_name || `데이터셋 ${l.dataset_id}`}
                     </Link>
-                    {l.datasource_type && <Badge variant="outline" className="ml-2 font-normal">{l.datasource_type}</Badge>}
+                    {l.datasource_type && <Badge variant="outline" className="ml-2 font-normal">{datasourceTypeLabel(l.datasource_type)}</Badge>}
                   </td>
                   <td className="px-3 py-2">{RELATION_LABEL[l.relation_type] ?? l.relation_type}</td>
                   <td className="px-3 py-2">{l.model_version ? `v${l.model_version}` : "전체"}</td>

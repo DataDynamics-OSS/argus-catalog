@@ -40,6 +40,7 @@ export const HELP_TOPICS: HelpTopic[] = [
   { id: "dataset-lineage", title: "데이터셋 상세 — 리니지 탭", page: "catalog/lineage", anchor: "help-dataset-lineage" },
   { id: "dataset-relationships", title: "데이터셋 상세 — 관계 탭", page: "catalog/lineage", anchor: "help-dataset-relationships" },
   { id: "dataset-erd", title: "데이터셋 상세 — ER 다이어그램 탭", page: "catalog/lineage", anchor: "help-dataset-erd" },
+  { id: "catalogs", title: "카탈로그", route: "/dashboard/catalogs", page: "catalog/catalogs" },
   { id: "datasources", title: "데이터 소스", route: "/dashboard/datasources", page: "catalog/platforms" },
   { id: "sync-runs", title: "메타데이터 수집", route: "/dashboard/sync-runs", page: "catalog/platforms", anchor: "help-sync-runs" },
   { id: "quality-runs", title: "데이터 품질", route: "/dashboard/quality-runs", page: "catalog/quality", anchor: "help-quality-runs" },
@@ -80,6 +81,7 @@ export const HELP_TOPICS: HelpTopic[] = [
   { id: "users", title: "사용자 관리", route: "/dashboard/users", page: "ops/users" },
   { id: "settings", title: "설정", route: "/dashboard/settings", page: "ops/settings" },
   { id: "permissions", title: "권한 관리", route: "/dashboard/permissions", page: "ops/permissions" },
+  { id: "audit", title: "감사 로그", route: "/dashboard/audit", page: "ops/audit" },
 
   // 플러그인 화면 — 플러그인이 PluginScreen.help 를 주지 않았을 때
   { id: "plugin", title: "플러그인 화면", route: "/dashboard/x/[...slug]", page: "plugin/usage" },

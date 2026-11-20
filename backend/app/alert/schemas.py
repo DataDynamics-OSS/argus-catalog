@@ -64,6 +64,7 @@ class RuleTriggerType(str, Enum):
     AI_READY_UNMET = "AI_READY_UNMET"    # 공유 최소 요건 미충족 (주기 점검)
     REPORT_RECEIVED = "REPORT_RECEIVED"  # 오류 신고·개선 요청 접수 (댓글 저장 때)
     REPORT_DUE = "REPORT_DUE"            # 신고 처리 기한 임박·넘김 (주기 점검)
+    REPORT_CLOSED = "REPORT_CLOSED"      # 신고 처리 결과(해결·소명) — 신고한 사람에게 (상태 변경 때)
 
 
 # 엔터티(MCP) 트리거 — 범위는 ALL / DATASOURCE 만 의미가 있다.
@@ -183,7 +184,7 @@ def normalize_trigger_config(trigger_type: str, raw: str | dict | None) -> str:
             if not conds:
                 raise ValueError("최소 요건 조건을 하나 이상 선택해야 합니다.")
             out["conditions"] = conds
-    elif trigger_type == "REPORT_RECEIVED":
+    elif trigger_type in ("REPORT_RECEIVED", "REPORT_CLOSED"):
         cats = _str_list(cfg.get("categories"), "categories", allowed=_REPORT_CATEGORIES)
         if cats is not None:
             if not cats:

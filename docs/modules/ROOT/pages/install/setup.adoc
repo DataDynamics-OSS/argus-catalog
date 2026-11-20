@@ -199,7 +199,7 @@ make run
 [source,bash]
 ----
 curl http://localhost:4600/health
-# {"status":"ok","service":"argus-catalog-server","uptime":5,"version":"0.8.0"}
+# {"status":"ok","service":"argus-catalog-server","uptime":5,"version":"0.9.0"}
 ----
 
 [TIP]

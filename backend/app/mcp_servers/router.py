@@ -20,7 +20,13 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import AdminUser, CurrentUser, assert_owner_or_admin, get_current_user
+from app.core.auth import (
+    AdminUser,
+    CurrentUser,
+    PermissionDenied,
+    assert_owner_or_admin,
+    get_current_user,
+)
 from app.core.database import get_session
 from app.mcp_servers import audit, policy, service, versions
 from app.mcp_servers import bundle as bundle_mod
@@ -104,7 +110,7 @@ async def _require_mcp_feature(current, session, feature: str | None) -> None:
     """소유자 확인을 통과한 뒤 역할의 기능 권한(기본 허용형)도 본다 — 수정 · 폐기 · 수집 · 감사(TODO-122)."""
     if feature and not await check_feature(session, current, feature):
         logger.warning("MCP 기능 권한 거부(403): user=%s feature=%s", _who(current), feature)
-        raise HTTPException(status_code=403, detail=f"기능 권한이 없습니다: {feature}")
+        raise PermissionDenied(f"기능 권한이 없습니다: {feature}", user=current, kind="FEATURE", key=feature)
 
 
 async def _guard_server(current, session, name: str, feature: str | None = None) -> None:
@@ -140,7 +146,7 @@ async def _guard_policy(current, session, name: str) -> None:
     await _guard_deployment(current, session, name)  # 404 / 소유자·관리자
     if not await check_feature(session, current, POLICY_FEATURE):
         logger.warning("MCP 승인 정책 변경 거부(기능 권한 없음): deployment=%s user=%s", name, _who(current))
-        raise HTTPException(status_code=403, detail=f"기능 권한이 없습니다: {POLICY_FEATURE}")
+        raise PermissionDenied(f"기능 권한이 없습니다: {POLICY_FEATURE}", user=current, kind="FEATURE", key=POLICY_FEATURE)
 
 
 # ===========================================================================
@@ -208,7 +214,7 @@ async def list_all_audit_events(
     """전체 배포의 감사 이벤트 — 호출 인자가 들어 있어 관리자만(DEF-124). 배포별 조회는 소유자도 된다."""
     if not current.is_admin:
         logger.warning("전체 감사 이벤트 조회 거부(403): user=%s", _who(current))
-        raise HTTPException(status_code=403, detail="전체 배포의 감사 이벤트는 관리자만 볼 수 있습니다.")
+        raise PermissionDenied("전체 배포의 감사 이벤트는 관리자만 볼 수 있습니다.", user=current, kind="ADMIN", key="MCP 전체 감사 이벤트")
     return await audit.list_events(session, None, tool=tool, user=user, decision=decision, page=page,
                                    page_size=page_size)
 

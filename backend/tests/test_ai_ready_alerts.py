@@ -4,7 +4,7 @@
 
 - AI_READY_UNMET: 미충족 조건이 있으면 알림, 같은 데이터셋엔 다시 안 함, 충족하면 자동 해결(무시한 알림도), 판정 못 하는 조건은 미충족 아님
 - REPORT_RECEIVED: 댓글을 오류 신고 · 개선 요청으로 남기거나 분류를 바꾸면 알림, 분류 · 범위 필터, 수신자에 데이터셋 생성자
-- REPORT_DUE: 임박(경고) → 넘김(치명, 임박 알림은 해결), 처리 끝나면 해결, 0 이면 넘김만
+- REPORT_DUE: 임박(경고) → 넘김(치명, 임박 알림은 해결), 처리 끝나면 바로 해결, 0 이면 넘김만
 - 트리거 설정 검증
 
 실행:
@@ -141,7 +141,7 @@ def test_report_due_stages(env) -> None:
     due_in(2.5)
     assert _call(run, ai_ready_alerts.evaluate_due_alerts) == {"created": 1, "resolved": 0}, "0 인 규칙은 넘김만"
     (soon,) = _alerts(run, "REPORT_DUE")
-    assert soon.severity == "WARNING" and "처리 기한 임박(2일 남음)" in soon.change_summary and f"#{bug['id']}" in soon.change_summary
+    assert soon.severity == "WARNING" and "처리 기한 임박(3일 남음)" in soon.change_summary and f"#{bug['id']}" in soon.change_summary
     assert _call(run, ai_ready_alerts.evaluate_due_alerts)["created"] == 0
 
     due_in(-1.2)
@@ -152,7 +152,35 @@ def test_report_due_stages(env) -> None:
 
     r = c.put(f"{V1}/comments/{bug['id']}/status", json={"status": "RESOLVED", "resolution": "고쳤습니다"})
     assert r.status_code == 200, r.text
-    assert _call(run, ai_ready_alerts.evaluate_due_alerts) == {"created": 0, "resolved": 2}, "처리하면 해결"
+    assert all(a.status == "RESOLVED" and a.resolved_by == "system" for a in _alerts(run, "REPORT_DUE")), \
+        "처리하면 그 자리에서 해결(DEF-140)"
+    assert _call(run, ai_ready_alerts.evaluate_due_alerts) == {"created": 0, "resolved": 0}, "점검에 남은 것 없음"
+
+
+def test_due_text_matches_screen() -> None:
+    """DEF-144 — 남은 일수는 화면(``OpenDueText``)처럼 올림, 기한 날짜는 표시 시간대(KST)."""
+    now = datetime(2026, 11, 15, 3, 0, tzinfo=timezone.utc)
+    assert ai_ready_alerts._days_left(now + timedelta(days=0.99), now) == 1, "0.99일 남으면 D-1(전에는 '오늘')"
+    assert ai_ready_alerts._days_left(now + timedelta(days=2.5), now) == 3
+    assert ai_ready_alerts._days_left(now, now) == 0
+    # KST 2026-11-25 08:00 = UTC 2026-11-24 23:00 — UTC 날짜로 적으면 하루 이르다
+    assert ai_ready_alerts._due_date(datetime(2026, 11, 24, 23, 0, tzinfo=timezone.utc)) == "2026-11-25"
+    assert ai_ready_alerts._due_date(datetime(2026, 11, 24, 14, 0, tzinfo=timezone.utc)) == "2026-11-24"
+
+
+def test_due_soon_alert_uses_ceil_and_kst_date(env) -> None:
+    c, _who, ids, run = env
+    _setup(run, ("REPORT_DUE", "ALL", {"days_before": 2}))
+    bug = _post(c, ids["bare"], "bug")
+    now = datetime(2026, 11, 24, 0, 0, tzinfo=timezone.utc)
+    due = datetime(2026, 11, 24, 23, 45, tzinfo=timezone.utc)   # 0.99일 남음, KST 11-25 08:45
+
+    async def _go(db):
+        await db.execute(update(Comment).where(Comment.id == bug["id"]).values(due_at=due))
+    run(_go)
+    assert _call(run, ai_ready_alerts.evaluate_due_alerts, now)["created"] == 1
+    (a,) = _alerts(run, "REPORT_DUE")
+    assert "처리 기한 임박(1일 남음)" in a.change_summary and "(기한 2026-11-25)" in a.change_summary, a.change_summary
 
 
 def test_run_checks_without_rules(env) -> None:

@@ -27,7 +27,13 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.catalog.models import CatalogConnection, Dataset, DatasetSchema, Datasource
+from app.catalog.models import (
+    CatalogConnection,
+    Dataset,
+    DatasetSchema,
+    Datasource,
+    DatasourceConfiguration,
+)
 from app.quality import indicators as quality_indicators
 from app.quality.models import (
     QualityDefinition,
@@ -37,7 +43,7 @@ from app.quality.models import (
     QualityRun,
     QualityWorker,
 )
-from app.quality.rule_direct import DIRECT_CHECK_TYPES, DIRECT_SOURCE_TYPES
+from app.quality.rule_direct import DIRECT_CHECK_TYPES, DIRECT_SOURCE_TYPES, ENGINE_CHECK_TYPES
 from app.quality.rule_sql import TRINO_PATH_TYPES, TableRef
 from app.quality.schemas import (
     QualityEngineStatus,
@@ -129,13 +135,62 @@ def _as_utc(dt: datetime | None) -> datetime | None:
 # 엔진 대상 해석
 # ---------------------------------------------------------------------------
 
-async def resolve_engine_target(session: AsyncSession, dataset: Dataset, *, direct: bool = True) -> EngineTarget:
+async def stored_connection_config(session: AsyncSession, datasource_id: int, name: str, what: str) -> str:
+    """데이터 소스에 저장된 접속 설정(암호화된 JSON). 없으면 ``EngineUnavailableError``.
+
+    경로 확인(``resolve_engine_target``)과 실행(``execution._source_connection``)이 같이 써 두 판단이 어긋나지 않게 한다(DEF-154).
+    """
+    stored = await session.scalar(select(DatasourceConfiguration.config_json).where(
+        DatasourceConfiguration.datasource_id == datasource_id))
+    if not stored:
+        raise EngineUnavailableError(f"{what} 데이터 소스 '{name}' 에 접속 설정이 없습니다.")
+    return stored
+
+
+async def resolve_engine_target(
+    session: AsyncSession, dataset: Dataset, *, direct: bool = True, connection: bool = True,
+) -> EngineTarget:
     """데이터셋 → 진단 경로와 대상. 해석하지 못하면 ``EngineUnavailableError``(사유 포함).
 
     카탈로그에 Trino 연결(QUERY)이 있으면 Trino 로 진단한다. 연결이 없으면 원천이 직접 읽을 수 있는 유형
     (``DIRECT_SOURCE_TYPES``)일 때 품질 워커가 원천을 직접 읽는다 — ``direct=False`` 면 Trino 대상만 찾는다.
     Trino 연결은 있는데 설정이 잘못됐으면(카탈로그 이름 없음 등) 직접 진단으로 넘어가지 않고 그 사유를 알린다.
+    ``connection`` 이면 대상 데이터 소스에 접속 설정이 저장돼 있는지도 실행과 같은 기준으로 본다(DEF-154).
     """
+    target = await _resolve_target(session, dataset, direct=direct)
+    if connection:
+        await stored_connection_config(session, target.datasource_id, target.datasource_name,
+                                       "원천" if target.engine == DIRECT_ENGINE else "Trino")
+    return target
+
+
+async def source_view(session: AsyncSession, dataset: Dataset):
+    """수동 데이터셋(TODO-CAT-001)이면 원천 매핑을 데이터셋처럼 보이게 한 대리 객체, 아니면 데이터셋 그대로.
+
+    대리 객체는 매핑된 데이터 소스 · ``{datasource_id}.{원천 경로}`` · 그 데이터 소스의 SYNC 카탈로그를 가진다 —
+    수집 데이터셋과 같은 규칙(Trino 연결 · 원천 직접)으로 대상을 정할 수 있다. 매핑이 없으면 ``EngineUnavailableError``.
+    """
+    from types import SimpleNamespace
+
+    from app.catalog.catalogs_service import is_manual_datasource, sync_catalog_id
+    from app.catalog.models import DatasetSourceMap
+    if not is_manual_datasource(await session.get(Datasource, dataset.datasource_id)):
+        return dataset
+    m = (await session.execute(
+        select(DatasetSourceMap).where(DatasetSourceMap.dataset_id == dataset.id))).scalars().first()
+    if m is None:
+        raise EngineUnavailableError(
+            "원천 매핑이 없는 수동 데이터셋입니다. 데이터셋 상세에서 실제 데이터 소스와 원천 경로를 매핑하면 진단할 수 있습니다.")
+    source = await session.get(Datasource, m.datasource_id)
+    return SimpleNamespace(
+        id=dataset.id, datasource_id=m.datasource_id,
+        qualified_name=f"{source.datasource_id}.{m.remote_path}",
+        catalog_id=await sync_catalog_id(session, m.datasource_id),
+    )
+
+
+async def _resolve_target(session: AsyncSession, dataset: Dataset, *, direct: bool) -> EngineTarget:
+    dataset = await source_view(session, dataset)
     try:
         target = await _trino_target(session, dataset)
     except _NoTrinoConnectionError as e:
@@ -239,6 +294,21 @@ def wants_definition(definition_ids: list[int] | None, rule_definition_id: int |
     return not definition_ids or rule_definition_id in definition_ids
 
 
+def in_scope(
+    indicator_keys: list[str] | None, definition_ids: list[int] | None,
+    check_type: str | None, domain: str | None, column_name: str | None, rule_definition_id: int | None,
+) -> bool:
+    """이 실행이 진단하는 규칙인가 — 정밀 진단이 아는 유형이고, 고른 진단 기준 · 품질 지표에 든다.
+
+    실행의 ``rules_total`` 은 이 규칙들의 수다(DEF-149) — 작업이 고르지 않은 지표의 규칙이나 지표 없이 직접 만든 규칙은
+    분모에 넣지 않아 작업 이력 · 실행 현황 · 리포트가 같은 수를 보인다. 고른 범위 안인데 경로가 평가하지 못하는 유형
+    (원천 직접의 Trino 함수 등)은 넣는다 — 실행이 건너뛴 규칙으로 알린다.
+    """
+    return (check_type in ENGINE_CHECK_TYPES
+            and quality_indicators.wants(indicator_keys or [], check_type, domain, column_name)
+            and wants_definition(definition_ids, rule_definition_id))
+
+
 async def fill_definition_names(session: AsyncSession, responses: list) -> None:
     """응답들의 ``definition_ids`` 에 맞춰 ``definitions``(이름)를 채운다. 지운 지표는 "삭제된 지표 #ID"."""
     ids = {i for r in responses for i in r.definition_ids}
@@ -248,6 +318,9 @@ async def fill_definition_names(session: AsyncSession, responses: list) -> None:
     names = dict(rows.all())
     for r in responses:
         r.definitions = [names.get(i, f"삭제된 지표 #{i}") for i in r.definition_ids]
+        if hasattr(r, "deleted_definition_ids"):
+            # 작업 응답 — 지운 지표를 따로 알려 화면이 "더는 진단하지 않음" 을 설명하게 한다(DEF-148)
+            r.deleted_definition_ids = [i for i in r.definition_ids if i not in names]
 
 
 def to_response(run: QualityRun) -> QualityRunResponse:
@@ -348,6 +421,9 @@ async def create_run(
             QualityRule.dataset_id == dataset_id, QualityRule.is_active == "true")
     )).all()
     runnable = [r for r in rules if r.check_type in target.check_types]
+    if not rules:
+        # 규칙이 아예 없으면 경로 이야기를 섞지 않는다(DEF-157)
+        raise RunConflictError("이 데이터셋에 활성 규칙이 없습니다. 품질 규칙을 먼저 추가하세요.")
     if not runnable:
         raise RunConflictError(
             "원천을 직접 읽어 평가할 수 있는 활성 규칙이 없습니다(Trino 함수·커스텀 SQL 규칙은 Trino 연결이 필요합니다)."
@@ -362,7 +438,9 @@ async def create_run(
     run = QualityRun(
         dataset_id=dataset_id, engine=target.engine, engine_datasource_id=target.datasource_id,
         engine_table=target.table.display, trigger_type=trigger_type, status="QUEUED",
-        rules_total=len(rules), requested_by=requested_by, queued_at=_now(),
+        rules_total=sum(1 for r in rules if in_scope(
+            keys, definition_ids, r.check_type, r.domain, r.column_name, r.definition_id)),
+        requested_by=requested_by, queued_at=_now(),
         indicators=quality_indicators.dump(keys), definition_ids=dump_definition_ids(definition_ids),
         job_run_id=job_run_id,
     )
@@ -456,7 +534,8 @@ async def get_run(session: AsyncSession, run_id: int) -> QualityRunResponse:
 
 
 async def retry_run(session: AsyncSession, run_id: int, requested_by: str | None) -> QualityRunResponse:
-    """끝난 실행의 데이터셋을 다시 진단한다 — 같은 품질 지표로 새 실행을 대기열에 넣는다(작업 실행에는 묶지 않는다)."""
+    """끝난 실행의 데이터셋을 다시 진단한다 — 원래 실행과 같은 종류(진단 · 프로파일)와 범위(진단 기준 · 품질 지표)로
+    새 실행을 대기열에 넣는다(작업 실행에는 묶지 않는다, DEF-151)."""
     run = await session.get(QualityRun, run_id)
     if run is None:
         raise RunNotFoundError("진단 실행을 찾을 수 없습니다.")
@@ -465,7 +544,7 @@ async def retry_run(session: AsyncSession, run_id: int, requested_by: str | None
         raise RunConflictError("아직 끝나지 않은 실행입니다.")
     return await create_run(
         session, run.dataset_id, requested_by, indicators=quality_indicators.load(run.indicators),
-        definition_ids=load_definition_ids(run.definition_ids))
+        definition_ids=load_definition_ids(run.definition_ids), kind=run.kind or CHECK_KIND)
 
 
 async def cancel_run(session: AsyncSession, run_id: int, requested_by: str | None) -> QualityRunResponse:

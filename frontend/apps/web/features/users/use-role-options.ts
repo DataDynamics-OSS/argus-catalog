@@ -59,3 +59,40 @@ export function useRoleOptions(): readonly RoleOption[] {
   }, [])
   return options
 }
+
+// 줄 수 있는 역할 — 로그인한 사람마다 한 번만 불러온다(사용자 표의 행마다 부르지 않도록)
+const assignableCache = new Map<string, Promise<ReadonlySet<string> | null>>()
+
+function fetchAssignable(who: string): Promise<ReadonlySet<string> | null> {
+  let p = assignableCache.get(who)
+  if (!p) {
+    p = authFetch("/api/v1/usermgr/roles/assignable")
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
+      .then((body: { roles: string[] | null }) => (body.roles ? new Set(body.roles) : null))
+      .catch((err) => {
+        console.error("Failed to load assignable roles", err)
+        assignableCache.delete(who)
+        return new Set(["argus-user"])
+      })
+    assignableCache.set(who, p)
+  }
+  return p
+}
+
+/**
+ * 요청자가 계정 · API 키에 줄 수 있고 관리할 수 있는 역할인지 판정하는 함수(DEF-163).
+ *
+ * 관리자는 모두 허용. 위임받은 사람은 GET /usermgr/roles/assignable 이 돌려준 역할(기본 사용자 역할 + 자기 역할)만 —
+ * 불러오기 전 · 실패 때는 기본 사용자 역할만 허용한다(서버도 같은 규칙으로 403).
+ */
+export function useCanAssignRole(isAdmin: boolean, who = ""): (role: string) => boolean {
+  const [allowed, setAllowed] = useState<ReadonlySet<string> | null | undefined>(undefined)
+  useEffect(() => {
+    if (isAdmin) return
+    let cancelled = false
+    void fetchAssignable(who).then((set) => { if (!cancelled) setAllowed(set) })
+    return () => { cancelled = true }
+  }, [isAdmin, who])
+  if (isAdmin || allowed === null) return () => true
+  return (role: string) => (allowed ? allowed.has(role) : role === "argus-user")
+}

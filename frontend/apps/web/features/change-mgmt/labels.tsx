@@ -5,6 +5,7 @@ import { ChevronDown } from "lucide-react"
 
 import { StatusBadge as ToneBadge, type StatusTone } from "@workspace/ui/components/status-badge"
 import { RichTextViewer } from "@/components/comments/rich-text-viewer"
+import { htmlToPlain } from "@/lib/plain-text"
 import { fetchUsers } from "@/features/users/api"
 import type { User } from "@/features/users/data/schema"
 import type { ChangeType, CRStatus, Priority } from "./api"
@@ -107,24 +108,10 @@ export function useUserNames() {
   return { userMap, emailMap, approverLabel, referrerLabel }
 }
 
-/** 리치 HTML 본문을 미리보기용 순수 텍스트로 변환한다. */
-export function htmlToText(html: string): string {
-  return html
-    .replace(/<br\s*\/?>/gi, " ")
-    .replace(/<\/(p|div|li|h[1-6]|tr)>/gi, " ")
-    .replace(/<[^>]+>/g, "")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/\s+/g, " ")
-    .trim()
-}
-
 /** 목록 카드 본문: 기본 2줄 미리보기, 길면 더보기로 서식 포함 전체 표시. */
 export function DescriptionPreview({ html }: { html: string }) {
   const [open, setOpen] = useState(false)
-  const text = htmlToText(html)
+  const text = htmlToPlain(html)
   if (!text) return null
   const long = text.length > 100
   return (

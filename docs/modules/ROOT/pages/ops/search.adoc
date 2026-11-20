@@ -109,19 +109,19 @@ image::ops-search/results-full.png[검색 결과 — 데이터셋 · 용어집 �
 | 데이터 소스
 | 데이터셋이 속한 데이터 소스 이름입니다.
 | 환경
-| `DEV` · `PROD` 같은 환경입니다.
+| 색 점과 함께 "개발 (DEV)" · "운영 (PROD)" 처럼 보이는 환경입니다.
 | 필드
 | 스키마 컬럼 수입니다. xref:catalog/datasets.adoc[데이터셋] 목록의 **필드** 열과 같습니다.
 | 태그
 | 붙은 태그 수입니다.
 | 매칭
-| 이 결과가 어떤 경로로 찾아졌는지(`keyword` · `semantic` · `hybrid`)입니다.
+| 이 결과가 어떤 경로로 찾아졌는지(*키워드* · *의미* · *혼합*)입니다.
 | 점수
 | 연관도를 백분율로 표시합니다. 결과는 점수가 높은 순으로 정렬됩니다.
 |===
 
 **용어집 · AI Agent · API · MCP 서버** 그룹은 행마다 표시명(없으면 이름)과 설명을 보여 주고, 오른쪽에 항목 성격을 알려 주는
-배지(분류 · 프로토콜 · 플랫폼 · 상태 — 예: `core` · `REST` · `published`, `data-platform` · `kafka` · `active`)와 매칭 · 점수가 붙습니다.
+배지(분류 · 프로토콜 · 플랫폼 · 상태 — 예: `core` · `REST` · *게시*, `data-platform` · `kafka` · *활성*)와 매칭 · 점수가 붙습니다.
 
 image::ops-search/results-keyword.png[데이터셋 행 — 물리명 · 논리명 · 요약, 키워드 매칭, 900]
 
@@ -134,23 +134,23 @@ NOTE: 검색 결과 화면은 검색어가 들어간 부분을 따로 강조(하
 |===
 | 매칭 | 배지 색 | 뜻
 
-| `hybrid`
+| 혼합 (`hybrid`)
 | 보라
 | 키워드와 시맨틱 모두에 걸렸습니다. 가장 확실한 결과입니다.
-| `semantic`
+| 의미 (`semantic`)
 | 파랑
 | 글자는 일치하지 않지만 뜻이 비슷합니다.
-| `keyword`
+| 키워드 (`keyword`)
 | 회색
-| 글자만 일치했습니다. 임베딩이 꺼져 있으면 모든 결과가 `keyword` · 100% 입니다.
+| 글자만 일치했습니다. 임베딩이 꺼져 있으면 모든 결과가 *키워드* · 100% 입니다.
 |===
 
 점수 표시는 80% 이상 초록, 60% 이상 파랑, 40% 이상 주황, 그 아래는 회색으로 칠해집니다.
 
-image::ops-search/results-hybrid.png[하이브리드 검색 — hybrid · semantic · keyword 결과와 점수, 900]
+image::ops-search/results-hybrid.png[하이브리드 검색 — 혼합 · 의미 · 키워드 결과와 점수, 900]
 
-위 화면은 `customer` 로 검색한 결과입니다. 이름에 customer 가 들어 있고 뜻도 가까운 `shop.customers` 는 `hybrid`,
-이름에는 없지만 고객과 관련된 `shop.orders` 는 `semantic`, 설명에 글자만 들어 있는 `sakila.rental` 은 `keyword` 로 표시됩니다.
+위 화면은 `세금계산서` 로 검색한 결과입니다. 논리명에 세금계산서가 들어 있고 뜻도 가까운 `ar.invoices`(매출 세금계산서)는 *혼합*,
+이름에는 없지만 회계와 관련된 `gl.journal_entries`(분개)는 *의미*, 설명에 글자만 들어 있는 `commerce.orders`(주문)는 *키워드* 로 표시됩니다.
 
 [TIP]
 .고급 사용자 — 점수 계산 방식
@@ -190,7 +190,7 @@ image::diagrams/ops-search-01.png[키워드·시맨틱 하이브리드 검색,ro
 | MCP 서버 상세 (`/dashboard/mcp-servers?server=<이름>`)
 |===
 
-image::ops-search/goto-glossary.png[용어집 결과를 눌러 이동 — 해당 분류가 선택됨, 900]
+image::ops-search/goto-glossary.png[용어집 결과를 눌러 이동 — 그 용어만 보이는 용어집 화면, 900]
 
 image::ops-search/goto-agent.png[AI Agent 결과를 눌러 이동 — 에이전트 상세, 900]
 
@@ -234,10 +234,10 @@ image::ops-search/mcp-group.png[kafka 검색 — MCP 서버 그룹과 분류 · 
 임베딩이 켜져 있으면 검색어와 뜻이 비슷한 항목을 찾습니다. 유사도가 임계값(기본 0.3) 이상인 항목만 결과에 들어갑니다.
 
 기본 모델 `paraphrase-multilingual-MiniLM-L12-v2` 는 한국어와 영어를 함께 이해하는 다국어 모델이라,
-한글 설명만 있는 데이터도 영어나 다른 표현으로 찾을 수 있습니다. 아래는 `비디오 빌리기` 로 검색한 결과로,
-어느 항목에도 이 글자가 없지만 영화 · 재고 데이터셋과 반납 · 영화 대여 용어가 `semantic` 으로 나옵니다.
+한글 설명만 있는 데이터도 영어나 다른 표현으로 찾을 수 있습니다. 아래는 `직원 월급` 으로 검색한 결과로,
+어느 항목에도 이 글자가 없지만 급여 · 사원 데이터셋과 인건비 · 재직자 용어가 *의미* 로 나옵니다.
 
-image::ops-search/korean-semantic.png[한글 의미 검색 — 비디오 빌리기, 900]
+image::ops-search/korean-semantic.png[한글 의미 검색 — 직원 월급, 900]
 
 [TIP]
 .고급 사용자 — 임베딩하는 텍스트
@@ -260,7 +260,7 @@ image::ops-search/korean-semantic.png[한글 의미 검색 — 비디오 빌리�
 === 임베딩이 꺼져 있을 때
 
 임베딩이 꺼져 있으면 오류 없이 키워드 검색만 합니다. 결과 위에 **키워드 검색만 (임베딩 비활성)** 배지가 붙고,
-모든 결과가 `keyword` · 100% 로 표시됩니다. 이때는 글자가 일치하지 않는 `movie` 같은 검색어로는 결과가 나오지 않습니다.
+모든 결과가 *키워드* · 100% 로 표시됩니다. 이때는 글자가 일치하지 않는 `movie` 같은 검색어로는 결과가 나오지 않습니다.
 
 image::ops-search/keyword-only.png[임베딩 비활성 — 키워드 검색만, 900]
 
@@ -280,7 +280,7 @@ image::ops-search/keyword-only.png[임베딩 비활성 — 키워드 검색만, 
 
 image::ops-search/model-options.png[임베딩 모델 선택 — 384차원 모델, 다국어 모델이 기본, 900]
 
-image::ops-search/backfill.png[백필 완료 — 커버리지 100%, 제공자 · 모델 표시, 900]
+image::ops-search/backfill.png[백필을 마친 임베딩 상태 카드 — 커버리지 100%, 제공자 · 모델 표시, 900]
 
 === 새 데이터를 바로 검색되게 하기
 

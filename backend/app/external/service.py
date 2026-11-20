@@ -28,56 +28,108 @@ from app.external.cache import get_cache
 
 logger = logging.getLogger(__name__)
 
-# 카탈로그 일반 타입 → Avro 타입 매핑
+_AVRO_TIMESTAMP = {"type": "long", "logicalType": "timestamp-millis"}
+# Avro 명세상 time-millis 는 int 다(long 은 time-micros). ``time(6)`` 처럼 정밀도가 붙어도 time-millis 로 통일한다 (DEF-190)
+_AVRO_TIME = {"type": "int", "logicalType": "time-millis"}
+_AVRO_DECIMAL = {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 10}
+
+# 카탈로그 일반 타입 → Avro 타입 매핑.
+# ``DATE`` 는 수집(``app/catalog/sync.py``)이 date · datetime · timestamp · time · year 를 모두 넣는 공통 타입이라,
+# 네이티브 타입이 없으면 시각까지 담을 수 있는 timestamp-millis 로 둔다(날짜 전용 컬럼은 네이티브 ``date`` 로 구분).
 AVRO_TYPE_MAP = {
     "STRING": "string",
     "NUMBER": "long",
-    "DATE": {"type": "long", "logicalType": "timestamp-millis"},
+    "DATE": _AVRO_TIMESTAMP,
     "BOOLEAN": "boolean",
     "BYTES": "bytes",
     "MAP": {"type": "map", "values": "string"},
     "ARRAY": {"type": "array", "items": "string"},
     "ENUM": "string",
+    # 타입 선택지(``app/catalog/datasource_metadata.py``)에만 있는 이름 — 네이티브 타입으로는 원천마다 뜻이 달라
+    # 네이티브 표에 두지 않는다(``int8``: PostgreSQL 8바이트 · Kudu 8비트 → 넓은 쪽, ``long``: Oracle 은 문자열).
+    "INT8": "long",
+    "LONG": "long",
 }
 
 # UI(AvroSchemaCard)에서 저장한 Avro 편집본 — 있으면 자동 생성 대신 이것을 내려준다
 AVRO_OVERRIDE_PROPERTY = "argus.avro_schema"
 
-# Avro 용 네이티브 타입 세부 보정
+# Avro 용 네이티브 타입 세부 보정 — 키는 ``_native_base`` 가 정리한 이름(소문자, 괄호 · 부호 수식어 제외).
+# 화면 Avro 탭(``frontend/apps/web/features/datasets/avro.ts`` ``NATIVE_AVRO_TYPES``)과 같은 표여야 한다.
 NATIVE_AVRO_OVERRIDES = {
     "int": "int",
     "integer": "int",
     "smallint": "int",
     "tinyint": "int",
     "mediumint": "int",
+    "int16": "int",
+    "int32": "int",
+    "byte": "int",
+    "short": "int",
+    "serial": "int",
+    "year": "int",
     "bigint": "long",
+    "int64": "long",
+    "bigserial": "long",
     "float": "float",
     "real": "float",
+    "float4": "float",
+    "float32": "float",
+    "half_float": "float",
     "double": "double",
     "double precision": "double",
-    "decimal": {
-        "type": "bytes",
-        "logicalType": "decimal",
-        "precision": 38,
-        "scale": 10,
-    },
-    "numeric": {
-        "type": "bytes",
-        "logicalType": "decimal",
-        "precision": 38,
-        "scale": 10,
-    },
+    "float8": "double",
+    "float64": "double",
+    "decimal": _AVRO_DECIMAL,
+    "numeric": _AVRO_DECIMAL,
+    # 통화 — 자릿수가 원천마다 달라(PostgreSQL 2자리, SQL Server (19,4)·(10,4)) 기본 decimal 로. long 이면 소수부가 빠진다(DEF-194)
+    "money": _AVRO_DECIMAL,
+    "smallmoney": _AVRO_DECIMAL,
+    "number": _AVRO_DECIMAL,
     "date": {"type": "int", "logicalType": "date"},
-    "time": {"type": "long", "logicalType": "time-millis"},
-    "timestamp": {"type": "long", "logicalType": "timestamp-millis"},
+    "time": _AVRO_TIME,
+    "timetz": _AVRO_TIME,
+    "time with time zone": _AVRO_TIME,
+    "time without time zone": _AVRO_TIME,
+    "timestamp": _AVRO_TIMESTAMP,
+    "timestamptz": _AVRO_TIMESTAMP,
+    "timestamp with time zone": _AVRO_TIMESTAMP,
+    "timestamp without time zone": _AVRO_TIMESTAMP,
+    "timestamp with local time zone": _AVRO_TIMESTAMP,
+    "timestamp_ntz": _AVRO_TIMESTAMP,
+    "timestamp_ltz": _AVRO_TIMESTAMP,
+    "timestamp_tz": _AVRO_TIMESTAMP,
+    "datetime": _AVRO_TIMESTAMP,
+    "datetime2": _AVRO_TIMESTAMP,
+    "smalldatetime": _AVRO_TIMESTAMP,
+    "datetimeoffset": _AVRO_TIMESTAMP,
+    "unixtime_micros": _AVRO_TIMESTAMP,
+    "interval": "string",
     "boolean": "boolean",
     "bool": "boolean",
     "bytea": "bytes",
     "blob": "bytes",
     "binary": "bytes",
     "varbinary": "bytes",
+    "bindata": "bytes",
     "uuid": {"type": "string", "logicalType": "uuid"},
 }
+
+# 같은 네이티브 이름이 원천마다 다른 뜻이라, 수집이 넣은 카탈로그 타입 쪽을 따르는 조합 (DEF-193).
+# 키는 ``_native_base`` 이름, 값은 그 이름과 어긋나는 카탈로그 타입 — 수집 서비스(metadata-sync)의 타입 표에 실제로
+# 있는 쌍만 둔다. 카탈로그 ``DATE`` 는 날짜 · 일시 · 시각을 모두 넣는 공통 타입이라 넣지 않는다(네이티브 ``date`` 가 맞다).
+# 화면 Avro 탭(``avro.ts`` ``CATALOG_OVER_NATIVE``)과 같은 표여야 한다.
+CATALOG_OVER_NATIVE = {
+    "date": ("TIMESTAMP",),   # Oracle DATE — 시각 포함
+    "float": ("DOUBLE",),     # SQL Server FLOAT(기본 8바이트) · Oracle FLOAT
+    "timestamp": ("BINARY",),  # SQL Server TIMESTAMP(rowversion) — 일시가 아닌 8바이트 값
+}
+
+# 타입 이름 뒤에 붙는 부호 · 채움 수식어(MySQL ``int(10) unsigned zerofill``) — Avro 타입 판정에서는 뺀다
+_NATIVE_MODIFIERS = re.compile(r"\b(?:unsigned|signed|zerofill)\b", re.ASCII)
+_NATIVE_SPACES = re.compile(r"[ \t\n\r\f\v]+")
+_DECIMAL_ARG = re.compile(r"[0-9]{1,9}")
+_DECIMAL_BASES = ("decimal", "numeric", "number")
 
 
 # ---------------------------------------------------------------------------
@@ -417,32 +469,48 @@ def avro_namespace(text: str) -> str:
     return ".".join(avro_name(p) for p in (text or "").split(".") if p) or "default"
 
 
+def _native_base(type_text: str) -> tuple[str, str | None]:
+    """네이티브 타입 문자열을 ``(기본 타입명, 괄호 안 인자)`` 로 나눈다 — 인자가 없으면 None.
+
+    첫 ``(`` 부터 마지막 ``)`` 까지를 인자로 떼고 앞뒤를 이어 붙여, 괄호 뒤에 붙은 말도 타입명에 남긴다
+    (``timestamp(6) with time zone`` → ``timestamp with time zone``). 부호 · 채움 수식어는 빼고 공백은 하나로 줄인다
+    (``DECIMAL(10,2) UNSIGNED`` → ``decimal`` + ``10,2``, ``int(10) unsigned zerofill`` → ``int``).
+    """
+    text = type_text.lower()
+    args = None
+    start = text.find("(")
+    if start >= 0:
+        end = text.rfind(")")
+        if end < start:
+            end = len(text)
+        args = text[start + 1:end]
+        text = f"{text[:start]} {text[end + 1:]}"
+    return " ".join(w for w in _NATIVE_SPACES.split(_NATIVE_MODIFIERS.sub(" ", text)) if w), args
+
+
 def _native_to_avro(type_text: str | None):
     """DB 네이티브 타입 문자열(``DECIMAL(12,2)``, ``int unsigned`` 등)을 Avro 타입으로. 모르면 None.
 
-    decimal/numeric 은 괄호 안 ``(precision, scale)`` 을 읽어 반영하고, 파싱 실패 시 기본값(38, 10)을 쓴다.
+    decimal/numeric/number 는 괄호 안 ``(precision, scale)`` 을 읽어 반영한다. 인자가 숫자가 아니거나 셋 이상이거나
+    Avro 명세(precision ≥ 1, 0 ≤ scale ≤ precision)에 맞지 않으면 기본값(38, 10)을 쓴다.
     """
     if not type_text:
         return None
-    # 괄호 앞 기본 타입명만 소문자로 비교(``varchar(255)`` → ``varchar``)
-    base_native = type_text.split("(")[0].strip().lower()
-    base_native = base_native.replace(" unsigned", "")
+    base_native, args = _native_base(type_text)
     avro_type = NATIVE_AVRO_OVERRIDES.get(base_native)
 
-    if base_native in ("decimal", "numeric") and "(" in type_text:
-        try:
-            params = type_text.split("(")[1].rstrip(")")
-            parts = params.split(",")
-            precision = int(parts[0].strip())
-            scale = int(parts[1].strip()) if len(parts) > 1 else 0
-            avro_type = {
-                "type": "bytes",
-                "logicalType": "decimal",
-                "precision": precision,
-                "scale": scale,
-            }
-        except (ValueError, IndexError):
-            pass
+    if base_native in _DECIMAL_BASES and args is not None:
+        parts = [" ".join(w for w in _NATIVE_SPACES.split(p) if w) for p in args.split(",")]
+        if len(parts) <= 2 and all(_DECIMAL_ARG.fullmatch(p) for p in parts):
+            precision = int(parts[0])
+            scale = int(parts[1]) if len(parts) > 1 else 0
+            if precision >= 1 and scale <= precision:
+                avro_type = {
+                    "type": "bytes",
+                    "logicalType": "decimal",
+                    "precision": precision,
+                    "scale": scale,
+                }
     return avro_type
 
 
@@ -451,8 +519,14 @@ def _resolve_avro_type(field_type: str, native_type: str | None, nullable: bool)
 
     native_type 이 비어 있으면(수동 등록·스키마 편집 그리드) field_type 자체(``INTEGER``,
     ``DECIMAL(12,2)``, ``varchar`` 등)를 네이티브 타입처럼 해석한다 — 화면 Avro 탭과 같은 결과.
+    네이티브 이름이 ``CATALOG_OVER_NATIVE`` 의 카탈로그 타입과 짝이면 네이티브 대신 카탈로그 타입으로 해석한다
+    (Oracle ``DATE`` + ``TIMESTAMP`` → timestamp-millis).
     """
     avro_type = _native_to_avro(native_type)
+    catalog_type = (field_type or "").upper()
+    if avro_type is not None and catalog_type in CATALOG_OVER_NATIVE.get(_native_base(native_type)[0], ()):
+        # 원천마다 뜻이 다른 이름 — 수집이 정한 카탈로그 타입으로 해석한다 (DEF-193)
+        avro_type = None
     if avro_type is None:
         avro_type = AVRO_TYPE_MAP.get((field_type or "").upper()) or _native_to_avro(field_type) or "string"
 
@@ -574,6 +648,8 @@ async def _build_metadata(session: AsyncSession, dataset_id: int) -> dict | None
                 "is_distribution_key": s.is_distribution_key,
                 "ordinal": s.ordinal,
                 "pii_type": s.pii_type,
+                "unit": s.unit,
+                "calculation": s.calculation,
             }
             for s in schema_rows
         ],

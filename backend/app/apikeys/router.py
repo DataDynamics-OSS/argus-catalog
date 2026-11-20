@@ -29,7 +29,7 @@ from app.apikeys.schemas import (
     ScopeInfo,
 )
 from app.audit.service import record as audit_record
-from app.core.auth import TokenUser
+from app.core.auth import PermissionDenied, TokenUser
 from app.core.database import get_session
 from app.permissions.router import require_feature_granted
 
@@ -43,10 +43,21 @@ ADMIN_ROLE = "argus-admin"
 
 
 def _forbid_admin_key(current, *roles: str | None) -> None:
-    """위임받은 사람은 관리자 역할 키를 발급 · 수정 · 재발급 · 폐기할 수 없다 — 권한 상승을 막는다(TODO-123)."""
-    if not current.is_admin and ADMIN_ROLE in roles:
+    """위임받은 사람은 자기가 줄 수 없는 역할(관리자 · 슈퍼유저 · 다른 사용자 정의 역할)의 키를 발급 · 수정 · 재발급 · 폐기할
+    수 없다 — 권한 상승을 막는다(TODO-123, DEF-163). 줄 수 있는 역할은 사용자 관리 위임과 같다."""
+    from app.usermgr.router import assignable_roles
+    allowed = assignable_roles(current)
+    if allowed is None:
+        return
+    if ADMIN_ROLE in roles:
         logger.warning("관리자 역할 API 키 작업 거부(위임 사용자): user=%s", current.username)
-        raise HTTPException(status_code=403, detail="관리자 역할 API 키는 관리자만 다룰 수 있습니다.")
+        raise PermissionDenied("관리자 역할 API 키는 관리자만 다룰 수 있습니다.",
+                               user=current, kind="DELEGATE", key=f"settings.api-keys — {ADMIN_ROLE} 키")
+    beyond = [r for r in roles if r is not None and r not in allowed]
+    if beyond:
+        logger.warning("역할 %s API 키 작업 거부(위임 사용자): user=%s", beyond[0], current.username)
+        raise PermissionDenied("API 키 관리를 위임받은 사람은 기본 사용자 역할과 자기 역할의 키만 다룰 수 있습니다.",
+                               user=current, kind="DELEGATE", key=f"settings.api-keys — {beyond[0]} 키")
 
 
 async def _check_role(session: AsyncSession, role: str | None) -> None:

@@ -23,8 +23,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.catalog import service as catalog_service
-from app.core.auth import CurrentUser, TokenUser, assert_owner_or_admin
+from app.core.auth import CurrentUser, TokenUser
 from app.core.database import get_session
 from app.permissions.router import require_feature, require_feature_granted
 from app.standard import service
@@ -74,13 +73,10 @@ async def _standards_editor(
 
 
 async def _require_dataset_editor(current, session: AsyncSession, dataset_id: int) -> None:
-    """데이터셋 단위 매핑 — 데이터셋 수정과 같은 기준(생성자 또는 관리자). 데이터셋이 없으면 404."""
-    created_by = await catalog_service.get_dataset_created_by(session, dataset_id)
-    # created_by 가 None 이면 데이터셋이 없거나(404) 생성자 정보가 없는 과거 데이터(admin 만 허용)다.
-    if created_by is None and not await catalog_service.dataset_exists(session, dataset_id):
-        logger.warning("매핑 대상 데이터셋 없음: dataset_id=%d", dataset_id)
-        raise HTTPException(status_code=404, detail="데이터셋을 찾을 수 없습니다.")
-    assert_owner_or_admin(current, created_by, "데이터셋")
+    """데이터셋 단위 매핑 — 데이터셋 수정과 같은 기준(생성자 · 소유자 목록 · 관리자, TODO-154). 없으면 404."""
+    from app.catalog.dataset_owner import assert_dataset_owner_or_admin
+
+    await assert_dataset_owner_or_admin(session, current, dataset_id)
 
 
 def _http(e: service.StandardError) -> HTTPException:

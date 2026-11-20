@@ -31,6 +31,8 @@ class AIGenerationLog(Base):
     model = Column(String(100), nullable=False)
     prompt_tokens = Column(Integer)
     completion_tokens = Column(Integer)
+    # 제안 근거 — AI-Ready 초안의 관련법령 · 허용 이용 유형을 고른 이유(TODO-096). 제안 창에 보여 준다.
+    reason = Column(Text)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 

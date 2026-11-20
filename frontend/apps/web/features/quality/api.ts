@@ -179,7 +179,10 @@ export type QualityJobRun = {
   /** 대기열에 넣은 데이터셋 실행 수 */
   runs_total: number
   runs_succeeded: number
+  /** 실패 · 일부 실패한 데이터셋 실행 수 — 중지는 runs_cancelled 로 따로 센다(DEF-156) */
   runs_failed: number
+  /** 중지된 데이터셋 실행 수 */
+  runs_cancelled: number
   runs_active: number
   /** 함께 넣은 프로파일 실행(작업의 include_profile) — 진단 실행 수(runs_*)에는 들지 않는다 */
   profiles_total?: number
@@ -220,6 +223,8 @@ export type QualityJob = QualityJobSchedule & {
   /** 고른 품질 지표(미리 정의한 지표)의 ID 와 이름 — 비어 있으면 가리지 않는다 */
   definition_ids: number[]
   definitions: string[]
+  /** definition_ids 가운데 지워진 지표 — 이 작업은 그 지표의 규칙을 더는 진단하지 않는다(DEF-148) */
+  deleted_definition_ids?: number[]
   enabled: boolean
   /** 회차마다 대상 데이터셋의 프로파일(컬럼 통계)도 함께 수집한다 */
   include_profile?: boolean
@@ -253,6 +258,23 @@ const JSON_HEADERS = { "Content-Type": "application/json" }
 export async function fetchQualityIndicators(): Promise<QualityIndicator[]> {
   const res = await authFetch(`${BASE}/indicators`)
   if (!res.ok) await throwOnError(res, "진단 기준을 불러오지 못했습니다.")
+  return res.json()
+}
+
+/** 허용 값 규칙이 가리킬 수 있는 표준 코드 그룹 (TODO-096) */
+export type QualityCodeGroupOption = {
+  id: number
+  name: string
+  dictionary_name: string | null
+  /** 사용 중인 코드 값 수 */
+  value_count: number
+  /** 앞의 코드 값 몇 개(정렬 순서) */
+  sample_values: string[]
+}
+
+export async function fetchQualityCodeGroups(): Promise<QualityCodeGroupOption[]> {
+  const res = await authFetch(`${BASE}/code-groups`)
+  if (!res.ok) await throwOnError(res, "표준 코드 그룹을 불러오지 못했습니다.")
   return res.json()
 }
 
@@ -511,6 +533,7 @@ export type QualityJobTrendPoint = {
   runs_total: number
   runs_succeeded: number
   runs_failed: number
+  runs_cancelled: number
   checked_count: number | null
   error_count: number | null
   error_rate: number | null
@@ -532,16 +555,25 @@ export async function fetchQualityJobTrend(jobId: number, limit = 30): Promise<Q
   return res.json()
 }
 
+/** 리포트 파일에 시각을 적을 시간대 — 화면과 같은 브라우저 시간대(DEF-155). 알 수 없으면 빈 값(서버 기본 Asia/Seoul). */
+function browserTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || ""
+  } catch {
+    return ""
+  }
+}
+
 /** 작업 실행 리포트 엑셀(요약 / 지표별 / 데이터셋별 / 규칙별)을 받아 온다. */
 export async function fetchQualityJobRunReportXlsx(jobRunId: number): Promise<Blob> {
-  const res = await authFetch(`${BASE}/job-runs/${jobRunId}/report.xlsx`)
+  const res = await authFetch(`${BASE}/job-runs/${jobRunId}/report.xlsx?tz=${encodeURIComponent(browserTimeZone())}`)
   if (!res.ok) await throwOnError(res, "리포트를 내려받지 못했습니다.")
   return res.blob()
 }
 
 /** 작업 실행 리포트 PDF(핵심 숫자 · 실행 정보 · 영역별 · 진단 기준별 · 데이터셋별 · 규칙별)를 받아 온다. */
 export async function fetchQualityJobRunReportPdf(jobRunId: number): Promise<Blob> {
-  const res = await authFetch(`${BASE}/job-runs/${jobRunId}/report.pdf`)
+  const res = await authFetch(`${BASE}/job-runs/${jobRunId}/report.pdf?tz=${encodeURIComponent(browserTimeZone())}`)
   if (!res.ok) await throwOnError(res, "리포트를 내려받지 못했습니다.")
   return res.blob()
 }
@@ -566,6 +598,8 @@ export type QualityDefinition = {
   /** 할당된 컬럼(규칙) 수와 그 컬럼들이 있는 데이터셋 수 */
   rules: number
   datasets: number
+  /** 이 지표를 진단 범위로 고른 품질 진단 작업 — only 면 이 지표 하나만 고른 작업(DEF-148) */
+  jobs?: { id: number; name: string; only: boolean }[]
   created_at: string
   updated_at: string
 }
@@ -619,13 +653,19 @@ export type QualitySqlPreviewRequest = {
 }
 
 export type QualitySqlPreview = {
-  /** 실행할 Trino 쿼리 — 만들 수 없으면 null(사유는 note) */
+  /** 실행할 진단 쿼리(Trino 또는 원천 방언) — 만들 수 없으면 null(사유는 note) */
   sql: string | null
   judgement: string
   note: string | null
   table: string
-  /** 실제 Trino 테이블 이름인가(아니면 예시 이름) */
+  /** 실제 테이블 이름인가(아니면 예시 이름) */
   actual_table: boolean
+  /** 진단 경로 — TRINO 또는 DIRECT(원천 DB 를 직접 읽음, sql 은 원천 방언) (DEF-152) */
+  engine?: "TRINO" | "DIRECT"
+  /** DIRECT 일 때 원천 유형(postgresql · mysql · mariadb · oracle · mssql) */
+  source_type?: string | null
+  /** DIRECT 일 때 쿼리의 쓰임 — AGGREGATE(원천이 집계) · READ(행을 읽어 워커가 판정) · SEPARATE(따로 내는 조인) */
+  mode?: "AGGREGATE" | "READ" | "SEPARATE" | null
 }
 
 /** 데이터셋의 품질 규칙 가운데 컬럼-지표 매핑에 쓰는 부분 */

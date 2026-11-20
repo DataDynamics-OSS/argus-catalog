@@ -35,16 +35,19 @@ import { datasetQualityStatus } from "@/features/datasets/status"
 import { useConfirm } from "@/components/confirm-provider"
 import { authFetch, throwOnError } from "@/features/auth/auth-fetch"
 import { usePermissions } from "@/features/permissions/use-permissions"
+import { useAuth } from "@/features/auth"
 import { MONACO_FONT_SIZE } from "@/lib/monaco"
 import {
-  DATE_FORMAT_CHOICES, isBinaryColumnType, listedDateFormat, ruleListMeta,
+  codeGroupExpected, codeGroupRef, DATE_FORMAT_CHOICES, isBinaryColumnType, listedDateFormat, ruleListMeta,
 } from "@/features/datasets/quality-rules"
 import {
   categoryOfRule, checkTypeLabel, domainForCategory, pathSkipReason, ruleCategories, skippedOnPath,
 } from "@/features/quality/check-types"
 import { QualityCategorySelect, QualityCheckTypeSelect } from "@/features/quality/components/quality-category-select"
 import { typeForCategory } from "@/features/quality/definitions"
-import { loadQualityIndicators, type QualityIndicator } from "@/features/quality/api"
+import {
+  fetchQualityCodeGroups, loadQualityIndicators, type QualityCodeGroupOption, type QualityIndicator,
+} from "@/features/quality/api"
 import { QualityDatasetAssignDialog } from "@/features/quality/components/quality-dataset-assign-dialog"
 import { QualitySqlPreviewDialog } from "@/features/quality/components/quality-sql-preview"
 import { datasetHref } from "@/features/datasets/links"
@@ -57,7 +60,7 @@ const BASE = "/api/v1/quality"
 // 진단 유형별 한글 라벨·설명·기대값 힌트 — 규칙 추가 다이얼로그에서 사용.
 // 평가 시맨틱은 서버(app/quality/service.py:_evaluate_rule) 기준.
 /** 기대값이 값 목록인 유형 — 배지 입력(TODO-143) */
-const LIST_CHECK_TYPES = new Set(["ACCEPTED_VALUES", "DUMMY_VALUE"])
+const LIST_CHECK_TYPES = new Set(["ACCEPTED_VALUES", "DUMMY_VALUE", "COMPOSITE_UNIQUE"])
 
 const CHECK_TYPE_META: Record<string, { desc: string; expectedHint: string | null; usesThreshold: boolean }> = {
   NOT_NULL: {
@@ -91,7 +94,7 @@ const CHECK_TYPE_META: Record<string, { desc: string; expectedHint: string | nul
     usesThreshold: false,
   },
   ACCEPTED_VALUES: {
-    desc: "컬럼 값이 허용 값 목록 안에만 있어야 합니다 (임계값 미사용). 정밀 진단이 전체 데이터로 평가합니다.",
+    desc: "컬럼 값이 허용 값 목록 안에만 있어야 합니다 (임계값 미사용). 값을 직접 넣거나 데이터 표준의 코드 그룹을 고릅니다 — 코드 그룹을 고르면 진단할 때마다 그 그룹의 사용 중인 코드 값을 허용 값으로 씁니다(AI-Ready 기준 정합성). 정밀 진단이 전체 데이터로 평가합니다.",
     expectedHint: "예: PG-13 입력 후 Enter",
     usesThreshold: false,
   },
@@ -151,8 +154,18 @@ const CHECK_TYPE_META: Record<string, { desc: string; expectedHint: string | nul
     usesThreshold: true,
   },
   CONTINUITY: {
-    desc: "날짜·시각 컬럼의 가장 이른 기간부터 가장 늦은 기간까지 값이 하나도 없는 기간(시계열 공백)이 있는지 봅니다 — AI-Ready 품질 지표 '적시성 › 데이터 연속성'. 기대값에 단위(HOUR · DAY · MONTH · YEAR)를 적고, 문자열로 저장한 날짜면 뒤에 형식을 붙입니다(예: DAY YYYYMMDD). 있는 기간의 비율이 임계값(%) 이상이면 통과합니다(100 = 빠진 기간 없음). 정밀 진단에서만 평가됩니다.",
-    expectedHint: "예: DAY · MONTH · DAY YYYYMMDD",
+    desc: "날짜·시각 컬럼의 가장 이른 기간부터 가장 늦은 기간까지 값이 하나도 없는 기간(시계열 공백)이 있는지 봅니다 — AI-Ready 품질 지표 '적시성 › 데이터 연속성'. 기대값에 단위(HOUR · DAY · WEEK · MONTH · YEAR — WEEK 는 월요일에 시작하는 ISO 주)를 적고, 문자열로 저장한 날짜면 뒤에 형식을 붙입니다(예: DAY YYYYMMDD). 있는 기간의 비율이 임계값(%) 이상이면 통과합니다(100 = 빠진 기간 없음). 정밀 진단에서만 평가됩니다.",
+    expectedHint: "예: DAY · WEEK · MONTH · DAY YYYYMMDD",
+    usesThreshold: true,
+  },
+  DIVERSITY: {
+    desc: "범주 · 라벨 컬럼에서 한 값이 지나치게 많은지 봅니다 — AI-Ready 품질 지표 '완전성 › 데이터 · 라벨 다양성'. 값마다 행 수를 세어 가장 많은 값의 비율(NULL 제외)이 기대값(%) 이하이면 통과합니다(비우면 90). 판정 설명에 고유값 수와 최다/최소 빈도 비율도 적습니다. 정밀 진단에서만 평가됩니다.",
+    expectedHint: "(선택) 가장 많은 값의 비율 상한 % — 예: 80, 비우면 90",
+    usesThreshold: false,
+  },
+  COMPOSITE_UNIQUE: {
+    desc: "여러 컬럼을 묶은 키(예: 기준일자 + 지역코드)가 겹치는 행이 없어야 합니다 — AI-Ready 품질 지표 '유일성 › 데이터 유일성'. 키 컬럼을 둘 이상 고릅니다(컬럼 칸은 쓰지 않는 테이블 수준 규칙). 키가 겹치는 행은 모두 오류로 세고, 겹치지 않는 행의 비율이 임계값(%) 이상이면 통과합니다(100 = 겹치는 키 없음). 키 컬럼 가운데 하나라도 NULL 인 행은 세지 않습니다. 정밀 진단에서만 평가됩니다.",
+    expectedHint: "키 컬럼 이름 입력 후 Enter",
     usesThreshold: true,
   },
   REFERENTIAL: {
@@ -172,12 +185,14 @@ type QualityRule = {
 }
 
 // passed=null → 미평가(서버가 평가할 수 없는 유형인데 이전 배치 결과도 없음, 점수 제외 — id·checked_at 도 null)
-// carried_forward=true → 이번 실행에서 새로 평가하지 않고 직전(배치) 결과를 이어받음
+// carried_forward=true → 마지막 진단이 평가하지 않아 그 전 실행의 결과를 이어받음(점수에 반영, DEF-150)
 type QualityResult = {
   id: number | null; rule_id: number; rule_name: string | null; check_type: string | null
   column_name: string | null; passed: string | null; actual_value: string | null
   detail: string | null; severity: string | null; checked_at: string | null
   failed_samples: Record<string, string | null>[] | null
+  // 샘플 보기 권한이 없어 서버가 위반 샘플 값을 뺐다(DEF-153)
+  samples_hidden?: boolean
   carried_forward?: boolean
   checked_count?: number | null; error_count?: number | null
 }
@@ -196,6 +211,10 @@ type QualityRun = {
   checked_count: number | null; error_count: number | null; error_rate: number | null
   error_message: string | null; requested_by: string | null; cancel_requested_by?: string | null
   queued_at: string | null; started_at: string | null; finished_at: string | null
+  /** 이번 실행이 평가한 규칙만으로 낸 점수 — 데이터셋 점수(이어받은 결과 포함)와 다를 수 있다 */
+  score?: number | null
+  /** 품질 진단 작업이 넣은 실행이면 그 작업 */
+  job_id?: number | null; job_name?: string | null
 }
 const isActiveRun = (run: QualityRun | null) => run?.status === "QUEUED" || run?.status === "RUNNING"
 
@@ -220,8 +239,12 @@ type ColumnProfile = {
 type Props = { datasetId: number
   /** 컬럼 선택 콤보 옵션 — 데이터셋 스키마의 field_path 목록 */
   columns?: string[]
-  /** 데이터셋 소유자(생성자) 또는 관리자 — 진단 · 규칙 · 주기 · 프로파일을 바꿀 수 있다. 아니면 보기만 */
+  /** 데이터셋 소유자(생성자 · 소유자 목록) 또는 관리자 — 진단 · 규칙 · 주기 · 프로파일을 바꿀 수 있다. 아니면 보기만 */
   canManage?: boolean
+  /** 수동 데이터셋(직접 등록 카탈로그, TODO-CAT-001) — 진단할 수 없으면 탭 위에 원천 매핑 안내를 띄운다(TODO-CAT-006) */
+  manual?: boolean
+  /** 안내 띠의 [원천 매핑] — 개요 탭의 원천 매핑 영역으로 */
+  onOpenSourceMap?: () => void
 }
 
 // 규칙을 만드는 버튼의 설명 — 툴팁 제목과 본문
@@ -260,11 +283,19 @@ function elapsedText(since: string): string {
  * 정밀 진단 · 프로파일 실행 상태 — 버튼을 누른 구역 바로 아래에 보인다(정밀 진단은 품질 진단 구역, 프로파일은 데이터 프로파일 구역).
  * 실행 중이면 진행 막대 · 경과 시간 · 중지 버튼, 끝났으면 결과 요약.
  */
-function RunStatusCard({ run, engine, canCancel, onCancel, inline = false }: {
+/** 품질 워커가 없을 때 할 일 — 워커는 관리자가 띄우므로 일반 사용자에게는 관리자에게 문의하라고 한다(DEF-157). */
+function noWorkerHint(isAdmin: boolean): string {
+  return isAdmin ? "워커를 띄우면 시작합니다." : "관리자에게 문의하세요."
+}
+
+function RunStatusCard({ run, engine, canCancel, onCancel, inline = false, carried = 0 }: {
   run: QualityRun; engine: EngineStatus | null; canCancel: boolean; onCancel: () => void
   /** 다른 박스 안에 넣을 때 — 테두리 없이 */
   inline?: boolean
+  /** 결과 표에서 이 실행 전의 결과를 이어받은 규칙 수 — 데이터셋 점수와 실행 점수의 기준이 다름을 알린다(DEF-150) */
+  carried?: number
 }) {
+  const isAdmin = !!useAuth().user?.is_admin
   const active = isActiveRun(run)
   const what = run.kind === "PROFILE" ? "프로파일" : "정밀 진단"
   const cancelling = active && !!run.cancel_requested_by
@@ -280,6 +311,11 @@ function RunStatusCard({ run, engine, canCancel, onCancel, inline = false }: {
             {active && <Loader2 className="h-4 w-4 animate-spin text-primary" aria-hidden />}
             {what}
           </span>
+          {run.job_name && (
+            <Badge variant="outline" title="관리 › 데이터 품질 › 품질 진단 작업이 넣은 실행 — 작업이 고른 진단 범위만 평가합니다">
+              작업 실행 · {run.job_name}
+            </Badge>
+          )}
           {/* 실행 상태 톤 — 품질 진단 이력과 같은 맵(DEF-116) */}
           {cancelling ? <StatusBadge tone="neutral" label="중지 중" />
             : run.unresponsive ? <StatusBadge tone="danger" label="응답 없음" />
@@ -293,7 +329,7 @@ function RunStatusCard({ run, engine, canCancel, onCancel, inline = false }: {
           {run.status === "QUEUED" && !cancelling && (
             <span className={engine && engine.workers_alive === 0 ? "text-amber-600" : "text-muted-foreground"}>
               {engine && engine.workers_alive === 0
-                ? "실행 중인 품질 워커가 없습니다 — 워커를 띄우면 시작합니다."
+                ? `실행 중인 품질 워커가 없습니다 — ${noWorkerHint(isAdmin)}`
                 : "품질 워커가 곧 시작합니다."}
             </span>
           )}
@@ -302,6 +338,7 @@ function RunStatusCard({ run, engine, canCancel, onCancel, inline = false }: {
               규칙 {run.rules_evaluated}/{run.rules_total} · 진단 {run.checked_count.toLocaleString()}건 ·
               오류 {(run.error_count ?? 0).toLocaleString()}건
               {run.error_rate != null ? ` · 오류율 ${run.error_rate}%` : ""}
+              {run.score != null ? ` · 실행 점수 ${run.score}%` : ""}
             </span>
           )}
           {run.error_message && (
@@ -324,6 +361,12 @@ function RunStatusCard({ run, engine, canCancel, onCancel, inline = false }: {
               ? <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${Math.max(pct, 3)}%` }} />
               : <div className="h-full w-1/3 animate-pulse rounded-full bg-primary/40" />}
           </div>
+        )}
+        {!active && run.kind !== "PROFILE" && run.score != null && carried > 0 && (
+          <p className="text-xs">
+            실행 점수는 이번에 평가한 규칙 {run.rules_evaluated}개 기준입니다. 위의 품질 점수는 데이터셋의 활성 규칙 전체 기준이라,
+            이번에 평가하지 않은 규칙 {carried}개는 그 전 실행의 결과(결과 표의 &quot;이전 결과&quot;)를 이어받아 계산합니다.
+          </p>
         )}
         {cancelling && (
           <p className="text-xs">
@@ -354,8 +397,9 @@ function ActionTip({ title, lines, blocked, children }: {
   )
 }
 
-export function QualityTab({ datasetId, columns = [], canManage = false }: Props) {
+export function QualityTab({ datasetId, columns = [], canManage = false, manual = false, onOpenSourceMap }: Props) {
   const askConfirm = useConfirm()
+  const isAdmin = !!useAuth().user?.is_admin
   // 기능 권한(권한 관리 › 기능 권한)에 더해, 진단 · 변경은 데이터셋 소유자 또는 관리자만 — 서버도 같은 기준으로 403
   const { canUseFeature } = usePermissions()
   const runAllowed = canUseFeature("quality.run")
@@ -370,7 +414,8 @@ export function QualityTab({ datasetId, columns = [], canManage = false }: Props
   const [score, setScore] = useState<QualityScore | null>(null)
   const [profile, setProfile] = useState<ColumnProfile[]>([])
   // 프로파일을 언제 떴고 몇 행이었는지 — 데이터 프로파일 구역 머리에 보인다
-  const [profileMeta, setProfileMeta] = useState<{ row_count: number; profiled_at: string } | null>(null)
+  // values_hidden: 샘플 보기 권한이 없어 서버가 최솟값 · 최댓값 · 최빈값을 뺐다(DEF-164)
+  const [profileMeta, setProfileMeta] = useState<{ row_count: number; profiled_at: string; values_hidden: boolean } | null>(null)
   const [scoreHistory, setScoreHistory] = useState<ScoreHistoryItem[]>([])
   const [expandedResultId, setExpandedResultId] = useState<number | null>(null)  // 위반 샘플 펼침 행
   const [recsOpen, setRecsOpen] = useState(false)
@@ -408,6 +453,10 @@ export function QualityTab({ datasetId, columns = [], canManage = false }: Props
     loadQualityIndicators().then(setIndicators).catch((err) => console.error("Failed to load quality indicators", err))
   }, [])
   const indicatorName = (key?: string | null) => indicators.find((i) => i.key === key)?.name
+  // 표준 코드 그룹 — 허용 값 규칙이 가리킬 수 있는 것. 대화상자에서 허용 값을 고르거나 규칙 목록이 코드 그룹을 가리킬 때만 읽는다
+  const [codeGroups, setCodeGroups] = useState<QualityCodeGroupOption[] | null>(null)
+  // 허용 값을 표준 코드 그룹으로 정하는 중인지(직접 넣는 값 목록 대신)
+  const [codeGroupMode, setCodeGroupMode] = useState(false)
 
   // 규칙/결과/점수/프로파일을 한 번에 조회. 점수·프로파일은 미생성 상태에서 404 가 정상이므로
   // 개별 .catch(() => null) 로 막아 다른 응답이 함께 무효화되는 것을 방지.
@@ -427,6 +476,8 @@ export function QualityTab({ datasetId, columns = [], canManage = false }: Props
       if (rulesResp.ok) setRules(await rulesResp.json())
       if (resultsResp.ok) setResults(await resultsResp.json())
       if (scoreResp?.ok) setScore(await scoreResp.json())
+      // 점수가 없어졌으면(규칙을 모두 지움 — 404) 앞서 받은 점수를 지운다(DEF-195)
+      else if (scoreResp?.status === 404) setScore(null)
       if (historyResp?.ok) setScoreHistory(await historyResp.json())
       if (upstreamResp?.ok) setUpstreamWarnings(await upstreamResp.json())
       if (engineResp?.ok) setEngine(await engineResp.json())
@@ -434,7 +485,9 @@ export function QualityTab({ datasetId, columns = [], canManage = false }: Props
       if (profileResp?.ok) {
         const data = await profileResp.json()
         setProfile(data.columns || [])
-        setProfileMeta(data.profiled_at ? { row_count: data.row_count ?? 0, profiled_at: data.profiled_at } : null)
+        setProfileMeta(data.profiled_at
+          ? { row_count: data.row_count ?? 0, profiled_at: data.profiled_at, values_hidden: !!data.values_hidden }
+          : null)
       }
       // 규칙·결과는 필수 응답 — 실패하면 빈 화면으로 조용히 두지 않고 알린다
       const failed = [rulesResp, resultsResp].find((r) => !r.ok)
@@ -449,6 +502,13 @@ export function QualityTab({ datasetId, columns = [], canManage = false }: Props
 
   // 정밀 진단을 대기열에 넣는다 — 실행은 품질 워커가 하고, 아래 폴링이 상태를 따라간다.
   const requestRun = async () => {
+    // 워커가 없으면 요청 전에 알린다 — 요청은 대기열에 남고 워커가 뜨면 시작한다(DEF-157)
+    if (engine?.workers_alive === 0 && !(await askConfirm({
+      title: "품질 워커 없음",
+      description: `지금 실행 중인 품질 워커가 없어 정밀 진단이 대기열에서 기다립니다. ${noWorkerHint(isAdmin)} 그래도 요청할까요?`,
+      confirmText: "요청",
+      cancelText: "취소",
+    }))) return
     setRequestingRun(true)
     try {
       const resp = await authFetch(`${BASE}/datasets/${datasetId}/runs`, { method: "POST" })
@@ -513,6 +573,8 @@ export function QualityTab({ datasetId, columns = [], canManage = false }: Props
     } finally { setProfiling(false) }
   }
   const runActive = isActiveRun(latestRun)
+  // 규칙이 없으면 정밀 진단 단추를 끄고 이유를 보인다(DEF-157) — 서버도 409 로 거절한다
+  const hasActiveRules = rules.some((r) => r.is_active === "true")
   const profileRun = latestRun?.kind === "PROFILE"
 
   // 규칙 대화상자의 분류 — 서버 분류 전체와 "분류 없음"(정밀 진단 대상이 아닌 유형)
@@ -528,9 +590,30 @@ export function QualityTab({ datasetId, columns = [], canManage = false }: Props
     if (next !== checkType) {
       setExpectedValue("")
       setDateCustom(false)
+      setCodeGroupMode(false)
     }
+    if (next === "COMPOSITE_UNIQUE") setColumnName("")  // 테이블 수준 — 키 컬럼은 기대값의 목록
     setCheckType(next)
   }
+  const wantsCodeGroups = (addOpen && checkType === "ACCEPTED_VALUES")
+    || rules.some((r) => r.check_type === "ACCEPTED_VALUES" && codeGroupRef(r.expected_value) != null)
+  useEffect(() => {
+    if (!wantsCodeGroups || codeGroups !== null) return
+    fetchQualityCodeGroups().then(setCodeGroups).catch((err) => {
+      console.error("Failed to load code groups", err)
+      setCodeGroups([])
+    })
+  }, [wantsCodeGroups, codeGroups])
+  const codeGroupName = (id: number) => {
+    const g = codeGroups?.find((c) => c.id === id)
+    return g ? `${g.dictionary_name ? `${g.dictionary_name} › ` : ""}${g.name}` : `#${id}`
+  }
+  const compositeColumns = checkType === "COMPOSITE_UNIQUE" ? decodeList(expectedValue) : []
+  // 저장할 수 없는 이유 — 단추 옆에 보인다
+  const saveBlocked = checkType === "FRESHNESS" && !columnName ? "최신성은 적재 · 수정 시각 컬럼을 골라야 합니다."
+    : checkType === "COMPOSITE_UNIQUE" && compositeColumns.length < 2 ? "여러 컬럼 키는 키 컬럼을 둘 이상 골라야 합니다."
+    : checkType === "ACCEPTED_VALUES" && codeGroupMode && codeGroupRef(expectedValue) == null ? "표준 코드 그룹을 고르세요."
+    : undefined
 
   // 다이얼로그 입력값으로 규칙 등록/수정 후 폼 리셋. 입력 검증은 disabled 속성으로 처리.
   const saveRule = async () => {
@@ -602,6 +685,7 @@ export function QualityTab({ datasetId, columns = [], canManage = false }: Props
     setCheckType(rule.check_type)
     setColumnName(rule.column_name || "")
     setExpectedValue(rule.expected_value || "")
+    setCodeGroupMode(rule.check_type === "ACCEPTED_VALUES" && codeGroupRef(rule.expected_value) != null)
     setThreshold(String(rule.threshold))
     setSeverity(rule.severity)
     setCategory(categoryOfRule(rule, categories))
@@ -678,6 +762,21 @@ export function QualityTab({ datasetId, columns = [], canManage = false }: Props
 
   return (
     <div className="space-y-4">
+      {/* 수동 데이터셋 — 원천 매핑 전에는 프로파일 · 정밀 진단을 할 수 없다. 규칙은 미리 만들어 둘 수 있다(TODO-CAT-006) */}
+      {manual && engine != null && !engine.available && (
+        <div className="flex flex-wrap items-start gap-2.5 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm dark:border-amber-700 dark:bg-amber-950/40">
+          <Link2 className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" />
+          <div className="min-w-0 flex-1">
+            <p className="font-medium text-amber-900 dark:text-amber-200">원천을 읽을 수 없는 수동 데이터셋입니다</p>
+            <p className="mt-0.5 text-amber-800 dark:text-amber-300">
+              {engine.reason ?? "원천 매핑이 필요합니다."} 품질 규칙은 지금 만들어 둘 수 있고, 프로파일과 정밀 진단은 매핑한 뒤에 실행됩니다.
+            </p>
+          </div>
+          {onOpenSourceMap && (
+            <Button variant="outline" size="sm" className="shrink-0" onClick={onOpenSourceMap}>원천 매핑</Button>
+          )}
+        </div>
+      )}
       {/* 업스트림 품질 경고 — 원천 데이터 품질 문제의 전파 알림 */}
       {upstreamWarnings.length > 0 && (
         <div className="flex items-start gap-2.5 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm dark:border-amber-700 dark:bg-amber-950/40">
@@ -711,7 +810,10 @@ export function QualityTab({ datasetId, columns = [], canManage = false }: Props
             <Shield className="h-5 w-5 text-muted-foreground" />
             <div className="flex-1">
               <div className="flex items-center gap-3 mb-1">
-                <span className="text-sm font-medium">품질 점수</span>
+                <span className="text-sm font-medium"
+                  title="데이터셋의 활성 규칙 전체 기준 — 마지막 진단이 평가하지 않은 규칙은 그 전 실행의 결과를 이어받습니다(결과 표의 '이전 결과')">
+                  품질 점수
+                </span>
                 <span className="text-lg font-bold">{score ? `${pct}%` : "—"}</span>
               </div>
               <div className="w-full bg-muted rounded-full h-2.5">
@@ -731,16 +833,20 @@ export function QualityTab({ datasetId, columns = [], canManage = false }: Props
             <ScoreTrend history={scoreHistory} />
             <div className="flex flex-col items-end gap-0.5 text-xs whitespace-nowrap">
               {score?.scored_at && <span>마지막 진단 {timeAgo(score.scored_at)}</span>}
-              {/* 주기 진단은 관리 › 데이터 품질 › 품질 진단 작업에서 — 데이터셋 하나만 고를 수도 있다(예전 데이터셋 주기는 작업으로 옮겼다) */}
-              <a href="/dashboard/quality-runs?tab=jobs" className="hover:text-foreground hover:underline"
-                title="정해진 주기로 진단하려면 관리 › 데이터 품질 › 품질 진단 작업에 이 데이터셋(또는 카탈로그 · 스키마)을 대상으로 등록합니다.">
-                주기 진단 설정 →
-              </a>
+              {/* 주기 진단은 관리 › 데이터 품질 › 품질 진단 작업에서 — 작업 하나가 데이터셋 하나를 진단한다.
+                  그 메뉴를 열 수 있는 사람(관리자 · quality.manage)에게만 링크를 보인다(DEF-158) */}
+              {canUseFeature("quality.manage") && (
+                <a href="/dashboard/quality-runs?tab=jobs" className="hover:text-foreground hover:underline"
+                  title="정해진 주기로 진단하려면 관리 › 데이터 품질 › 품질 진단 작업에 이 데이터셋을 대상으로 작업을 등록합니다.">
+                  주기 진단 설정 →
+                </a>
+              )}
             </div>
             <div className="flex items-center gap-2">
               <ActionTip title={engine?.engine === "DIRECT" ? "정밀 진단 — 원천 DB 를 직접 읽어 전체 데이터를 평가" : "정밀 진단 — 원본 전체 데이터를 Trino 로 평가"}
                 blocked={runBlocked ?? (engine == null ? "정밀 진단 경로를 확인하는 중입니다."
-                  : !engine.available ? (engine.reason ?? "이 데이터셋은 정밀 진단할 수 없습니다.") : null)}
+                  : !engine.available ? (engine.reason ?? "이 데이터셋은 정밀 진단할 수 없습니다.")
+                  : !hasActiveRules ? "활성 규칙이 없습니다. 규칙을 추가하거나 품질 지표를 할당하세요." : null)}
                 lines={[
                   engine?.engine === "DIRECT"
                     ? "카탈로그에 Trino 가 연결돼 있지 않아 품질 워커가 원천 DB 를 직접 읽어(읽기 전용) 규칙마다 진단 건수 · 오류 건수 · 오류율을 남깁니다. Trino 함수 · 커스텀 SQL 규칙은 Trino 연결이 필요해 건너뜁니다."
@@ -748,9 +854,11 @@ export function QualityTab({ datasetId, columns = [], canManage = false }: Props
                   "실행은 품질 워커가 대기열에서 가져가 하며, 테이블 크기에 따라 수 분이 걸릴 수 있습니다. 진행 상황은 아래 상태 카드에 나옵니다.",
                   ...(engine?.available && engine.engine_table
                     ? [`대상: ${engine.engine_table} (${engine.engine === "DIRECT" ? "원천 직접" : "Trino"}: ${engine.engine_datasource_name ?? "-"})`] : []),
+                  ...(engine?.available && engine.workers_alive === 0
+                    ? [`지금 실행 중인 품질 워커가 없어 요청하면 대기열에서 기다립니다 — ${noWorkerHint(isAdmin)}`] : []),
                 ]}>
                 <Button variant="outline" size="sm" onClick={requestRun}
-                  disabled={!canRun || !engine?.available || requestingRun || runActive}>
+                  disabled={!canRun || !engine?.available || !hasActiveRules || requestingRun || runActive}>
                   <Play className="h-3.5 w-3.5 mr-1" />
                   {runActive ? (profileRun ? "프로파일 중…" : "진단 중…") : "정밀 진단"}
                 </Button>
@@ -780,7 +888,8 @@ export function QualityTab({ datasetId, columns = [], canManage = false }: Props
 
       {/* 정밀 진단 실행 상태 — 프로파일 실행은 아래 데이터 프로파일 구역에 보인다(둘은 같은 대기열에서 돈다) */}
       {latestRun && !profileRun && (
-        <RunStatusCard run={latestRun} engine={engine} canCancel={canRun} onCancel={() => void cancelRun(latestRun)} />
+        <RunStatusCard run={latestRun} engine={engine} canCancel={canRun} onCancel={() => void cancelRun(latestRun)}
+          carried={results.filter((r) => r.carried_forward).length} />
       )}
 
       {/* Results table */}
@@ -809,7 +918,16 @@ export function QualityTab({ datasetId, columns = [], canManage = false }: Props
                             ? <CheckCircle className="h-4 w-4 text-green-500" />
                             : <XCircle className="h-4 w-4 text-red-500" />}
                       </TableCell>
-                      <TableCell className="font-medium text-sm">{r.rule_name}</TableCell>
+                      <TableCell className="font-medium text-sm">
+                        {r.rule_name}
+                        {r.carried_forward && (
+                          // 마지막 진단이 평가하지 않은 규칙 — 그 전 실행의 결과를 점수에 이어받았다(DEF-150)
+                          <Badge variant="outline" size="sm" className="ml-2 font-normal"
+                            title={`마지막 진단이 평가하지 않은 규칙입니다 — ${r.checked_at ? `${timeAgo(r.checked_at)} 결과를` : "그 전 결과를"} 품질 점수에 이어받았습니다`}>
+                            이전 결과{r.checked_at ? ` · ${timeAgo(r.checked_at)}` : ""}
+                          </Badge>
+                        )}
+                      </TableCell>
                       <TableCell><Badge variant="outline" title={r.check_type ?? undefined}>{checkTypeLabel(r.check_type)}</Badge></TableCell>
                       <TableCell className="text-sm">{r.column_name || "—"}</TableCell>
                       <TableCell className="text-sm font-mono">{r.actual_value || "—"}</TableCell>
@@ -824,6 +942,11 @@ export function QualityTab({ datasetId, columns = [], canManage = false }: Props
                             {expandedResultId === r.rule_id ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
                             위반 샘플 {r.failed_samples.length}행
                           </button>
+                        )}
+                        {r.samples_hidden && (
+                          <span className="ml-2 text-xs text-muted-foreground" title="샘플 보기 권한이 있어야 위반 행 값을 볼 수 있습니다.">
+                            위반 샘플은 샘플 보기 권한이 있어야 보입니다
+                          </span>
                         )}
                       </TableCell>
                       <TableCell><SeverityBadge severity={r.severity || "INFO"} /></TableCell>
@@ -898,6 +1021,14 @@ export function QualityTab({ datasetId, columns = [], canManage = false }: Props
                       </Badge>
                     )}
                     {rule.column_name && <span className="font-mono">{rule.column_name}</span>}
+                    {rule.check_type === "COMPOSITE_UNIQUE" && (
+                      <span className="font-mono" title="여러 컬럼 키">({decodeList(rule.expected_value).join(", ")})</span>
+                    )}
+                    {rule.check_type === "ACCEPTED_VALUES" && codeGroupRef(rule.expected_value) != null && (
+                      <span title="허용 값 — 진단할 때 이 표준 코드 그룹의 사용 중인 코드 값을 씁니다">
+                        코드 그룹: {codeGroupName(codeGroupRef(rule.expected_value)!)}
+                      </span>
+                    )}
                     {meta.threshold != null && <span >임계값: {meta.threshold}%</span>}
                     {meta.inactive && (
                       <Badge variant="secondary" title="비활성 규칙 — 진단·결과·점수에서 제외됩니다">비활성</Badge>
@@ -967,7 +1098,11 @@ export function QualityTab({ datasetId, columns = [], canManage = false }: Props
               <span >
                 {profileMeta.row_count.toLocaleString()}행 · {timeAgo(profileMeta.profiled_at)} 프로파일
               </span>
-            ) : (
+            ) : null}
+            {profileMeta?.values_hidden ? (
+              <span className="text-xs text-muted-foreground">최소 · 최대 · 최빈값은 샘플 보기 권한이 있어야 보입니다</span>
+            ) : null}
+            {profileMeta ? null : (
               <span className="text-muted-foreground">{loading ? "불러오는 중…" : "아직 프로파일이 없습니다."}</span>
             )}
             {canRun && (
@@ -1083,7 +1218,7 @@ export function QualityTab({ datasetId, columns = [], canManage = false }: Props
                     연결돼 있으면 Trino 로 집계하고, 없으면 품질 워커가 원천 DB(PostgreSQL·MySQL·MariaDB·Oracle·SQL Server)를 직접 읽습니다.
                     Trino 함수·커스텀 SQL 은 Trino 경로에서만 평가하고, 커스텀 Python 은 원천 DB 를 직접 읽을 수 있을 때(Trino 경로라도) 평가하며, 경로에서 빠지는
                     규칙에는 <b>정밀 진단 제외</b> 표시가 붙습니다.</li>
-                  <li>주기적으로 진단하려면 관리 › 데이터 품질 › <b>품질 진단 작업</b>에 이 데이터셋(또는 카탈로그 · 스키마)을 대상으로 등록합니다.</li>
+                  <li>주기적으로 진단하려면 관리 › 데이터 품질 › <b>품질 진단 작업</b>에 이 데이터셋을 대상으로 작업을 등록합니다(작업 하나에 데이터셋 하나). 관리자나 데이터 품질 관리를 위임받은 사람이 등록합니다.</li>
                   <li>진단 · 프로파일 · 규칙을 바꾸는 버튼은 <b>데이터셋의 소유자 또는 관리자</b>만 씁니다. 점수 · 추세 · 결과는 누구나 봅니다.</li>
                 </ul>
               </div>
@@ -1097,8 +1232,10 @@ export function QualityTab({ datasetId, columns = [], canManage = false }: Props
                   <li><b>BROKEN_TEXT / WHITESPACE</b> — 글자 깨짐, 값 앞뒤 공백·제어 문자·금지 문자 / <b>LOGICAL / FORMULA</b> —
                     논리관계(IF … THEN …), 계산식(합계 = 공급가 + 부가세). 정밀 진단으로 평가합니다.</li>
                   <li><b>FUNCTION</b> — Trino 에 미리 등록한 함수(UDF)로 값 검증. 기대값은 함수 이름. 정밀 진단으로 평가합니다.</li>
-                  <li><b>DUMMY_VALUE / CONTINUITY</b> — AI-Ready 품질 지표: 더미 값(999999 · -999 · N/A) 비율, 날짜 컬럼의 빠진 기간(일 · 월 단위
+                  <li><b>DUMMY_VALUE / CONTINUITY</b> — AI-Ready 품질 지표: 더미 값(999999 · -999 · N/A) 비율, 날짜 컬럼의 빠진 기간(일 · 주 · 월 단위
                     시계열 공백). 정밀 진단으로 평가합니다.</li>
+                  <li><b>DIVERSITY / COMPOSITE_UNIQUE</b> — AI-Ready 품질 지표: 범주 · 라벨 컬럼의 쏠림(가장 많은 값의 비율 상한), 여러 컬럼을 묶은
+                    키의 중복. 허용 값(ACCEPTED_VALUES)은 데이터 표준의 코드 그룹을 고를 수 있습니다. 정밀 진단으로 평가합니다.</li>
                   <li><b>DATE_FORMAT / COLUMN_COMPARE / REFERENTIAL</b> — 날짜 형식, 컬럼 간 순서(시작일 ≤ 종료일), 참조관계.
                     <b>정밀 진단</b>으로 평가합니다(참조관계는 Trino 경로면 같은 Trino, 원천 직접 경로면 같은 원본 데이터 소스의 데이터셋만).</li>
                   <li><b>FRESHNESS</b> — 최신 데이터가 지정 기간 안에 적재되었어야 함 (적재·수정 시각 컬럼의 최댓값 기준 — 컬럼 필수)</li>
@@ -1245,10 +1382,11 @@ def rental_duration_outlier(df, params):
                 <Select
                   value={columnName || "__none__"}
                   onValueChange={(v) => setColumnName(v === "__none__" ? "" : v)}
+                  disabled={checkType === "COMPOSITE_UNIQUE"}
                 >
                   <SelectTrigger className="h-9"><SelectValue placeholder="선택 안 함 (테이블 수준)" /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="__none__">선택 안 함 (테이블 수준 — ROW_COUNT/LOGICAL)</SelectItem>
+                    <SelectItem value="__none__">선택 안 함 (테이블 수준 — ROW_COUNT/LOGICAL/여러 컬럼 키)</SelectItem>
                     {columns.map((c) => (
                       <SelectItem key={c} value={c} className="font-mono text-sm">{c}</SelectItem>
                     ))}
@@ -1319,6 +1457,69 @@ def rental_duration_outlier(df, params):
                     </>
                   )}
                 </div>
+              ) : checkType === "ACCEPTED_VALUES" ? (
+                <div className="space-y-1.5">
+                  <Select disabled={editingLinked != null} value={codeGroupMode ? "group" : "list"}
+                    onValueChange={(v) => { setCodeGroupMode(v === "group"); setExpectedValue("") }}>
+                    <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="list">값을 직접 넣기</SelectItem>
+                      <SelectItem value="group">데이터 표준의 코드 그룹 쓰기</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {codeGroupMode ? (
+                    <>
+                      <Select disabled={editingLinked != null || codeGroups === null}
+                        value={codeGroupRef(expectedValue) != null ? String(codeGroupRef(expectedValue)) : ""}
+                        onValueChange={(v) => setExpectedValue(codeGroupExpected(Number(v)))}>
+                        <SelectTrigger className="h-9">
+                          <SelectValue placeholder={codeGroups === null ? "코드 그룹을 불러오는 중…" : "코드 그룹 선택"} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {codeGroupRef(expectedValue) != null && !codeGroups?.some((g) => g.id === codeGroupRef(expectedValue)) && (
+                            <SelectItem value={String(codeGroupRef(expectedValue))}>
+                              #{codeGroupRef(expectedValue)} (찾을 수 없는 코드 그룹)
+                            </SelectItem>
+                          )}
+                          {(codeGroups ?? []).map((g) => (
+                            <SelectItem key={g.id} value={String(g.id)}>
+                              {g.dictionary_name ? `${g.dictionary_name} › ` : ""}{g.name}
+                              <span className="text-muted-foreground"> — 코드 값 {g.value_count}개
+                                {g.sample_values.length > 0 ? ` (${g.sample_values.join(" · ")}${g.value_count > g.sample_values.length ? " …" : ""})` : ""}
+                              </span>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs">
+                        {codeGroups !== null && codeGroups.length === 0
+                          ? "데이터 표준에 코드 그룹이 없습니다 — 데이터 표준 화면에서 코드 그룹과 코드 값을 먼저 만드세요."
+                          : "진단할 때마다 그 그룹의 사용 중인 코드 값을 허용 값으로 씁니다 — 코드 값을 고치면 다음 진단부터 반영됩니다."}
+                      </p>
+                    </>
+                  ) : (
+                    <TagInput mono value={decodeList(expectedValue)} onChange={(v) => setExpectedValue(encodeList(v) ?? "")}
+                      placeholder={CHECK_TYPE_META[checkType]?.expectedHint ?? undefined} disabled={editingLinked != null} />
+                  )}
+                </div>
+              ) : checkType === "COMPOSITE_UNIQUE" && columns.length > 0 ? (
+                // 여러 컬럼 키 — 키 컬럼을 눌러 넣고 뺀다(고른 순서대로 저장, JSON 배열)
+                <div className="space-y-1.5">
+                  <div className="flex flex-wrap gap-1.5">
+                    {columns.map((c) => {
+                      const on = compositeColumns.includes(c)
+                      return (
+                        <Button key={c} type="button" size="sm" variant={on ? "default" : "outline"} className="h-7 font-mono"
+                          disabled={editingLinked != null} aria-pressed={on}
+                          onClick={() => setExpectedValue(encodeList(on ? compositeColumns.filter((x) => x !== c)
+                            : [...compositeColumns, c]) ?? "")}>
+                          {c}
+                        </Button>
+                      )
+                    })}
+                  </div>
+                  <p className="text-xs">키: {compositeColumns.length ? compositeColumns.join(" + ") : "고른 컬럼 없음"} — 둘 이상 고릅니다.</p>
+                </div>
               ) : LIST_CHECK_TYPES.has(checkType) ? (
                 // 허용 값 · 더미 값 — 배지 입력, JSON 배열 문자열로 저장(값 안의 쉼표 보존, TODO-143)
                 <TagInput mono value={decodeList(expectedValue)} onChange={(v) => setExpectedValue(encodeList(v) ?? "")}
@@ -1356,7 +1557,7 @@ def rental_duration_outlier(df, params):
                 </Select>
               </div>
             </div>
-            <div className="flex justify-end"><DisabledReason reason={checkType === "FRESHNESS" && !columnName ? "최신성은 적재 · 수정 시각 컬럼을 골라야 합니다." : undefined}><Button onClick={saveRule} disabled={!ruleName.trim() || (checkType === "FRESHNESS" && !columnName)}
+            <div className="flex justify-end"><DisabledReason reason={saveBlocked}><Button onClick={saveRule} disabled={!ruleName.trim() || saveBlocked != null}
              >{editingRuleId != null ? "저장" : "규칙 추가"}</Button></DisabledReason></div>
           </div>
         </DialogContent>

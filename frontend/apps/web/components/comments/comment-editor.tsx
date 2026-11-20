@@ -85,6 +85,8 @@ type CommentEditorProps = {
   initialCategory?: string
   /** 카테고리 셀렉트 노출 여부. 댓글이 아닌 일반 텍스트 편집 시 ``false`` 권장. */
   showCategory?: boolean
+  /** 카테고리 셀렉트를 숨겼을 때 그 자리에 보일 안내(예: 처리된 신고는 분류를 바꿀 수 없음). */
+  categoryNote?: React.ReactNode
   /** 입력값 실시간 동기화(폼 필드로 사용 시). 지정 시 편집 내용이 바뀔 때마다 HTML 을 전달. */
   onChange?: (html: string) => void
   /** 하단 등록/취소 액션 숨김(외부 폼이 제출을 담당할 때). */
@@ -124,6 +126,7 @@ export function CommentEditor({
   initialContent,
   initialCategory = "general",
   showCategory = true,
+  categoryNote,
   onChange,
   hideActions = false,
   onReady,
@@ -336,7 +339,7 @@ export function CommentEditor({
             </SelectContent>
           </Select>
         ) : (
-          <span />
+          <span className="text-xs text-muted-foreground">{categoryNote}</span>
         )}
         <div className="flex items-center gap-2">
           {onCancel && (

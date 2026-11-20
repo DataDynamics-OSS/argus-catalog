@@ -199,6 +199,8 @@ export type SyncRun = {
   updated_count: number
   removed_count: number
   failed_count: number
+  /** 수동 데이터셋에 원천 매핑된 테이블이라 건너뛴 수(TODO-CAT-001) */
+  skipped_count?: number
   items_total: number
   error_message: string | null
   requested_by: string | null

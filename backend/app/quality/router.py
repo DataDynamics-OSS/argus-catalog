@@ -15,7 +15,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import AdminUser, TokenUser
+from app.core.auth import AdminUser, CurrentUser, PermissionDenied, TokenUser
 from app.core.database import get_session
 from app.permissions.router import (
     check_feature,
@@ -30,6 +30,7 @@ from app.quality.schemas import (
     QualityAssignment,
     QualityAssignRequest,
     QualityAssignResult,
+    QualityCodeGroupOption,
     QualityColumnCandidate,
     QualityDefinitionResponse,
     QualityDefinitionWrite,
@@ -102,31 +103,32 @@ async def _own_worker(session: AsyncSession, user: TokenUser, worker_id: str) ->
 async def _require_schedule(session: AsyncSession, user: TokenUser, req: QualityJobWrite) -> None:
     """주기가 있는 작업을 저장하려면 주기 설정 권한(quality.schedule)도 필요하다."""
     if req.schedule_type != "NONE" and not await check_feature(session, user, "quality.schedule"):
-        raise HTTPException(status_code=403, detail="기능 권한이 없습니다: quality.schedule")
+        raise PermissionDenied("기능 권한이 없습니다: quality.schedule", user=user, kind="FEATURE", key="quality.schedule")
 
 DATASET_NOT_FOUND = "데이터셋을 찾을 수 없습니다."
 
 
 async def _require_dataset_owner(session: AsyncSession, user: TokenUser, dataset_ids) -> None:
-    """데이터셋의 품질을 바꾸거나 진단을 돌리는 일은 그 데이터셋의 소유자(생성자) 또는 관리자만 — 아니면 403.
+    """데이터셋의 품질을 바꾸거나 진단을 돌리는 일은 그 데이터셋의 소유자(생성자 또는 소유자 목록) 또는 관리자만 — 아니면 403.
 
-    데이터셋 수정과 같은 기준(``assert_owner_or_admin``)이다. 기능 권한(기본 허용형)은 그대로 먼저 검사하고, 이 검사가
+    데이터셋 수정과 같은 기준(``app.catalog.dataset_owner``, TODO-154)이다. 기능 권한(기본 허용형)은 그대로 먼저 검사하고, 이 검사가
     그 위에 더해진다. 없는 데이터셋은 건너뛴다(뒤 단계의 404 에 맡긴다). 생성자가 비어 있는 데이터셋은 관리자만.
     """
     if user.is_admin:
         return
     from sqlalchemy import select
 
+    from app.catalog.dataset_owner import managed_dataset_ids
     from app.catalog.models import Dataset
 
     ids = sorted({int(i) for i in dataset_ids})
     if not ids:
         return
-    rows = (await session.execute(select(Dataset.id, Dataset.created_by).where(Dataset.id.in_(ids)))).all()
-    for dataset_id, created_by in rows:
-        if not created_by or created_by != user.username:
-            logger.warning("품질 변경 거부(403): user=%s dataset_id=%d owner=%s", user.username, dataset_id, created_by)
-            raise HTTPException(status_code=403, detail="데이터셋의 소유자 또는 관리자만 할 수 있습니다.")
+    existing = set((await session.execute(select(Dataset.id).where(Dataset.id.in_(ids)))).scalars().all())
+    denied = sorted(existing - await managed_dataset_ids(session, user.username, existing))
+    if denied:
+        logger.warning("품질 변경 거부(403): user=%s dataset_ids=%s", user.username, denied)
+        raise PermissionDenied("데이터셋의 소유자 또는 관리자만 할 수 있습니다.", user=user, kind="OWNER", key="데이터셋 소유자")
 
 
 async def _datasets_of_rules(session: AsyncSession, rule_ids) -> list[int]:
@@ -151,13 +153,27 @@ async def _dataset_of_run(session: AsyncSession, run_id: int) -> list[int]:
 # 프로파일 — 실행은 POST /datasets/{id}/runs 에 {"kind": "PROFILE"}
 # ---------------------------------------------------------------------------
 
+SAMPLE_VIEW_FEATURE = "datasets.sample-view"
+
+
 @router.get("/datasets/{dataset_id}/profile", response_model=ProfileResponse)
-async def get_profile(dataset_id: int, session: AsyncSession = Depends(get_session)):
-    """데이터셋의 최신 프로파일을 조회한다."""
+async def get_profile(dataset_id: int, current: CurrentUser, session: AsyncSession = Depends(get_session)):
+    """데이터셋의 최신 프로파일을 조회한다.
+
+    최솟값 · 최댓값 · 최빈값은 실제 데이터 값이라 샘플 보기 권한(``datasets.sample-view``)이 있을 때만 들어간다.
+    없으면 그 값을 빼고 ``values_hidden: true`` — 행 수 · NULL · 고유 비율 · 평균 같은 통계는 그대로(DEF-164).
+    """
     logger.debug("GET 프로파일: dataset_id=%d", dataset_id)
     result = await service.get_latest_profile(session, dataset_id)
     if not result:
         raise HTTPException(status_code=404, detail="프로파일을 찾을 수 없습니다. 먼저 프로파일링을 실행하십시오.")
+    if not await check_feature(session, current, SAMPLE_VIEW_FEATURE):
+        logger.info("프로파일 값 숨김(샘플 보기 권한 없음): user=%s dataset_id=%d", current.username, dataset_id)
+        result = result.model_copy(update={
+            "values_hidden": True,
+            "columns": [c.model_copy(update={"min_value": None, "max_value": None, "top_values": None})
+                        for c in result.columns],
+        })
     return result
 
 
@@ -184,19 +200,29 @@ async def get_upstream_quality(dataset_id: int, session: AsyncSession = Depends(
           AND d.quality_status IN ('WARN', 'BAD')
     """), {"did": dataset_id})).fetchall()
     logger.debug("업스트림 품질 경고 조회: dataset_id=%d count=%d", dataset_id, len(rows))
+    # 데이터셋 행의 점수는 정수로 반올림해 둔 값(33.3 → 33)이라 품질 탭 · 점수 이력과 어긋난다 — 최신 점수 기록의
+    # 소수 한 자리 값을 쓴다(DEF-150). 점수 기록이 없으면 데이터셋 행의 값.
+    latest: dict[int, float] = {}
+    for source_id in {r[0] for r in rows}:
+        recorded = await service.get_latest_score(session, source_id)
+        if recorded is not None:
+            latest[source_id] = float(recorded.score)
     return [
         {"id": r[0], "name": r[1], "urn": r[2], "quality_status": r[3],
-         "quality_score": float(r[4]) if r[4] is not None else None,
+         "quality_score": latest.get(r[0], float(r[4]) if r[4] is not None else None),
          "relation_type": r[5]}
         for r in rows
     ]
 
 
 @router.get("/datasets/{dataset_id}/rules/recommendations")
-async def recommend_rules(dataset_id: int, session: AsyncSession = Depends(get_session)):
-    """프로파일 기반 품질 규칙 추천 후보 (생성은 별도 — 기존 규칙과 중복 제외)."""
+async def recommend_rules(dataset_id: int, current: CurrentUser, session: AsyncSession = Depends(get_session)):
+    """프로파일 기반 품질 규칙 추천 후보 (생성은 별도 — 기존 규칙과 중복 제외).
+
+    샘플 보기 권한이 없으면 실제 값이 드러나는 후보(허용 값 목록)는 빼고 준다(DEF-164)."""
     logger.debug("GET 규칙 추천: dataset_id=%d", dataset_id)
-    return await service.recommend_rules(session, dataset_id)
+    reveal = await check_feature(session, current, SAMPLE_VIEW_FEATURE)
+    return await service.recommend_rules(session, dataset_id, reveal_values=reveal)
 
 
 # ---------------------------------------------------------------------------
@@ -418,14 +444,26 @@ async def unassign_definition(
 # 결과 & 점수
 # ---------------------------------------------------------------------------
 
+async def _mask_samples(
+    session: AsyncSession, current: TokenUser, results: list[QualityResultResponse],
+) -> list[QualityResultResponse]:
+    """위반 샘플은 실데이터 — 샘플 탭과 같은 기능 권한(``datasets.sample-view``)이 없으면 값을 빼고 건수만 남긴다(DEF-153)."""
+    if not any(r.failed_samples for r in results) or await check_feature(session, current, SAMPLE_VIEW_FEATURE):
+        return results
+    logger.info("위반 샘플 숨김(샘플 보기 권한 없음): user=%s", current.username)
+    return [r.model_copy(update={"failed_samples": None, "samples_hidden": True}) if r.failed_samples else r
+            for r in results]
+
+
 @router.get("/datasets/{dataset_id}/results", response_model=list[QualityResultResponse])
-async def get_results(dataset_id: int, session: AsyncSession = Depends(get_session)):
+async def get_results(dataset_id: int, current: CurrentUser, session: AsyncSession = Depends(get_session)):
     """데이터셋의 최신 품질 검사 결과를 조회한다.
 
     활성 규칙별 가장 최근 결과. 서버가 평가할 수 없는 유형인데 결과가 없으면 미평가(``passed: null``) 항목.
+    위반 샘플은 샘플 보기 권한이 있을 때만 값이 들어간다(DEF-153).
     """
     logger.debug("GET 최신 결과: dataset_id=%d", dataset_id)
-    return await service.get_latest_results(session, dataset_id)
+    return await _mask_samples(session, current, await service.get_latest_results(session, dataset_id))
 
 
 @router.get("/datasets/{dataset_id}/score", response_model=QualityScoreResponse)
@@ -588,8 +626,12 @@ async def get_job_run_report(job_run_id: int, session: AsyncSession = Depends(ge
 
 
 @router.get("/job-runs/{job_run_id}/report.xlsx", dependencies=[*_MENU, Depends(require_feature("quality.export"))])
-async def download_job_run_report(job_run_id: int, session: AsyncSession = Depends(get_session)):
-    """작업 실행 리포트를 엑셀로 내려받는다 (시트: 요약 / 지표별 / 데이터셋별 / 규칙별)."""
+async def download_job_run_report(
+    job_run_id: int,
+    tz: str | None = Query(None, max_length=64, description="시각을 적을 IANA 시간대(브라우저 시간대, 기본 Asia/Seoul)"),
+    session: AsyncSession = Depends(get_session),
+):
+    """작업 실행 리포트를 엑셀로 내려받는다 (시트: 요약 / 진단 기준별 / AI-Ready 지표별 / 데이터셋별 / 규칙별)."""
     try:
         report = await reports.job_run_report(session, job_run_id)
         await session.commit()
@@ -597,14 +639,18 @@ async def download_job_run_report(job_run_id: int, session: AsyncSession = Depen
         raise _job_error(e) from e
     logger.info("작업 실행 리포트 내려받기: job_run_id=%d 규칙 %d건", job_run_id, report.rules_total)
     return Response(
-        content=await asyncio.to_thread(reports.report_xlsx, report),
+        content=await asyncio.to_thread(reports.report_xlsx, report, tz),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="quality-report-{job_run_id}.xlsx"'},
     )
 
 
 @router.get("/job-runs/{job_run_id}/report.pdf", dependencies=[*_MENU, Depends(require_feature("quality.export"))])
-async def download_job_run_report_pdf(job_run_id: int, session: AsyncSession = Depends(get_session)):
+async def download_job_run_report_pdf(
+    job_run_id: int,
+    tz: str | None = Query(None, max_length=64, description="시각을 적을 IANA 시간대(브라우저 시간대, 기본 Asia/Seoul)"),
+    session: AsyncSession = Depends(get_session),
+):
     """작업 실행 리포트를 PDF 로 내려받는다 (핵심 숫자 · 실행 정보 · 영역별 · 분류별 · 데이터셋별 · 규칙별)."""
     try:
         report = await reports.job_run_report(session, job_run_id)
@@ -613,7 +659,7 @@ async def download_job_run_report_pdf(job_run_id: int, session: AsyncSession = D
         raise _job_error(e) from e
     logger.info("품질 진단 리포트 PDF 내려받기: job_run_id=%d 규칙 %d건", job_run_id, report.rules_total)
     # 줄이 많으면 조판에 시간이 걸린다 — 이벤트 루프를 막지 않게 스레드에서 만든다
-    content = await asyncio.to_thread(report_pdf.report_pdf, report)
+    content = await asyncio.to_thread(report_pdf.report_pdf, report, tz)
     return Response(
         content=content,
         media_type="application/pdf",
@@ -677,6 +723,13 @@ async def list_indicators():
             ai_ready_detail=i.ai_ready[1] if i.ai_ready else None)
         for i in quality_indicators.INDICATORS
     ]
+
+
+@router.get("/code-groups", response_model=list[QualityCodeGroupOption])
+async def list_code_groups(session: AsyncSession = Depends(get_session)):
+    """허용 값 규칙이 가리킬 수 있는 표준 코드 그룹(모든 사전) — 규칙은 ``{"code_group_id": N}`` 으로 연결하고, 진단할 때 그
+    그룹의 사용 중인 코드 값을 허용 값으로 쓴다(TODO-096)."""
+    return await definitions.list_code_groups(session)
 
 
 @router.post("/datasets/{dataset_id}/runs", response_model=QualityRunResponse, status_code=202)
@@ -753,13 +806,15 @@ async def get_run(run_id: int, session: AsyncSession = Depends(get_session)):
 
 
 @router.get("/runs/{run_id}/results", response_model=list[QualityResultResponse], dependencies=_MENU)
-async def get_run_results(run_id: int, session: AsyncSession = Depends(get_session)):
-    """진단 실행 하나가 남긴 규칙별 결과(진단 건수·오류 건수·품질 지표). 그 실행에서 평가한 규칙만 나온다."""
+async def get_run_results(run_id: int, current: CurrentUser, session: AsyncSession = Depends(get_session)):
+    """진단 실행 하나가 남긴 규칙별 결과(진단 건수·오류 건수·품질 지표). 그 실행에서 평가한 규칙만 나온다.
+
+    위반 샘플은 샘플 보기 권한이 있을 때만 값이 들어간다(DEF-153)."""
     try:
         await runs.get_run(session, run_id)
     except runs.RunNotFoundError as e:
         raise _run_error(e) from e
-    return await service.get_run_results(session, run_id)
+    return await _mask_samples(session, current, await service.get_run_results(session, run_id))
 
 
 @router.get("/runs/{run_id}/queries", response_model=list[QualityRunQuery], dependencies=_MENU)

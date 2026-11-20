@@ -39,7 +39,7 @@ from dataclasses import dataclass, field, replace
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.catalog.models import Dataset, DatasetSchema, DatasourceConfiguration
+from app.catalog.models import Dataset, DatasetSchema
 from app.core.config import settings
 from app.quality import indicators as quality_indicators
 from app.quality import profiling, rule_direct, rule_sql, runs, service, trino_client
@@ -130,12 +130,31 @@ async def _resolve_reference(
             return "SQL Server 의 참조관계는 참조 데이터셋이 같은 데이터베이스에 있어야 합니다"
         return TableRef(parts[0] if len(parts) > 2 else "", parts[-2], parts[-1]), column
     try:
-        target = await runs.resolve_engine_target(session, parent, direct=False)
+        target = await runs.resolve_engine_target(session, parent, direct=False, connection=False)
     except runs.EngineUnavailableError as e:
         return f"참조 데이터셋을 Trino 에서 찾을 수 없습니다: {e}"
     if target.datasource_id != engine_datasource_id:
         return "참조 데이터셋이 다른 Trino 데이터 소스에 연결돼 있습니다"
     return target.table, column
+
+
+async def resolve_code_group(session: AsyncSession, check_type: str | None, expected: str | None) -> str | None:
+    """허용 값(ACCEPTED_VALUES)이 표준 코드 그룹을 가리키면 그 그룹의 사용 중인 코드 값 목록(JSON 배열 문자열)으로 푼다.
+
+    진단을 요청할 때 풀어 실행에 남긴다 — 코드 값을 나중에 고쳐도 이 실행은 그때의 값으로 판정한다. 연결이 아니면 그대로,
+    그룹이 없거나 사용 중인 코드 값이 없으면 연결 그대로 둔다(``rule_sql.compile_rule`` 이 규칙 오류로 판정한다).
+    """
+    group_id = rule_sql.code_group_ref(expected) if check_type == "ACCEPTED_VALUES" else None
+    if group_id is None:
+        return expected
+    from app.core.text_list import encode_list
+    from app.standard.models import CodeValue
+
+    values = (await session.execute(
+        select(CodeValue.code_value).where(CodeValue.code_group_id == group_id, CodeValue.is_active != "false")
+        .order_by(CodeValue.sort_order, CodeValue.code_value)
+    )).scalars().all()
+    return encode_list(values) or expected
 
 
 def _table_json(table: TableRef) -> list[str]:
@@ -179,10 +198,7 @@ def _source_database(source_type: str | None, qualified_name: str | None) -> str
 
 async def _source_connection(session: AsyncSession, datasource_id: int, name: str, what: str, build):
     """데이터 소스의 저장된 접속 설정 → ``build(config)``. 없거나 틀리면 ``EngineUnavailableError``."""
-    stored = await session.scalar(select(DatasourceConfiguration.config_json).where(
-        DatasourceConfiguration.datasource_id == datasource_id))
-    if not stored:
-        raise runs.EngineUnavailableError(f"{what} 데이터 소스 '{name}' 에 접속 설정이 없습니다.")
+    stored = await runs.stored_connection_config(session, datasource_id, name, what)
     from app.catalog.datasource_secrets import DatasourceSecretError, unseal_config
 
     try:
@@ -216,6 +232,8 @@ async def _snapshot(session: AsyncSession, run: QualityRun) -> tuple[dict, trino
     dataset = await session.get(Dataset, run.dataset_id)
     if dataset is None:
         raise runs.EngineUnavailableError("데이터셋이 삭제되었습니다.")
+    # 수동 데이터셋(TODO-CAT-001)은 원천 매핑의 데이터 소스 · 경로로 읽는다
+    dataset = await runs.source_view(session, dataset)
     target = await runs.resolve_engine_target(session, dataset)
     direct = target.engine == runs.DIRECT_ENGINE
     connection = await _source_connection(
@@ -243,7 +261,6 @@ async def _snapshot(session: AsyncSession, run: QualityRun) -> tuple[dict, trino
         select(QualityRule).where(QualityRule.dataset_id == dataset.id, QualityRule.is_active == "true")
         .order_by(QualityRule.created_at, QualityRule.id)
     )).scalars().all()
-    run.rules_total = len(rules)
     run.engine = target.engine
     run.engine_datasource_id = target.datasource_id
     run.engine_table = target.table.display
@@ -251,6 +268,9 @@ async def _snapshot(session: AsyncSession, run: QualityRun) -> tuple[dict, trino
     # 실행이 품질 지표를 골랐으면 그 지표의 규칙만 낸다 — 나머지는 직전 결과를 이어받는다
     wanted = quality_indicators.load(run.indicators)
     wanted_definitions = runs.load_definition_ids(run.definition_ids)
+    # 분모는 이 실행이 진단하는 규칙만 — 고르지 않은 지표 · 직접 만든 규칙은 넣지 않는다(DEF-149, create_run 과 같은 기준)
+    run.rules_total = sum(1 for r in rules if runs.in_scope(
+        wanted, wanted_definitions, r.check_type, r.domain, r.column_name, r.definition_id))
     used = {r.definition_id for r in rules if r.definition_id is not None}
     definition_names: dict[int, str] = dict((await session.execute(
         select(QualityDefinition.id, QualityDefinition.name).where(QualityDefinition.id.in_(used)))).all()) if used else {}
@@ -288,7 +308,8 @@ async def _snapshot(session: AsyncSession, run: QualityRun) -> tuple[dict, trino
                 "table": _table_json(resolved[0]), "column": resolved[1]}
         items.append({
             "id": rule.id, "check_type": rule.check_type, "column_name": rule.column_name,
-            "expected_value": rule.expected_value,
+            # 표준 코드 그룹을 가리키는 허용 값은 지금의 코드 값으로 풀어 남긴다
+            "expected_value": await resolve_code_group(session, rule.check_type, rule.expected_value),
             "threshold": float(rule.threshold) if rule.threshold is not None else 100.0,
             "reference": reference,
             # 리포트용 — 규칙이나 지표가 나중에 바뀌어도 이 실행은 당시의 분류로 집계한다
@@ -355,6 +376,19 @@ def compile_snapshot(snapshot: dict) -> _Plan:
             sample = rule_direct.referential_sample_sql(
                 plan.source_type or "", (table.schema, table.table), spec.column_name or "",
                 (parent.schema, parent.table), parent_column, rule_sql.SAMPLE_ROWS)
+            plan.separate.append(replace(compiled, own_sql=sql, sample_sql=sample))
+        elif plan.direct and spec.check_type in ("DIVERSITY", "COMPOSITE_UNIQUE"):
+            # 값(키) 묶음별 집계 — 원본의 SQL 방언으로 바꿔 따로 낸다. 판정은 Trino 경로와 같다
+            source, own = plan.source_type or "", (table.schema, table.table)
+            try:
+                if spec.check_type == "DIVERSITY":
+                    sql, sample = rule_direct.diversity_sql(source, own, spec.column_name or "", types), None
+                else:
+                    sql, sample = rule_direct.composite_unique_sql(source, own, spec.expected_value, types,
+                                                                   rule_sql.SAMPLE_ROWS)
+            except (rule_sql.ExpressionError, ValueError) as e:
+                plan.outcomes[spec.id] = Outcome(False, "N/A", str(e))
+                continue
             plan.separate.append(replace(compiled, own_sql=sql, sample_sql=sample))
         elif plan.direct:
             try:
@@ -918,8 +952,9 @@ def _step_error(results: dict[str, dict]) -> str:
 async def _store_profile(session: AsyncSession, run: QualityRun, snapshot: dict, results: dict[str, dict]) -> None:
     """프로파일 결과를 저장하고 실행을 끝낸다. 행 수를 하나도 얻지 못했으면 실패(저장하지 않음)."""
     columns = snapshot.get("columns") or []
-    row_count, profiles, missing = profiling.read_profile(columns, results)
     direct = snapshot.get("engine") == runs.DIRECT_ENGINE
+    row_count, profiles, missing = profiling.read_profile(
+        columns, results, source_type=snapshot.get("source_type") if direct else None)
     if row_count is None:
         _end(run, "FAILED", f"{_FAILURE_PREFIX[runs.DIRECT_ENGINE if direct else runs.TRINO_ENGINE]}: {_step_error(results)}")
         logger.warning("프로파일 실행 실패: run_id=%d %s", run.id, run.error_message)

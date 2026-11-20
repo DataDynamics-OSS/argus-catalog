@@ -6,6 +6,7 @@
 - 설정 메뉴는 settings.* 중 하나라도 받으면 열리고, API 는 받은 항목만 통과한다. 인증 · CORS 는 관리자 고정.
 - 사용자 관리 메뉴는 users.manage 로 열린다. 권한 관리 메뉴는 늘 관리자 전용.
 - 위임받은 사람은 관리자 계정을 바꾸거나 관리자를 만들 수 없고, 관리자 역할 API 키를 다룰 수 없다(권한 상승 방지).
+- 위임받은 사람이 줄 · 다룰 수 있는 역할은 기본 사용자 역할과 자기 역할뿐이다(DEF-163).
 - 플러그인은 기능 키 · 관리자 전용 메뉴 · API 메뉴 가드를 선언할 수 있다.
 
 실행:
@@ -198,6 +199,55 @@ async def test_user_delegate_cannot_touch_admin_accounts(monkeypatch):
     with pytest.raises(HTTPException) as e:
         await um.add_user(req, SUPER, None)
     assert e.value.status_code == 403
+
+
+async def test_user_delegate_limited_to_own_role(monkeypatch):
+    """DEF-163 — 위임받은 사람은 기본 사용자 역할과 자기 역할의 계정만 만들고 관리한다(슈퍼유저 · 다른 사용자 정의 역할 X)."""
+    from app.usermgr import router as um
+    from app.usermgr.schemas import UserAddRequest
+
+    roles = {1: "argus-superuser", 2: "argus-user", 3: "dept-steward", 9: "argus-user"}
+
+    async def _get_user(_s, user_id):
+        return SimpleNamespace(id=user_id, username="alice" if user_id == 9 else f"u{user_id}", role=roles[user_id])
+
+    monkeypatch.setattr(um.service, "get_user", _get_user)
+    assert um.assignable_roles(ADMIN) is None
+    assert um.assignable_roles(ALICE) == {"argus-user"}
+    assert "argus-superuser" in um.assignable_roles(SUPER)
+    steward = TokenUser(sub="t", username="tom", roles=["argus-user"], custom_role="dept-steward")
+    assert um.assignable_roles(steward) == {"argus-user", "dept-steward"}
+
+    for target in (1, 3):
+        with pytest.raises(HTTPException) as e:
+            await um._forbid_admin_target(None, ALICE, target, "비밀번호 재설정")
+        assert (e.value.status_code, e.value.detail) == (403, um.ROLE_BEYOND_DETAIL)
+    await um._forbid_admin_target(None, ALICE, 2, "비밀번호 재설정")
+    await um._forbid_admin_target(None, ALICE, 9, "수정")  # 본인
+    await um._forbid_admin_target(None, SUPER, 1, "비밀번호 재설정")
+    await um._forbid_admin_target(None, steward, 3, "비밀번호 재설정")
+    with pytest.raises(HTTPException):
+        await um._forbid_admin_target(None, steward, 1, "비밀번호 재설정")
+
+    monkeypatch.setattr(um.settings, "auth_type", "local")
+    req = UserAddRequest.model_validate({"username": "boss2", "email": "b@x.io", "first_name": "b", "last_name": "b",
+                                         "password": "Passw0rd!x", "role": "argus-superuser"})
+    with pytest.raises(HTTPException) as e:
+        await um.add_user(req, ALICE, None)
+    assert (e.value.status_code, e.value.detail) == (403, um.ROLE_BEYOND_DETAIL)
+    assert await um.list_assignable_roles(ALICE) == {"roles": ["argus-user"]}
+    assert await um.list_assignable_roles(ADMIN) == {"roles": None}
+
+
+def test_api_key_delegate_limited_to_own_role():
+    from app.apikeys import router as ak
+
+    with pytest.raises(HTTPException) as e:
+        ak._forbid_admin_key(ALICE, "argus-superuser")
+    assert e.value.status_code == 403
+    with pytest.raises(HTTPException):
+        ak._forbid_admin_key(ALICE, "argus-user", "argus-superuser")
+    ak._forbid_admin_key(ALICE, "argus-user", None)
 
 
 def test_api_key_delegate_cannot_handle_admin_keys():

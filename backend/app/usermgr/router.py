@@ -50,7 +50,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.service import record as audit_record
 from app.audit.service import secret_change
-from app.core.auth import AdminUser, CurrentUser, TokenUser, invalidate_account_cache
+from app.core.auth import (
+    AdminUser,
+    CurrentUser,
+    PermissionDenied,
+    TokenUser,
+    invalidate_account_cache,
+)
 from app.core.config import settings
 from app.core.database import get_session
 from app.permissions.router import check_feature_granted, require_feature_granted
@@ -73,6 +79,7 @@ router = APIRouter(prefix="/usermgr", tags=["usermgr"])
 UserManager = Annotated[TokenUser, Depends(require_feature_granted("users.manage"))]
 ADMIN_ROLE = "argus-admin"
 ADMIN_TARGET_DETAIL = "관리자 계정은 관리자만 관리할 수 있습니다."
+ROLE_BEYOND_DETAIL = "사용자 관리를 위임받은 사람은 기본 사용자 역할과 자기 역할의 계정만 만들고 관리할 수 있습니다."
 
 
 # ---------------------------------------------------------------------------
@@ -95,14 +102,39 @@ async def _forbid_self(session: AsyncSession, current, user_id: int, action: str
         raise HTTPException(status_code=400, detail=f"본인 계정은 {action}할 수 없습니다. 다른 관리자에게 요청하세요.")
 
 
-async def _forbid_admin_target(session: AsyncSession, current, user_id: int, action: str) -> None:
-    """위임받은 사람(관리자 아님)은 관리자 계정을 바꿀 수 없다 — 비밀번호 재설정으로 관리자가 되는 길을 막는다."""
+def assignable_roles(current) -> frozenset[str] | None:
+    """위임받은 사람(관리자 아님)이 계정에 줄 수 있고 관리할 수 있는 역할 — 기본 사용자 역할과 자기 역할(DEF-163).
+
+    관리자는 ``None``(제한 없음). 슈퍼유저 · 다른 사용자 정의 역할처럼 자기보다 넓을 수 있는 역할의 계정을 만들거나
+    비밀번호를 재설정해 그 계정으로 로그인하는 길(권한 상승)을 막는다.
+    """
     if current.is_admin:
+        return None
+    from app.permissions.router import _my_role
+    return frozenset({"argus-user", settings.auth_keycloak_user_role, _my_role(current)})
+
+
+def _forbid_role(current, role: str | None, action: str) -> None:
+    """위임받은 사람이 줄 수 없는 역할이면 403 — 관리자 역할은 기존 문구 그대로."""
+    allowed = assignable_roles(current)
+    if allowed is None or role is None or role in allowed:
+        return
+    logger.warning("역할 %s 계정 %s 거부(위임 사용자): actor=%s", role, action, current.username)
+    # 위임 범위를 넘은 시도(권한 상승 시도)는 감사 로그에도 남긴다(DEF-159)
+    key = f"users.manage — {role} 계정 {action}"
+    if role == ADMIN_ROLE:
+        raise PermissionDenied(ADMIN_TARGET_DETAIL, user=current, kind="DELEGATE", key=key)
+    raise PermissionDenied(ROLE_BEYOND_DETAIL, user=current, kind="DELEGATE", key=key)
+
+
+async def _forbid_admin_target(session: AsyncSession, current, user_id: int, action: str) -> None:
+    """위임받은 사람(관리자 아님)은 자기가 줄 수 없는 역할(관리자 · 슈퍼유저 · 다른 사용자 정의 역할)의 계정을 바꿀 수 없다
+    — 비밀번호 재설정으로 그 계정이 되는 길을 막는다(DEF-163)."""
+    if current.is_admin or await _is_self(session, current, user_id):
         return
     target = await service.get_user(session, user_id)
-    if target is not None and target.role == ADMIN_ROLE:
-        logger.warning("관리자 계정 %s 거부(위임 사용자): actor=%s target=%d", action, current.username, user_id)
-        raise HTTPException(status_code=403, detail=ADMIN_TARGET_DETAIL)
+    if target is not None:
+        _forbid_role(current, target.role, action)
 
 
 async def _can_manage_users(session: AsyncSession, current) -> bool:
@@ -174,12 +206,10 @@ async def add_user(req: UserAddRequest, _admin: UserManager, session: AsyncSessi
     """새 사용자 생성.
 
     비밀번호는 저장 전 해시 처리한다. 지정한 역할이 DB 에 없으면 400.
-    신규 사용자는 ``active`` 상태로 생성된다. 위임받은 사람은 관리자를 만들 수 없다(403).
+    신규 사용자는 ``active`` 상태로 생성된다. 위임받은 사람은 기본 사용자 역할과 자기 역할로만 만들 수 있다(403, DEF-163).
     """
     _forbid_keycloak("사용자 생성")
-    if not _admin.is_admin and req.role == ADMIN_ROLE:
-        logger.warning("관리자 계정 생성 거부(위임 사용자): actor=%s", _admin.username)
-        raise HTTPException(status_code=403, detail=ADMIN_TARGET_DETAIL)
+    _forbid_role(_admin, req.role, "생성")
     try:
         user = await service.add_user(session, req)
     except IntegrityError as e:
@@ -282,7 +312,7 @@ async def modify_user(
     if current.sub != str(user_id):
         if not await _can_manage_users(session, current):
             logger.warning("modify_user 권한 없음: actor=%s target=%d", current.sub, user_id)
-            raise HTTPException(status_code=403, detail="본인 또는 관리자만 수정할 수 있습니다.")
+            raise PermissionDenied("본인 또는 관리자만 수정할 수 있습니다.", user=current, kind="FEATURE", key="users.manage")
         await _forbid_admin_target(session, current, user_id, "수정")
     if settings.auth_type != "local" and req.model_fields_set & _KEYCLOAK_SYNCED_FIELDS:
         logger.warning("keycloak 모드에서 동기화 필드 수정 거부: target=%d fields=%s",
@@ -445,6 +475,13 @@ async def deactivate_user(user_id: int, admin: UserManager, session: AsyncSessio
 # ---------------------------------------------------------------------------
 # 역할 엔드포인트
 # ---------------------------------------------------------------------------
+
+@router.get("/roles/assignable")
+async def list_assignable_roles(current: CurrentUser):
+    """요청자가 계정에 줄 · 관리할 수 있는 역할 — 관리자는 ``{"roles": null}``(전부), 위임받은 사람은 목록(DEF-163)."""
+    allowed = assignable_roles(current)
+    return {"roles": None if allowed is None else sorted(allowed)}
+
 
 @router.get("/roles", response_model=list[RoleResponse])
 async def list_roles(_user: CurrentUser, session: AsyncSession = Depends(get_session)):

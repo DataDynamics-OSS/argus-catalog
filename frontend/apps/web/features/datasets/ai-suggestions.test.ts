@@ -91,5 +91,21 @@ describe("AI-Ready 초안 (TODO-096 6단계)", () => {
       drafts: [], skipped: [{ field: "legal_basis", label: "관련법령", reason: "목록이 없습니다" }], legal_reason: null,
     }, "다시 쓰려면 메뉴")
     expect(none).toEqual({ ok: false, title: "새로 만든 초안이 없습니다.", description: "관련법령: 목록이 없습니다" })
+    const uses = draftResultMessage({
+      drafts: [{ field: "allowed_uses", label: "허용 이용 유형", text: "VIEW", log_id: 3, reason: "PII 있음" }],
+      skipped: [], legal_reason: null,
+    })
+    expect(uses.description).toBe("허용 이용 유형 근거: PII 있음")
+  })
+
+  it("허용 이용 유형은 코드 대신 이름으로", () => {
+    const s = { entity_type: "dataset", generation_type: "ai_ready", field_name: "allowed_uses",
+      generated_text: "VIEW,AI_TRAINING", current_text: null as string | null }
+    expect(suggestionKindLabel(s)).toBe("AI-Ready · 허용 이용 유형")
+    expect(formatSuggestedValue(s)).toBe("열람, AI 학습")
+    expect(formatCurrentValue(s)).toBe("(없음)")
+    expect(formatCurrentValue({ ...s, current_text: "" })).toBe("모두 허용하지 않음")
+    expect(formatCurrentValue({ ...s, current_text: "ANALYSIS" })).toBe("분석")
+    expect(suggestionKindLabel({ ...s, field_name: "privacy_measures" })).toBe("AI-Ready · 개인정보 보호조치")
   })
 })

@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import download_link
-from app.core.auth import CurrentUser, OptionalUser, TokenUser
+from app.core.auth import CurrentUser, OptionalUser, PermissionDenied, TokenUser
 from app.core.config import settings
 from app.core.database import get_session
 from app.models import model_store, service
@@ -59,10 +59,10 @@ async def _require_browse_scope(current: TokenUser, session: AsyncSession, path:
     parts = [p for p in (path or "").split("/") if p]
     if not parts or any(p in (".", "..") for p in parts):
         logger.warning("저장소 탐색 거부(관리자 아님, 범위 밖): path=%s user=%s", path, current.username)
-        raise HTTPException(status_code=403, detail="저장소 전체 탐색은 관리자만 할 수 있습니다.")
+        raise PermissionDenied("저장소 전체 탐색은 관리자만 할 수 있습니다.", user=current, kind="ADMIN", key="저장소 전체 탐색")
     if not await check_menu(session, current, "oci-hub"):
         logger.warning("저장소 탐색 거부(oci-hub 메뉴 권한 없음): user=%s", current.username)
-        raise HTTPException(status_code=403, detail="메뉴 접근 권한이 없습니다: oci-hub")
+        raise PermissionDenied("메뉴 접근 권한이 없습니다: oci-hub", user=current, kind="MENU", key="oci-hub")
     found = (await session.execute(
         # storage_prefix 는 "<이름>/" (등록·반입) 또는 끝 "/" 없이 저장된 예전 데이터가 있다
         select(OciModel.id).where(OciModel.storage_prefix.in_((parts[0], f"{parts[0]}/")))
@@ -72,7 +72,7 @@ async def _require_browse_scope(current: TokenUser, session: AsyncSession, path:
         raise HTTPException(status_code=403, detail="OCI 모델 경로만 탐색할 수 있습니다.")
     if download and not await check_feature(session, current, "oci.download"):
         logger.warning("저장소 파일 내려받기 거부(기능 권한 oci.download): path=%s user=%s", path, current.username)
-        raise HTTPException(status_code=403, detail="기능 권한이 없습니다: oci.download")
+        raise PermissionDenied("기능 권한이 없습니다: oci.download", user=current, kind="FEATURE", key="oci.download")
 
 
 # ---------------------------------------------------------------------------
@@ -169,7 +169,7 @@ async def _require_model_menu(current: TokenUser, session: AsyncSession, model_n
         raise HTTPException(status_code=404, detail=f"'{model_name}' 은(는) 등록된 모델이 아닙니다.")
     if not await check_menu(session, current, menu):
         logger.warning("model-store 읽기 거부(%s 메뉴 권한 없음): %s user=%s", menu, model_name, current.username)
-        raise HTTPException(status_code=403, detail=f"메뉴 접근 권한이 없습니다: {menu}")
+        raise PermissionDenied(f"메뉴 접근 권한이 없습니다: {menu}", user=current, kind="MENU", key=menu)
     if download:
         # 파일 내려받기(다운로드 주소 발급)는 그 레지스트리의 내려받기 권한도 본다(TODO-122)
         from app.permissions.router import check_feature
@@ -177,7 +177,7 @@ async def _require_model_menu(current: TokenUser, session: AsyncSession, model_n
         feature = "oci.download" if menu == "oci-hub" else "models.download"
         if not await check_feature(session, current, feature):
             logger.warning("model-store 다운로드 거부(기능 권한 %s): %s user=%s", feature, model_name, current.username)
-            raise HTTPException(status_code=403, detail=f"기능 권한이 없습니다: {feature}")
+            raise PermissionDenied(f"기능 권한이 없습니다: {feature}", user=current, kind="FEATURE", key=feature)
 
 
 async def _assert_store_writer(current: TokenUser, session: AsyncSession, model_name: str) -> None:
@@ -202,14 +202,14 @@ async def _assert_store_writer(current: TokenUser, session: AsyncSession, model_
         )
     if not (current.is_admin or current.username in {target.created_by, target.owner} - {None, ""}):
         logger.warning("model-store 쓰기 거부(권한 없음): %s user=%s", model_name, current.username)
-        raise HTTPException(status_code=403, detail="모델의 소유자 또는 관리자만 파일을 올리거나 확정할 수 있습니다.")
+        raise PermissionDenied("모델의 소유자 또는 관리자만 파일을 올리거나 확정할 수 있습니다.", user=current, kind="OWNER", key="모델 소유자")
     # 파일 올리기 · 확정 · 지우기는 모델 수정 — 그 레지스트리의 수정 권한도 본다(TODO-122)
     from app.permissions.router import check_feature
 
     feature = "oci.edit" if oci else "models.edit"
     if not await check_feature(session, current, feature):
         logger.warning("model-store 쓰기 거부(기능 권한 %s): %s user=%s", feature, model_name, current.username)
-        raise HTTPException(status_code=403, detail=f"기능 권한이 없습니다: {feature}")
+        raise PermissionDenied(f"기능 권한이 없습니다: {feature}", user=current, kind="FEATURE", key=feature)
 
 
 @router.post("/{model_name}/versions/{version}/upload")
@@ -352,7 +352,9 @@ async def browse_s3_directory(_user: CurrentUser,
         raise _s3_http_error(e) from e
 
 
-_STORAGE_DOWN = "오브젝트 스토리지에 연결할 수 없습니다. MinIO 실행 여부와 설정을 확인하세요."
+# 저장소 연결 불가 안내 · 판정은 model_store 의 공용 정의를 쓴다(OCI 모델 허브의 HF 가져오기와 같은 문구)
+_STORAGE_DOWN = model_store.STORAGE_DOWN
+_storage_unavailable = model_store.storage_unavailable
 
 
 def _s3_http_error(e: Exception) -> HTTPException:
@@ -360,12 +362,6 @@ def _s3_http_error(e: Exception) -> HTTPException:
     if _storage_unavailable(e):
         return HTTPException(status_code=503, detail=_STORAGE_DOWN)
     return HTTPException(status_code=500, detail=str(e))
-
-
-def _storage_unavailable(e: Exception) -> bool:
-    """예외 메시지로 저장소 연결 불가 여부를 추정한다(연결·엔드포인트·타임아웃·MinIO 기본 포트 9000)."""
-    msg = str(e).lower()
-    return any(k in msg for k in ("connect", "endpoint", "timed out", "9000"))
 
 
 async def _head_or_http(path: str) -> dict:
