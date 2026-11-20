@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-21
+
 ### Added
 - **카탈로그 직접 등록과 원천 매핑**: 데이터 카탈로그 › 카탈로그(`/dashboard/catalogs`)에서 데이터 소스 없이 카탈로그를 만들고(`source_type=ARGUS`)
   데이터셋을 직접 등록한다(수동 데이터셋, 메타데이터를 수집하지 않음). 수동 데이터셋은 실제 데이터 소스의 테이블에 원천 매핑한다 — 이미 수집된
@@ -1198,7 +1200,8 @@
 - **알림** — 스키마 변경 영향 분석 + 품질 실패 트리거, Webhook 통지
 - 백엔드(FastAPI) · 프론트엔드(Next.js) · Python SDK(`argus-model`) · AI 에이전트 구성
 
-[Unreleased]: https://github.com/DataDynamics-OSS/argus-catalog/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/DataDynamics-OSS/argus-catalog/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/DataDynamics-OSS/argus-catalog/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/DataDynamics-OSS/argus-catalog/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/DataDynamics-OSS/argus-catalog/compare/v0.6.5...v0.7.0
 [0.6.5]: https://github.com/DataDynamics-OSS/argus-catalog/compare/v0.5.0...v0.6.5
